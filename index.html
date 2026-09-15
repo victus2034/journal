@@ -3823,6 +3823,28 @@ function syncNow(opts){
       return {remote:parsed, sha:j.sha};
     });
   }).then(function(got){
+    /* A device connecting for the first time may already hold the same trades,
+       imported on its own. Their ids differ from the ones on GitHub, so a merge
+       would keep both and every trade would appear twice. When nothing on this
+       device has ever been part of the shared journal, ask before combining. */
+    if(got.remote && !c.lastSha && (state.trades || []).length){
+      var known = {};
+      (got.remote.trades || []).forEach(function(t){ known[t.id] = 1; });
+      Object.keys(got.remote.tombstones || {}).forEach(function(k){ known[k.replace(/^trades:/, "")] = 1; });
+      var shared = state.trades.some(function(t){ return known[t.id]; });
+      if(!shared){
+        var useRemote = window.confirm(
+          "GitHub already has a journal with " + (got.remote.trades || []).length + " trades.\n" +
+          "This device has " + state.trades.length + " trades that were never synced.\n\n" +
+          "OK: use the GitHub journal here. Choose this if you imported the same trades on this device too; otherwise every trade shows twice.\n\n" +
+          "Cancel: keep both sets. Choose this only if these trades are different ones.");
+        if(useRemote){
+          try{ localStorage.setItem(KEY + ".before-sync", JSON.stringify(state)); }catch(e){}
+          state = mergeState({accounts:[], trades:[], signals:[], goals:[], aliases:{}, tombstones:{},
+                              ui:{account:"all"}, lastBackup:state.lastBackup || null}, got.remote);
+        }
+      }
+    }
     var before = JSON.stringify(syncPayload(state));
     if(got.remote) state = mergeState(state, got.remote);
     var after = syncPayload(state);
