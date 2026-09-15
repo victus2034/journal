@@ -1,6 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tape &amp; Target</title>
+<meta name="app-version" content="2026-09-16.5">
 <style>
 :root{
   --ground:#E9ECEE; --surface:#FFFFFF; --surface-2:#F2F4F6; --surface-3:#E3E7EA;
@@ -257,6 +258,7 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
   font-size:12.5px; line-height:1.55;
 }
 .alertbar.on{display:flex}
+.alertbar.info{background:var(--surface-2); border-color:var(--line-2); color:var(--ink); align-items:center; justify-content:space-between}
 .alertbar strong{display:block; font-size:13px}
 .toast{position:fixed; left:50%; bottom:28px; transform:translate(-50%,12px); background:var(--ink); color:var(--ground); padding:9px 16px; font-size:13px; opacity:0; pointer-events:none; transition:opacity .18s, transform .18s; z-index:80}
 .toast.on{opacity:1; transform:translate(-50%,0)}
@@ -284,6 +286,7 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
 
   <main>
     <div class="alertbar" id="storageAlert" role="alert"></div>
+    <div class="alertbar" id="updateAlert" role="status"></div>
     <div class="accounts" id="accounts"></div>
 
     <section class="view is-active" id="view-dashboard">
@@ -554,7 +557,6 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
               <input type="file" id="restoreFile" accept=".json,application/json" hidden>
               <button class="btn btn-sm" id="exportBtn">Copy backup</button>
               <button class="btn btn-sm" id="importBtn">Restore from text</button>
-              <button class="btn btn-sm" id="seedBtn">Reload sample data</button>
               <button class="btn btn-sm btn-danger" id="wipeBtn">Delete data</button>
             </div>
             <p style="font-size:12.5px; margin:0 0 12px" id="backupState"></p>
@@ -686,7 +688,7 @@ function load(){
     }catch(e){
       loadNotice = "The saved journal could not be read.";
     }
-    /* Keep whatever was there rather than writing sample data over it. */
+    /* Keep whatever was there rather than writing a fresh journal over it. */
     try{ localStorage.setItem(KEY + ".unreadable", raw); }catch(e2){}
   }
 
@@ -935,109 +937,21 @@ function tradingDays(ts){
   }).sort(function(x,y){ return x.date < y.date ? -1 : x.date > y.date ? 1 : 0; });
 }
 
-/* ============ sample data ============ */
-function rng(s){
-  return function(){
-    s |= 0; s = s + 0x6D2B79F5 | 0;
-    var t = Math.imul(s ^ s >>> 15, 1 | s);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
+/* ============ a fresh journal ============ */
+/* No made-up trades. A generated sample looks exactly like a real history, and
+   once sync is on it travels to every device as if it were one. */
+function defaultAccounts(){
+  return [
+    {id:uid(), name:"Dhan",  market:"nse",    currency:"INR", startBalance:5000,
+     maxRiskPct:1, dailyLossLimit:250, maxTradesPerDay:5, defaultLeverage:5},
+    {id:uid(), name:"Delta", market:"crypto", currency:"USD", startBalance:5000,
+     maxRiskPct:1, dailyLossLimit:250, maxTradesPerDay:5, defaultLeverage:10}
+  ];
 }
 function seed(){
-  var rand = rng(20260818);
-  var nseId = uid();
-  /* NSE only for now. Add a crypto book from Data -> Accounts whenever you want
-     it: the account layer, currency handling and perp hazards are already here. */
-  var accounts = [
-    {id:nseId, name:"Dhan", market:"nse", currency:"INR", startBalance:200000,
-     maxRiskPct:1, dailyLossLimit:4000, maxTradesPerDay:4, defaultLeverage:5}
-  ];
-  var NSE = [
-    {s:"RELIANCE",  px:1420, sd:9},   {s:"HDFCBANK", px:1680, sd:11},
-    {s:"INFY",      px:1560, sd:10},  {s:"TATAMOTORS", px:720, sd:6},
-    {s:"ICICIBANK", px:1240, sd:8},   {s:"SBIN",     px:820,  sd:6},
-    {s:"AXISBANK",  px:1150, sd:8},   {s:"TATASTEEL", px:155, sd:1.6}
-  ];
-  var EDGE = [{win:.44,avg:2.1},{win:.56,avg:1.30},{win:.52,avg:1.55},{win:.58,avg:1.40},{win:.40,avg:2.3},{win:.36,avg:1.2}];
-  var NOTES = [
-    "Clean break, held the retest. Sized properly.",
-    "Entered early and sat through heat. The trigger came a few minutes later.",
-    "Textbook. Let it run to the measured move.",
-    "Choppy tape. Should have stood aside.",
-    "Cut it at the stop without hesitating. Good process, bad outcome.",
-    "Averaged down, which was not in the plan.",
-    "Took half at 1R and trailed the rest. Happy with the management.",
-    "Last-hour trade with no edge. Boredom, not a setup.",
-    "Waited for the reclaim and it worked immediately.",
-    "Third trade after two losses. Should have been done for the day."
-  ];
-  var trades = [];
-  var today = new Date(); today.setHours(0,0,0,0);
-
-  for(var back=88; back>=0; back--){
-    var d = new Date(today); d.setDate(d.getDate() - back);
-    var dow = d.getDay(), date = iso(d);
-    var weekday = dow !== 0 && dow !== 6;
-
-    /* NSE: weekdays only, inside the session. */
-    if(weekday && rand() > 0.28){
-      var nRun = 0, k = 0, revenged = false;
-      var pick = rand();
-      var nCount = pick < .15 ? 1 : pick < .45 ? 2 : pick < .70 ? 3
-                 : pick < .85 ? 4 : pick < .94 ? 5 : 6;
-      while(k < nCount){
-        var sy = NSE[Math.floor(rand()*NSE.length)];
-        var si = Math.floor(rand()*PLAYBOOK.nse.length);
-        var tilt = nRun < -2500 ? -0.13 : 0;          /* tilt after a bad run */
-        var lateTilt = k >= 3 ? -0.15 : 0;             /* overtrading tilt */
-        var isWin = rand() < (EDGE[si].win + tilt + lateTilt);
-        var rM = isWin ? EDGE[si].avg*(0.45+rand()*1.25)
-                       : (rand()<.16 ? -(0.15+rand()*0.4) : -(0.9+rand()*0.35));
-        var risk = 1400 + rand()*1300;
-        var sd = sy.sd * (0.7 + rand()*0.7);
-        var qty = Math.max(1, Math.round(risk/sd));
-        var entry = +(sy.px * (1 + (rand()-0.5)*0.07)).toFixed(2);
-        var long = rand() < 0.60, dirn = long ? 1 : -1;
-        var startM = 560 + Math.floor(rand()*rand()*350);
-        var hold = 8 + Math.floor(rand()*70);
-        if(startM + hold > 928) hold = Math.max(5, 928 - startM);
-        var prob = isWin ? 0.90 : 0.68;
-        var rules = RULES.map(function(){ return rand() < prob; });
-        if(k >= 3) rules[4] = false;
-        var pnlEst = sd*rM*qty;
-        nRun += pnlEst;
-        k++;
-        /* Some days the loss limit gets passed and the clicking carries on
-           anyway. That is exactly the behaviour the breach flag exists to catch,
-           so the sample needs to contain it. */
-        if(!revenged && nRun <= -4000 && k >= nCount && rand() < 0.5){
-          revenged = true;
-          nCount = k + 1 + Math.floor(rand()*2);
-        }
-        trades.push({
-          id:uid(), accountId:nseId, date:date, time:hhmm(startM), exitTime:hhmm(startM+hold),
-          symbol:sy.s, direction: long?"long":"short",
-          entry:entry, stop:+(entry - dirn*sd).toFixed(2), exit:+(entry + dirn*sd*rM).toFixed(2),
-          qty:qty, fees:+(22 + rand()*30).toFixed(2),
-          leverage: rand() < .7 ? 5 : (rand() < .5 ? 4 : 3),
-          setup:PLAYBOOK.nse[si], rules:rules,
-          notes: rand()<0.5 ? NOTES[Math.floor(rand()*NOTES.length)] : ""
-        });
-      }
-    }
-  }
   return {
-    accounts: accounts,
-    trades: trades,
-    goals: [
-      {id:uid(), title:"Dhan monthly target",      metric:"net_pnl",        target:30000, period:"month",   accountId:nseId},
-      {id:uid(), title:"Stop when the day is done", metric:"breaches",      target:0,     period:"month",   accountId:"all"},
-      {id:uid(), title:"Keep it to four a day",     metric:"avg_trades_day", target:4,    period:"month",   accountId:"all"},
-      {id:uid(), title:"Follow the checklist",      metric:"rule_adherence", target:90,   period:"month",   accountId:"all"},
-      {id:uid(), title:"Total R for the quarter",   metric:"total_r",        target:40,   period:"quarter", accountId:"all"},
-      {id:uid(), title:"Keep expectancy positive",  metric:"expectancy",     target:0.35, period:"quarter", accountId:"all"}
-    ],
+    accounts: defaultAccounts(),
+    trades: [], signals: [], goals: [], aliases: {}, tombstones: {},
     ui: {account:"all"}
   };
 }
@@ -1464,8 +1378,10 @@ function renderDashboard(){
               : s.n + " trades"]
         : ["Total R", rfmt(s.totalR), cls(s.totalR), curSummary || (s.n + " trades")],
     ["Win rate", pct(s.winRate), "", s.wins + "W / " + s.losses + "L"],
-    ["Profit factor", isFinite(s.pf) ? s.pf.toFixed(2) : "∞", s.pf >= 1 ? "up" : "down",
-       s.pf >= 1.5 ? "healthy" : s.pf >= 1 ? "thin edge" : "negative"],
+    /* An empty book has no edge to judge, so it gets a dash rather than a red 0.00. */
+    s.n ? ["Profit factor", isFinite(s.pf) ? s.pf.toFixed(2) : "∞", s.pf >= 1 ? "up" : "down",
+       s.pf >= 1.5 ? "healthy" : s.pf >= 1 ? "thin edge" : "negative"]
+        : ["Profit factor", "—", "", "no trades yet"],
     ["Expectancy", rfmt(s.expectancy), cls(s.expectancy),
        s.hasR ? "per trade" : "add stops to get R"],
     ["Green days", days.length ? green + " of " + days.length : "—", green*2 >= days.length ? "up" : "down",
@@ -1476,7 +1392,7 @@ function renderDashboard(){
        "up",
        worstDay && anyR(ts) ? "worst " + rfmt(worstDay.r)
          : (worstDay && cur ? "worst " + signedMoney(Math.min.apply(null, days.map(function(d){ return d.net; })), cur, 0) : "")],
-    ["Max drawdown", cur ? money(-s.maxDD, cur, 0) : rfmt(-s.maxDDR), "down", "peak to trough"],
+    ["Max drawdown", !s.n ? "—" : cur ? money(-s.maxDD, cur, 0) : rfmt(-s.maxDDR), s.n ? "down" : "", "peak to trough"],
     ["Limit breaches", String(breaches), breaches ? "down" : "up", "days you kept going"]
   ].forEach(function(it){
     var b = el("div","stat");
@@ -2361,8 +2277,8 @@ function openWipe(){
       Object.keys(want).forEach(function(k){ want[k] = boxes[k].checked; });
       var any = Object.keys(want).some(function(k){ return want[k]; });
       var lines = [];
-      if(want.accounts) lines.push("Accounts go too, so you will start again with one empty book "
-        + "and will need to set your balance and daily loss limit.");
+      if(want.accounts) lines.push("Accounts go too, so you will start again with the two default "
+        + "books: Dhan and Delta, 5,000 each.");
       else if(want.trades) lines.push("Your accounts and their settings are kept.");
       if(want.signals) lines.push("Imported alerts and any symbol links go with them.");
       note.style.color = want.accounts ? "var(--down)" : "var(--muted)";
@@ -2386,8 +2302,7 @@ function openWipe(){
     if(want.accounts){
       done.push("accounts");
       state.accounts.forEach(function(a){ noteDeleted("accounts", a.id); });
-      state.accounts = [{id:uid(), name:"Dhan", market:"nse", currency:"INR", startBalance:100000,
-                         maxRiskPct:1, dailyLossLimit:2000, maxTradesPerDay:4, defaultLeverage:5}];
+      state.accounts = defaultAccounts();
       state.ui.account = "all";
     }
     calCursor = null;
@@ -3836,22 +3751,26 @@ function syncNow(opts){
        imported on its own. Their ids differ from the ones on GitHub, so a merge
        would keep both and every trade would appear twice. When nothing on this
        device has ever been part of the shared journal, ask before combining. */
-    if(got.remote && !c.lastSha && (state.trades || []).length){
+    if(got.remote && !c.lastSha && (got.remote.accounts || []).length){
+      var useRemote = false;
       var known = {};
       (got.remote.trades || []).forEach(function(t){ known[t.id] = 1; });
       Object.keys(got.remote.tombstones || {}).forEach(function(k){ known[k.replace(/^trades:/, "")] = 1; });
-      var shared = state.trades.some(function(t){ return known[t.id]; });
-      if(!shared){
-        var useRemote = window.confirm(
+      if(!(state.trades || []).length){
+        /* Nothing logged here yet. This device's accounts are only the defaults,
+           and merging them would put a second Dhan and Delta beside GitHub's. */
+        useRemote = true;
+      } else if(!state.trades.some(function(t){ return known[t.id]; })){
+        useRemote = window.confirm(
           "GitHub already has a journal with " + (got.remote.trades || []).length + " trades.\n" +
           "This device has " + state.trades.length + " trades that were never synced.\n\n" +
           "OK: use the GitHub journal here. Choose this if you imported the same trades on this device too; otherwise every trade shows twice.\n\n" +
           "Cancel: keep both sets. Choose this only if these trades are different ones.");
-        if(useRemote){
-          try{ localStorage.setItem(KEY + ".before-sync", JSON.stringify(state)); }catch(e){}
-          state = mergeState({accounts:[], trades:[], signals:[], goals:[], aliases:{}, tombstones:{},
-                              ui:{account:"all"}, lastBackup:state.lastBackup || null}, got.remote);
-        }
+      }
+      if(useRemote){
+        try{ localStorage.setItem(KEY + ".before-sync", JSON.stringify(state)); }catch(e){}
+        state = mergeState({accounts:[], trades:[], signals:[], goals:[], aliases:{}, tombstones:{},
+                            ui:{account:"all"}, lastBackup:state.lastBackup || null}, got.remote);
       }
     }
     if(got.remote) state = mergeState(state, got.remote);
@@ -3915,6 +3834,46 @@ document.addEventListener("visibilitychange", syncPull);
 window.addEventListener("online", syncPull);
 setInterval(syncPull, 120000);
 setTimeout(syncPull, 1500);
+
+/* Two open tabs share one saved copy but each keeps its own in memory, so the
+   tab that saved second would quietly undo the first. Follow the other tab's
+   saves instead. (The storage event only reaches the tabs that did not save.) */
+window.addEventListener("storage", function(e){
+  if(e.key !== KEY || !e.newValue) return;
+  try{
+    var p = JSON.parse(e.newValue);
+    if(p && Array.isArray(p.trades) && Array.isArray(p.accounts)){ state = p; renderAll(); }
+  }catch(err){}
+});
+
+/* GitHub Pages lets a browser keep this page for ten minutes, and a tab left open
+   keeps whatever it first loaded — which is how a fixed sync bug came back from
+   a tab running the old code. So an open journal looks for a newer copy of
+   itself and offers to reload. Bump the app-version meta tag with every change. */
+var updateShown = false;
+function checkForUpdate(){
+  if(updateShown || document.hidden || !/^https?:$/.test(location.protocol)) return;
+  var mine = document.querySelector('meta[name="app-version"]');
+  fetch(location.pathname, {cache: "no-store"}).then(function(r){
+    return r.ok ? r.text() : "";
+  }).then(function(t){
+    var m = t.match(/<meta name="app-version" content="([^"]+)"/);
+    if(!m || !mine || m[1] === mine.content || updateShown) return;
+    updateShown = true;
+    var bar = $("#updateAlert");
+    var box = el("div");
+    box.appendChild(el("strong", null, "A newer version of the journal is available."));
+    box.appendChild(el("span", null, "Reload to use it. Everything you have entered is already saved."));
+    var btn = el("button", "btn btn-sm btn-primary", "Reload");
+    btn.onclick = function(){ location.reload(); };
+    bar.innerHTML = "";
+    bar.appendChild(box); bar.appendChild(btn);
+    bar.className = "alertbar info on";
+  }).catch(function(){});
+}
+document.addEventListener("visibilitychange", checkForUpdate);
+setInterval(checkForUpdate, 300000);
+setTimeout(checkForUpdate, 3000);
 var syncTimer = null, syncBusy = false;
 function syncSoon(){
   /* A sync saves what it merged; that save must not schedule yet another sync. */
@@ -4662,15 +4621,6 @@ $("#importBtn").onclick = function(){
   if(!raw){ toast("Paste a backup into the box first"); return; }
   try{ applyBackup(raw); }
   catch(err){ toast("That is not a valid backup — check the JSON"); }
-};
-$("#seedBtn").onclick = function(){
-  confirmAction("Load practice data?",
-    "This replaces everything currently in the journal with a fresh set of made-up trades.",
-    "Replace with practice data", function(){
-      var keep = state.discord;
-      state = seed(); state.discord = keep || {webhook:""};
-      calCursor = null; save(); renderAll(); toast("Sample data reloaded");
-    });
 };
 $("#wipeBtn").onclick = function(){ openWipe(); };
 state = load();
