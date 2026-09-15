@@ -1,7 +1,9 @@
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Victus Journal</title>
-<meta name="app-version" content="2026-09-16.6">
+<meta name="app-version" content="2026-09-16.7">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="application-name" content="Victus Journal">
 <meta name="apple-mobile-web-app-title" content="Victus Journal">
 <meta name="theme-color" content="#0B0E12">
@@ -217,6 +219,37 @@ input:hover,select:hover,textarea:hover{border-color:var(--muted)}
 .track .fill{position:absolute; top:0; bottom:0; left:0; transition:width .5s cubic-bezier(.2,.7,.3,1)}
 .pace{position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--ink); opacity:.6}
 .goal-foot{display:flex; justify-content:space-between; gap:10px; margin-top:7px; font-size:11px; color:var(--muted)}
+.goals-dash{margin-bottom:16px; grid-template-columns:repeat(auto-fill, minmax(290px, 1fr))}
+.goal-compact{cursor:pointer; padding:13px 14px}
+.goal-compact .goal-meta{margin-bottom:9px}
+.goal-compact .goal-cur{font-size:20px}
+.plan-line{margin:9px 0 0; font-size:12.5px; color:var(--ink-2)}
+.goal-plan{margin-top:13px; padding-top:13px; border-top:1px solid var(--line)}
+.plan-tiles{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+.plan-tile{background:var(--surface-2); border:1px solid var(--line); padding:9px 11px; display:flex; flex-direction:column; min-width:0}
+.plan-tile .k{font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted)}
+.plan-tile .v{font-size:21px; font-weight:600; margin-top:2px}
+.plan-tile .s{font-size:11.5px; color:var(--muted)}
+.plan-tile .s.up{color:var(--up)}
+.plan-skip{margin-top:11px}
+.plan-skip .k{display:block; font-size:11.5px; color:var(--muted); margin-bottom:6px}
+.chips{display:grid; grid-template-columns:repeat(3,1fr); gap:6px}
+.chip{border:1px solid var(--line-2); padding:6px 9px; font-size:11px; color:var(--muted); background:var(--surface); display:flex; flex-direction:column}
+.chip b{color:var(--down); font-weight:600; font-size:15px}
+.plan-note{margin:10px 0 0; font-size:11.5px; color:var(--muted)}
+.plan-note.up{color:var(--up)}
+
+/* ---------- trade cards (phones) ---------- */
+.tcards{display:none}
+.tcard{padding:12px 14px; border-bottom:1px solid var(--line)}
+.tcard:last-child{border-bottom:0}
+.tc-top{display:flex; align-items:center; gap:8px}
+.tc-res{margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; line-height:1.25}
+.tc-pnl{font-size:16px; font-weight:600}
+.tc-r{font-size:11.5px}
+.tc-meta{font-size:12px; color:var(--muted); margin-top:3px}
+.tc-note{font-size:12.5px; color:var(--ink-2); margin-top:6px}
+.tc-act{display:flex; gap:6px; margin-top:9px}
 
 /* ---------- forms ---------- */
 .field{display:flex; flex-direction:column; gap:4px}
@@ -264,6 +297,63 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
 .toast{position:fixed; left:50%; bottom:28px; transform:translate(-50%,12px); background:var(--ink); color:var(--ground); padding:9px 16px; font-size:13px; opacity:0; pointer-events:none; transition:opacity .18s, transform .18s; z-index:80}
 .toast.on{opacity:1; transform:translate(-50%,0)}
 @media (prefers-reduced-motion:reduce){*{transition:none !important}}
+
+/* ---------- phones ---------- */
+/* The desktop header stacked brand, tabs and button into a quarter of the screen
+   and pinned it there. On a phone the header is one slim row and the tabs move
+   to a bar at the bottom, where a thumb reaches them. */
+@media (max-width:640px){
+  .app{padding:0 14px calc(84px + env(safe-area-inset-bottom))}
+  .topbar{padding:10px 0; gap:10px; flex-wrap:nowrap}
+  .brand{gap:9px; min-width:0}
+  .mark{width:32px; height:32px; border-radius:8px}
+  .brand h1{font-size:17px; white-space:nowrap}
+  .tagline{display:none}
+  #newTradeBtn{padding:8px 13px; white-space:nowrap}
+  .tabs{
+    position:fixed; left:0; right:0; bottom:0; z-index:40;
+    display:grid; grid-template-columns:repeat(5,1fr); gap:0;
+    padding:0 0 env(safe-area-inset-bottom); border-width:1px 0 0;
+    background:var(--surface); box-shadow:0 -8px 20px -14px rgba(0,0,0,.4);
+  }
+  .tab{padding:14px 0 13px; font-size:12.5px; border-top:2px solid transparent}
+  .tab.is-active{box-shadow:none; background:var(--surface); border-top-color:var(--brass); font-weight:600}
+  .toast{bottom:calc(78px + env(safe-area-inset-bottom))}
+  .view{padding-top:14px}
+  .alertbar.info{flex-wrap:wrap}
+
+  .accounts{flex-wrap:nowrap; overflow-x:auto; margin:0 -14px 12px; padding:2px 14px; scrollbar-width:none}
+  .accounts::-webkit-scrollbar{display:none}
+  .acct{flex:none; padding:8px 13px; font-size:13px}
+
+  .stat{padding:11px 12px}
+  .stat-k{font-size:10.5px}
+  .stat-v{font-size:18px}
+  .stat-sub{font-size:11.5px}
+  .panel-head{padding:12px 14px}
+  .panel-head .hint{flex-basis:100%; margin-left:0; order:3; font-size:12px}
+  .panel-body{padding:14px}
+  .chart .axis-t{font-size:10px}
+  .barrow .lbl, .barrow .val{font-size:13px}
+
+  .goal{padding:14px}
+  .goal-meta, .goal-foot{font-size:12px}
+  .plan-tile .k{font-size:10.5px}
+  .plan-tile .s{font-size:12px}
+  .chip{font-size:12px}
+  .chip b{font-size:16px}
+
+  #view-journal .tablewrap{display:none}
+  .tcards{display:block}
+  .filters input[type=text]{width:100%}
+  .filters select{flex:1 1 40%; min-width:0}
+  /* iPhone zooms the page into any field whose text is under 16px. */
+  input[type=text],input[type=number],input[type=date],input[type=time],select,textarea{font-size:16px}
+  .modal{padding:10px 8px}
+  .sheet-body{padding:14px}
+  .empty{padding:26px 14px}
+  .pill{font-size:11px}
+}
 </style>
 
 <div class="app">
@@ -291,6 +381,7 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
     <div class="accounts" id="accounts"></div>
 
     <section class="view is-active" id="view-dashboard">
+      <div class="goals goals-dash" id="dashGoals"></div>
       <div class="strip" id="statStrip"></div>
       <div class="grid-2">
         <div class="stack">
@@ -381,6 +472,7 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
           </tr></thead>
           <tbody id="tradeBody"></tbody>
         </table></div>
+        <div class="tcards" id="tradeCards"></div>
       </div>
     </section>
 
@@ -463,7 +555,7 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
       <div class="panel">
         <div class="panel-head">
           <h2>Targets</h2>
-          <span class="hint">The marker shows where you should be by today</span>
+          <span class="hint">The marker shows where the plan has you by today</span>
           <button class="btn btn-sm" id="newGoalBtn" style="margin-left:12px">Add goal</button>
         </div>
         <div class="panel-body"><div class="goals" id="goalList"></div></div>
@@ -797,7 +889,11 @@ function isAll(){ return selected() === "all"; }
 function viewCur(){
   if(!isAll()) return acct(selected()).currency;
   var cs = uniq(state.accounts.map(function(a){ return a.currency; }));
-  return cs.length === 1 ? cs[0] : null;
+  if(cs.length === 1) return cs[0];
+  /* Books in two currencies, but trades in only one of them: there is still one
+     currency to add up, and showing 0.00R for trades without stops hides it. */
+  var used = uniq(state.trades.map(function(t){ return acct(t.accountId).currency; }));
+  return used.length === 1 ? used[0] : null;
 }
 
 /* ============ derived trade fields ============ */
@@ -970,7 +1066,11 @@ function equityChart(host, ts, cur){
   host.innerHTML = "";
   if(ts.length < 2){ host.appendChild(el("div","empty","Log at least two trades to draw the curve.")); return; }
   var inR = cur == null;
-  var W=760, H=250, PL=62, PR=14, PT=14, PB=26;
+  /* Drawn at the width it will be shown at. A 760-wide drawing squeezed onto a
+     phone shrinks its axis labels to a few pixels. Hidden views report no width
+     and get the desktop size until they are shown and redrawn. */
+  var W = host.clientWidth ? clamp(Math.round(host.clientWidth), 300, 760) : 760;
+  var H = W < 520 ? 210 : 250, PL = W < 520 ? 54 : 62, PR=14, PT=14, PB=26;
   var pts=[], run=0;
   for(var i=0;i<ts.length;i++){
     run += inR ? (ts[i].r || 0) : ts[i].pnl;
@@ -1352,6 +1452,7 @@ function renderAccounts(){
 }
 
 function renderDashboard(){
+  renderDashGoals();
   var ts = scoped();
   var s = stats(ts);
   var days = tradingDays(ts);
@@ -1407,11 +1508,11 @@ function renderDashboard(){
 
   equityChart($("#equityWrap"), ts, cur);
   var openingCapital = isAll()
-    ? sum(state.accounts.map(function(a){ return a.startBalance; }))
+    ? sum(state.accounts.filter(function(a){ return a.currency === cur; }).map(function(a){ return a.startBalance; }))
     : acct(selected()).startBalance;
   $("#equityHint").textContent = ts.length
     ? (cur ? "Since " + fmtDay(ts[0].date) + " · "
-             + (isAll() && state.accounts.length > 1 ? "combined balance " : "balance ")
+             + (isAll() && state.accounts.filter(function(a){ return a.currency === cur; }).length > 1 ? "combined balance " : "balance ")
              + money(openingCapital + s.net, cur, 0)
            : "In R — the books settle in different currencies, so only R adds up")
     : "";
@@ -1465,13 +1566,27 @@ function renderJournal(){
     + " · " + pct(s.winRate) + " won";
 
   var body = $("#tradeBody"); body.innerHTML = "";
+  var cards = $("#tradeCards"); cards.innerHTML = "";
   if(!rows.length){
     var tr = el("tr"), td = el("td"); td.colSpan = 17;
-    td.appendChild(el("div","empty", scoped().length ? "No trades match these filters." : "No trades logged yet."));
-    tr.appendChild(td); body.appendChild(tr); return;
+    var msg = scoped().length ? "No trades match these filters." : "No trades logged yet.";
+    td.appendChild(el("div","empty", msg));
+    tr.appendChild(td); body.appendChild(tr);
+    cards.appendChild(el("div","empty", msg));
+    return;
+  }
+  function removeTrade(t){
+    confirmAction("Delete this trade?",
+      "The " + t.symbol + " trade from " + fmtDay(t.date) + " will be removed for good.",
+      "Delete trade", function(){
+        noteDeleted("trades", t.id);
+        state.trades = state.trades.filter(function(o){ return o.id !== t.id; });
+        save(); renderAll(); toast("Trade deleted");
+      });
   }
   rows.forEach(function(t){
     var a = acct(t.accountId);
+    cards.appendChild(tradeCard(t, a, function(){ openTrade(t.id); }, function(){ removeTrade(t); }));
     var tr = el("tr");
     function cell(txt, c){ tr.appendChild(el("td", c || null, txt)); }
     cell(fmtDay(t.date), "num dim");
@@ -1511,18 +1626,39 @@ function renderJournal(){
     var e = el("button","btn btn-sm btn-ghost","Edit");
     e.onclick = function(){ openTrade(t.id); };
     var x = el("button","btn btn-sm btn-ghost btn-danger","Delete");
-    x.onclick = function(){
-      confirmAction("Delete this trade?",
-        "The " + t.symbol + " trade from " + fmtDay(t.date) + " will be removed for good.",
-        "Delete trade", function(){
-          noteDeleted("trades", t.id);
-          state.trades = state.trades.filter(function(o){ return o.id !== t.id; });
-          save(); renderAll(); toast("Trade deleted");
-        });
-    };
+    x.onclick = function(){ removeTrade(t); };
     act.appendChild(e); act.appendChild(x); tr.appendChild(act);
     body.appendChild(tr);
   });
+}
+/* A seventeen-column table leaves the P&L off the edge of a phone. On narrow
+   screens each trade becomes a card that leads with what it made. */
+function tradeCard(t, a, onEdit, onDelete){
+  var c = el("div","tcard");
+  var top = el("div","tc-top");
+  top.appendChild(el("span","sym", t.symbol));
+  top.appendChild(el("span","pill " + (t.direction === "long" ? "pill-neutral" : "pill-brass"),
+                     t.direction === "long" ? "Long" : "Short"));
+  var res = el("span","tc-res");
+  res.appendChild(el("span","tc-pnl num " + cls(t.pnl), signedMoney(t.pnl, a.currency, 2)));
+  if(t.r != null) res.appendChild(el("span","tc-r num " + cls(t.r), rfmt(t.r)));
+  top.appendChild(res);
+  c.appendChild(top);
+  var fmtPx = function(v){ return v.toLocaleString(curLocale(a.currency),{maximumFractionDigits:4}); };
+  c.appendChild(el("div","tc-meta",
+    fmtDay(t.date) + " · " + (t.time || "—") + " · held " + fmtHeld(heldMins(t))
+    + " · " + a.name + (t.leverage > 1 ? " · " + t.leverage + "×" : "")));
+  c.appendChild(el("div","tc-meta num",
+    fmtPx(t.entry) + " → " + fmtPx(t.exit) + " · qty " + t.qty
+    + (t.risk ? " · risk " + money(t.risk, a.currency, 0) : "")
+    + (t.setup ? " · " + t.setup : "")));
+  if(t.notes) c.appendChild(el("div","tc-note", t.notes));
+  var act = el("div","tc-act");
+  var e = el("button","btn btn-sm","Edit"); e.onclick = onEdit;
+  var x = el("button","btn btn-sm btn-ghost btn-danger","Delete"); x.onclick = onDelete;
+  act.appendChild(e); act.appendChild(x);
+  c.appendChild(act);
+  return c;
 }
 
 /* ============ goals ============ */
@@ -1560,6 +1696,220 @@ function fmtMetric(metric, v, cur){
   if(u === "R") return (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2) + "R";
   return v % 1 === 0 ? String(v) : v.toFixed(1);
 }
+/* A goal counts trading days, not calendar days: weekends are left out unless
+   the goal says to count every day. Exchange holidays are not known here, so a
+   holiday still counts as a day to earn on. */
+var DAY_MODES = {weekdays:"Weekdays only", all:"Every day"};
+function countsAsDay(d, mode){ var w = d.getDay(); return mode === "all" || (w !== 0 && w !== 6); }
+function dayCount(from, to, mode){
+  var n = 0, d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  while(d <= to){ if(countsAsDay(d, mode)) n++; d.setDate(d.getDate() + 1); }
+  return n;
+}
+
+function goalState(g, ts){
+  var o = {g:g, m: METRICS[g.metric] || METRICS.total_r};
+  o.acct = g.accountId && g.accountId !== "all" ? acct(g.accountId) : null;
+  o.cur = o.acct ? o.acct.currency : null;
+  var w = o.w = periodWindow(g.period);
+  o.inWin = ts.filter(function(t){
+    if(o.acct && t.accountId !== o.acct.id) return false;
+    var d = parseDay(t.date);
+    return d >= w.start && d <= w.end;
+  });
+  o.lower = o.m.dir === "atmost";
+  o.val = goalValue(g.metric, o.inWin);
+  o.progress = o.lower
+    ? (o.val <= g.target ? 100 : clamp(g.target > 0 ? g.target/o.val*100 : 0, 0, 100))
+    : clamp(g.target ? o.val/g.target*100 : 0, 0, 100);
+  o.mode = g.days === "all" ? "all" : "weekdays";
+  o.closed = w.now > w.end;
+  o.hit = o.lower ? (o.val <= g.target) : (o.val >= g.target);
+  o.paced = o.m.kind === "cumulative" && g.period !== "all" && !o.closed;
+
+  if(o.paced){
+    var today = iso(w.now);
+    o.totalDays = Math.max(1, dayCount(w.start, w.end, o.mode));
+    o.todayCounts = countsAsDay(w.now, o.mode);
+    /* Today is still a day to earn on until it is over, so it is counted as left. */
+    o.daysLeft = dayCount(w.now, w.end, o.mode);
+    o.pace = clamp((o.totalDays - o.daysLeft)/o.totalDays*100, 0, 100);
+    o.before = goalValue(g.metric, o.inWin.filter(function(t){ return t.date < today; }));
+    o.doneToday = o.val - o.before;
+    o.todayTrades = o.inWin.filter(function(t){ return t.date === today; }).length;
+    /* On a counted day the target is fixed at the start of the day, so it does
+       not shrink as the day's trades come in. On a day that does not count,
+       whatever was made on it simply lowers what the coming days need. */
+    o.remaining = g.target - (o.todayCounts ? o.before : o.val);
+    o.perDay = o.daysLeft > 0 ? Math.max(0, o.remaining) / o.daysLeft : null;
+    o.planned = g.target / o.totalDays;
+    o.behind = o.planned * (o.totalDays - o.daysLeft) - o.before;
+    o.skip = [1,2,3].filter(function(k){ return o.daysLeft - k > 0; }).map(function(k){
+      return {k:k, perDay: Math.max(0, o.remaining) / (o.daysLeft - k)};
+    });
+    if(!o.todayCounts){
+      var nd = new Date(w.now);
+      do { nd.setDate(nd.getDate() + 1); } while(!countsAsDay(nd, o.mode));
+      o.nextDay = nd;
+    }
+  }
+
+  if(o.lower){
+    if(o.closed){ o.status = o.hit ? "Held" : "Breached"; o.statusCls = o.hit ? "pill-up" : "pill-down"; }
+    else { o.status = o.hit ? "Inside cap" : "Over cap"; o.statusCls = o.hit ? "pill-up" : "pill-down"; }
+  }
+  else if(o.hit){ o.status = "Hit"; o.statusCls = "pill-up"; }
+  else if(o.closed){ o.status = "Missed"; o.statusCls = "pill-down"; }
+  else if(!o.paced){
+    if(o.progress >= 90){ o.status = "Just short"; o.statusCls = "pill-brass"; }
+    else { o.status = "Below target"; o.statusCls = "pill-down"; }
+  }
+  else if(o.progress >= o.pace){ o.status = "On track"; o.statusCls = "pill-up"; }
+  else if(o.progress >= o.pace*0.7){ o.status = "Slipping"; o.statusCls = "pill-brass"; }
+  else { o.status = "Behind"; o.statusCls = "pill-down"; }
+  return o;
+}
+
+/* The daily plan only reads naturally for things that add up day by day. */
+function hasPlan(o){ return o.paced && !o.lower && !o.hit && o.daysLeft > 0; }
+function planFmt(o, v){
+  if(o.g.metric === "trade_count") return (Math.ceil(v*10)/10).toFixed(v % 1 ? 1 : 0);
+  return fmtMetric(o.g.metric, v, o.cur);
+}
+function dayWord(n){ return n + " day" + (n === 1 ? "" : "s"); }
+function shortDay(d){ return d.toLocaleDateString("en-GB",{weekday:"short", day:"numeric", month:"short"}); }
+
+function goalCard(o, compact){
+  var g = o.g;
+  var card = el("div","goal" + (compact ? " goal-compact" : ""));
+  var top = el("div","goal-top");
+  top.appendChild(el("h3", null, g.title));
+  top.appendChild(el("span","pill " + o.statusCls, o.status));
+  if(!compact){
+    var edit = el("button","btn btn-sm btn-ghost","Edit");
+    edit.onclick = function(){ openGoal(g.id); };
+    top.appendChild(edit);
+  }
+  card.appendChild(top);
+  card.appendChild(el("div","goal-meta",
+    o.m.label + " · " + (o.acct ? o.acct.name : "All accounts") + " · " + PERIODS[g.period]
+    + (o.paced && o.mode === "all" ? " · every day" : "")
+    + " · " + o.inWin.length + " trades"));
+
+  var nums = el("div","goal-nums");
+  nums.appendChild(el("span","goal-cur num " + (o.hit ? "up" : ""), fmtMetric(g.metric, o.val, o.cur)));
+  nums.appendChild(el("span","goal-tgt", (o.lower ? "ceiling " : "target ") + fmtMetric(g.metric, g.target, o.cur)));
+  card.appendChild(nums);
+
+  var track = el("div","track");
+  var fill = el("div","fill");
+  fill.style.width = o.progress + "%";
+  fill.style.background = o.hit ? "var(--up)"
+    : (o.paced ? (o.progress >= o.pace ? "var(--brass)" : "var(--down)")
+               : (o.progress >= 90 ? "var(--brass)" : "var(--down)"));
+  track.appendChild(fill);
+  if(o.paced && !o.lower){
+    var mark = el("div","pace");
+    mark.style.left = o.pace + "%";
+    mark.title = "Where the plan has you by the start of today";
+    track.appendChild(mark);
+  }
+  card.appendChild(track);
+
+  var foot = el("div","goal-foot");
+  foot.appendChild(el("span", null, o.lower
+    ? (o.hit ? fmtMetric(g.metric, g.target - o.val, o.cur) + " of room left"
+             : fmtMetric(g.metric, o.val - g.target, o.cur) + " over the cap")
+    : Math.round(o.progress) + "% of target"));
+  foot.appendChild(el("span", null,
+    g.period === "all" ? o.inWin.length + " trades"
+    : o.closed ? "Window closed"
+    : o.paced ? dayWord(o.daysLeft).replace("day", o.mode === "all" ? "day" : "trading day") + " left"
+    : ""));
+  card.appendChild(foot);
+
+  if(!hasPlan(o)){
+    if(o.paced && o.hit && !o.lower){
+      var spare = Math.max(0, o.daysLeft - (o.todayCounts ? 1 : 0));
+      card.appendChild(el("p","plan-note up", "Target reached with " + spare
+        + (o.mode === "all" ? " day" : " trading day") + (spare === 1 ? "" : "s") + " to spare."));
+    }
+    return card;
+  }
+
+  var green = g.metric === "green_days";
+  var need = o.todayCounts ? o.perDay - o.doneToday : o.perDay;
+
+  if(compact){
+    var line;
+    if(green){
+      line = Math.ceil(Math.max(0, o.remaining)) + " green of " + dayWord(o.daysLeft) + " left";
+    } else if(o.todayCounts){
+      line = (need > 0 ? "Today: " + planFmt(o, need) + " to go" : "Today's target met")
+        + (o.skip.length ? " · miss today → " + planFmt(o, o.skip[0].perDay) + "/day" : "");
+    } else {
+      line = "Next: " + planFmt(o, o.perDay) + " on " + shortDay(o.nextDay);
+    }
+    card.appendChild(el("p","plan-line", line));
+    return card;
+  }
+
+  var plan = el("div","goal-plan");
+  var tiles = el("div","plan-tiles");
+  function tile(k, v, vcls, s, scls){
+    var t = el("div","plan-tile");
+    t.appendChild(el("span","k", k));
+    t.appendChild(el("span","v num " + (vcls || ""), v));
+    if(s) t.appendChild(el("span","s " + (scls || ""), s));
+    tiles.appendChild(t);
+  }
+  if(green){
+    tile("Green days needed", String(Math.ceil(Math.max(0, o.remaining))), "",
+         "of " + dayWord(o.daysLeft) + " left");
+    tile("Today", o.doneToday > 0 ? "Green" : o.todayTrades ? "Not yet" : "No trades", o.doneToday > 0 ? "up" : "",
+         o.todayTrades + " trades");
+  } else {
+    if(o.todayCounts){
+      tile("Today's target", planFmt(o, o.perDay), "",
+           need > 0 ? planFmt(o, need) + " to go" : "Met" + (need < 0 ? " · " + planFmt(o, -need) + " extra" : ""),
+           need > 0 ? "" : "up");
+    } else {
+      tile("Next trading day", planFmt(o, o.perDay), "", shortDay(o.nextDay));
+    }
+    tile(o.todayCounts ? "Done today" : "Today (not counted)",
+         g.metric === "net_pnl" ? signedMoney(o.doneToday, o.cur) : planFmt(o, o.doneToday),
+         cls(o.doneToday), o.todayTrades + " trade" + (o.todayTrades === 1 ? "" : "s"));
+  }
+  plan.appendChild(tiles);
+
+  if(o.skip.length && !green){
+    var skip = el("div","plan-skip");
+    skip.appendChild(el("span","k", "Miss days and each " + (o.mode === "all" ? "day" : "trading day") + " left needs"));
+    var chips = el("div","chips");
+    o.skip.forEach(function(s){
+      var c = el("span","chip");
+      c.appendChild(el("span", null, "miss " + dayWord(s.k)));
+      c.appendChild(el("b","num", planFmt(o, s.perDay)));
+      chips.appendChild(c);
+    });
+    skip.appendChild(chips);
+    plan.appendChild(skip);
+  } else if(o.daysLeft === 1){
+    plan.appendChild(el("p","plan-note", "Last " + (o.mode === "all" ? "day" : "trading day") + " of the window."));
+  }
+
+  if(!green){
+    var ahead = -o.behind;
+    plan.appendChild(el("p","plan-note",
+      "Plan: " + planFmt(o, o.planned) + " a " + (o.mode === "all" ? "day" : "trading day")
+      + " over " + dayWord(o.totalDays)
+      + (Math.abs(o.behind) < o.planned * 0.05 ? " · right on plan"
+         : " · " + planFmt(o, Math.abs(o.behind)) + (ahead > 0 ? " ahead of plan" : " behind plan"))));
+  }
+  card.appendChild(plan);
+  return card;
+}
+
 function renderGoals(){
   var host = $("#goalList"); host.innerHTML = "";
   if(!state.goals.length){
@@ -1570,88 +1920,21 @@ function renderGoals(){
     e.appendChild(b); host.appendChild(e); return;
   }
   var ts = allTrades();
-  state.goals.forEach(function(g){
-    var m = METRICS[g.metric] || METRICS.total_r;
-    var gAcct = g.accountId && g.accountId !== "all" ? acct(g.accountId) : null;
-    var gCur = gAcct ? gAcct.currency : null;
-    var w = periodWindow(g.period);
-    var inWin = ts.filter(function(t){
-      if(gAcct && t.accountId !== gAcct.id) return false;
-      var d = parseDay(t.date);
-      return d >= w.start && d <= w.end;
-    });
-    var lower = m.dir === "atmost";
-    var val = goalValue(g.metric, inWin);
-    var progress = lower
-      ? (val <= g.target ? 100 : clamp(g.target > 0 ? g.target/val*100 : 0, 0, 100))
-      : clamp(g.target ? val/g.target*100 : 0, 0, 100);
-
-    var totalDays = Math.max(1, Math.round((w.end - w.start)/864e5) + 1);
-    var elapsed = clamp(Math.round((w.now - w.start)/864e5) + 1, 0, totalDays);
-    var pace = elapsed/totalDays*100;
-    var left = Math.max(0, totalDays - elapsed);
-    var closed = w.now > w.end || left === 0;
-    var hit = lower ? (val <= g.target) : (val >= g.target);
-    var paced = m.kind === "cumulative" && g.period !== "all" && !closed;
-
-    var status, statusCls;
-    if(lower){
-      if(closed){ status = hit ? "Held" : "Breached"; statusCls = hit ? "pill-up" : "pill-down"; }
-      else { status = hit ? "Inside cap" : "Over cap"; statusCls = hit ? "pill-up" : "pill-down"; }
-    }
-    else if(hit){ status = "Hit"; statusCls = "pill-up"; }
-    else if(closed){ status = "Missed"; statusCls = "pill-down"; }
-    else if(!paced){
-      if(progress >= 90){ status = "Just short"; statusCls = "pill-brass"; }
-      else { status = "Below target"; statusCls = "pill-down"; }
-    }
-    else if(progress >= pace){ status = "On track"; statusCls = "pill-up"; }
-    else if(progress >= pace*0.7){ status = "Slipping"; statusCls = "pill-brass"; }
-    else { status = "Behind"; statusCls = "pill-down"; }
-
-    var card = el("div","goal");
-    var top = el("div","goal-top");
-    top.appendChild(el("h3", null, g.title));
-    top.appendChild(el("span","pill " + statusCls, status));
-    var edit = el("button","btn btn-sm btn-ghost","Edit");
-    edit.onclick = function(){ openGoal(g.id); };
-    top.appendChild(edit);
-    card.appendChild(top);
-    card.appendChild(el("div","goal-meta",
-      m.label + " · " + (gAcct ? gAcct.name : "All accounts") + " · " + PERIODS[g.period]
-      + " · " + inWin.length + " trades"));
-
-    var nums = el("div","goal-nums");
-    nums.appendChild(el("span","goal-cur num " + (hit ? "up" : ""), fmtMetric(g.metric, val, gCur)));
-    nums.appendChild(el("span","goal-tgt", (lower ? "ceiling " : "target ") + fmtMetric(g.metric, g.target, gCur)));
-    card.appendChild(nums);
-
-    var track = el("div","track");
-    var fill = el("div","fill");
-    fill.style.width = progress + "%";
-    fill.style.background = hit ? "var(--up)"
-      : (paced ? (progress >= pace ? "var(--brass)" : "var(--down)")
-               : (progress >= 90 ? "var(--brass)" : "var(--down)"));
-    track.appendChild(fill);
-    if(paced){
-      var mark = el("div","pace");
-      mark.style.left = pace + "%";
-      mark.title = "Where you should be by today";
-      track.appendChild(mark);
-    }
-    card.appendChild(track);
-
-    var foot = el("div","goal-foot");
-    foot.appendChild(el("span", null, lower
-      ? (hit ? fmtMetric(g.metric, g.target - val, gCur) + " of room left"
-             : fmtMetric(g.metric, val - g.target, gCur) + " over the cap")
-      : Math.round(progress) + "% of target"));
-    foot.appendChild(el("span", null,
-      g.period === "all" ? inWin.length + " trades"
-      : closed ? "Window closed"
-      : left + " day" + (left === 1 ? "" : "s") + " left"));
-    card.appendChild(foot);
-    host.appendChild(card);
+  state.goals.forEach(function(g){ host.appendChild(goalCard(goalState(g, ts), false)); });
+}
+/* Progress is what gets checked most, so the dashboard carries a short card for
+   each goal that belongs to the account in view. */
+function renderDashGoals(){
+  var host = $("#dashGoals"); host.innerHTML = "";
+  var gs = (state.goals || []).filter(function(g){
+    return isAll() || !g.accountId || g.accountId === "all" || g.accountId === selected();
+  });
+  host.style.display = gs.length ? "" : "none";
+  var ts = allTrades();
+  gs.forEach(function(g){
+    var c = goalCard(goalState(g, ts), true);
+    c.onclick = function(){ var t = document.querySelector('.tab[data-tab="goals"]'); if(t) t.click(); };
+    host.appendChild(c);
   });
 }
 
@@ -4184,7 +4467,7 @@ function openTrade(id){
 
 function openGoal(id){
   var existing = id ? state.goals.filter(function(x){ return x.id === id; })[0] : null;
-  var v = existing || {title:"", metric:"total_r", target:"", period:"month", accountId:"all"};
+  var v = existing || {title:"", metric:"total_r", target:"", period:"month", accountId:"all", days:"weekdays"};
   var refs = {};
   openSheet(existing ? "Edit goal" : "New goal", function(body){
     var grid = el("div","form-grid"); grid.style.gridTemplateColumns = "1fr 1fr";
@@ -4198,6 +4481,8 @@ function openGoal(id){
     }), v.metric);
     refs.period = select(Object.keys(PERIODS).map(function(k){ return {value:k, label:PERIODS[k]}; }), v.period);
     refs.target = input("number", v.target, "any");
+    refs.days = select(Object.keys(DAY_MODES).map(function(k){ return {value:k, label:DAY_MODES[k]}; }),
+                       v.days === "all" ? "all" : "weekdays");
 
     grid.appendChild(field("Goal name", refs.title, "spanfull"));
     grid.appendChild(field("What it measures", refs.metric));
@@ -4205,6 +4490,8 @@ function openGoal(id){
     grid.appendChild(field("Window", refs.period));
     var ft = field("Target", refs.target);
     grid.appendChild(ft);
+    var fd = field("Trading days", refs.days, "spanfull");
+    grid.appendChild(fd);
     var hint = el("p","dim");
     hint.style.cssText = "font-size:11px; margin:2px 0 0; grid-column:1/-1";
     grid.appendChild(hint);
@@ -4223,9 +4510,13 @@ function openGoal(id){
       hint.textContent = (m.dir === "atmost" ? "Stay at or below this. " : "Reach at least this. ")
         + "Measured in " + unit + "."
         + (needsAcct ? " Money targets belong to a single account." : "");
+      /* The daily plan divides what is left by the days left, so the choice only
+         matters for a total that builds up inside a month, quarter or year. */
+      fd.style.display = (m.kind === "cumulative" && m.dir !== "atmost" && refs.period.value !== "all") ? "" : "none";
     }
     refs.metric.addEventListener("change", sync);
     refs.account.addEventListener("change", sync);
+    refs.period.addEventListener("change", sync);
     sync();
 
     if(existing){
@@ -4246,7 +4537,8 @@ function openGoal(id){
       id: existing ? existing.id : uid(),
       title:title, metric:refs.metric.value, target:+refs.target.value,
       period:refs.period.value,
-      accountId: METRICS[refs.metric.value].money ? refs.account.value : refs.account.value
+      accountId: METRICS[refs.metric.value].money ? refs.account.value : refs.account.value,
+      days: refs.days.value
     };
     stamp(rec);
     if(existing) state.goals = state.goals.map(function(x){ return x.id === existing.id ? rec : x; });
@@ -4366,6 +4658,19 @@ $("#tabs").addEventListener("click", function(e){
   });
   $("#accounts").style.display =
     (b.dataset.tab === "data" || state.accounts.length < 2) ? "none" : "";
+  if(b.dataset.tab === "dashboard") renderDashboard();
+  window.scrollTo(0, 0);
+});
+/* The equity chart is drawn to its width, so a rotated phone or a resized
+   window redraws it. */
+var lastWidth = window.innerWidth, resizeTimer = null;
+window.addEventListener("resize", function(){
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(function(){
+    if(Math.abs(window.innerWidth - lastWidth) < 40) return;
+    lastWidth = window.innerWidth;
+    if($("#view-dashboard").classList.contains("is-active")) renderDashboard();
+  }, 200);
 });
 $("#newTradeBtn").onclick = function(){ openTrade(null); };
 $("#reviewBtn").onclick   = function(){ openReview(null); };
