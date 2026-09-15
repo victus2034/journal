@@ -3768,12 +3768,18 @@ function mergeList(mine, theirs, kind, tombstones){
     var a = seen.updatedAt || "", b = rec.updatedAt || "";
     if(b > a) out[rec.id] = rec;
   }
-  (mine || []).forEach(take);
+  /* GitHub's order first, this device's additions after. If each device put its
+     own records first, two devices with new trades would never agree on the
+     order and would take turns saving over each other forever. */
   (theirs || []).forEach(take);
+  (mine || []).forEach(take);
   return order.map(function(id){ return out[id]; }).filter(Boolean);
 }
 function mergeState(local, remote){
-  var tombs = Object.assign({}, remote.tombstones || {}, local.tombstones || {});
+  var tombs = Object.assign({}, remote.tombstones || {});
+  Object.keys(local.tombstones || {}).forEach(function(k){
+    if(!tombs[k] || local.tombstones[k] > tombs[k]) tombs[k] = local.tombstones[k];
+  });
   var merged = {
     accounts: mergeList(local.accounts, remote.accounts, "accounts", tombs),
     trades:   mergeList(local.trades,   remote.trades,   "trades",   tombs),
@@ -3811,7 +3817,10 @@ function syncNow(opts){
   stampAll();
   setSyncStatus("Syncing...");
   var ref = "?ref=" + encodeURIComponent(c.branch || "main");
-  return syncApi("/contents/" + SYNC_PATH + ref).then(function(res){
+  /* GitHub lets a browser reuse this answer for sixty seconds. A reused answer
+     names a version of the file that has since been replaced, and GitHub then
+     refuses the save as a conflict. */
+  return syncApi("/contents/" + SYNC_PATH + ref, {cache: "no-store"}).then(function(res){
     if(res.status === 404) return {remote:null, sha:null};
     if(res.status === 401 || res.status === 403){
       throw new Error("auth");
@@ -3845,13 +3854,14 @@ function syncNow(opts){
         }
       }
     }
-    var before = JSON.stringify(syncPayload(state));
     if(got.remote) state = mergeState(state, got.remote);
     var after = syncPayload(state);
     var body = JSON.stringify(after, null, 2);
+    /* Compared without the save time, which differs on every call and would
+       otherwise make a save that changes nothing but the clock. */
     var unchanged = got.remote && JSON.stringify(after) === JSON.stringify(
       Object.assign({}, got.remote, {savedAt: after.savedAt}));
-    if(unchanged && before === JSON.stringify(after)){
+    if(unchanged){
       state.sync.lastAt = new Date().toISOString();
       state.sync.lastSha = got.sha;
       save(); renderAll();
@@ -3879,8 +3889,14 @@ function syncNow(opts){
     });
   }).catch(function(err){
     var m = String(err && err.message || "");
+    /* Another device saved between this one reading and writing. Nothing is
+       lost: read again, merge again, save again. */
+    if(/conflict/.test(m) && !opts.retried){
+      syncBusy = false;
+      return syncNow(Object.assign({}, opts, {retried: true}));
+    }
     var why = /auth/.test(m) ? "The token was refused. Check it has read and write access to that repository."
-      : /conflict/.test(m) ? "Another device saved at the same moment. Press Sync again."
+      : /conflict/.test(m) ? "Another device saved at the same moment. It will catch up on the next sync."
       : /http 404/.test(m) ? "That repository or branch was not found."
       : /Failed to fetch/i.test(m) ? "Could not reach GitHub. If this is the shared claude.ai link, open the app from your own address instead."
       : "Sync failed (" + m + ").";
