@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Victus Journal</title>
-<meta name="app-version" content="2026-09-16.15">
+<meta name="app-version" content="2026-09-17.1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="application-name" content="Victus Journal">
@@ -14,7 +14,7 @@
   --ground:#E9ECEE; --surface:#FFFFFF; --surface-2:#F2F4F6; --surface-3:#E3E7EA;
   --ink:#12171B; --ink-2:#3C464D; --muted:#6B767E;
   --line:#D2D8DC; --line-2:#BAC3C9;
-  --brass:#9A6B12; --brass-ink:#7C5510; --brass-soft:rgba(154,107,18,.11);
+  --brass:#9A6B12; --brass-ink:#7C5510; --brass-soft:rgba(154,107,18,.11); --on-brass:#FFFFFF;
   --up:#12735A; --down:#AC3E2C;
   --up-soft:rgba(18,115,90,.13); --down-soft:rgba(172,62,44,.13);
   --mark-ink:#FFFFFF;
@@ -28,7 +28,7 @@
     --ground:#0E1215; --surface:#161B20; --surface-2:#1C2329; --surface-3:#232B32;
     --ink:#E4E9EC; --ink-2:#B4BEC5; --muted:#828E97;
     --line:#252D34; --line-2:#333E46;
-    --brass:#D6A052; --brass-ink:#E7BC7C; --brass-soft:rgba(214,160,82,.14);
+    --brass:#D6A052; --brass-ink:#E7BC7C; --brass-soft:rgba(214,160,82,.14); --on-brass:#20160A;
     --up:#35B189; --down:#E07158;
     --up-soft:rgba(53,177,137,.15); --down-soft:rgba(224,113,88,.15);
     --mark-ink:#0E1215;
@@ -39,7 +39,7 @@
   --ground:#0E1215; --surface:#161B20; --surface-2:#1C2329; --surface-3:#232B32;
   --ink:#E4E9EC; --ink-2:#B4BEC5; --muted:#828E97;
   --line:#252D34; --line-2:#333E46;
-  --brass:#D6A052; --brass-ink:#E7BC7C; --brass-soft:rgba(214,160,82,.14);
+  --brass:#D6A052; --brass-ink:#E7BC7C; --brass-soft:rgba(214,160,82,.14); --on-brass:#20160A;
   --up:#35B189; --down:#E07158;
   --up-soft:rgba(53,177,137,.15); --down-soft:rgba(224,113,88,.15);
   --mark-ink:#0E1215;
@@ -67,7 +67,7 @@ button,input,select,textarea{font:inherit; color:inherit}
 }
 .brand{display:flex; align-items:center; gap:11px; margin-right:auto}
 .mark{width:38px; height:38px; flex:none; display:block; border-radius:9px; object-fit:cover}
-.brand h1{font-size:19px; line-height:1.15}
+.brand h1{font-size:19px; line-height:1.15; color:var(--brass-ink)}
 .tagline{margin:0; font-size:11px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted)}
 
 .tabs{display:flex; gap:2px; background:var(--surface-2); border:1px solid var(--line); padding:2px}
@@ -80,8 +80,8 @@ button,input,select,textarea{font:inherit; color:inherit}
   cursor:pointer; font-size:13px; font-weight:500; transition:background .12s, border-color .12s, color .12s;
 }
 .btn:hover{background:var(--surface-2); border-color:var(--muted)}
-.btn-primary{background:var(--ink); color:var(--ground); border-color:var(--ink)}
-.btn-primary:hover{background:var(--ink-2); border-color:var(--ink-2)}
+.btn-primary{background:var(--brass); color:var(--on-brass); border-color:var(--brass)}
+.btn-primary:hover{filter:brightness(1.08)}
 .btn-sm{padding:4px 9px; font-size:12px}
 .btn-ghost{border-color:transparent; background:transparent; color:var(--muted)}
 .btn-ghost:hover{background:var(--surface-2); color:var(--ink); border-color:transparent}
@@ -100,13 +100,14 @@ button,input,select,textarea{font:inherit; color:inherit}
   cursor:pointer; font-size:12.5px; display:flex; align-items:baseline; gap:7px;
 }
 .acct:hover{border-color:var(--muted)}
-.acct.is-active{background:var(--ink); color:var(--ground); border-color:var(--ink)}
+.acct.is-active{background:var(--brass); color:var(--on-brass); border-color:var(--brass)}
 .acct .mk{font-size:9.5px; text-transform:uppercase; letter-spacing:.08em; opacity:.7}
 
 /* A border already says "this is one surface, distinct from the page." A
    shadow under it too was saying that twice — on a screen stacking eight of
-   these, that doubling is most of what read as cluttered. */
-.panel{background:var(--surface); border:1px solid var(--line)}
+   these, that doubling is most of what read as cluttered. The gold edge
+   replaces it as the thing that says "this app", not another line of gray. */
+.panel{background:var(--surface); border:1px solid var(--line); border-left:2px solid var(--brass)}
 .panel-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; padding:13px 16px; border-bottom:1px solid var(--line)}
 .panel-head h2{font-size:15px}
 .panel-head .hint{font-size:11.5px; color:var(--muted); margin-left:auto}
@@ -1238,7 +1239,9 @@ function equityChart(host, ts, cur){
                          role:"img","aria-label":"Cumulative result over "+pts.length+" trades"});
   var gid = "eq"+Math.random().toString(36).slice(2,8);
   var defs = svgEl("defs"), grad = svgEl("linearGradient",{id:gid,x1:"0",y1:"0",x2:"0",y2:"1"});
-  var col = run >= 0 ? "var(--up)" : "var(--down)";
+  /* The signature chart carries the brand color on purpose, not the win/loss
+     color — those already do their job in the stat strip and the day list. */
+  var col = "var(--brass)";
   grad.appendChild(svgEl("stop",{offset:"0%","stop-color":col,"stop-opacity":".22"}));
   grad.appendChild(svgEl("stop",{offset:"100%","stop-color":col,"stop-opacity":"0"}));
   defs.appendChild(grad); svg.appendChild(defs);
