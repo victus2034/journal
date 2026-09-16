@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Victus Journal</title>
-<meta name="app-version" content="2026-09-16.7">
+<meta name="app-version" content="2026-09-16.10">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="application-name" content="Victus Journal">
@@ -94,6 +94,7 @@ button,input,select,textarea{font:inherit; color:inherit}
 
 /* ---------- account switcher ---------- */
 .accounts{display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:16px}
+#dashFilters{margin-bottom:16px}
 .acct{
   border:1px solid var(--line-2); background:var(--surface); padding:6px 13px;
   cursor:pointer; font-size:12.5px; display:flex; align-items:baseline; gap:7px;
@@ -381,6 +382,10 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
     <div class="accounts" id="accounts"></div>
 
     <section class="view is-active" id="view-dashboard">
+      <div class="filters" id="dashFilters">
+        <select id="fMonth" aria-label="Filter by month"></select>
+        <span class="hint" id="monthHint"></span>
+      </div>
       <div class="goals goals-dash" id="dashGoals"></div>
       <div class="strip" id="statStrip"></div>
       <div class="grid-2">
@@ -610,6 +615,47 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
             <p class="dim" style="font-size:11.5px; margin:8px 0 0; line-height:1.6">
               The token stays on this device and never travels in the journal file or a backup.
               Trades, signals, goals and accounts sync; your Discord link and this token do not.
+            </p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Delta Exchange</h2><span class="hint">Pull fills in automatically</span></div>
+          <div class="panel-body">
+            <ol style="margin:0 0 14px; padding-left:20px; font-size:12.5px; color:var(--ink-2); line-height:1.7">
+              <li>In Delta, go to <strong>API Keys</strong> and create one</li>
+              <li>Tick only <strong>Read Data</strong> &mdash; leave Trading off, this key never places an order</li>
+              <li>Leave Trusted IPs blank unless Delta insists on one</li>
+              <li>Paste the key and secret below, then press Test &amp; connect</li>
+            </ol>
+            <div class="form-grid" style="grid-template-columns:1fr 1fr">
+              <div class="field">
+                <label for="deltaKey">API key</label>
+                <input type="text" id="deltaKey" placeholder="a1b2c3..." autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="deltaSecret">API secret</label>
+                <input type="password" id="deltaSecret" placeholder="secret" autocomplete="off">
+              </div>
+              <div class="field spanfull">
+                <label for="deltaAccount">Import into account</label>
+                <select id="deltaAccount"></select>
+              </div>
+            </div>
+            <label class="rule" style="margin-top:12px">
+              <input type="checkbox" id="deltaAuto">
+              Check for new fills automatically
+            </label>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px">
+              <button class="btn btn-sm btn-primary" id="deltaSave">Test &amp; connect</button>
+              <button class="btn btn-sm" id="deltaRun">Import now</button>
+              <button class="btn btn-sm btn-ghost btn-danger" id="deltaForget">Disconnect</button>
+              <button class="btn btn-sm btn-ghost btn-danger" id="deltaUndo">Remove trades Delta imported</button>
+            </div>
+            <p class="dim" style="font-size:12px; margin:12px 0 0" id="deltaState"></p>
+            <p class="dim" style="font-size:11.5px; margin:8px 0 0; line-height:1.6">
+              The key and secret stay on this device and never travel in the journal file, a backup,
+              or GitHub &mdash; each device that should pull fills needs its own connection.
+              Imported trades have no stop price, so they show no R until you add one.
             </p>
           </div>
         </div>
@@ -948,6 +994,48 @@ function allTrades(){
 function scoped(){
   var ts = allTrades();
   return isAll() ? ts : ts.filter(function(t){ return t.accountId === selected(); });
+}
+
+/* ============ month filter (dashboard) ============
+   The dashboard defaults to the current calendar month so it stays a read on
+   how the month in progress is going, not a lifetime blur; "current" tracks
+   the real month as it rolls over instead of freezing at whatever month the
+   journal was opened in. "all" is the escape hatch back to the whole book. */
+function monthKey(dateStr){ return (dateStr || "").slice(0,7); }
+function curMonthKey(){
+  var d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+}
+function monthLabel(key){
+  var p = key.split("-");
+  return new Date(+p[0], +p[1]-1, 1).toLocaleDateString("en-GB",{month:"long", year:"numeric"});
+}
+function selectedMonthKey(){
+  var m = state.ui.month || "current";
+  return m === "all" ? "all" : (m === "current" ? curMonthKey() : m);
+}
+function monthFilter(ts){
+  var key = selectedMonthKey();
+  return key === "all" ? ts : ts.filter(function(t){ return monthKey(t.date) === key; });
+}
+function renderMonthFilter(all){
+  var sel = $("#fMonth");
+  var months = uniq(all.map(function(t){ return monthKey(t.date); })).filter(Boolean);
+  months.sort().reverse();
+  var thisMonth = curMonthKey();
+  if(months.indexOf(thisMonth) === -1) months.unshift(thisMonth);
+  var val = state.ui.month || "current";
+  sel.innerHTML = "";
+  var allOpt = el("option", null, "All time"); allOpt.value = "all"; sel.appendChild(allOpt);
+  months.forEach(function(k){
+    var label = monthLabel(k) + (k === thisMonth ? " (this month)" : "");
+    var o = el("option", null, label);
+    o.value = (k === thisMonth && val === "current") ? "current" : k;
+    sel.appendChild(o);
+  });
+  sel.value = val;
+  if(sel.value !== val) sel.value = "all"; /* a since-removed month falls back safely */
+  sel.onchange = function(){ state.ui.month = sel.value; save(); renderDashboard(); };
 }
 
 /* ============ stats ============ */
@@ -1453,7 +1541,14 @@ function renderAccounts(){
 
 function renderDashboard(){
   renderDashGoals();
-  var ts = scoped();
+  var scopedAll = scoped();
+  renderMonthFilter(scopedAll);
+  var ts = monthFilter(scopedAll);
+  var monthKeyNow = selectedMonthKey();
+  $("#monthHint").textContent = monthKeyNow === "all"
+    ? (scopedAll.length + " trades overall")
+    : (ts.length ? ts.length + " trades in " + monthLabel(monthKeyNow)
+                 : "No trades in " + monthLabel(monthKeyNow));
   var s = stats(ts);
   var days = tradingDays(ts);
   var cur = viewCur();
@@ -1507,9 +1602,19 @@ function renderDashboard(){
   });
 
   equityChart($("#equityWrap"), ts, cur);
-  var openingCapital = isAll()
+  var baseCapital = isAll()
     ? sum(state.accounts.filter(function(a){ return a.currency === cur; }).map(function(a){ return a.startBalance; }))
     : acct(selected()).startBalance;
+  /* A month view's "balance" should read as of the start of that month, not
+     the account's all-time opening balance, or it double-counts every prior
+     month's P&L as if the month just started from scratch. */
+  var priorNet = 0;
+  if(monthKeyNow !== "all"){
+    scopedAll.forEach(function(t){
+      if(monthKey(t.date) < monthKeyNow && acct(t.accountId).currency === cur) priorNet += t.pnl;
+    });
+  }
+  var openingCapital = baseCapital + priorNet;
   $("#equityHint").textContent = ts.length
     ? (cur ? "Since " + fmtDay(ts[0].date) + " · "
              + (isAll() && state.accounts.filter(function(a){ return a.currency === cur; }).length > 1 ? "combined balance " : "balance ")
@@ -1524,7 +1629,9 @@ function renderDashboard(){
   dayList($("#dayList"), days);
   $("#daysHint").textContent = days.length ? days.length + " sessions logged" : "";
   $("#discHint").textContent = ts.length ? pct(adherence(ts)) + " overall" : "";
-  calendar(days);
+  /* The calendar browses its own month via calPrev/calNext independent of the
+     dashboard's month filter, so it needs the unfiltered days, not `days`. */
+  calendar(tradingDays(scopedAll));
 }
 
 /* ============ journal ============ */
@@ -3993,7 +4100,8 @@ function mergeState(local, remote){
     /* The token and the webhook belong to this device, never to the shared
        file, so they are always taken from whatever is already here. */
     discord: state.discord || {webhook:""},
-    sync: state.sync
+    sync: state.sync,
+    delta: state.delta
   };
   if(!merged.accounts.length) merged.accounts = local.accounts || remote.accounts || [];
   return merged;
@@ -4175,6 +4283,260 @@ function setSyncStatus(text, bad){
   if(!el0) return;
   el0.style.color = bad ? "var(--down)" : "var(--muted)";
   el0.textContent = text;
+}
+
+/* ============ Delta Exchange ============ */
+/* Read-only fills, pulled straight from the exchange instead of an exported
+   CSV. The key and secret live only on this device, the same way the GitHub
+   token does — never in the journal file, a backup, or a sync payload. */
+function deltaCfg(){
+  return state.delta || {key:"", secret:"", accountId:"", auto:false, lastAt:"", lastFillTime:0};
+}
+function deltaReady(){ var c = deltaCfg(); return !!(c.key && c.secret && c.accountId); }
+var DELTA_BASE = "https://api.india.delta.exchange";
+function hex(buf){
+  var b = new Uint8Array(buf), s = "";
+  for(var i=0;i<b.length;i++) s += b[i].toString(16).padStart(2,"0");
+  return s;
+}
+/* Delta's signature is an HMAC-SHA256 over method+timestamp+path+query+body,
+   hex-encoded, using the secret as the key. SubtleCrypto is what a page
+   served over https gets for this — no library needed. */
+function deltaSign(secret, message){
+  var enc = new TextEncoder();
+  return crypto.subtle.importKey("raw", enc.encode(secret), {name:"HMAC", hash:"SHA-256"}, false, ["sign"])
+    .then(function(key){ return crypto.subtle.sign("HMAC", key, enc.encode(message)); })
+    .then(hex);
+}
+function deltaCall(path, query){
+  var c = deltaCfg();
+  var qs = query ? "?" + query : "";
+  var timestamp = String(Math.floor(Date.now()/1000));
+  var message = "GET" + timestamp + path + qs;
+  return deltaSign(c.secret, message).then(function(sig){
+    return fetch(DELTA_BASE + path + qs, {
+      headers: {"api-key": c.key, timestamp: timestamp, signature: sig}
+    });
+  }).then(function(res){
+    return res.json().then(function(j){ return {ok: res.status === 200, status: res.status, body: j}; });
+  });
+}
+/* One call proves the key works and is read-only-safe: asking for balances
+   needs no permission a Read Data key lacks, and a Trading-capable key would
+   answer it exactly the same way, so this alone cannot tell the two apart. */
+function deltaTest(){ return deltaCall("/v2/wallet/balances", ""); }
+/* Delta's created_at carries six fraction digits; Date.parse is only reliable
+   on the millisecond-precision ISO it actually guarantees, so the rest is
+   dropped before parsing rather than trusted. Good enough for a fetch cursor,
+   which only has to move forward, not land on the exact microsecond. */
+function deltaMicros(iso){
+  var t = Date.parse(String(iso).replace(/(\.\d{3})\d+/, "$1"));
+  return isFinite(t) ? t * 1000 : 0;
+}
+/* Fills paginate by a cursor, not by page number. Capped so a first connect
+   on a very old account cannot loop forever against the rate limit. */
+function deltaFetchFills(startMicros){
+  var fills = [], after = null, pages = 0;
+  function page(){
+    pages++;
+    var q = "page_size=200" + (startMicros ? "&start_time=" + startMicros : "") + (after ? "&after=" + after : "");
+    return deltaCall("/v2/fills", q).then(function(r){
+      if(!r.ok) return Promise.reject(r);
+      var page = (r.body.result || []);
+      fills = fills.concat(page);
+      after = r.body.meta && r.body.meta.after;
+      if(after && page.length && pages < 60) return page();
+      return {fills: fills, capped: pages >= 60 && !!after};
+    });
+  }
+  return page();
+}
+/* A trade already in the journal from a CSV import carries no src tag, so the
+   src check alone cannot recognize it — the first Delta connection would
+   otherwise recreate a whole history that was already imported by hand,
+   doubling every trade in it. A loose match on symbol, day, direction and
+   size close enough to the same trade catches that case; CSV trades round to
+   four places and Delta fills reconstruct to six, so the comparison has to
+   tolerate that difference rather than requiring an exact number. */
+function nearlyEqual(a, b, tolRel){
+  if(a === b) return true;
+  var scale = Math.max(Math.abs(a), Math.abs(b), 1e-9);
+  return Math.abs(a - b) <= scale * tolRel;
+}
+function findExistingTrade(existingByKey, key, qty, entry, exit){
+  var list = existingByKey[key];
+  if(!list) return null;
+  for(var i=0;i<list.length;i++){
+    var t = list[i];
+    if(nearlyEqual(t.qty, qty, 0.01) && nearlyEqual(t.entry, entry, 0.005) && nearlyEqual(t.exit, exit, 0.005)) return t;
+  }
+  return null;
+}
+/* Fills are executions, not trades — the same reconstruction the CSV import
+   uses (pairTrades), but keyed on symbol alone and spanning whatever window
+   was fetched, since a crypto position can sit open across midnight. Each
+   trade is tagged with the order that closed it, so a second device — or a
+   second import overlapping the first for safety — never adds it twice. */
+function deltaFillsToTrades(fills, accountId, seenOrders, existingByKey){
+  var bySym = {};
+  fills.forEach(function(f){
+    (bySym[f.product_symbol] = bySym[f.product_symbol] || []).push(f);
+  });
+  var trades = [];
+  Object.keys(bySym).forEach(function(sym){
+    var list = bySym[sym].slice().sort(function(a,b){
+      return a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0;
+    });
+    var pos = 0, eQty = 0, eVal = 0, xQty = 0, xVal = 0, fees = 0, dir = null, startT = null;
+    function emit(closeOrderId, closeAt){
+      var src = "delta:" + closeOrderId;
+      if(seenOrders[src]) return;
+      var openD = new Date(startT), closeD = new Date(closeAt);
+      var entry = +(eVal / eQty).toFixed(6), exit = +(xVal / xQty).toFixed(6);
+      var key = accountId + "|" + sym + "|" + iso(openD) + "|" + dir;
+      var already = findExistingTrade(existingByKey, key, eQty, entry, exit);
+      if(already){
+        /* This trade is already here from a CSV import. Tag it instead of
+           adding a second copy, so the next check recognizes it instantly. */
+        already.src = src;
+        seenOrders[src] = true;
+        return;
+      }
+      trades.push({
+        id: uid(), accountId: accountId, date: iso(openD),
+        time: openD.toTimeString().slice(0,5), exitTime: closeD.toTimeString().slice(0,5),
+        symbol: sym, direction: dir,
+        entry: entry, exit: exit,
+        stop: 0, qty: eQty, fees: +fees.toFixed(6),
+        leverage: acct(accountId).defaultLeverage || 1,
+        setup: "", rules: RULES.map(function(){ return false; }), notes: "",
+        src: src
+      });
+      seenOrders[src] = true;
+    }
+    list.forEach(function(f){
+      var qty = Math.abs(num(f.size));
+      var price = num(f.price);
+      var fee = num(f.commission) || 0;
+      if(!qty || !isFinite(price)) return;
+      var signed = f.side === "buy" ? qty : -qty;
+      if(pos === 0){
+        dir = signed > 0 ? "long" : "short";
+        startT = f.created_at; eQty = qty; eVal = qty * price; fees = fee; pos = signed;
+        return;
+      }
+      if((pos > 0) === (signed > 0)){
+        eQty += qty; eVal += qty * price; fees += fee; pos += signed;
+        return;
+      }
+      /* Opposite side of the open position: this fill reduces it, and can
+         reduce it clean to zero or run straight through to the other side —
+         a single order flipping long to short, common on perps. The fee is
+         split between the share that closes the old position and the share
+         that (on a flip) opens the new one. */
+      var posBefore = pos;
+      var close = Math.min(qty, Math.abs(posBefore));
+      var feeClose = fee * (close / qty);
+      xQty += close; xVal += close * price; fees += feeClose;
+      pos = posBefore + signed;
+      var closedFully = close >= Math.abs(posBefore) - 1e-9;
+      if(closedFully){
+        emit(f.order_id, f.created_at);
+        pos = 0; eQty = 0; eVal = 0; xQty = 0; xVal = 0; fees = 0; dir = null; startT = null;
+        var leftover = qty - close;
+        if(leftover > 1e-9){
+          dir = signed > 0 ? "long" : "short";
+          startT = f.created_at; eQty = leftover; eVal = leftover * price;
+          fees = fee - feeClose; pos = signed > 0 ? leftover : -leftover;
+        }
+        return;
+      }
+      /* Reduced but still open in the same direction: keep accumulating the
+         closing side and wait for whatever fill finally flattens it. */
+    });
+  });
+  return trades;
+}
+var deltaBusy = false;
+function deltaSyncNow(opts){
+  opts = opts || {};
+  if(!deltaReady()) return Promise.resolve({ok:false, why:"not-set-up"});
+  if(deltaBusy) return Promise.resolve({ok:false, why:"busy"});
+  deltaBusy = true;
+  var c = deltaCfg();
+  setDeltaStatus("Checking fills...");
+  /* A day of overlap so a position that was still open at the last cursor
+     gets its closing fill picked up, not skipped as already seen. */
+  var since = c.lastFillTime ? c.lastFillTime - 86400e6 : 0;
+  return deltaFetchFills(since).then(function(r){
+    var seen = {}, existingByKey = {};
+    state.trades.forEach(function(t){
+      if(t.src) seen[t.src] = true;
+      var key = t.accountId + "|" + t.symbol + "|" + t.date + "|" + t.direction;
+      (existingByKey[key] = existingByKey[key] || []).push(t);
+    });
+    var found = deltaFillsToTrades(r.fills, c.accountId, seen, existingByKey);
+    if(found.length){
+      state.trades = state.trades.concat(found.map(stamp));
+    }
+    var maxT = r.fills.reduce(function(m,f){ var t = deltaMicros(f.created_at); return t > m ? t : m; }, since);
+    state.delta.lastFillTime = maxT || state.delta.lastFillTime;
+    state.delta.lastAt = new Date().toISOString();
+    save(); renderAll();
+    var msg = found.length ? "Imported " + found.length + " new trade" + (found.length === 1 ? "" : "s")
+      : "Up to date, no new trades";
+    if(r.capped) msg += " (stopped at the rate-limit cap — press Import now again to keep going)";
+    setDeltaStatus(msg);
+    if(!opts.quiet) toast(msg);
+    deltaBusy = false;
+    return {ok:true, found:found.length};
+  }).catch(function(r){
+    deltaBusy = false;
+    var code = r && r.body && r.body.error && r.body.error.code;
+    var why = code === "invalid_api_key" ? "That key was refused. Check it was copied in full."
+      : code === "ip_not_whitelisted_for_api_key" ? "Delta is asking for this device's IP to be whitelisted on the key."
+      : code === "insufficient_permissions" ? "This key does not have Read Data permission."
+      : code ? "Delta refused the request (" + code + ")."
+      : /Failed to fetch/i.test(String(r && r.message)) ? "Could not reach Delta from here."
+      : "Import failed.";
+    setDeltaStatus(why, true);
+    if(!opts.quiet) toast(why);
+    return {ok:false, why:why};
+  });
+}
+function setDeltaStatus(text, bad){
+  var el0 = document.getElementById("deltaState");
+  if(!el0) return;
+  el0.style.color = bad ? "var(--down)" : "var(--muted)";
+  el0.textContent = text;
+}
+function renderDelta(){
+  var sel = $("#deltaAccount");
+  if(!sel) return;
+  var c = deltaCfg();
+  var cur = sel.value || c.accountId;
+  sel.innerHTML = "";
+  state.accounts.forEach(function(a){
+    var o = el("option", null, a.name + (a.market === "crypto" ? "" : " (not a crypto account)"));
+    o.value = a.id;
+    sel.appendChild(o);
+  });
+  sel.value = state.accounts.some(function(a){ return a.id === cur; }) ? cur : (state.accounts[0] && state.accounts[0].id);
+  var key = $("#deltaKey"), secret = $("#deltaSecret"), auto = $("#deltaAuto");
+  if(document.activeElement !== key) key.value = c.key || "";
+  if(document.activeElement !== secret) secret.value = c.secret || "";
+  auto.checked = !!c.auto;
+  var ready = deltaReady();
+  ["deltaRun","deltaForget"].forEach(function(id){
+    $("#" + id).disabled = !ready;
+    $("#" + id).style.opacity = ready ? "" : ".5";
+  });
+  var st = $("#deltaState");
+  if(st && !st.dataset.busy){
+    setDeltaStatus(ready
+      ? (c.lastAt ? "Last checked " + new Date(c.lastAt).toLocaleString() : "Connected. Press Import now.")
+      : "Not connected. Paste the key and secret above.");
+  }
 }
 
 /* ============ discord ============ */
@@ -4643,6 +5005,7 @@ function renderAll(){
   renderAcctList();
   renderDiscord();
   renderSync();
+  renderDelta();
   renderBackupState();
   showStorageAlert();
 }
@@ -4836,6 +5199,77 @@ $("#syncForget").onclick = function(){
     });
 };
 
+$("#deltaSave").onclick = function(){
+  var key = $("#deltaKey").value.trim(), secret = $("#deltaSecret").value.trim();
+  var accountId = $("#deltaAccount").value;
+  if(!key || !secret){ toast("Paste the key and secret"); return; }
+  if(!accountId){ toast("Add a crypto account first"); return; }
+  state.delta = {key:key, secret:secret, accountId:accountId,
+                 auto:$("#deltaAuto").checked, lastAt:"", lastFillTime:0};
+  save(); renderDelta();
+  setDeltaStatus("Testing...");
+  deltaTest().then(function(r){
+    if(!r.ok){
+      var code = r.body && r.body.error && r.body.error.code;
+      var why = code === "invalid_api_key" ? "That key was refused. Check it was copied in full."
+        : code === "ip_not_whitelisted_for_api_key" ? "Delta is asking for this device's IP to be whitelisted on the key."
+        : code ? "Delta refused the request (" + code + ")."
+        : "Could not verify the key.";
+      setDeltaStatus(why, true); toast(why);
+      return;
+    }
+    toast("Connected. Importing...");
+    deltaSyncNow();
+  }).catch(function(){
+    setDeltaStatus("Could not reach Delta from here.", true);
+  });
+};
+$("#deltaRun").onclick = function(){ deltaSyncNow(); };
+$("#deltaAccount").addEventListener("change", function(e){
+  if(!state.delta.key) return;
+  state.delta.accountId = e.target.value; save();
+});
+$("#deltaAuto").addEventListener("change", function(e){
+  if(!state.delta) return;
+  state.delta.auto = e.target.checked;
+  save();
+});
+$("#deltaForget").onclick = function(){
+  confirmAction("Disconnect Delta?",
+    "The key and secret are removed from this device. Trades already imported stay in the journal.",
+    "Disconnect", function(){
+      state.delta = {key:"", secret:"", accountId:"", auto:false, lastAt:"", lastFillTime:0};
+      save(); renderAll(); toast("Disconnected");
+    });
+};
+/* A rollback for exactly one mistake: an early version of this import fetched
+   a device's entire history on first connect and had no way to recognize a
+   trade already sitting here from a CSV import, so it recreated the whole
+   thing as a second, separate copy. This removes only what that import
+   added — anything typed by hand or brought in from a broker file is untouched
+   — and resets the cursor so the next Import now starts over and, with the
+   fix in place, recognizes the originals instead of duplicating them again. */
+$("#deltaUndo").onclick = function(){
+  var mine = state.trades.filter(function(t){ return t.src && t.src.indexOf("delta:") === 0; });
+  if(!mine.length){ toast("No Delta-imported trades to remove"); return; }
+  confirmAction("Remove " + mine.length + " Delta-imported trade" + (mine.length === 1 ? "" : "s") + "?",
+    "Only trades this journal pulled from Delta's API are removed — nothing typed by hand or "
+    + "brought in from a CSV. Press Import now afterward to bring them back correctly.",
+    "Remove them", function(){
+      mine.forEach(function(t){ noteDeleted("trades", t.id); });
+      state.trades = state.trades.filter(function(t){ return !(t.src && t.src.indexOf("delta:") === 0); });
+      if(state.delta) state.delta.lastFillTime = 0;
+      save(); renderAll();
+      toast("Removed " + mine.length + " trade" + (mine.length === 1 ? "" : "s") + ". Press Import now to bring them back.");
+    });
+};
+function deltaPull(){
+  if(deltaReady() && state.delta.auto && !document.hidden) deltaSyncNow({quiet:true});
+}
+document.addEventListener("visibilitychange", deltaPull);
+setInterval(deltaPull, 300000);
+setTimeout(deltaPull, 2500);
+
 $("#importTradesBtn").onclick = function(){ openImport(); };
 $("#importSignalsBtn").onclick = function(){ openSignalImport(); };
 $("#importScannerBtn").onclick = function(){ openScannerImport(); };
@@ -4934,12 +5368,14 @@ $("#wipeBtn").onclick = function(){ openWipe(); };
 state = load();
 if(loadNotice) setTimeout(function(){ toast(loadNotice); }, 400);
 if(!state.ui) state.ui = {account:"all"};
+if(!state.ui.month) state.ui.month = "current";
 if(!state.goals) state.goals = [];
 if(!state.discord) state.discord = {webhook:""};
 if(!state.signals) state.signals = [];
 if(!state.aliases) state.aliases = {};
 if(!state.tombstones) state.tombstones = {};
 if(!state.sync) state.sync = {token:"", repo:"", branch:"main", auto:false, lastAt:"", lastSha:""};
+if(!state.delta) state.delta = {key:"", secret:"", accountId:"", auto:false, lastAt:"", lastFillTime:0};
 if(state.ui.account !== "all" && !state.accounts.some(function(a){ return a.id === state.ui.account; })){
   state.ui.account = "all";
 }
