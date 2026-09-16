@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Victus Journal</title>
-<meta name="app-version" content="2026-09-16.12">
+<meta name="app-version" content="2026-09-16.15">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="application-name" content="Victus Journal">
@@ -103,14 +103,17 @@ button,input,select,textarea{font:inherit; color:inherit}
 .acct.is-active{background:var(--ink); color:var(--ground); border-color:var(--ink)}
 .acct .mk{font-size:9.5px; text-transform:uppercase; letter-spacing:.08em; opacity:.7}
 
-.panel{background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow)}
+/* A border already says "this is one surface, distinct from the page." A
+   shadow under it too was saying that twice — on a screen stacking eight of
+   these, that doubling is most of what read as cluttered. */
+.panel{background:var(--surface); border:1px solid var(--line)}
 .panel-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; padding:13px 16px; border-bottom:1px solid var(--line)}
 .panel-head h2{font-size:15px}
 .panel-head .hint{font-size:11.5px; color:var(--muted); margin-left:auto}
 .panel-body{padding:16px}
 
 /* ---------- stat strip ---------- */
-.strip{display:grid; grid-template-columns:repeat(2,1fr); background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow)}
+.strip{display:grid; grid-template-columns:repeat(2,1fr); background:var(--surface); border:1px solid var(--line)}
 @media (min-width:620px){.strip{grid-template-columns:repeat(4,1fr)}}
 @media (min-width:1000px){.strip{grid-template-columns:repeat(8,1fr)}}
 .stat{padding:13px 14px; border-right:1px solid var(--line); border-bottom:1px solid var(--line)}
@@ -209,7 +212,7 @@ input:hover,select:hover,textarea:hover{border-color:var(--muted)}
 /* ---------- goals ---------- */
 .goals{display:grid; gap:14px; grid-template-columns:1fr}
 @media (min-width:780px){.goals{grid-template-columns:1fr 1fr}}
-.goal{background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow); padding:15px 16px}
+.goal{background:var(--surface); border:1px solid var(--line); padding:15px 16px}
 .goal-top{display:flex; align-items:flex-start; gap:10px}
 .goal-top h3{font-size:15px; flex:1}
 .goal-meta{font-size:11px; color:var(--muted); margin:2px 0 13px}
@@ -313,11 +316,16 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
   #newTradeBtn{padding:8px 13px; white-space:nowrap}
   .tabs{
     position:fixed; left:0; right:0; bottom:0; z-index:40;
-    display:grid; grid-template-columns:repeat(5,1fr); gap:0;
+    /* Flex, not a fixed 5-column grid — a hidden tab is removed from flow
+       entirely, and grid's auto-placement then packs the rest into the
+       first N of 5 cells rather than stretching them, leaving a dead gap
+       at the end of the bar. Flex just redistributes across whatever is
+       actually visible. */
+    display:flex; gap:0;
     padding:0 0 env(safe-area-inset-bottom); border-width:1px 0 0;
     background:var(--surface); box-shadow:0 -8px 20px -14px rgba(0,0,0,.4);
   }
-  .tab{padding:14px 0 13px; font-size:12.5px; border-top:2px solid transparent}
+  .tab{flex:1; padding:14px 0 13px; font-size:12.5px; border-top:2px solid transparent}
   .tab.is-active{box-shadow:none; background:var(--surface); border-top-color:var(--brass); font-weight:600}
   .toast{bottom:calc(78px + env(safe-area-inset-bottom))}
   .view{padding-top:14px}
@@ -390,18 +398,18 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
       <div class="strip" id="statStrip"></div>
       <div class="grid-2">
         <div class="stack">
-          <div class="panel">
+          <div class="panel" id="panel-equity">
             <div class="panel-head"><h2>Equity curve</h2><span class="hint" id="equityHint"></span></div>
             <div class="panel-body"><div class="chart-wrap" id="equityWrap"></div></div>
           </div>
-          <div class="panel">
+          <div class="panel" id="panel-time">
             <div class="panel-head">
               <h2>Time of day</h2>
               <span class="hint">Half-hour slots you actually traded</span>
             </div>
             <div class="panel-body"><div class="barlist" id="timeBars"></div></div>
           </div>
-          <div class="panel">
+          <div class="panel" id="panel-recent">
             <div class="panel-head">
               <h2>Recent days</h2>
               <span class="hint" id="daysHint"></span>
@@ -411,29 +419,29 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
           </div>
         </div>
         <div class="stack">
-          <div class="panel">
+          <div class="panel" id="panel-overtrading">
             <div class="panel-head">
               <h2>Overtrading</h2>
               <span class="hint">What a day returns, by how many trades you took</span>
             </div>
             <div class="panel-body"><div class="barlist" id="countBars"></div></div>
           </div>
-          <div class="panel" id="levPanel">
+          <div class="panel" id="panel-leverage">
             <div class="panel-head">
               <h2>Leverage</h2>
               <span class="hint">Average R by how hard you pressed</span>
             </div>
             <div class="panel-body"><div class="barlist" id="levBars"></div></div>
           </div>
-          <div class="panel">
+          <div class="panel" id="panel-setup">
             <div class="panel-head"><h2>Performance by setup</h2></div>
             <div class="panel-body"><div class="barlist" id="setupBars"></div></div>
           </div>
-          <div class="panel">
+          <div class="panel" id="panel-discipline">
             <div class="panel-head"><h2>Discipline</h2><span class="hint" id="discHint"></span></div>
             <div class="panel-body"><div class="barlist" id="ruleBars"></div></div>
           </div>
-          <div class="panel">
+          <div class="panel" id="panel-calendar">
             <div class="panel-head">
               <h2 id="calTitle">Month</h2>
               <span style="margin-left:auto; display:flex; gap:4px">
@@ -569,6 +577,19 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
 
     <section class="view" id="view-data">
       <div class="datacols">
+        <div class="panel">
+          <div class="panel-head"><h2>Layout</h2><span class="hint">What shows, and where</span></div>
+          <div class="panel-body">
+            <p class="sub-label">Dashboard panels</p>
+            <div class="rules" id="layoutPanels" style="margin-bottom:18px"></div>
+            <p class="sub-label">Tabs in the main bar</p>
+            <div class="rules" id="layoutTabs"></div>
+            <p class="dim" style="font-size:11.5px; margin:12px 0 0; line-height:1.6">
+              Dashboard and Data always stay, so there is always a way back in. This follows
+              the journal through sync, not the device.
+            </p>
+          </div>
+        </div>
         <div class="panel">
           <div class="panel-head">
             <h2>Accounts</h2>
@@ -909,15 +930,27 @@ function cls(v){ return v > 0 ? "up" : v < 0 ? "down" : "dim"; }
 function iso(d){
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 }
-/* A rolling N-month window back from today, for bounding how much history an
-   import pulls in — from a file that has more rows than you want, or from a
-   first-time Delta connect that would otherwise walk the whole account. */
+/* A rolling window back from today, for bounding how much history an import
+   pulls in — from a file that has more rows than you want, or from a
+   first-time Delta connect that would otherwise walk the whole account.
+   Option values are either plain months ("3") or a day count with a "d"
+   suffix ("7d"), since "7 months" would be a strange way to ask for a week. */
+function daysAgoISO(n){
+  var d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() - n);
+  return iso(d);
+}
 function monthsAgoISO(n){
   var d = new Date(); d.setHours(0,0,0,0); d.setMonth(d.getMonth() - n);
   return iso(d);
 }
+/* Returns the cutoff ISO date for a LOOKBACK_OPTS value, or null for "All". */
+function lookbackCutoff(val){
+  if(!val || val === "0") return null;
+  return /d$/.test(val) ? daysAgoISO(+val.slice(0,-1)) : monthsAgoISO(+val);
+}
 var LOOKBACK_OPTS = [
   {value:"0", label:"All available"},
+  {value:"7d", label:"Last 7 days"},
   {value:"1", label:"Last 1 month"},
   {value:"3", label:"Last 3 months"},
   {value:"6", label:"Last 6 months"},
@@ -1557,6 +1590,103 @@ function renderAccounts(){
   });
 }
 
+/* ============ dashboard customization ============ */
+/* This travels with the journal, not the device: the point is opening the
+   same dashboard on the phone that was just set up on the laptop. */
+var DASH_PANELS = [
+  {key:"equity",      panelId:"panel-equity",      label:"Equity curve"},
+  {key:"time",         panelId:"panel-time",         label:"Time of day"},
+  {key:"recent",        panelId:"panel-recent",        label:"Recent days"},
+  {key:"overtrading",  panelId:"panel-overtrading",  label:"Overtrading"},
+  {key:"leverage",     panelId:"panel-leverage",     label:"Leverage"},
+  {key:"setup",         panelId:"panel-setup",         label:"Performance by setup"},
+  {key:"discipline",   panelId:"panel-discipline",   label:"Discipline"},
+  {key:"calendar",      panelId:"panel-calendar",      label:"Calendar"}
+];
+/* A first-time dashboard leads with the two things that answer "how am I
+   doing": the running total, and what actually happened lately. The rest —
+   breakdowns by hour, by size, by setup, the calendar — are real, useful,
+   and one Layout toggle away, but they don't need to load-bear the first
+   screen every time the journal opens. */
+var DEFAULT_DASH_PANELS = {
+  equity: true, recent: true,
+  time: false, overtrading: false, leverage: false,
+  setup: false, discipline: false, calendar: false
+};
+function dashPanels(){ return Object.assign({}, DEFAULT_DASH_PANELS, state.dashboardPanels || {}); }
+function dashPanelOn(key){ return dashPanels()[key] !== false; }
+function renderLayoutPanels(){
+  var host = $("#layoutPanels");
+  if(!host) return;
+  host.innerHTML = "";
+  var dp = dashPanels();
+  DASH_PANELS.forEach(function(item){
+    var lab = el("label","rule");
+    var cb = input("checkbox");
+    cb.checked = dp[item.key] !== false;
+    cb.addEventListener("change", function(){
+      var next = dashPanels();
+      next[item.key] = cb.checked;
+      state.dashboardPanels = next;
+      save(); renderDashboard();
+    });
+    lab.appendChild(cb);
+    lab.appendChild(document.createTextNode(item.label));
+    host.appendChild(lab);
+  });
+}
+
+/* ============ tab visibility ============ */
+/* Dashboard and Data are the anchors: one is where you land, the other is
+   where this very control lives, so neither can be switched off. */
+var TAB_OPTIONS = [
+  {key:"journal", label:"Journal"},
+  {key:"signals",  label:"Signals"},
+  {key:"goals",     label:"Goals"}
+];
+var DEFAULT_VISIBLE_TABS = {journal:true, signals:true, goals:true};
+function visibleTabs(){ return Object.assign({}, DEFAULT_VISIBLE_TABS, state.visibleTabs || {}); }
+function tabVisible(key){ return key === "dashboard" || key === "data" || visibleTabs()[key] !== false; }
+function renderLayoutTabs(){
+  var host = $("#layoutTabs");
+  if(!host) return;
+  host.innerHTML = "";
+  var vt = visibleTabs();
+  TAB_OPTIONS.forEach(function(item){
+    var lab = el("label","rule");
+    var cb = input("checkbox");
+    cb.checked = vt[item.key] !== false;
+    cb.addEventListener("change", function(){
+      var next = visibleTabs();
+      next[item.key] = cb.checked;
+      state.visibleTabs = next;
+      save(); renderTabsNav();
+    });
+    lab.appendChild(cb);
+    lab.appendChild(document.createTextNode(item.label));
+    host.appendChild(lab);
+  });
+}
+/* A tab hidden out from under whatever was showing needs somewhere to land —
+   the dashboard, since it is the one tab that can never itself be hidden. */
+function renderTabsNav(){
+  var buttons = document.querySelectorAll("#tabs .tab");
+  var activeHidden = false;
+  buttons.forEach(function(b){
+    var show = tabVisible(b.dataset.tab);
+    b.style.display = show ? "" : "none";
+    if(!show && b.classList.contains("is-active")) activeHidden = true;
+  });
+  if(activeHidden){
+    buttons.forEach(function(b){ b.classList.toggle("is-active", b.dataset.tab === "dashboard"); });
+    document.querySelectorAll(".view").forEach(function(v){
+      v.classList.toggle("is-active", v.id === "view-dashboard");
+    });
+    $("#accounts").style.display = state.accounts.length < 2 ? "none" : "";
+    renderDashboard();
+  }
+}
+
 function renderDashboard(){
   renderDashGoals();
   var scopedAll = scoped();
@@ -1619,7 +1749,14 @@ function renderDashboard(){
     host.appendChild(b);
   });
 
-  equityChart($("#equityWrap"), ts, cur);
+  var dp = dashPanels();
+  DASH_PANELS.forEach(function(item){
+    /* Leverage stays hidden either because the user turned it off, or
+       because nothing here is leveraged — whichever says hide wins. */
+    if(item.key !== "leverage") $("#" + item.panelId).style.display = dp[item.key] !== false ? "" : "none";
+  });
+
+  if(dp.equity !== false) equityChart($("#equityWrap"), ts, cur);
   var baseCapital = isAll()
     ? sum(state.accounts.filter(function(a){ return a.currency === cur; }).map(function(a){ return a.startBalance; }))
     : acct(selected()).startBalance;
@@ -1639,17 +1776,20 @@ function renderDashboard(){
              + money(openingCapital + s.net, cur, 0)
            : "In R — the books settle in different currencies, so only R adds up")
     : "";
-  timeBars($("#timeBars"), ts);
-  countBars($("#countBars"), days);
-  $("#levPanel").style.display = leverageBars($("#levBars"), ts) ? "" : "none";
-  setupBars($("#setupBars"), ts);
-  ruleBars($("#ruleBars"), ts);
-  dayList($("#dayList"), days);
-  $("#daysHint").textContent = days.length ? days.length + " sessions logged" : "";
+  if(dp.time !== false) timeBars($("#timeBars"), ts);
+  if(dp.overtrading !== false) countBars($("#countBars"), days);
+  $("#panel-leverage").style.display =
+    (dp.leverage !== false && leverageBars($("#levBars"), ts)) ? "" : "none";
+  if(dp.setup !== false) setupBars($("#setupBars"), ts);
+  if(dp.discipline !== false) ruleBars($("#ruleBars"), ts);
+  if(dp.recent !== false){
+    dayList($("#dayList"), days);
+    $("#daysHint").textContent = days.length ? days.length + " sessions logged" : "";
+  }
   $("#discHint").textContent = ts.length ? pct(adherence(ts)) + " overall" : "";
   /* The calendar browses its own month via calPrev/calNext independent of the
      dashboard's month filter, so it needs the unfiltered days, not `days`. */
-  calendar(tradingDays(scopedAll));
+  if(dp.calendar !== false) calendar(tradingDays(scopedAll));
 }
 
 /* ============ journal ============ */
@@ -2771,7 +2911,7 @@ function openScannerImport(){
 
     function selected(){
       if(!parsed) return [];
-      var cutoff = back.value !== "0" ? monthsAgoISO(+back.value) : null;
+      var cutoff = lookbackCutoff(back.value);
       return parsed.records.filter(function(r){
         if(mkt.value && r.market !== mkt.value) return false;
         if(tf.value && r.timeframe !== tf.value) return false;
@@ -3731,10 +3871,9 @@ function openImport(){
       }
       var res = pairTrades(parsed.rows, map, importAccount.value,
                            step2.__manualDate ? step2.__manualDate.value : iso(new Date()));
-      var months = +(step2.__lookback ? step2.__lookback.value : "0");
+      var cutoff = lookbackCutoff(step2.__lookback ? step2.__lookback.value : "0");
       var older = 0;
-      if(months){
-        var cutoff = monthsAgoISO(months);
+      if(cutoff){
         var kept = res.trades.filter(function(t){ return t.date >= cutoff; });
         older = res.trades.length - kept.length;
         res.trades = kept;
@@ -4138,6 +4277,10 @@ function mergeState(local, remote){
     tombstones: tombs,
     ui: local.ui || {account:"all"},
     lastBackup: local.lastBackup || remote.lastBackup || null,
+    /* Follows the journal, not the device — a fresh device with no
+       customization of its own inherits whatever the others already chose. */
+    dashboardPanels: local.dashboardPanels || remote.dashboardPanels,
+    visibleTabs: local.visibleTabs || remote.visibleTabs,
     /* The token and the webhook belong to this device, never to the shared
        file, so they are always taken from whatever is already here. */
     discord: state.discord || {webhook:""},
@@ -4154,7 +4297,9 @@ function syncPayload(st){
     savedAt: new Date().toISOString(),
     accounts: st.accounts, trades: st.trades,
     signals: st.signals || [], goals: st.goals || [],
-    aliases: st.aliases || {}, tombstones: st.tombstones || {}
+    aliases: st.aliases || {}, tombstones: st.tombstones || {},
+    dashboardPanels: st.dashboardPanels || null,
+    visibleTabs: st.visibleTabs || null
   };
 }
 
@@ -4534,8 +4679,9 @@ function deltaSyncNow(opts){
      only bounds the very first pull on a fresh connect — once a cursor exists,
      every later sync is "new fills since last time" regardless of it, so
      narrowing it later can never silently drop history already imported. */
+  var lbCutoff = lookbackCutoff(c.lookbackMonths);
   var since = c.lastFillTime ? c.lastFillTime - 86400e6
-    : (c.lookbackMonths ? Date.parse(monthsAgoISO(c.lookbackMonths)) * 1000 : 0);
+    : (lbCutoff ? Date.parse(lbCutoff) * 1000 : 0);
   return Promise.all([deltaFetchFills(since), deltaFetchContractValues()]).then(function(res){
     var r = res[0], contractValues = res[1];
     var seen = {}, existingByKey = {};
@@ -5090,13 +5236,16 @@ function renderAll(){
   renderDiscord();
   renderSync();
   renderDelta();
+  renderLayoutPanels();
+  renderLayoutTabs();
+  renderTabsNav();
   renderBackupState();
   showStorageAlert();
 }
 
 $("#tabs").addEventListener("click", function(e){
   var b = e.target.closest(".tab");
-  if(!b) return;
+  if(!b || !tabVisible(b.dataset.tab)) return;
   Array.prototype.forEach.call(document.querySelectorAll(".tab"), function(t){
     t.classList.toggle("is-active", t === b);
   });
@@ -5290,7 +5439,10 @@ $("#deltaSave").onclick = function(){
   if(!accountId){ toast("Add a crypto account first"); return; }
   state.delta = {key:key, secret:secret, accountId:accountId,
                  auto:$("#deltaAuto").checked, lastAt:"", lastFillTime:0,
-                 lookbackMonths: +($("#deltaLookback").value || 0)};
+                 /* Holds a LOOKBACK_OPTS value ("0", "7d", "3", ...) — not
+                    numeric months despite the field's name, kept as-is to
+                    avoid touching every device's already-saved state shape. */
+                 lookbackMonths: $("#deltaLookback").value || "0"};
   save(); renderDelta();
   setDeltaStatus("Testing...");
   deltaTest().then(function(r){
