@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Victus Journal</title>
-<meta name="app-version" content="2026-09-16.10">
+<meta name="app-version" content="2026-09-16.12">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="application-name" content="Victus Journal">
@@ -636,9 +636,13 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
                 <label for="deltaSecret">API secret</label>
                 <input type="password" id="deltaSecret" placeholder="secret" autocomplete="off">
               </div>
-              <div class="field spanfull">
+              <div class="field">
                 <label for="deltaAccount">Import into account</label>
                 <select id="deltaAccount"></select>
+              </div>
+              <div class="field">
+                <label for="deltaLookback">First import goes back</label>
+                <select id="deltaLookback"></select>
               </div>
             </div>
             <label class="rule" style="margin-top:12px">
@@ -905,6 +909,20 @@ function cls(v){ return v > 0 ? "up" : v < 0 ? "down" : "dim"; }
 function iso(d){
   return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 }
+/* A rolling N-month window back from today, for bounding how much history an
+   import pulls in — from a file that has more rows than you want, or from a
+   first-time Delta connect that would otherwise walk the whole account. */
+function monthsAgoISO(n){
+  var d = new Date(); d.setHours(0,0,0,0); d.setMonth(d.getMonth() - n);
+  return iso(d);
+}
+var LOOKBACK_OPTS = [
+  {value:"0", label:"All available"},
+  {value:"1", label:"Last 1 month"},
+  {value:"3", label:"Last 3 months"},
+  {value:"6", label:"Last 6 months"},
+  {value:"12", label:"Last 12 months"}
+];
 function parseDay(s){ var p = s.split("-"); return new Date(+p[0], +p[1]-1, +p[2]); }
 function fmtDay(s){ return parseDay(s).toLocaleDateString("en-GB",{day:"numeric", month:"short"}); }
 function toMin(t){ if(!t) return null; var p = t.split(":"); return (+p[0])*60 + (+p[1]); }
@@ -2730,10 +2748,14 @@ function openScannerImport(){
       {value:"30m", label:"30m only"},
       {value:"4h", label:"4h only"}
     ], "");
+    /* The scanner's own backtest file only grows — every alert it has ever
+       resolved, in one JSONL. Without a window this is a 6 MB / 1,400-alert
+       all-or-nothing pull every time. */
+    var back = select(LOOKBACK_OPTS, "0");
     var grid = el("div","form-grid");
-    grid.style.gridTemplateColumns = "1fr 1fr";
     grid.appendChild(field("Market", mkt));
     grid.appendChild(field("Timeframe", tf));
+    grid.appendChild(field("How far back", back));
     body.appendChild(grid);
 
     var urlWrap = urlRow(SCANNER_STATE, function(text){
@@ -2749,9 +2771,11 @@ function openScannerImport(){
 
     function selected(){
       if(!parsed) return [];
+      var cutoff = back.value !== "0" ? monthsAgoISO(+back.value) : null;
       return parsed.records.filter(function(r){
         if(mkt.value && r.market !== mkt.value) return false;
         if(tf.value && r.timeframe !== tf.value) return false;
+        if(cutoff && r.date < cutoff) return false;
         return true;
       });
     }
@@ -2782,6 +2806,7 @@ function openScannerImport(){
     }
     mkt.addEventListener("change", draw);
     tf.addEventListener("change", draw);
+    back.addEventListener("change", draw);
 
     $("#sheetSave").textContent = "Import";
     $("#sheetSave").disabled = true;
@@ -3706,8 +3731,17 @@ function openImport(){
       }
       var res = pairTrades(parsed.rows, map, importAccount.value,
                            step2.__manualDate ? step2.__manualDate.value : iso(new Date()));
+      var months = +(step2.__lookback ? step2.__lookback.value : "0");
+      var older = 0;
+      if(months){
+        var cutoff = monthsAgoISO(months);
+        var kept = res.trades.filter(function(t){ return t.date >= cutoff; });
+        older = res.trades.length - kept.length;
+        res.trades = kept;
+      }
       lastResult = res;
       var bits = [res.trades.length + " complete trade" + (res.trades.length === 1 ? "" : "s") + " found"];
+      if(older) bits.push(older + " older than the window chosen, skipped");
       if(res.openLeft) bits.push(res.openLeft + " position(s) never closed in this file, skipped");
       if(res.skipped) bits.push(res.skipped + " unreadable row(s), skipped");
       var head = el("p", null, bits.join(" · "));
@@ -3829,14 +3863,21 @@ function openImport(){
       }
       if(map.time === "" && map.date !== "") map.time = map.date;
 
-      var accWrap = el("div");
-      accWrap.style.marginBottom = "14px";
+      var accWrap = el("div","form-grid");
+      accWrap.style.cssText = "grid-template-columns:1fr 1fr; margin-bottom:14px";
       importAccount = select(state.accounts.map(function(a){
         return {value:a.id, label:a.name};
       }), isAll() ? state.accounts[0].id : selected());
       importAccount.addEventListener("change", preview);
       accWrap.appendChild(field("Import into", importAccount));
+      /* A full tradebook export can span years; this trims it to a recent
+         window instead of forcing a re-export just to skip old rows, or
+         re-adding rows already brought in by an earlier, wider import. */
+      var lookbackSel = select(LOOKBACK_OPTS, "0");
+      lookbackSel.addEventListener("change", preview);
+      accWrap.appendChild(field("How far back", lookbackSel));
       step2.appendChild(accWrap);
+      step2.__lookback = lookbackSel;
 
       /* A single-day export carries its date in the banner, not a column. */
       var dateWrap = el("div");
@@ -4290,7 +4331,7 @@ function setSyncStatus(text, bad){
    CSV. The key and secret live only on this device, the same way the GitHub
    token does — never in the journal file, a backup, or a sync payload. */
 function deltaCfg(){
-  return state.delta || {key:"", secret:"", accountId:"", auto:false, lastAt:"", lastFillTime:0};
+  return state.delta || {key:"", secret:"", accountId:"", auto:false, lastAt:"", lastFillTime:0, lookbackMonths:0};
 }
 function deltaReady(){ var c = deltaCfg(); return !!(c.key && c.secret && c.accountId); }
 var DELTA_BASE = "https://api.india.delta.exchange";
@@ -4351,6 +4392,24 @@ function deltaFetchFills(startMicros){
   }
   return page();
 }
+/* A fill's size counts contracts, not coins — Delta prices every perpetual by
+   its own contract_value (LINKUSD is 1 coin per contract, ETHUSD is 0.01,
+   TLMUSD is 10000), and that value has nothing to do with the symbol's price
+   or name. Skipping this step was the earlier bug: it read a fill's contract
+   count as if it were the coin quantity outright, so a trade came out scaled
+   by whatever that symbol's multiplier happened to be — wrong in either
+   direction, and wrong by a lot for anything far from 1. Product listings
+   are public, so this needs no signature. */
+function deltaFetchContractValues(){
+  return fetch(DELTA_BASE + "/v2/products?contract_types=perpetual_futures&page_size=1000")
+    .then(function(res){ return res.json(); })
+    .then(function(j){
+      var map = {};
+      (j.result || []).forEach(function(p){ map[p.symbol] = num(p.contract_value); });
+      return map;
+    })
+    .catch(function(){ return {}; });
+}
 /* A trade already in the journal from a CSV import carries no src tag, so the
    src check alone cannot recognize it — the first Delta connection would
    otherwise recreate a whole history that was already imported by hand,
@@ -4377,7 +4436,8 @@ function findExistingTrade(existingByKey, key, qty, entry, exit){
    was fetched, since a crypto position can sit open across midnight. Each
    trade is tagged with the order that closed it, so a second device — or a
    second import overlapping the first for safety — never adds it twice. */
-function deltaFillsToTrades(fills, accountId, seenOrders, existingByKey){
+function deltaFillsToTrades(fills, accountId, seenOrders, existingByKey, contractValues){
+  contractValues = contractValues || {};
   var bySym = {};
   fills.forEach(function(f){
     (bySym[f.product_symbol] = bySym[f.product_symbol] || []).push(f);
@@ -4387,6 +4447,10 @@ function deltaFillsToTrades(fills, accountId, seenOrders, existingByKey){
     var list = bySym[sym].slice().sort(function(a,b){
       return a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0;
     });
+    /* Missing from the product list only for a symbol Delta has since
+       delisted — 1 is the least-wrong fallback, not a silent guess passed
+       off as certain. */
+    var cv = contractValues[sym] > 0 ? contractValues[sym] : 1;
     var pos = 0, eQty = 0, eVal = 0, xQty = 0, xVal = 0, fees = 0, dir = null, startT = null;
     function emit(closeOrderId, closeAt){
       var src = "delta:" + closeOrderId;
@@ -4415,7 +4479,7 @@ function deltaFillsToTrades(fills, accountId, seenOrders, existingByKey){
       seenOrders[src] = true;
     }
     list.forEach(function(f){
-      var qty = Math.abs(num(f.size));
+      var qty = Math.abs(num(f.size)) * cv;
       var price = num(f.price);
       var fee = num(f.commission) || 0;
       if(!qty || !isFinite(price)) return;
@@ -4466,16 +4530,21 @@ function deltaSyncNow(opts){
   var c = deltaCfg();
   setDeltaStatus("Checking fills...");
   /* A day of overlap so a position that was still open at the last cursor
-     gets its closing fill picked up, not skipped as already seen. */
-  var since = c.lastFillTime ? c.lastFillTime - 86400e6 : 0;
-  return deltaFetchFills(since).then(function(r){
+     gets its closing fill picked up, not skipped as already seen. The lookback
+     only bounds the very first pull on a fresh connect — once a cursor exists,
+     every later sync is "new fills since last time" regardless of it, so
+     narrowing it later can never silently drop history already imported. */
+  var since = c.lastFillTime ? c.lastFillTime - 86400e6
+    : (c.lookbackMonths ? Date.parse(monthsAgoISO(c.lookbackMonths)) * 1000 : 0);
+  return Promise.all([deltaFetchFills(since), deltaFetchContractValues()]).then(function(res){
+    var r = res[0], contractValues = res[1];
     var seen = {}, existingByKey = {};
     state.trades.forEach(function(t){
       if(t.src) seen[t.src] = true;
       var key = t.accountId + "|" + t.symbol + "|" + t.date + "|" + t.direction;
       (existingByKey[key] = existingByKey[key] || []).push(t);
     });
-    var found = deltaFillsToTrades(r.fills, c.accountId, seen, existingByKey);
+    var found = deltaFillsToTrades(r.fills, c.accountId, seen, existingByKey, contractValues);
     if(found.length){
       state.trades = state.trades.concat(found.map(stamp));
     }
@@ -4526,6 +4595,21 @@ function renderDelta(){
   if(document.activeElement !== key) key.value = c.key || "";
   if(document.activeElement !== secret) secret.value = c.secret || "";
   auto.checked = !!c.auto;
+  var lb = $("#deltaLookback");
+  if(lb && !lb.options.length){
+    LOOKBACK_OPTS.forEach(function(o){
+      var opt = el("option", null, o.label); opt.value = o.value; lb.appendChild(opt);
+    });
+  }
+  if(lb){
+    /* Only the first pull on a fresh connect reads this — changing it after
+       that would look like a promise to prune history already imported. */
+    var connected = !!c.lastAt;
+    lb.value = String(c.lookbackMonths || 0);
+    lb.disabled = connected;
+    lb.style.opacity = connected ? ".5" : "";
+    lb.title = connected ? "Already connected — this only applied to the first import" : "";
+  }
   var ready = deltaReady();
   ["deltaRun","deltaForget"].forEach(function(id){
     $("#" + id).disabled = !ready;
@@ -5205,7 +5289,8 @@ $("#deltaSave").onclick = function(){
   if(!key || !secret){ toast("Paste the key and secret"); return; }
   if(!accountId){ toast("Add a crypto account first"); return; }
   state.delta = {key:key, secret:secret, accountId:accountId,
-                 auto:$("#deltaAuto").checked, lastAt:"", lastFillTime:0};
+                 auto:$("#deltaAuto").checked, lastAt:"", lastFillTime:0,
+                 lookbackMonths: +($("#deltaLookback").value || 0)};
   save(); renderDelta();
   setDeltaStatus("Testing...");
   deltaTest().then(function(r){
