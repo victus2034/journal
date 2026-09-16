@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Victus Journal</title>
-<meta name="app-version" content="2026-09-17.2">
+<meta name="app-version" content="2026-09-17.3">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="application-name" content="Victus Journal">
@@ -119,14 +119,14 @@ button,input,select,textarea{font:inherit; color:inherit}
 .strip{display:grid; grid-template-columns:repeat(2,1fr); background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow)}
 @media (min-width:620px){.strip{grid-template-columns:repeat(4,1fr)}}
 @media (min-width:1000px){.strip{grid-template-columns:repeat(8,1fr)}}
-.stat{padding:13px 14px; border-right:1px solid var(--line); border-bottom:1px solid var(--line)}
+.stat{padding:11px 14px; border-right:1px solid var(--line); border-bottom:1px solid var(--line)}
 @media (min-width:1000px){.stat{border-bottom:0}}
 .stat:last-child{border-right:0}
 .stat-k{display:block; font-size:10px; text-transform:uppercase; letter-spacing:.085em; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .stat-v{display:block; margin-top:5px; font-size:19px; font-weight:600}
 .stat-sub{display:block; font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 
-.grid-2{display:grid; gap:16px; grid-template-columns:1fr; margin-top:16px}
+.grid-2{display:grid; gap:16px; grid-template-columns:1fr; margin-top:10px}
 @media (min-width:1000px){.grid-2{grid-template-columns:1.85fr 1fr}}
 .stack{display:flex; flex-direction:column; gap:16px}
 
@@ -226,10 +226,15 @@ input:hover,select:hover,textarea:hover{border-color:var(--muted)}
 .track .fill{position:absolute; top:0; bottom:0; left:0; transition:width .5s cubic-bezier(.2,.7,.3,1)}
 .pace{position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--ink); opacity:.6}
 .goal-foot{display:flex; justify-content:space-between; gap:10px; margin-top:7px; font-size:11px; color:var(--muted)}
-.goals-dash{margin-bottom:16px; grid-template-columns:repeat(auto-fill, minmax(290px, 1fr))}
+.goals-dash{margin-bottom:10px; grid-template-columns:repeat(auto-fill, minmax(290px, 1fr))}
+/* The dashboard's goal card sat noticeably heavier than the stat strip right
+   under it — different padding, a bigger title — so the two read as separate
+   floating pieces instead of one composed page. Brought down to the stat
+   strip's own weight: same padding, a title the same size as a panel head. */
 .goal-compact{cursor:pointer; padding:13px 14px}
-.goal-compact .goal-meta{margin-bottom:9px}
-.goal-compact .goal-cur{font-size:20px}
+.goal-compact .goal-top h3{font-size:14px}
+.goal-compact .goal-meta{margin-bottom:8px}
+.goal-compact .goal-cur{font-size:19px}
 .plan-line{margin:9px 0 0; font-size:12.5px; color:var(--ink-2)}
 .goal-plan{margin-top:13px; padding-top:13px; border-top:1px solid var(--line)}
 .plan-tiles{display:grid; grid-template-columns:1fr 1fr; gap:8px}
