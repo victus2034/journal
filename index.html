@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Victus Journal</title>
-<meta name="app-version" content="2026-09-17.1">
+<meta name="app-version" content="2026-09-17.2">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="application-name" content="Victus Journal">
@@ -100,21 +100,23 @@ button,input,select,textarea{font:inherit; color:inherit}
   cursor:pointer; font-size:12.5px; display:flex; align-items:baseline; gap:7px;
 }
 .acct:hover{border-color:var(--muted)}
-.acct.is-active{background:var(--brass); color:var(--on-brass); border-color:var(--brass)}
+.acct.is-active{background:var(--ink); color:var(--ground); border-color:var(--ink)}
 .acct .mk{font-size:9.5px; text-transform:uppercase; letter-spacing:.08em; opacity:.7}
 
-/* A border already says "this is one surface, distinct from the page." A
-   shadow under it too was saying that twice — on a screen stacking eight of
-   these, that doubling is most of what read as cluttered. The gold edge
-   replaces it as the thing that says "this app", not another line of gray. */
-.panel{background:var(--surface); border:1px solid var(--line); border-left:2px solid var(--brass)}
+/* A gold edge on every single panel — including the calendar, the sync
+   instructions, all of it — stopped being an accent and became wallpaper.
+   Gold now shows up in exactly three places: the title, the primary
+   buttons, and the equity line. The shadow is back too: without it, a
+   plain 1px border in light mode barely separates a card from the page
+   behind it — that read as "flat", not "clean". */
+.panel{background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow)}
 .panel-head{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; padding:13px 16px; border-bottom:1px solid var(--line)}
 .panel-head h2{font-size:15px}
 .panel-head .hint{font-size:11.5px; color:var(--muted); margin-left:auto}
 .panel-body{padding:16px}
 
 /* ---------- stat strip ---------- */
-.strip{display:grid; grid-template-columns:repeat(2,1fr); background:var(--surface); border:1px solid var(--line)}
+.strip{display:grid; grid-template-columns:repeat(2,1fr); background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow)}
 @media (min-width:620px){.strip{grid-template-columns:repeat(4,1fr)}}
 @media (min-width:1000px){.strip{grid-template-columns:repeat(8,1fr)}}
 .stat{padding:13px 14px; border-right:1px solid var(--line); border-bottom:1px solid var(--line)}
@@ -213,7 +215,7 @@ input:hover,select:hover,textarea:hover{border-color:var(--muted)}
 /* ---------- goals ---------- */
 .goals{display:grid; gap:14px; grid-template-columns:1fr}
 @media (min-width:780px){.goals{grid-template-columns:1fr 1fr}}
-.goal{background:var(--surface); border:1px solid var(--line); padding:15px 16px}
+.goal{background:var(--surface); border:1px solid var(--line); box-shadow:var(--shadow); padding:15px 16px}
 .goal-top{display:flex; align-items:flex-start; gap:10px}
 .goal-top h3{font-size:15px; flex:1}
 .goal-meta{font-size:11px; color:var(--muted); margin:2px 0 13px}
@@ -1242,7 +1244,11 @@ function equityChart(host, ts, cur){
   /* The signature chart carries the brand color on purpose, not the win/loss
      color — those already do their job in the stat strip and the day list. */
   var col = "var(--brass)";
-  grad.appendChild(svgEl("stop",{offset:"0%","stop-color":col,"stop-opacity":".22"}));
+  /* A win/loss fill at .22 opacity is barely there under a thin line. The
+     same opacity in solid gold, over a bigger share of the chart's height
+     since the line rarely dips near zero, read as a heavy tan block instead
+     of a wash. */
+  grad.appendChild(svgEl("stop",{offset:"0%","stop-color":col,"stop-opacity":".10"}));
   grad.appendChild(svgEl("stop",{offset:"100%","stop-color":col,"stop-opacity":"0"}));
   defs.appendChild(grad); svg.appendChild(defs);
 
