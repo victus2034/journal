@@ -1,7 +1,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Victus Journal</title>
-<meta name="app-version" content="2026-09-17.3">
+<meta name="app-version" content="2026-09-17.5">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="application-name" content="Victus Journal">
@@ -289,6 +289,39 @@ input:hover,select:hover,textarea:hover{border-color:var(--muted)}
 .empty{padding:40px 20px; text-align:center; color:var(--muted)}
 .empty p{margin:0 0 14px}
 textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resize:vertical}
+/* ---------- calculator ---------- */
+.seg{display:inline-flex; background:var(--surface-2); border:1px solid var(--line); padding:2px}
+.seg button{border:0; background:transparent; padding:7px 13px; font-size:12px; font-weight:600; cursor:pointer; color:var(--muted)}
+.seg button.active{background:var(--surface); box-shadow:var(--shadow); color:var(--ink)}
+.calc-cards{display:grid; gap:14px; grid-template-columns:1fr}
+@media (min-width:860px){.calc-cards{grid-template-columns:1fr 1fr}}
+.calc-hero{padding:14px 16px; background:var(--surface-2); border:1px solid var(--line); margin-bottom:12px}
+.calc-hero .k{font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted)}
+.calc-hero .v{font-family:var(--font-mono); font-size:26px; font-weight:600; margin-top:3px}
+.calc-hero .note{font-size:11px; color:var(--muted); margin-top:4px}
+.calc-banner{padding:10px 12px; border:1px solid; font-size:12px; line-height:1.5; margin-bottom:12px}
+.calc-banner strong{display:block; font-size:12.5px; margin-bottom:2px}
+.calc-banner.good{background:var(--up-soft); border-color:var(--up); color:var(--up)}
+.calc-banner.warn{background:var(--brass-soft); border-color:var(--brass); color:var(--brass-ink)}
+.calc-banner.danger{background:var(--down-soft); border-color:var(--down); color:var(--down)}
+.calc-row{display:flex; justify-content:space-between; align-items:baseline; gap:10px; font-size:12.5px; padding:6px 0; border-bottom:1px solid var(--line); color:var(--ink-2)}
+.calc-row:last-child{border-bottom:0}
+.calc-row .v{font-family:var(--font-mono); font-weight:600; color:var(--ink); text-align:right}
+.calc-row.strong{font-size:13.5px; color:var(--ink)}
+.calc-row.strong .v{color:var(--brass-ink)}
+.calc-row.muted{color:var(--muted); font-size:11.5px}
+.calc-recommend{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; background:var(--brass-soft); border:1px solid var(--brass); margin-bottom:12px}
+.calc-recommend .k{font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--brass-ink)}
+.calc-recommend .v{font-family:var(--font-mono); font-size:19px; font-weight:600; color:var(--brass-ink)}
+.ladder-table{display:grid; gap:2px; margin-top:10px}
+.ladder-head-row{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:0 10px 6px; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); border-bottom:1px solid var(--line); margin-bottom:2px}
+.ladder-head-row span:last-child{text-align:right}
+.ladder-row-btn{display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:9px 10px; border:1px solid transparent; background:var(--surface-2); font-family:var(--font-mono); font-size:12.5px; font-weight:600; cursor:pointer; text-align:left; color:var(--ink)}
+.ladder-row-btn:hover{background:var(--surface-3)}
+.ladder-row-btn span:last-child{text-align:right}
+.ladder-row-btn.active{background:var(--brass-soft); border-color:var(--brass); color:var(--brass-ink)}
+.calc-linked-note{font-size:11px; color:var(--muted); margin:8px 0 0}
+
 .datacols{display:grid; gap:16px; grid-template-columns:1fr}
 @media (min-width:860px){.datacols{grid-template-columns:1fr 1fr}}
 .acct-row{display:grid; grid-template-columns:1fr auto; gap:4px 12px; padding:11px 0; border-bottom:1px solid var(--line); align-items:center}
@@ -387,6 +420,7 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
       <button class="tab" data-tab="journal">Journal</button>
       <button class="tab" data-tab="signals">Signals</button>
       <button class="tab" data-tab="goals">Goals</button>
+      <button class="tab" data-tab="calculator">Calculator</button>
       <button class="tab" data-tab="data">Data</button>
     </nav>
     <button class="btn btn-primary" id="newTradeBtn">Log trade</button>
@@ -580,6 +614,148 @@ textarea{font-family:var(--font-mono); font-size:11.5px; min-height:150px; resiz
           <button class="btn btn-sm" id="newGoalBtn" style="margin-left:12px">Add goal</button>
         </div>
         <div class="panel-body"><div class="goals" id="goalList"></div></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-calculator">
+      <div class="panel" style="margin-bottom:14px">
+        <div class="panel-body" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center">
+          <label class="field" style="flex:1; min-width:200px">
+            <span class="field-label">Fill from account</span>
+            <select id="calcAccount"></select>
+          </label>
+          <div class="seg" id="calcCurrencySeg" aria-label="Currency">
+            <button data-v="INR">&#8377; INR</button>
+            <button data-v="USD">$ USD</button>
+          </div>
+          <div class="seg" id="calcViewSeg" aria-label="View">
+            <button data-v="calculator">Calculator</button>
+            <button data-v="ladder">SL ladder</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="calcCalculatorView">
+        <div class="calc-cards">
+          <div class="stack">
+            <div class="panel">
+              <div class="panel-head"><h2>Risk budget</h2><span class="hint">How much can you afford to lose?</span></div>
+              <div class="panel-body">
+                <div class="field" style="margin-bottom:12px">
+                  <label class="field-label" for="calcCapital">Available capital</label>
+                  <input type="number" id="calcCapital" step="any">
+                </div>
+                <div class="form-grid" style="grid-template-columns:1fr 1fr">
+                  <div class="field">
+                    <label class="field-label" for="calcRiskAmount">Maximum loss</label>
+                    <input type="number" id="calcRiskAmount" step="any">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="calcRiskPercent">Risk of capital (%)</label>
+                    <input type="number" id="calcRiskPercent" step="any">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2>Trade setup</h2><span class="hint">Stop and leverage</span></div>
+              <div class="panel-body">
+                <div class="form-grid" style="grid-template-columns:1fr 1fr">
+                  <div class="field">
+                    <label class="field-label" for="calcStopPercent">Stop-loss distance (%)</label>
+                    <input type="number" id="calcStopPercent" step="0.05">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="calcLeverage">Leverage</label>
+                    <select id="calcLeverage"></select>
+                  </div>
+                </div>
+                <div class="field" id="calcPresetRow" style="margin-top:12px">
+                  <label class="field-label" for="calcPreset">Broker charges</label>
+                  <select id="calcPreset"></select>
+                  <p class="dim" style="font-size:11px; margin:5px 0 0" id="calcPresetHint"></p>
+                </div>
+                <div class="field" style="margin-top:12px">
+                  <label class="field-label" for="calcCost">Cost buffer (%, round trip)</label>
+                  <input type="number" id="calcCost" step="0.001">
+                </div>
+                <label class="rule" style="margin-top:14px">
+                  <input type="checkbox" id="calcTpOn">
+                  Add take-profit target
+                </label>
+                <div class="field" id="calcTpRow" style="margin-top:10px">
+                  <label class="field-label" for="calcTpPercent">Target distance (%)</label>
+                  <input type="number" id="calcTpPercent" step="0.1">
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2>Margin comparison</h2><span class="hint">Recommended vs your amount</span></div>
+              <div class="panel-body">
+                <div class="calc-recommend">
+                  <div>
+                    <div class="k">Recommended maximum margin</div>
+                    <div class="v" id="calcRecommendV">&mdash;</div>
+                  </div>
+                  <button class="btn btn-sm btn-primary" id="calcUseBtn">Use this amount</button>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="calcMargin">Margin I want to use</label>
+                  <input type="number" id="calcMargin" step="any">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head"><h2>Live risk check</h2></div>
+            <div class="panel-body">
+              <div class="calc-hero">
+                <div class="k">Possible total loss at your margin</div>
+                <div class="v" id="calcHeroV">&mdash;</div>
+                <div class="note" id="calcHeroNote"></div>
+              </div>
+              <div id="calcBanner"></div>
+              <div id="calcResultRows"></div>
+              <p class="dim" style="font-size:11px; margin:14px 0 0; line-height:1.6">
+                Leverage changes the margin required. For the same position value and stop-loss,
+                it does not reduce the loss. Planning tool only &mdash; actual loss can differ
+                because of slippage, fees and liquidation.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="calcLadderView" style="display:none">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Stop-loss ladder</h2>
+            <button class="btn btn-sm" id="calcLadderLinkBtn" style="margin-left:12px"></button>
+          </div>
+          <div class="panel-body">
+            <div class="form-grid" style="grid-template-columns:1fr 1fr">
+              <div class="field">
+                <label class="field-label" for="calcLadderAmount">Amount</label>
+                <input type="number" id="calcLadderAmount" step="any">
+              </div>
+              <div class="field">
+                <label class="field-label" for="calcLadderLeverage">Leverage</label>
+                <select id="calcLadderLeverage"></select>
+              </div>
+            </div>
+            <p class="calc-linked-note" id="calcLadderNote"></p>
+            <label class="rule" style="margin-top:10px">
+              <input type="checkbox" id="calcLadderFees">
+              Include fees &amp; charges
+            </label>
+            <p class="calc-linked-note" id="calcLadderFeesNote"></p>
+            <div class="ladder-table" id="calcLadderTable"></div>
+            <p class="calc-linked-note" style="text-align:center; margin-top:10px">Tap a row to use it as the calculator's stop-loss.</p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -1656,7 +1832,8 @@ function renderLayoutPanels(){
 var TAB_OPTIONS = [
   {key:"journal", label:"Journal"},
   {key:"signals",  label:"Signals"},
-  {key:"goals",     label:"Goals"}
+  {key:"goals",     label:"Goals"},
+  {key:"calculator", label:"Calculator"}
 ];
 var DEFAULT_VISIBLE_TABS = {journal:true, signals:true, goals:true};
 function visibleTabs(){ return Object.assign({}, DEFAULT_VISIBLE_TABS, state.visibleTabs || {}); }
@@ -4296,10 +4473,14 @@ function mergeState(local, remote){
     dashboardPanels: local.dashboardPanels || remote.dashboardPanels,
     visibleTabs: local.visibleTabs || remote.visibleTabs,
     /* The token and the webhook belong to this device, never to the shared
-       file, so they are always taken from whatever is already here. */
+       file, so they are always taken from whatever is already here. The
+       calculator joins them: it is a scratchpad for whatever you are sizing
+       up right now on this device, not a setting the journal should carry
+       from one screen to another. */
     discord: state.discord || {webhook:""},
     sync: state.sync,
-    delta: state.delta
+    delta: state.delta,
+    calculatorSettings: state.calculatorSettings
   };
   if(!merged.accounts.length) merged.accounts = local.accounts || remote.accounts || [];
   return merged;
@@ -4445,6 +4626,22 @@ window.addEventListener("storage", function(e){
    a tab running the old code. So an open journal looks for a newer copy of
    itself and offers to reload. Bump the app-version meta tag with every change. */
 var updateShown = false;
+/* A local file:// tab can't fetch itself to check for a newer version —
+   Chrome blocks that kind of request for local files — so the reload banner
+   below can never fire here, silently. Without this, a file:// tab just
+   keeps showing whatever first loaded, indefinitely, with nothing on screen
+   to say so. */
+function showLocalFileNotice(){
+  if(/^https?:$/.test(location.protocol)) return;
+  updateShown = true;
+  var bar = $("#updateAlert");
+  var box = el("div");
+  box.appendChild(el("strong", null, "This is a local file, opened straight from disk."));
+  box.appendChild(el("span", null, "It cannot check on its own whether a newer version exists. After any update, reload this tab yourself (Ctrl+Shift+R) rather than trusting it's current."));
+  bar.innerHTML = "";
+  bar.appendChild(box);
+  bar.className = "alertbar info on";
+}
 function checkForUpdate(){
   if(updateShown || document.hidden || !/^https?:$/.test(location.protocol)) return;
   var mine = document.querySelector('meta[name="app-version"]');
@@ -4468,6 +4665,7 @@ function checkForUpdate(){
 document.addEventListener("visibilitychange", checkForUpdate);
 setInterval(checkForUpdate, 300000);
 setTimeout(checkForUpdate, 3000);
+showLocalFileNotice();
 var syncTimer = null, syncBusy = false;
 function syncSoon(){
   /* A sync saves what it merged; that save must not schedule yet another sync. */
@@ -5239,6 +5437,390 @@ function toast(msg){
   toastTimer = setTimeout(function(){ t.className = "toast"; }, 2400);
 }
 
+/* ============ calculator ============ */
+/* Ported from the standalone Victus Trade Calculator (v1.5.1) rather than
+   rewritten — the math, the fee presets and their sourcing comments carry
+   over exactly, since re-deriving broker charge schedules from memory is how
+   a calculator quietly starts lying to you. What changes here is only the
+   shell: no React, and a "Fill from account" step the standalone tool could
+   never have, since only the journal knows an account's actual running
+   balance. */
+function calcPositive(v){ var n = Number(v); return isFinite(n) && n > 0 ? n : 0; }
+function calcNonNeg(v){ var n = Number(v); return isFinite(n) && n >= 0 ? n : 0; }
+function calcProject(i){
+  var positionValue = i.margin * i.leverage;
+  var stopLossAmount = positionValue * (i.stopLossPercent / 100);
+  var costAmount = positionValue * (i.costPercent / 100);
+  var totalLoss = stopLossAmount + costAmount;
+  var cashLeft = Math.max(0, i.capital - i.margin);
+  var grossProfit = positionValue * (i.takeProfitPercent / 100);
+  var netProfit = Math.max(0, grossProfit - costAmount);
+  var rewardRatio = totalLoss > 0 ? netProfit / totalLoss : 0;
+  return {margin:i.margin, positionValue:positionValue, stopLossAmount:stopLossAmount, costAmount:costAmount,
+          totalLoss:totalLoss, cashLeft:cashLeft, grossProfit:grossProfit, netProfit:netProfit, rewardRatio:rewardRatio};
+}
+var CALC_EMPTY = {margin:0, positionValue:0, stopLossAmount:0, costAmount:0, totalLoss:0, netProfit:0, rewardRatio:0};
+function calcRecommend(i){
+  var capital = calcPositive(i.capital), riskAmount = calcPositive(i.riskAmount);
+  var stopLossPercent = calcPositive(i.stopLossPercent), leverage = calcPositive(i.leverage);
+  var costPercent = calcNonNeg(i.costPercent), takeProfitPercent = calcNonNeg(i.takeProfitPercent);
+  if(!(capital > 0 && riskAmount > 0 && stopLossPercent > 0 && leverage > 0)){
+    return Object.assign({valid:false, cashLeft:capital, capitalLimited:false}, CALC_EMPTY);
+  }
+  var lossPerUnit = (stopLossPercent + costPercent) / 100;
+  var idealMargin = riskAmount / lossPerUnit / leverage;
+  var margin = Math.min(idealMargin, capital);
+  return Object.assign({valid:true, idealMargin:idealMargin, capitalLimited:idealMargin > capital},
+    calcProject({margin:margin, capital:capital, stopLossPercent:stopLossPercent, leverage:leverage,
+                 costPercent:costPercent, takeProfitPercent:takeProfitPercent}));
+}
+function calcEvaluate(i){
+  var capital = calcPositive(i.capital), riskAmount = calcPositive(i.riskAmount);
+  var plannedMargin = calcPositive(i.plannedMargin), stopLossPercent = calcPositive(i.stopLossPercent);
+  var leverage = calcPositive(i.leverage), costPercent = calcNonNeg(i.costPercent);
+  var takeProfitPercent = calcNonNeg(i.takeProfitPercent);
+  if(!(capital > 0 && riskAmount > 0 && plannedMargin > 0 && stopLossPercent > 0 && leverage > 0)){
+    return Object.assign({valid:false, margin:plannedMargin, cashLeft:capital, capitalRiskPercent:0,
+      marginOverCapital:false, marginExcess:0, overRiskBudget:false, riskExcess:0}, CALC_EMPTY);
+  }
+  var projection = calcProject({margin:plannedMargin, capital:capital, stopLossPercent:stopLossPercent,
+    leverage:leverage, costPercent:costPercent, takeProfitPercent:takeProfitPercent});
+  return Object.assign({valid:true}, projection, {
+    capitalRiskPercent: (projection.totalLoss / capital) * 100,
+    marginOverCapital: plannedMargin > capital,
+    marginExcess: Math.max(0, plannedMargin - capital),
+    overRiskBudget: projection.totalLoss > riskAmount,
+    riskExcess: Math.max(0, projection.totalLoss - riskAmount)
+  });
+}
+function calcAnalyse(i){
+  var recommended = calcRecommend(i), actual = calcEvaluate(i);
+  return {valid: recommended.valid && actual.valid, recommended:recommended, actual:actual,
+          marginDifference: actual.margin - recommended.margin};
+}
+var CALC_STOP_LOSS_STEPS = Array.from({length:20}, function(_, idx){ return ((idx + 1) * 5) / 100; });
+function calcLadder(i, steps){
+  steps = steps || CALC_STOP_LOSS_STEPS;
+  var amount = calcPositive(i.margin), leverage = calcPositive(i.leverage);
+  var valid = amount > 0 && leverage > 0;
+  return steps.map(function(stopLossPercent){
+    var p = calcProject({margin:amount, capital:amount, stopLossPercent:stopLossPercent, leverage:leverage,
+                          costPercent:calcNonNeg(i.costPercent), takeProfitPercent:0});
+    return {stopLossPercent:stopLossPercent, valid:valid, margin:amount, positionValue:p.positionValue,
+            stopLossAmount:p.stopLossAmount, costAmount:p.costAmount, totalLoss:p.totalLoss};
+  });
+}
+function calcMoney(value, currency){
+  var amount = isFinite(Number(value)) ? Number(value) : 0;
+  try{
+    return new Intl.NumberFormat(currency === "USD" ? "en-US" : "en-IN",
+      {style:"currency", currency: currency === "USD" ? "USD" : "INR", maximumFractionDigits:2}).format(amount);
+  }catch(e){ return (currency === "USD" ? "$" : "₹") + amount.toFixed(2); }
+}
+
+/* Indian broker charge presets — percentages of ONE side's turnover, folded
+   into a single round-trip figure. Brokerage is modelled uncapped (0.03%/side);
+   discount brokers cap it at Rs 20/order above ~Rs 66,667 turnover, which
+   makes this preset slightly overstate charges there — errs toward safety.
+   Rates current as of the 2024-25 NSE/SEBI schedule; verify against your own
+   contract note before relying on them. */
+(function(){
+  var GST = 18;
+  function roundTrip(o){
+    o = o || {};
+    var brokerage = (o.brokeragePercentPerSide || 0) * 2;
+    var exchange = (o.exchangeTxnPercentPerSide || 0) * 2;
+    var sebi = (o.sebiPercentPerSide || 0) * 2;
+    var gst = ((brokerage + exchange + sebi) * GST) / 100;
+    return brokerage + (o.sttPercentOneSide || 0) + exchange + sebi + (o.stampDutyPercentOnBuy || 0)
+         + gst + (o.flatChargePercentEquivalent || 0);
+  }
+  var REF = 25000, REF_FUT = 500000, DP_CHARGE = 18.8;
+  window.FEE_PRESETS = [
+    {id:"nse-intraday", label:"NSE equity intraday (MIS)", currency:"INR",
+     hint:"Brokerage 0.03%/side, STT 0.025% on sell, stamp 0.003% on buy, + GST",
+     percent: roundTrip({brokeragePercentPerSide:0.03, sttPercentOneSide:0.025, exchangeTxnPercentPerSide:0.00297,
+                          sebiPercentPerSide:0.0001, stampDutyPercentOnBuy:0.003})},
+    {id:"nse-delivery", label:"NSE equity delivery (CNC)", currency:"INR",
+     hint:"Zero brokerage, but STT 0.1% on BOTH sides + DP charge on sell",
+     percent: roundTrip({sttPercentOneSide:0.2, exchangeTxnPercentPerSide:0.00297, sebiPercentPerSide:0.0001,
+                          stampDutyPercentOnBuy:0.015, flatChargePercentEquivalent:(DP_CHARGE/REF)*100})},
+    {id:"nse-futures", label:"NSE futures (intraday)", currency:"INR",
+     hint:"Flat Rs 20/order brokerage — the % falls as contract value rises",
+     percent: roundTrip({brokeragePercentPerSide:(20/REF_FUT)*100, sttPercentOneSide:0.02,
+                          exchangeTxnPercentPerSide:0.00173, sebiPercentPerSide:0.0001, stampDutyPercentOnBuy:0.002})},
+    {id:"custom", label:"Custom / my own broker", currency:"INR",
+     hint:"Enter the round-trip cost your broker charges", percent:null}
+  ];
+  window.DEFAULT_INR_PRESET = "nse-intraday";
+  /* Measured from a real Delta Exchange trade log (25 fills, 11 completed
+     round trips, 2026-08-21 to 2026-09-16): every charged fill came to
+     exactly notional x rate x 1.18 (18% GST), averaging 0.0303% of position
+     value — this is that average plus a small buffer, not a worst case. It
+     assumes a limit entry and a market exit with the exit's taker fee waived
+     as often as it has been; raise the Cost buffer field once that stops
+     holding. */
+  window.DEFAULT_USD_COST_PERCENT = 0.035;
+})();
+function calcGetPreset(id){
+  for(var i=0;i<FEE_PRESETS.length;i++) if(FEE_PRESETS[i].id === id) return FEE_PRESETS[i];
+  return null;
+}
+function calcPresetPercent(id){
+  var p = calcGetPreset(id);
+  if(!p || p.percent === null) return null;
+  return +p.percent.toFixed(3);
+}
+var CALC_LEVERAGE_OPTIONS = [1,2,3,5,10,20,25,50,100];
+var CALC_DEFAULTS = {
+  accountId:"", currency:"INR", capital:5000, riskAmount:200, riskPercent:4, activeRiskUnit:"amount",
+  stopLossPercent:2, leverage:5, costPercent: calcPresetPercent("nse-intraday"), feePreset:"nse-intraday",
+  plannedMargin:5000, takeProfitEnabled:true, takeProfitPercent:4, view:"calculator",
+  ladderIncludeFees:true, ladderLinked:true, ladderAmount:5000, ladderLeverage:5
+};
+function calcSettings(){ return Object.assign({}, CALC_DEFAULTS, state.calculatorSettings || {}); }
+function calcUpdate(patch){
+  state.calculatorSettings = Object.assign(calcSettings(), patch);
+  save(); renderCalculator();
+}
+/* An account's own current balance — opening balance plus every trade
+   logged against it — is the one number the standalone tool could never
+   have offered, since it has no journal to read it from. */
+function calcAccountBalance(a){
+  var net = 0;
+  state.trades.forEach(function(t){ if(t.accountId === a.id) net += derive(t).pnl; });
+  return a.startBalance + net;
+}
+function calcApplyAccount(accountId){
+  if(!accountId){ calcUpdate({accountId:""}); return; }
+  var a = state.accounts.filter(function(x){ return x.id === accountId; })[0];
+  if(!a) return;
+  var capital = +calcAccountBalance(a).toFixed(2);
+  var patch = {
+    accountId: accountId, currency: a.currency, capital: capital,
+    riskPercent: a.maxRiskPct || 1, activeRiskUnit: "percent",
+    riskAmount: +(capital * (a.maxRiskPct || 1) / 100).toFixed(2),
+    leverage: CALC_LEVERAGE_OPTIONS.indexOf(a.defaultLeverage) !== -1 ? a.defaultLeverage : 5,
+    plannedMargin: capital
+  };
+  if(a.currency === "USD"){ patch.costPercent = DEFAULT_USD_COST_PERCENT; patch.feePreset = "custom"; }
+  else { patch.feePreset = DEFAULT_INR_PRESET; patch.costPercent = calcPresetPercent(DEFAULT_INR_PRESET); }
+  calcUpdate(patch);
+}
+function calcResultRow(host, label, value, cls){
+  var row = el("div","calc-row" + (cls ? " " + cls : ""));
+  row.appendChild(el("span", null, label));
+  row.appendChild(el("span","v", value));
+  host.appendChild(row);
+}
+function calcBanner(host, tone, title, text){
+  var box = el("div","calc-banner " + tone);
+  box.appendChild(el("strong", null, title));
+  box.appendChild(el("span", null, text));
+  host.innerHTML = ""; host.appendChild(box);
+}
+function renderCalculator(){
+  if(!$("#calcAccount")) return;
+  var s = calcSettings();
+  var symbol = s.currency === "INR" ? "₹" : "$";
+
+  var accSel = $("#calcAccount");
+  var accCur = document.activeElement === accSel ? accSel.value : s.accountId;
+  accSel.innerHTML = "";
+  accSel.appendChild(new Option("Custom — not linked to an account", ""));
+  state.accounts.forEach(function(a){
+    accSel.appendChild(new Option(a.name + " (" + a.currency + ")", a.id));
+  });
+  accSel.value = state.accounts.some(function(a){ return a.id === accCur; }) ? accCur : "";
+
+  document.querySelectorAll("#calcCurrencySeg button").forEach(function(b){
+    b.classList.toggle("active", b.dataset.v === s.currency);
+  });
+  var showLadder = s.view === "ladder";
+  document.querySelectorAll("#calcViewSeg button").forEach(function(b){
+    b.classList.toggle("active", (b.dataset.v === "ladder") === showLadder);
+  });
+  $("#calcCalculatorView").style.display = showLadder ? "none" : "";
+  $("#calcLadderView").style.display = showLadder ? "" : "none";
+
+  if(document.activeElement.id !== "calcCapital") $("#calcCapital").value = s.capital;
+  if(document.activeElement.id !== "calcRiskAmount") $("#calcRiskAmount").value = s.riskAmount;
+  if(document.activeElement.id !== "calcRiskPercent") $("#calcRiskPercent").value = s.riskPercent;
+  if(document.activeElement.id !== "calcStopPercent") $("#calcStopPercent").value = s.stopLossPercent;
+  if(document.activeElement.id !== "calcCost") $("#calcCost").value = s.costPercent;
+  if(document.activeElement.id !== "calcMargin") $("#calcMargin").value = s.plannedMargin;
+  if(document.activeElement.id !== "calcTpPercent") $("#calcTpPercent").value = s.takeProfitPercent;
+  $("#calcTpOn").checked = s.takeProfitEnabled;
+  $("#calcTpRow").style.display = s.takeProfitEnabled ? "" : "none";
+
+  var levSel = $("#calcLeverage");
+  levSel.innerHTML = "";
+  CALC_LEVERAGE_OPTIONS.forEach(function(v){ levSel.appendChild(new Option(v + "×", v)); });
+  levSel.value = s.leverage;
+
+  var presetRow = $("#calcPresetRow");
+  presetRow.style.display = s.currency === "INR" ? "" : "none";
+  if(s.currency === "INR"){
+    var presetSel = $("#calcPreset");
+    presetSel.innerHTML = "";
+    FEE_PRESETS.filter(function(p){ return p.currency === "INR"; }).forEach(function(p){
+      presetSel.appendChild(new Option(p.label, p.id));
+    });
+    presetSel.value = s.feePreset;
+    var active = calcGetPreset(s.feePreset);
+    $("#calcPresetHint").textContent = active ? active.hint : "";
+  }
+
+  var analysis = calcAnalyse({
+    capital: s.capital, riskAmount: s.riskAmount, plannedMargin: s.plannedMargin,
+    stopLossPercent: s.stopLossPercent, leverage: s.leverage, costPercent: s.costPercent,
+    takeProfitPercent: s.takeProfitEnabled ? s.takeProfitPercent : 0
+  });
+  var recommended = analysis.recommended, actual = analysis.actual, valid = analysis.valid;
+  var matchesRecommendation = valid && Math.abs(analysis.marginDifference) <= 0.02;
+
+  $("#calcRecommendV").textContent = recommended.valid ? calcMoney(recommended.margin, s.currency) : "—";
+  $("#calcUseBtn").disabled = !recommended.valid;
+
+  $("#calcHeroV").textContent = valid ? calcMoney(actual.totalLoss, s.currency) : "—";
+  $("#calcHeroNote").textContent = (valid && actual.costAmount > 0)
+    ? "includes " + calcMoney(actual.costAmount, s.currency) + " of brokerage & charges" : "";
+
+  var bannerHost = $("#calcBanner");
+  if(!valid){
+    calcBanner(bannerHost, "warn", "Complete the trade setup",
+      "Capital, risk, margin, stop-loss and leverage must be greater than zero.");
+  } else if(actual.marginOverCapital){
+    calcBanner(bannerHost, "danger", "Margin exceeds your capital",
+      "Reduce planned margin by " + calcMoney(actual.marginExcess, s.currency) + ".");
+  } else if(actual.overRiskBudget){
+    calcBanner(bannerHost, "danger", "Trade exceeds your risk limit",
+      "Potential loss is " + calcMoney(actual.riskExcess, s.currency) + " above your maximum.");
+  } else if(actual.capitalRiskPercent > 5){
+    calcBanner(bannerHost, "danger", "High account risk",
+      "This trade risks " + actual.capitalRiskPercent.toFixed(2) + "% of your available capital.");
+  } else if(matchesRecommendation){
+    calcBanner(bannerHost, "good", "Matches the recommended margin",
+      "Your selected margin uses the full risk budget without exceeding it.");
+  } else {
+    calcBanner(bannerHost, "good", "Below your maximum risk",
+      "Your selected margin leaves " + calcMoney(s.riskAmount - actual.totalLoss, s.currency) + " of the risk budget unused.");
+  }
+
+  var rowsHost = $("#calcResultRows"); rowsHost.innerHTML = "";
+  if(valid){
+    calcResultRow(rowsHost, "Recommended maximum margin", calcMoney(recommended.margin, s.currency), "strong");
+    calcResultRow(rowsHost, "Your selected margin", calcMoney(actual.margin, s.currency));
+    if(!matchesRecommendation){
+      calcResultRow(rowsHost, analysis.marginDifference > 0 ? "Above recommendation" : "Below recommendation",
+        calcMoney(Math.abs(analysis.marginDifference), s.currency), "muted");
+    }
+    calcResultRow(rowsHost, "Position value", calcMoney(actual.positionValue, s.currency), "strong");
+    calcResultRow(rowsHost, "Loss from price move", calcMoney(actual.stopLossAmount, s.currency));
+    calcResultRow(rowsHost, "Brokerage & charges (round trip)", calcMoney(actual.costAmount, s.currency));
+    calcResultRow(rowsHost, "Total loss at SL", calcMoney(actual.totalLoss, s.currency), "strong");
+    calcResultRow(rowsHost, "Risk of capital", actual.capitalRiskPercent.toFixed(2) + "%");
+    if(s.takeProfitEnabled){
+      calcResultRow(rowsHost, "Estimated net profit at TP", calcMoney(actual.netProfit, s.currency));
+      calcResultRow(rowsHost, "Risk : reward", "1 : " + actual.rewardRatio.toFixed(2));
+    }
+  }
+
+  var ladderAmount = s.ladderLinked ? s.plannedMargin : s.ladderAmount;
+  var ladderLeverage = s.ladderLinked ? s.leverage : s.ladderLeverage;
+  $("#calcLadderLinkBtn").textContent = s.ladderLinked ? "Linked to calculator" : "Link to calculator";
+  $("#calcLadderLinkBtn").className = "btn btn-sm" + (s.ladderLinked ? " btn-primary" : "");
+  if(document.activeElement.id !== "calcLadderAmount") $("#calcLadderAmount").value = ladderAmount;
+  var lLevSel = $("#calcLadderLeverage");
+  lLevSel.innerHTML = "";
+  CALC_LEVERAGE_OPTIONS.forEach(function(v){ lLevSel.appendChild(new Option(v + "×", v)); });
+  lLevSel.value = ladderLeverage;
+  $("#calcLadderFees").checked = s.ladderIncludeFees;
+
+  var ladder = calcLadder({margin:ladderAmount, leverage:ladderLeverage, costPercent:s.costPercent});
+  var basis = ladder[0], ladderValid = !!(basis && basis.valid);
+  $("#calcLadderNote").textContent = (s.ladderLinked ? "Linked to calculator margin & leverage" : "Own values — calculator unchanged")
+    + (ladderValid ? " · Position " + calcMoney(basis.positionValue, s.currency) : "");
+  var chargesSource = (s.currency === "INR" && calcGetPreset(s.feePreset) && calcGetPreset(s.feePreset).percent !== null)
+    ? calcGetPreset(s.feePreset).label : "Cost buffer";
+  $("#calcLadderFeesNote").textContent = (s.ladderIncludeFees && ladderValid)
+    ? "+ " + calcMoney(basis.costAmount, s.currency) + " charges on every row · " + chargesSource + " " + (Number(s.costPercent) || 0) + "%" : "";
+
+  var table = $("#calcLadderTable"); table.innerHTML = "";
+  var head = el("div","ladder-head-row"); head.appendChild(el("span", null, "SL"));
+  head.appendChild(el("span", null, s.ladderIncludeFees ? "Loss with fees" : "Loss")); table.appendChild(head);
+  ladder.forEach(function(row){
+    var selected = Math.abs(Number(s.stopLossPercent) - row.stopLossPercent) < 0.0001;
+    var btn = el("button","ladder-row-btn" + (selected ? " active" : ""));
+    btn.type = "button";
+    btn.appendChild(el("span", null, row.stopLossPercent.toFixed(2) + "%"));
+    btn.appendChild(el("span", null, ladderValid ? calcMoney(s.ladderIncludeFees ? row.totalLoss : row.stopLossAmount, s.currency) : "—"));
+    btn.onclick = function(){ calcUpdate({stopLossPercent: row.stopLossPercent}); };
+    table.appendChild(btn);
+  });
+}
+function calcWire(){
+  $("#calcAccount").addEventListener("change", function(e){ calcApplyAccount(e.target.value); });
+  document.querySelectorAll("#calcCurrencySeg button").forEach(function(b){
+    b.onclick = function(){
+      var currency = b.dataset.v, s = calcSettings();
+      if(currency === s.currency) return;
+      if(currency === "USD") calcUpdate({currency:currency, costPercent:DEFAULT_USD_COST_PERCENT, feePreset:"custom"});
+      else calcUpdate({currency:currency, feePreset:DEFAULT_INR_PRESET, costPercent:calcPresetPercent(DEFAULT_INR_PRESET)});
+    };
+  });
+  document.querySelectorAll("#calcViewSeg button").forEach(function(b){
+    b.onclick = function(){ calcUpdate({view: b.dataset.v}); };
+  });
+  $("#calcCapital").addEventListener("input", function(e){
+    var s = calcSettings(), capital = Number(e.target.value) || 0;
+    if(s.activeRiskUnit === "percent"){
+      calcUpdate({capital:e.target.value, riskAmount:+((capital * Number(s.riskPercent || 0)) / 100).toFixed(2)});
+    } else {
+      calcUpdate({capital:e.target.value, riskPercent: capital > 0 ? +((Number(s.riskAmount || 0) / capital) * 100).toFixed(2) : 0});
+    }
+  });
+  $("#calcRiskAmount").addEventListener("input", function(e){
+    var s = calcSettings(), capital = Number(s.capital) || 0, value = e.target.value;
+    calcUpdate({riskAmount:value, activeRiskUnit:"amount", riskPercent: capital > 0 ? +((Number(value || 0) / capital) * 100).toFixed(2) : 0});
+  });
+  $("#calcRiskPercent").addEventListener("input", function(e){
+    var s = calcSettings(), capital = Number(s.capital) || 0, value = e.target.value;
+    calcUpdate({riskPercent:value, activeRiskUnit:"percent", riskAmount:+((capital * Number(value || 0)) / 100).toFixed(2)});
+  });
+  $("#calcStopPercent").addEventListener("input", function(e){ calcUpdate({stopLossPercent:e.target.value}); });
+  $("#calcLeverage").addEventListener("change", function(e){ calcUpdate({leverage:Number(e.target.value)}); });
+  $("#calcPreset").addEventListener("change", function(e){
+    var percent = calcPresetPercent(e.target.value);
+    calcUpdate(percent === null ? {feePreset:e.target.value} : {feePreset:e.target.value, costPercent:percent});
+  });
+  $("#calcCost").addEventListener("input", function(e){ calcUpdate({costPercent:e.target.value, feePreset:"custom"}); });
+  $("#calcTpOn").addEventListener("change", function(e){ calcUpdate({takeProfitEnabled:e.target.checked}); });
+  $("#calcTpPercent").addEventListener("input", function(e){ calcUpdate({takeProfitPercent:e.target.value}); });
+  $("#calcMargin").addEventListener("input", function(e){ calcUpdate({plannedMargin:e.target.value}); });
+  $("#calcUseBtn").onclick = function(){
+    var s = calcSettings(), r = calcRecommend({
+      capital:s.capital, riskAmount:s.riskAmount, stopLossPercent:s.stopLossPercent,
+      leverage:s.leverage, costPercent:s.costPercent, takeProfitPercent: s.takeProfitEnabled ? s.takeProfitPercent : 0
+    });
+    if(r.valid) calcUpdate({plannedMargin: +r.margin.toFixed(2)});
+  };
+  $("#calcLadderLinkBtn").onclick = function(){
+    var s = calcSettings();
+    if(s.ladderLinked) calcUpdate({ladderLinked:false, ladderAmount:s.plannedMargin, ladderLeverage:s.leverage});
+    else calcUpdate({ladderLinked:true});
+  };
+  $("#calcLadderAmount").addEventListener("input", function(e){
+    var s = calcSettings();
+    calcUpdate(s.ladderLinked ? {plannedMargin:e.target.value} : {ladderAmount:e.target.value});
+  });
+  $("#calcLadderLeverage").addEventListener("change", function(e){
+    var s = calcSettings(), v = Number(e.target.value);
+    calcUpdate(s.ladderLinked ? {leverage:v} : {ladderLeverage:v});
+  });
+  $("#calcLadderFees").addEventListener("change", function(e){ calcUpdate({ladderIncludeFees:e.target.checked}); });
+}
+
 /* ============ wiring ============ */
 function renderAll(){
   renderAccounts();
@@ -5250,6 +5832,7 @@ function renderAll(){
   renderDiscord();
   renderSync();
   renderDelta();
+  renderCalculator();
   renderLayoutPanels();
   renderLayoutTabs();
   renderTabsNav();
@@ -5616,6 +6199,7 @@ $("#importBtn").onclick = function(){
   catch(err){ toast("That is not a valid backup — check the JSON"); }
 };
 $("#wipeBtn").onclick = function(){ openWipe(); };
+calcWire();
 state = load();
 if(loadNotice) setTimeout(function(){ toast(loadNotice); }, 400);
 if(!state.ui) state.ui = {account:"all"};
