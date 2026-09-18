@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-09-19.14">
+  <meta name="app-version" content="2026-09-19.15">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -140,6 +140,7 @@
               <span id="activeMonthTitle" class="text-sm sm:text-base font-bold text-white font-mono">September 2026</span>
               <span id="activeTradesCountBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">19 trades</span>
               <span id="activeMonthStatusBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">Behind</span>
+              <button type="button" id="dupWarn" onclick="removeDuplicateTrades()" class="hidden text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25"></button>
             </div>
             <div class="text-xs text-slate-400 mt-0.5 font-mono">
               Net P&amp;L Delta: <span id="activePnlDeltaText" class="font-bold text-rose-400">-$4.98</span> • <span id="monthDaysRemainingText">9 trading days left</span>
@@ -151,10 +152,6 @@
           <select id="fMonth" onchange="onMonthFilterChange()" class="bg-black/50 border border-terminal-border text-xs px-2.5 py-1.5 rounded-lg text-slate-300 font-mono focus:outline-none">
             <!-- Dynamic months -->
           </select>
-          <div class="px-3 py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-700/50 text-emerald-400 text-xs font-mono flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span class="font-medium">● Within trading plan</span>
-          </div>
         </div>
       </div>
 
@@ -1306,7 +1303,7 @@
       const breaches = days.filter(d => d.breached).length;
 
       const items = [
-        { label: "NET P&L", val: signedMoney(s.net, cur), sub: `${s.n} trades in view`, color: s.net >= 0 ? "text-emerald-400" : "text-rose-400" },
+        { label: "NET P&L", val: signedMoney(s.net, cur), sub: (() => { const f = sum(monthFilter(scoped()).map(t => t.fees || 0)); return `${s.n} trades · gross ${signedMoney(s.net + f, cur)} · fees ${money(f, cur)}`; })(), color: s.net >= 0 ? "text-emerald-400" : "text-rose-400" },
         { label: "WIN RATE", val: pct(s.winRate), sub: `${s.wins}W / ${s.losses}L`, color: "text-emerald-400" },
         { label: "PROFIT FACTOR", val: s.pf.toFixed(2), sub: s.pf >= 1 ? "positive edge" : "losses outweigh", color: s.pf >= 1 ? "text-emerald-400" : "text-amber-400" },
         { label: "EXPECTANCY", val: rfmt(s.expectancy), sub: "risk-adjusted", color: s.expectancy >= 0 ? "text-emerald-400" : "text-rose-400" },
@@ -1401,6 +1398,33 @@
         document.getElementById('goalToGo').innerText = `${money(remaining / left, cur)} / day`;
         document.getElementById('goalRunRate').innerText = left > 1 ? `${money(remaining / (left - 1), cur)} / day` : "Last day";
       }
+    }
+
+    // Two trades identical in every field the exchange records are the same
+    // trade imported twice. The one carrying a Delta order tag is kept.
+    function duplicateTradeIds() {
+      const seen = {}, extras = [];
+      state.trades.slice().sort((a, b) => (b.src ? 1 : 0) - (a.src ? 1 : 0)).forEach(t => {
+        const key = [t.accountId, t.symbol, t.date, t.time, t.direction, +Number(t.entry).toFixed(6), +Number(t.exit).toFixed(6), +Number(t.qty).toFixed(6)].join("|");
+        if (seen[key]) extras.push(t.id); else seen[key] = 1;
+      });
+      return extras;
+    }
+    function updateDuplicateWarning() {
+      const btn = document.getElementById('dupWarn');
+      if (!btn) return;
+      const n = duplicateTradeIds().length;
+      btn.classList.toggle('hidden', !n);
+      btn.innerText = n ? `⚠ ${n} duplicate trade${n === 1 ? '' : 's'} · remove` : '';
+    }
+    function removeDuplicateTrades() {
+      const ids = duplicateTradeIds();
+      if (!ids.length) return;
+      if (!confirm(`Remove ${ids.length} duplicate trade${ids.length === 1 ? '' : 's'}? Only trades identical in account, symbol, date, time, side, entry, exit and size are affected; one copy of each stays.`)) return;
+      const drop = {}; ids.forEach(id => { drop[id] = 1; noteDeleted("trades", id); });
+      state.trades = state.trades.filter(t => !drop[t.id]);
+      save(); renderAll();
+      toast(`Removed ${ids.length} duplicate trade${ids.length === 1 ? '' : 's'}`);
     }
 
     function updateRiskStatusStrip(cur) {
@@ -2055,6 +2079,7 @@
       renderKPIRibbon(s, days, cur);
       updateGoalDisplays(cur);
       updateRiskStatusStrip(cur);
+      updateDuplicateWarning();
       renderMainEquityChart(ts, cur);
       renderTimeOfDaySlots(ts, cur);
       renderExecutionAudit(ts, cur);
