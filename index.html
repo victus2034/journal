@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-09-19.11">
+  <meta name="app-version" content="2026-09-19.14">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -343,7 +343,7 @@
             <span id="mistakeLeakPill" class="hidden mt-2 inline-block text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/25"></span>
 
             <div class="mt-3">
-              <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Confidence performance</span>
+              <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Confidence performance <span id="confidenceNote" class="normal-case font-normal tracking-normal text-slate-600 ml-1"></span></span>
               <div id="confidenceStrip" class="mt-1.5 grid grid-cols-2 gap-2 text-xs font-mono"></div>
             </div>
 
@@ -933,6 +933,20 @@
     let activeChartMetric = 'net';
 
     // State for dashboard 1-day ledger constraint
+    // A click on a time slot, tag or confidence level focuses the ledger on just
+    // those trades ({label, test}); null = the normal one-day session view.
+    let activeLedgerFocus = null;
+    function focusLedger(label, test) {
+      activeLedgerFocus = { label, test };
+      renderLedgerView();
+      const title = document.getElementById('ledgerSessionTitle');
+      const sec = title && title.closest('section');
+      if (sec) { sec.style.scrollMarginTop = '90px'; sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+    }
+    function clearLedgerFocus() {
+      activeLedgerFocus = null;
+      renderLedgerView();
+    }
     let activeLedgerDate = null; // null = auto (today if traded, else latest previous day)
 
     function read() { try { return localStorage.getItem(KEY); } catch(e) { return mem; } }
@@ -1344,11 +1358,9 @@
       return n;
     }
     function updateGoalDisplays(cur) {
-      if (!state.goals || !state.goals.length) {
-        state.goals = [{ id: uid(), title: "Claude Subscription", metric: "net_pnl", target: 20, period: "month", accountId: "all", days: "weekdays" }];
-      }
-      const idx = Math.min(state.ui.goalIdx || 0, state.goals.length - 1);
-      const g = state.goals[idx];
+      state.goals = state.goals || [];
+      const idx = Math.max(0, Math.min(state.ui.goalIdx || 0, state.goals.length - 1));
+      const g = state.goals[idx] || { title: "No goal set yet", target: 0, period: "month" };
       const s = computeStats(monthFilter(scoped()));
 
       document.getElementById('goalTitle').innerText = g.title;
@@ -1366,6 +1378,14 @@
       document.getElementById('goalPct').innerText = `${pctDone}% completed`;
       document.getElementById('goalBar').style.width = `${Math.max(2, pctDone)}%`;
 
+      if (!g.target) {
+        document.getElementById('goalTarget').innerText = '/ press + Add to set a target';
+        document.getElementById('goalPct').innerText = '';
+        document.getElementById('goalToGo').innerText = '—';
+        document.getElementById('goalRunRate').innerText = '—';
+        document.getElementById('goalDaysLeft').innerText = '—';
+        return;
+      }
       const remaining = Math.max(0, g.target - s.net);
       const left = weekdaysLeft(goalPeriodEnd(g.period));
       document.getElementById('goalDaysLeft').innerText = left ? `${left} day${left === 1 ? '' : 's'}` : 'none';
@@ -1550,6 +1570,12 @@
           </div>
           <span class="${isWin ? 'text-emerald-400' : 'text-rose-400'} font-bold">${signedMoney(netSlot, cur)}</span>
         `;
+        slotCard.classList.add('cursor-pointer', 'hover:border-amber-500/60', 'transition-colors');
+        slotCard.title = 'Show these trades in the ledger below';
+        slotCard.onclick = () => focusLedger(`${hhmm(k)} - ${hhmm((k + 30) % 1440)}`, t => {
+          const m = toMin(t.time);
+          return m != null && Math.floor(m / 30) * 30 === k;
+        });
         container.appendChild(slotCard);
       });
     }
@@ -1568,7 +1594,23 @@
     const CONFIDENCE_LABELS = {
       1: "Very Low / Hesitant", 2: "Low", 3: "Standard / Neutral", 4: "High Conviction", 5: "A+ Conviction"
     };
-    function tradeConfidence(t) { return t.confidence || 3; }
+    // null = never rated. Only trades rated on purpose count towards any level.
+    function tradeConfidence(t) {
+      const c = parseInt(t.confidence, 10);
+      return c >= 1 && c <= 5 ? c : null;
+    }
+    // Earlier builds treated every unrated trade as Level 3 and the trade form
+    // pre-selected 3. Clear a 3 that has no tags alongside it once, so old
+    // history stops posing as a rating. Runs one time per device.
+    function migrateConfidence() {
+      if (state.confidenceMigrated) return;
+      state.trades.forEach(t => {
+        const tagged = (t.tagsPositives || []).length || (t.tagsMistakes || []).length;
+        if (t.confidence === 3 && !tagged) delete t.confidence;
+      });
+      state.confidenceMigrated = true;
+      save();
+    }
     function starsText(n) { return "★".repeat(n) + "☆".repeat(5 - n); }
 
     function renderTagCards(containerId, ts, tagList, field, cur, isMistake) {
@@ -1601,6 +1643,9 @@
           </div>
           <span class="${isWin ? 'text-emerald-400' : 'text-rose-400'} font-bold">${signedMoney(r.net, cur)}</span>
         `;
+        card.classList.add('cursor-pointer', 'hover:border-amber-500/60', 'transition-colors');
+        card.title = 'Show these trades in the ledger below';
+        card.onclick = () => focusLedger(r.tag, t => (t[field] || []).indexOf(r.tag) !== -1);
         container.appendChild(card);
       });
       return rows;
@@ -1624,8 +1669,11 @@
         { label: "Level 1-2", test: c => c <= 2 }, { label: "Level 3", test: c => c === 3 },
         { label: "Level 4", test: c => c === 4 }, { label: "Level 5", test: c => c === 5 }
       ];
+      const rated = ts.filter(t => tradeConfidence(t) != null).length;
+      const noteEl = document.getElementById('confidenceNote');
+      if (noteEl) noteEl.innerText = rated ? `· ${rated} of ${ts.length} trades rated` : `· none rated yet — rate a trade to start tracking`;
       buckets.forEach(b => {
-        const inB = ts.filter(t => b.test(tradeConfidence(t)));
+        const inB = ts.filter(t => { const c = tradeConfidence(t); return c != null && b.test(c); });
         const net = sum(inB.map(t => t.pnl));
         const wins = inB.filter(t => t.pnl > 0).length;
         const card = document.createElement('div');
@@ -1635,6 +1683,11 @@
           <div class="${inB.length ? (net >= 0 ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-500'} font-bold text-sm mt-0.5">${inB.length ? signedMoney(net, cur) : '—'}</div>
           <span class="text-[10px] text-slate-500">${inB.length} trade${inB.length === 1 ? '' : 's'}${inB.length ? ' • ' + pct(wins / inB.length * 100) + ' won' : ''}</span>
         `;
+        if (inB.length) {
+          card.classList.add('cursor-pointer', 'hover:border-amber-500/60', 'transition-colors');
+          card.title = 'Show these trades in the ledger below';
+          card.onclick = () => focusLedger(b.label + ' confidence', t => { const c = tradeConfidence(t); return c != null && b.test(c); });
+        }
         strip.appendChild(card);
       });
     }
@@ -1681,7 +1734,10 @@
       tbody.innerHTML = '';
 
       const ts = scoped();
-      const session = getActiveSingleSession(ts);
+      const focus = activeLedgerFocus;
+      const session = focus
+        ? { date: '', trades: monthFilter(ts).filter(focus.test).slice().reverse(), isToday: false, isFallback: false }
+        : getActiveSingleSession(ts);
       const activeDay = session.date;
       const dayTrades = session.trades;
 
@@ -1691,7 +1747,9 @@
       const subEl = document.getElementById('ledgerSessionSubtitle');
       const countBadge = document.getElementById('ledgerCountBadge');
 
-      if (titleEl) {
+      if (titleEl && focus) {
+        titleEl.innerText = `Ledger: ${focus.label}`;
+      } else if (titleEl) {
         titleEl.innerText = session.isToday
           ? `Today's Executions Ledger (${fmtDay(activeDay)})`
           : (session.isFallback
@@ -1699,7 +1757,12 @@
               : `Session Ledger (${fmtDay(activeDay)})`);
       }
 
-      if (badgeEl) {
+      if (badgeEl) badgeEl.onclick = null;
+      if (badgeEl && focus) {
+        badgeEl.className = "text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/40 font-bold flex items-center gap-1.5 cursor-pointer hover:bg-violet-500/30";
+        badgeEl.innerHTML = `FILTER: ${focus.label} <span class="opacity-70">&nbsp;✕ clear</span>`;
+        badgeEl.onclick = clearLedgerFocus;
+      } else if (badgeEl) {
         if (session.isToday) {
           badgeEl.className = "text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1.5";
           badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> TODAY'S TRADES (${activeDay})`;
@@ -1712,7 +1775,9 @@
         }
       }
 
-      if (subEl) {
+      if (subEl && focus) {
+        subEl.innerText = 'Every execution behind the card you clicked, across the month in view. Click the violet tag or Today / Latest to go back to a single day.';
+      } else if (subEl) {
         subEl.innerText = session.isToday
           ? `Strict 1-day view: Showing all executions recorded today (${activeDay}).`
           : (session.isFallback
@@ -1733,14 +1798,14 @@
       });
 
       if (countBadge) {
-        countBadge.innerText = `${filtered.length} execution${filtered.length === 1 ? '' : 's'} on ${fmtDay(activeDay)}`;
+        countBadge.innerText = focus ? `${filtered.length} execution${filtered.length === 1 ? '' : 's'}` : `${filtered.length} execution${filtered.length === 1 ? '' : 's'} on ${fmtDay(activeDay)}`;
       }
 
       if (!filtered.length) {
         tbody.innerHTML = `
           <tr>
             <td colspan="11" class="text-center py-8 text-slate-500">
-              No executions found for ${activeDay} matching the filter.
+              No executions found ${focus ? "for this filter" : "for " + activeDay} matching the filter.
             </td>
           </tr>
         `;
@@ -1762,7 +1827,7 @@
 
         tr.innerHTML = `
           <td class="py-3 px-4 text-slate-400 whitespace-nowrap">
-            <span class="text-white font-medium">${trade.time || '—'}</span>
+            <span class="text-white font-medium">${focus ? trade.date.slice(5) + ' · ' : ''}${trade.time || '—'}</span>
           </td>
           <td class="py-3 px-4 text-slate-400 whitespace-nowrap">${a.name}</td>
           <td class="py-3 px-4 font-bold text-white flex items-center gap-2 whitespace-nowrap">
@@ -1926,7 +1991,7 @@
       if (document.getElementById('syncAutoCheckbox')) document.getElementById('syncAutoCheckbox').checked = !!sync.auto;
 
       const syncBadge = document.getElementById('syncStatusBadge');
-      if (syncBadge) syncBadge.innerText = sync.token ? (sync.lastAt ? `Synced ${sync.lastAt.slice(11, 16)}` : 'Connected') : 'Disconnected';
+      if (syncBadge) syncBadge.innerText = sync.token ? (sync.lastAt ? `Synced ${new Date(sync.lastAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Connected') : 'Disconnected';
 
       if (document.getElementById('deltaKeyInput')) document.getElementById('deltaKeyInput').value = delta.key || '';
       if (document.getElementById('deltaSecretInput')) document.getElementById('deltaSecretInput').value = delta.secret || '';
@@ -2044,8 +2109,9 @@
       });
 
       const conf = tradeConfidence(trade);
-      document.getElementById('inspConfidence').innerHTML =
-        `Confidence: <span class="text-amber-300">${starsText(conf)}</span> <span class="text-slate-500">(${conf}/5 · ${CONFIDENCE_LABELS[conf]})</span>`;
+      document.getElementById('inspConfidence').innerHTML = conf
+        ? `Confidence: <span class="text-amber-300">${starsText(conf)}</span> <span class="text-slate-500">(${conf}/5 · ${CONFIDENCE_LABELS[conf]})</span>`
+        : `Confidence: <span class="text-slate-500">not rated</span>`;
       const pills = (list, cls) => list.map(tg => `<span class="px-2 py-0.5 rounded-full border text-[10px] ${cls}">${tg}</span>`).join('');
       document.getElementById('inspTagsPositive').innerHTML = pills(trade.tagsPositives || [], 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50');
       document.getElementById('inspTagsMistake').innerHTML = pills(trade.tagsMistakes || [], 'bg-rose-500/20 text-rose-300 border-rose-500/50');
@@ -2075,12 +2141,14 @@
     }
 
     function filterByDate(dateStr) {
+      activeLedgerFocus = null;
       activeLedgerDate = dateStr;
       renderLedgerView();
       toast(`Displaying 1-day session: ${dateStr}`);
     }
 
     function resetLedgerFilters() {
+      activeLedgerFocus = null;
       activeLedgerDate = null;
       const searchInp = document.getElementById('tradeSearchInput');
       if (searchInp) searchInp.value = '';
@@ -2110,8 +2178,9 @@
     }
 
     function pickConfidence(n) {
-      document.getElementById('mConfidence').value = n;
-      document.getElementById('mConfLabel').innerText = CONFIDENCE_LABELS[n];
+      if (String(n) === document.getElementById('mConfidence').value) n = 0; // click again to clear
+      document.getElementById('mConfidence').value = n || '';
+      document.getElementById('mConfLabel').innerText = n ? CONFIDENCE_LABELS[n] : 'Not rated';
       document.querySelectorAll('#mConfRow .conf-btn').forEach(b => {
         const on = +b.dataset.conf === n;
         b.className = 'conf-btn py-1.5 rounded border text-[11px] ' + (on
@@ -2201,11 +2270,11 @@
           </div>
 
           <div>
-            <label class="text-slate-400 block mb-1">Confidence Level <span id="mConfLabel" class="text-amber-300 ml-1">${CONFIDENCE_LABELS[v.confidence || 3]}</span></label>
+            <label class="text-slate-400 block mb-1">Confidence Level <span id="mConfLabel" class="text-amber-300 ml-1">${tradeConfidence(v) ? CONFIDENCE_LABELS[tradeConfidence(v)] : 'Not rated'}</span></label>
             <div class="grid grid-cols-5 gap-1.5" id="mConfRow">
-              ${[1, 2, 3, 4, 5].map(n => `<button type="button" data-conf="${n}" onclick="pickConfidence(${n})" class="conf-btn py-1.5 rounded border text-[11px] ${n === (v.confidence || 3) ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold' : 'bg-[#080D15] border-terminal-border text-slate-400 hover:border-amber-500/50'}">${n} ${'★'.repeat(n)}</button>`).join('')}
+              ${[1, 2, 3, 4, 5].map(n => `<button type="button" data-conf="${n}" onclick="pickConfidence(${n})" class="conf-btn py-1.5 rounded border text-[11px] ${n === tradeConfidence(v) ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold' : 'bg-[#080D15] border-terminal-border text-slate-400 hover:border-amber-500/50'}">${n} ${'★'.repeat(n)}</button>`).join('')}
             </div>
-            <input type="hidden" id="mConfidence" value="${v.confidence || 3}">
+            <input type="hidden" id="mConfidence" value="${tradeConfidence(v) || ''}">
           </div>
 
           <div>
@@ -2235,7 +2304,7 @@
         // (src tag, exitTime, leverage, ...) survive a re-save.
         const rec = Object.assign({}, existing || {}, {
           id: existing ? existing.id : uid(),
-          confidence: parseInt(document.getElementById('mConfidence').value, 10) || 3,
+          confidence: parseInt(document.getElementById('mConfidence').value, 10) || null,
           tagsPositives: pickedTags('positives'),
           tagsMistakes: pickedTags('mistakes'),
           accountId: document.getElementById('mAcc').value,
@@ -2368,10 +2437,55 @@
       return new TextDecoder().decode(bytes);
     }
     function stamp(rec) { rec.updatedAt = new Date().toISOString(); return rec; }
+    // Every record carries a stamp so a merge can tell which side of a pair is
+    // newer instead of guessing from file order.
+    function stampAll() {
+      const now = new Date().toISOString();
+      ["trades", "signals", "goals", "accounts"].forEach(k => {
+        (state[k] || []).forEach(r => { if (!r.updatedAt) r.updatedAt = now; });
+      });
+    }
+    // Deletions have to travel too, or the other device puts the record back.
     function noteDeleted(kind, id) {
       state.tombstones = state.tombstones || {};
       state.tombstones[kind + ":" + id] = new Date().toISOString();
     }
+    function mergeList(mine, theirs, kind, tombstones) {
+      const out = {}, order = [];
+      function take(rec) {
+        if (!rec || !rec.id) return;
+        const gone = tombstones[kind + ":" + rec.id];
+        if (gone && (!rec.updatedAt || gone >= rec.updatedAt)) return;
+        const seen = out[rec.id];
+        if (!seen) { out[rec.id] = rec; order.push(rec.id); return; }
+        if ((rec.updatedAt || "") > (seen.updatedAt || "")) out[rec.id] = rec;
+      }
+      // GitHub's order first, this device's additions after — otherwise two
+      // devices with new trades never agree on order and overwrite each other.
+      (theirs || []).forEach(take);
+      (mine || []).forEach(take);
+      return order.map(id => out[id]).filter(Boolean);
+    }
+    // Merge, never replace: whatever is only on this device or only on GitHub
+    // survives. Device-local things (sync token, Delta key, UI, calculator)
+    // are always kept from this device, never taken from the shared file.
+    function mergeState(local, remote) {
+      const tombs = Object.assign({}, remote.tombstones || {});
+      Object.keys(local.tombstones || {}).forEach(k => {
+        if (!tombs[k] || local.tombstones[k] > tombs[k]) tombs[k] = local.tombstones[k];
+      });
+      const merged = Object.assign({}, local, {
+        accounts: mergeList(local.accounts, remote.accounts, "accounts", tombs),
+        trades: mergeList(local.trades, remote.trades, "trades", tombs),
+        signals: mergeList(local.signals, remote.signals, "signals", tombs),
+        goals: mergeList(local.goals, remote.goals, "goals", tombs),
+        aliases: Object.assign({}, remote.aliases || {}, local.aliases || {}),
+        tombstones: tombs
+      });
+      if (!merged.accounts.length) merged.accounts = local.accounts || remote.accounts || [];
+      return merged;
+    }
+    // What actually travels: never the token, the Delta key, or the webhook.
     function syncPayload(st) {
       return {
         version: 1,
@@ -2385,50 +2499,130 @@
     function syncSoon() {
       if (syncBusy || !syncReady() || !(state.sync && state.sync.auto)) return;
       clearTimeout(syncTimer);
+      // Batched, so importing three hundred rows is one push, not three hundred.
       syncTimer = setTimeout(() => syncNow({ quiet: true }), 4000);
     }
-    function syncNow(opts = {}) {
-      if (!syncReady() || syncBusy) return Promise.resolve({ ok: false });
-      syncBusy = true;
+    function setSyncStatus(text, bad) {
       const badge = document.getElementById('syncStatusBadge');
-      if (badge) badge.innerText = "Syncing...";
-
-      const c = syncCfg();
-      const ref = "?ref=" + encodeURIComponent(c.branch || "main");
-      return syncApi("/contents/" + SYNC_PATH + ref, { cache: "no-store" })
-        .then(res => {
-          if (res.status === 404) return { remote: null, sha: null };
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          return res.json().then(j => ({ remote: JSON.parse(b64decode(j.content)), sha: j.sha }));
-        })
-        .then(got => {
-          const payload = {
-            message: "Journal commit from workstation",
-            content: b64encode(JSON.stringify(syncPayload(state), null, 2)),
-            branch: c.branch || "main"
-          };
-          if (got.sha) payload.sha = got.sha;
-          return syncApi("/contents/" + SYNC_PATH, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          }).then(res => res.json()).then(j => {
-            state.sync.lastAt = new Date().toISOString();
-            state.sync.lastSha = j.content && j.content.sha;
-            save();
-            if (badge) badge.innerText = "Synced";
-            if (!opts.quiet) toast("GitHub sync successful");
-            syncBusy = false;
-            return { ok: true };
-          });
-        })
-        .catch(err => {
-          syncBusy = false;
-          if (badge) badge.innerText = "Sync Error";
-          if (!opts.quiet) toast("Sync error: " + err.message);
-          return { ok: false };
-        });
+      if (!badge) return;
+      badge.innerText = text;
+      badge.className = "text-[10px] px-2 py-0.5 rounded " + (bad ? "bg-rose-950/60 text-rose-300" : "bg-slate-800 text-slate-300");
     }
+    function syncNow(opts = {}) {
+      if (!syncReady()) return Promise.resolve({ ok: false, why: "not-set-up" });
+      if (syncBusy) return Promise.resolve({ ok: false, why: "busy" });
+      syncBusy = true;
+      const c = syncCfg();
+      stampAll();
+      setSyncStatus("Syncing...");
+      const ref = "?ref=" + encodeURIComponent(c.branch || "main");
+      // no-store: GitHub lets a browser reuse this answer for 60s, which names a
+      // file version that has since been replaced and makes the save a conflict.
+      return syncApi("/contents/" + SYNC_PATH + ref, { cache: "no-store" }).then(res => {
+        if (res.status === 404) return { remote: null, sha: null };
+        if (res.status === 401 || res.status === 403) throw new Error("auth");
+        if (!res.ok) throw new Error("http " + res.status);
+        return res.json().then(j => {
+          let parsed = null;
+          try { parsed = JSON.parse(b64decode(j.content)); } catch (e) { parsed = null; }
+          return { remote: parsed, sha: j.sha };
+        });
+      }).then(got => {
+        // A device connecting for the first time may already hold the same
+        // trades under different ids; merging would show every trade twice.
+        if (got.remote && !c.lastSha && (got.remote.accounts || []).length) {
+          let useRemote = false;
+          const known = {};
+          (got.remote.trades || []).forEach(t => { known[t.id] = 1; });
+          Object.keys(got.remote.tombstones || {}).forEach(k => { known[k.replace(/^trades:/, "")] = 1; });
+          if (!(state.trades || []).length) {
+            useRemote = true;
+          } else if (!state.trades.some(t => known[t.id])) {
+            useRemote = window.confirm(
+              "GitHub already has a journal with " + (got.remote.trades || []).length + " trades.\n" +
+              "This device has " + state.trades.length + " trades that were never synced.\n\n" +
+              "OK: use the GitHub journal here. Choose this if you imported the same trades on this device too; otherwise every trade shows twice.\n\n" +
+              "Cancel: keep both sets. Choose this only if these trades are different ones.");
+          }
+          if (useRemote) {
+            try { localStorage.setItem(KEY + ".before-sync", JSON.stringify(state)); } catch (e) {}
+            state = mergeState(Object.assign({}, state, { accounts: [], trades: [], signals: [], goals: [], aliases: {}, tombstones: {} }), got.remote);
+          }
+        }
+        if (got.remote) state = mergeState(state, got.remote);
+        const after = syncPayload(state);
+        const body = JSON.stringify(after, null, 2);
+        // Compared without the save time, which differs on every call.
+        const unchanged = got.remote && JSON.stringify(after) === JSON.stringify(Object.assign({}, got.remote, { savedAt: after.savedAt }));
+        if (unchanged) {
+          state.sync.lastAt = new Date().toISOString();
+          state.sync.lastSha = got.sha;
+          save(); renderAll();
+          return { ok: true, changed: false };
+        }
+        const payload = {
+          message: "Journal from " + (navigator.platform || "a device"),
+          content: b64encode(body),
+          branch: c.branch || "main"
+        };
+        if (got.sha) payload.sha = got.sha;
+        return syncApi("/contents/" + SYNC_PATH, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).then(res => {
+          if (res.status === 409) throw new Error("conflict");
+          if (!res.ok) throw new Error("http " + res.status);
+          return res.json();
+        }).then(j => {
+          state.sync.lastAt = new Date().toISOString();
+          state.sync.lastSha = j.content && j.content.sha;
+          save(); renderAll();
+          return { ok: true, changed: true };
+        });
+      }).catch(err => {
+        const m = String((err && err.message) || "");
+        // Another device saved between this one reading and writing. Nothing
+        // is lost: read again, merge again, save again.
+        if (/conflict/.test(m) && !opts.retried) {
+          syncBusy = false;
+          return syncNow(Object.assign({}, opts, { retried: true }));
+        }
+        const why = /auth/.test(m) ? "The token was refused. Check it has read and write access to that repository."
+          : /conflict/.test(m) ? "Another device saved at the same moment. It will catch up on the next sync."
+          : /http 404/.test(m) ? "That repository or branch was not found."
+          : /Failed to fetch/i.test(m) ? "Could not reach GitHub."
+          : "Sync failed (" + m + ").";
+        setSyncStatus(why, true);
+        if (!opts.quiet) toast(why);
+        return { ok: false, why };
+      }).then(r => {
+        syncBusy = false;
+        if (r && r.ok) {
+          setSyncStatus("Synced " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+          if (!opts.quiet) toast(r.changed ? "GitHub sync successful" : "Already up to date");
+        }
+        return r;
+      });
+    }
+    // Pulling, not only pushing: a trade logged on the phone shows up here when
+    // the journal opens, when its tab returns to view, and every two minutes.
+    function syncPull() {
+      if (syncReady() && state.sync && state.sync.auto && !document.hidden) syncNow({ quiet: true });
+    }
+    document.addEventListener("visibilitychange", syncPull);
+    window.addEventListener("online", syncPull);
+    setInterval(syncPull, 120000);
+    // Two open tabs share one saved copy but each keeps its own in memory, so
+    // the one that saved second would quietly undo the first. Follow the other
+    // tab's saves instead (the storage event only reaches tabs that did not save).
+    window.addEventListener("storage", e => {
+      if (e.key !== KEY || !e.newValue) return;
+      try {
+        const p = JSON.parse(e.newValue);
+        if (p && Array.isArray(p.trades) && Array.isArray(p.accounts)) { state = p; renderAll(); }
+      } catch (err) {}
+    });
 
     function saveSyncSettings() {
       state.sync = state.sync || {};
@@ -3590,11 +3784,12 @@
 
     window.onload = function() {
       state = load();
+      migrateConfidence();
       renderAll();
       window.addEventListener('resize', () => {
         if (mainEquityChartInstance) mainEquityChartInstance.resize();
       });
-      if (syncReady()) syncNow({ quiet: true });
+      setTimeout(syncPull, 1500);
     };
   </script>
 </body>
