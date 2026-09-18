@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-09-19.9">
+  <meta name="app-version" content="2026-09-19.11">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -447,10 +447,8 @@
                 <th class="py-2.5 px-3">Side</th>
                 <th class="py-2.5 px-3">Entry</th>
                 <th class="py-2.5 px-3">Exit</th>
-                <th class="py-2.5 px-3">Stop</th>
                 <th class="py-2.5 px-3">Qty</th>
                 <th class="py-2.5 px-3">Net P&amp;L</th>
-                <th class="py-2.5 px-3">R</th>
                 <th class="py-2.5 px-3 text-right">Actions</th>
               </tr>
             </thead>
@@ -775,6 +773,7 @@
           <div class="flex gap-2 pt-2 border-t border-terminal-border">
             <button onclick="saveDeltaSettings()" class="px-3 py-1.5 bg-cyan-500 text-black font-bold rounded hover:bg-cyan-400">Test &amp; Connect</button>
             <button onclick="deltaSyncNow()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Now</button>
+            <button onclick="deltaFullReimport()" title="Fetch all available Delta history again. Trades already in the journal are skipped, not duplicated." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Full History</button>
             <button onclick="undoDeltaFills()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Undo Delta Trades</button>
           </div>
         </div>
@@ -1049,6 +1048,21 @@
     function signedMoney(v, cur = "USD", dp = 2) {
       if (v == null || !isFinite(v)) return "—";
       return (v >= 0 ? "+" : "-") + curSym(cur) + Math.abs(v).toLocaleString(curLocale(cur), { minimumFractionDigits: dp, maximumFractionDigits: dp });
+    }
+    // Quantity for display: at most 2 decimals, no trailing zeros. A tiny size
+    // that would round to 0 (0.004 BTC) keeps 2 significant digits instead.
+    function fmtQty(v) {
+      const n = Number(v);
+      if (!isFinite(n)) return "—";
+      if (n === 0) return "0";
+      const r = +n.toFixed(2);
+      if (r === 0) return String(+n.toPrecision(2));
+      return String(r);
+    }
+    // Removes float noise (3.4000000000000004 -> 3.4) without hiding real precision.
+    function cleanNum(v) {
+      const n = Number(v);
+      return isFinite(n) ? String(+n.toPrecision(12)) : (v == null ? "" : v);
     }
     function pct(v) { return (isFinite(v) ? Math.round(v) : "—") + "%"; }
     function rfmt(v) {
@@ -1783,7 +1797,7 @@
       if (badge) badge.innerText = `${ts.length} Total Trades`;
 
       if (!ts.length) {
-        tbody.innerHTML = `<tr><td colspan="12" class="text-center py-8 text-slate-500">No archived trades.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="text-center py-8 text-slate-500">No archived trades.</td></tr>`;
         return;
       }
 
@@ -1799,10 +1813,8 @@
           <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${trade.direction === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${trade.direction.toUpperCase()}</span></td>
           <td class="py-2.5 px-3">${trade.entry}</td>
           <td class="py-2.5 px-3">${trade.exit}</td>
-          <td class="py-2.5 px-3 text-slate-400">${trade.stop || '—'}</td>
-          <td class="py-2.5 px-3">${trade.qty}</td>
+          <td class="py-2.5 px-3">${fmtQty(trade.qty)}</td>
           <td class="py-2.5 px-3 ${trade.pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}">${signedMoney(trade.pnl, a.currency)}</td>
-          <td class="py-2.5 px-3">${rfmt(trade.r)}</td>
           <td class="py-2.5 px-3 text-right">
             <button onclick="openTrade('${trade.id}')" class="px-2 py-0.5 rounded bg-terminal-card border border-terminal-border hover:border-amber-500 text-[10px]">Edit</button>
           </td>
@@ -2172,7 +2184,7 @@
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="text-slate-400 block mb-1">Quantity / Contracts</label>
-              <input type="number" step="any" id="mQty" value="${v.qty}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+              <input type="number" step="any" id="mQty" value="${cleanNum(v.qty)}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
             </div>
             <div>
               <label class="text-slate-400 block mb-1">Fees Paid</label>
@@ -2564,7 +2576,7 @@
             time: openD.toTimeString().slice(0, 5), exitTime: closeD.toTimeString().slice(0, 5),
             symbol: sym, direction: dir,
             entry: entry, exit: exit,
-            stop: 0, qty: eQty, fees: +fees.toFixed(6),
+            stop: 0, qty: +eQty.toFixed(6), fees: +fees.toFixed(6),
             leverage: (acct(accountId) || {}).defaultLeverage || 1,
             setup: "", rules: RULES.map(() => false), notes: "",
             src: src
@@ -2729,12 +2741,17 @@
     setTimeout(fetchLiveBalance, 2000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) fetchLiveBalance(); });
 
+    function deltaFullReimport() {
+      if (state.delta) { state.delta.lastFillTime = 0; save(); }
+      deltaSyncNow();
+    }
     function undoDeltaFills() {
       const initialCount = state.trades.length;
       state.trades = state.trades.filter(t => !t.src || !t.src.startsWith('delta:'));
+      if (state.delta) { state.delta.lastFillTime = 0; state.delta.lastAt = ""; }
       save();
       renderAll();
-      toast(`Removed ${initialCount - state.trades.length} Delta trades`);
+      toast(`Removed ${initialCount - state.trades.length} Delta trades. Press Import Now to bring the full history back.`);
     }
 
     /* =================== CALCULATOR ENGINE =================== */
