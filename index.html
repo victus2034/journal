@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-09-19.15">
+  <meta name="app-version" content="2026-09-19.16">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -87,7 +87,7 @@
           <div>
             <div class="flex items-center gap-2">
               <h1 class="font-bold text-sm sm:text-base tracking-wider text-white font-mono uppercase">Victus Journal</h1>
-              <span class="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-mono font-bold tracking-wide">v2.0</span>
+              <span id="appVerPill" class="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-mono font-bold tracking-wide">v2.0</span>
               <span id="syncPulse" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse hidden sm:inline-block" title="Session Live"></span>
             </div>
             <p class="text-[10px] text-slate-400 font-mono tracking-wider uppercase -mt-0.5">Intraday Journal &amp; Goal Tracker</p>
@@ -2476,11 +2476,16 @@
       state.tombstones[kind + ":" + id] = new Date().toISOString();
     }
     function mergeList(mine, theirs, kind, tombstones) {
-      const out = {}, order = [];
+      const out = {}, order = [], bySrc = {};
       function take(rec) {
         if (!rec || !rec.id) return;
         const gone = tombstones[kind + ":" + rec.id];
         if (gone && (!rec.updatedAt || gone >= rec.updatedAt)) return;
+        // Every device that imports from Delta invents its own ids, so the same
+        // exchange trade arrives under different ids. Its Delta order tag is
+        // the real identity: keep the first copy, drop the rest.
+        if (rec.src && bySrc[rec.src] && bySrc[rec.src] !== rec.id) return;
+        if (rec.src) bySrc[rec.src] = rec.id;
         const seen = out[rec.id];
         if (!seen) { out[rec.id] = rec; order.push(rec.id); return; }
         if ((rec.updatedAt || "") > (seen.updatedAt || "")) out[rec.id] = rec;
@@ -2494,7 +2499,27 @@
     // Merge, never replace: whatever is only on this device or only on GitHub
     // survives. Device-local things (sync token, Delta key, UI, calculator)
     // are always kept from this device, never taken from the shared file.
+    // Each fresh device invents its own ids for the default Dhan and Delta
+    // accounts. Same name, market and currency means the same account, so this
+    // device's trades are pointed at the shared one instead of doubling it.
+    function unifyAccounts(local, remote) {
+      const key = a => [String(a.name || "").trim().toLowerCase(), a.market, a.currency].join("|");
+      const remoteByKey = {};
+      (remote.accounts || []).forEach(a => { remoteByKey[key(a)] = a.id; });
+      const map = {};
+      (local.accounts || []).forEach(a => { const rid = remoteByKey[key(a)]; if (rid && rid !== a.id) map[a.id] = rid; });
+      if (!Object.keys(map).length) return local;
+      const fix = id => map[id] || id;
+      return Object.assign({}, local, {
+        accounts: (local.accounts || []).filter(a => !map[a.id]),
+        trades: (local.trades || []).map(t => map[t.accountId] ? Object.assign({}, t, { accountId: map[t.accountId] }) : t),
+        goals: (local.goals || []).map(g => g.accountId && map[g.accountId] ? Object.assign({}, g, { accountId: map[g.accountId] }) : g),
+        ui: Object.assign({}, local.ui, { account: fix((local.ui || {}).account) }),
+        calculatorSettings: local.calculatorSettings ? Object.assign({}, local.calculatorSettings, { accountId: fix(local.calculatorSettings.accountId) }) : local.calculatorSettings
+      });
+    }
     function mergeState(local, remote) {
+      local = unifyAccounts(local, remote);
       const tombs = Object.assign({}, remote.tombstones || {});
       Object.keys(local.tombstones || {}).forEach(k => {
         if (!tombs[k] || local.tombstones[k] > tombs[k]) tombs[k] = local.tombstones[k];
@@ -3808,6 +3833,9 @@
     }
 
     window.onload = function() {
+      const ver = (document.querySelector('meta[name="app-version"]') || {}).content || '';
+      const pill = document.getElementById('appVerPill');
+      if (pill && ver) { pill.innerText = 'v' + ver.slice(5); pill.title = 'This copy: ' + ver + '. Devices on different builds can disagree, so check they match.'; }
       state = load();
       migrateConfidence();
       renderAll();
