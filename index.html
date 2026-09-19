@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-09-19.28">
+  <meta name="app-version" content="2026-09-19.29">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -2590,6 +2590,19 @@
       badge.innerText = text;
       badge.className = "text-[10px] px-2 py-0.5 rounded " + (bad ? "bg-rose-950/60 text-rose-300" : "bg-slate-800 text-slate-300");
     }
+    // GitHub says why it said no; keep that instead of guessing.
+    function refusal(res) {
+      return res.json().catch(() => ({})).then(j => {
+        const msg = String((j && j.message) || "").replace(/[|\r\n]/g, " ").slice(0, 160);
+        throw new Error((res.status === 401 || res.status === 403 ? "auth|" : "http|") + res.status + "|" + msg);
+      });
+    }
+    function authWhy(m) {
+      const [, code, msg] = m.split("|");
+      if (code === "401") return "GitHub rejected the token itself (401 " + (msg || "Bad credentials") + "). It is mistyped, cut short when pasted, expired or revoked. Paste it again in full, or make a new one.";
+      if (/rate limit/i.test(msg)) return "GitHub is limiting requests for a moment (403). Try again in a minute.";
+      return "GitHub refused this token (403" + (msg ? ": " + msg : "") + "). It needs Repository access to " + (syncCfg().repo || "the repo") + " and Contents: Read and write.";
+    }
     function syncNow(opts = {}) {
       if (!syncReady()) return Promise.resolve({ ok: false, why: "not-set-up" });
       if (syncBusy) return Promise.resolve({ ok: false, why: "busy" });
@@ -2602,8 +2615,7 @@
       // file version that has since been replaced and makes the save a conflict.
       return syncApi("/contents/" + SYNC_PATH + ref, { cache: "no-store" }).then(res => {
         if (res.status === 404) return { remote: null, sha: null };
-        if (res.status === 401 || res.status === 403) throw new Error("auth");
-        if (!res.ok) throw new Error("http " + res.status);
+        if (!res.ok) return refusal(res);
         return res.json().then(j => {
           if (j.content) {
             let parsed;
@@ -2664,7 +2676,7 @@
           body: JSON.stringify(payload)
         }).then(res => {
           if (res.status === 409) throw new Error("conflict");
-          if (!res.ok) throw new Error("http " + res.status);
+          if (!res.ok) return refusal(res);
           return res.json();
         }).then(j => {
           state.sync.lastAt = new Date().toISOString();
@@ -2681,9 +2693,9 @@
           return syncNow(Object.assign({}, opts, { retried: true }));
         }
         const why = /unreadable/.test(m) ? "GitHub's copy of the journal could not be read, so nothing was overwritten. Try again in a moment."
-          : /auth/.test(m) ? "The token was refused. Check it has read and write access to that repository."
+          : /^auth\|/.test(m) ? authWhy(m)
           : /conflict/.test(m) ? "Another device saved at the same moment. It will catch up on the next sync."
-          : /http 404/.test(m) ? "That repository or branch was not found."
+          : /^http\|404/.test(m) ? "GitHub can't find that repository or branch with this token. A fine-grained token only sees the repositories chosen for it, so check the name (" + (c.repo || "") + ") and that this token has access to it."
           : /Failed to fetch/i.test(m) ? "Could not reach GitHub."
           : "Sync failed (" + m + ").";
         setSyncStatus(why, true);
