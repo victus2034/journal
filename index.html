@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-09-19.34">
+  <meta name="app-version" content="2026-09-20.44">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -458,9 +458,11 @@
             <tbody id="signalsTableBody" class="divide-y divide-terminal-border text-slate-300"></tbody>
           </table>
         </div>
+        <div id="sigMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
       </div>
 
       <!-- Edge analysis -->
+      <div id="sigTinyBar" class="flex justify-end"></div>
       <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="sigEdgeStrip"></section>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1043,6 +1045,10 @@
       o.time = TIME_RE.test(String(g.time || "")) ? g.time : "";
       ["price", "stop", "zoneLow", "zoneHigh", "resultR", "exit"].forEach(k => { if (g[k] !== undefined && g[k] !== null) { const n = cNum(g[k]); o[k] = isFinite(n) ? n : null; } });
       ["channel", "score", "market", "timeframe", "outcome", "sector"].forEach(k => { if (g[k] !== undefined) o[k] = cText(g[k], 60); });
+      if (g.zoneResult && typeof g.zoneResult === "object") {
+        const n = cNum(g.zoneResult.resultR);
+        o.zoneResult = { from: cText(g.zoneResult.from, 8), filled: true, outcome: cText(g.zoneResult.outcome, 30), resultR: isFinite(n) ? n : null };
+      } else delete o.zoneResult;
       return o;
     }
     // Deleted-record markers older than half a year are dropped (every device has
@@ -2051,12 +2057,31 @@
       });
     }
 
+    // Whether an alert's entry was touched is only known once the scanner has
+    // graded it, so "not graded yet" is its own group instead of being counted as filled.
     const SIG_MODES = [
-      { k: "filled", label: "Filled", test: pr => pr.signal.filled !== false },
+      { k: "all", label: "Everything", test: () => true },
+      { k: "filled", label: "Filled", test: pr => pr.signal.filled === true },
+      { k: "waiting", label: "Not graded yet", test: pr => pr.signal.filled !== true && pr.signal.filled !== false },
       { k: "taken", label: "Taken by me", test: pr => !!pr.trade },
       { k: "nofill", label: "Never filled", test: pr => pr.signal.filled === false },
-      { k: "all", label: "Everything", test: () => true }
+      // Not alerts at all: your own trades that no alert explains (drawn separately).
+      { k: "orphans", label: "My trades with no alert", test: () => false }
     ];
+    // The scanner grades a crypto alert in its daily report, which runs Monday to
+    // Friday at 16:35 IST and covers the day that closed at 16:30. Anything sent
+    // after 16:30 belongs to the next day's report, and a Saturday or Sunday
+    // report is never produced.
+    function gradingState(sig) {
+      const p = String(sig.time || "").split(":").map(Number);
+      const d = parseDay(sig.date);
+      if ((p[0] * 60 + (p[1] || 0)) > 16 * 60 + 30 && !/^NSE$/i.test(sig.market || "")) d.setDate(d.getDate() + 1);
+      const wd = d.getDay();
+      if (wd === 0 || wd === 6) return { label: "weekend", why: "The scanner only grades Monday to Friday. Alerts sent from Friday 16:30 to Sunday 16:30 IST never get a result." };
+      const due = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 16, 35);
+      if (Date.now() < due.getTime()) return { label: "pending", why: "Graded in the scanner's daily report at 16:35 IST on " + iso(d) + "." };
+      return { label: "not in report", why: "The scanner's daily report left this alert out, for example a repeat on a zone it had already graded, so it has no result." };
+    }
     function renderSignalsTable() {
       const tbody = document.getElementById('signalsTableBody');
       if (!tbody) return;
@@ -2090,16 +2115,46 @@
       if (range.from) pairs = pairs.filter(pr => pr.signal.date >= range.from);
       if (range.to) pairs = pairs.filter(pr => pr.signal.date <= range.to);
 
-      renderSignalEdgeAnalysis(pairs);
+      // Alerts whose stop is under 0.2% cannot be traded profitably: the 0.10% round-trip
+      // fee alone is over half of R, and stop slippage adds more. They swing the
+      // statistics far past anything real, so the stats can leave them out (the table
+      // still lists them). Off by default now that the scanner has re-graded its history; the chip shows how many there are.
+      const isTiny = pr => { const p = slPct(pr.signal); return p != null && p < TINY_STOP_PCT; };
+      const skipTiny = state.ui.sigSkipTiny === true;
+      const tinyN = pairs.filter(isTiny).length;
+      const tinyBar = document.getElementById('sigTinyBar');
+      if (tinyBar) {
+        tinyBar.innerHTML = '';
+        if (tinyN) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'px-2.5 py-1 rounded text-[11px] font-mono border ' + (skipTiny ? 'bg-amber-500 text-black font-bold border-amber-500' : 'bg-terminal-surface border-terminal-border text-slate-300 hover:border-amber-500');
+          b.innerText = (skipTiny ? 'Tiny stops left out of stats' : 'Tiny stops included in stats') + ` (${tinyN})`;
+          b.title = `Alerts with a stop under ${TINY_STOP_PCT}% from entry. Fees and slippage alone cost several R on those, so they distort total R, average R and the worst figure. Click to ${skipTiny ? 'include' : 'leave out'} them. The table above always lists every alert.`;
+          b.onclick = () => { state.ui.sigSkipTiny = !skipTiny; save(); renderSignalsTable(); };
+          tinyBar.appendChild(b);
+        }
+      }
+      renderSignalEdgeAnalysis(skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs);
 
       // --- filled/taken/never-filled/everything filter ---
-      let mode = state.ui.sigFilter || "filled";
-      if (!SIG_MODES.some(m => m.k === mode)) mode = "filled";
+      let mode = state.ui.sigFilter || "all";
+      if (!SIG_MODES.some(m => m.k === mode)) mode = "all";
+
+      // Trades of yours that no alert explains. Only days from the first loaded
+      // alert onwards can be judged: before that there is simply no alert data.
+      const matchedIds = new Set(matchSignals().filter(p => p.trade).map(p => p.trade.id));
+      const firstSigDate = (state.signals || []).map(g => g.date).sort()[0] || null;
+      let orphans = firstSigDate ? state.trades.filter(t => t.date >= firstSigDate && !matchedIds.has(t.id)) : [];
+      if (range.from) orphans = orphans.filter(t => t.date >= range.from);
+      if (range.to) orphans = orphans.filter(t => t.date <= range.to);
+      orphans = orphans.map(hydrate).sort((a, b) => -byWhen(a, b));
+
       const modeBar = document.getElementById('sigModeBar');
       if (modeBar) {
         modeBar.innerHTML = '';
         SIG_MODES.forEach(m => {
-          const n = pairs.filter(m.test).length;
+          const n = m.k === "orphans" ? orphans.length : pairs.filter(m.test).length;
           const b = document.createElement('button');
           b.className = 'px-2.5 py-1 rounded text-[11px] font-mono ' + (m.k === mode ? 'bg-amber-500 text-black font-bold' : 'bg-terminal-surface border border-terminal-border text-slate-300 hover:border-amber-500');
           b.innerText = `${m.label} (${n})`;
@@ -2110,14 +2165,70 @@
       const shown = pairs.filter(SIG_MODES.find(m => m.k === mode).test);
 
       tbody.innerHTML = '';
+      const moreBar = document.getElementById('sigMoreBar');
+      if (moreBar) moreBar.innerHTML = '';
+      // "Show more" controls, shared by the alert list and the no-alert trade list.
+      const renderMore = total => {
+        const visible = Math.min(sigVisible, total);
+        if (moreBar && total > SIG_PAGE) {
+          const btn = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'px-4 py-1.5 rounded-md bg-terminal-surface border border-terminal-border hover:border-amber-500 text-slate-200 text-[11px] font-mono'; b.innerText = label; b.onclick = fn; return b; };
+          const info = document.createElement('span'); info.className = 'text-[11px] text-slate-500 font-mono'; info.innerText = `Showing ${visible} of ${total}`;
+          moreBar.appendChild(info);
+          if (visible < total) {
+            moreBar.appendChild(btn(`Show ${Math.min(SIG_PAGE, total - visible)} more`, () => { sigVisible += SIG_PAGE; renderSignalsTable(); }));
+            moreBar.appendChild(btn('Show all', () => { sigVisible = total; renderSignalsTable(); }));
+          }
+          if (visible > SIG_PAGE) moreBar.appendChild(btn('Show latest 10', () => { sigVisible = SIG_PAGE; renderSignalsTable(); }));
+        }
+        return visible;
+      };
+      if (mode === "orphans") {
+        const cap = document.createElement('tr');
+        cap.innerHTML = `<td colspan="14" class="py-2 px-3 text-[11px] text-slate-500 font-mono">Trades you took that no alert explains: no alert on the same symbol, direction and day. ${firstSigDate ? "Checked from " + esc(firstSigDate) + ", the first day with alert data loaded." : ""}</td>`;
+        tbody.appendChild(cap);
+        if (!orphans.length) {
+          const empty = document.createElement('tr');
+          empty.innerHTML = `<td colspan="14" class="text-center py-8 text-slate-500">${firstSigDate ? "Every trade in this period matches an alert." : "Load the scanner alerts first, so there is something to match your trades against."}</td>`;
+          tbody.appendChild(empty);
+          return;
+        }
+        const nShown = renderMore(orphans.length);
+        orphans.slice(0, nShown).forEach(t => {
+          const a = acct(t.accountId), pnl = t.pnl || 0;
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-terminal-cardHover/80 transition-colors border-b border-terminal-border/60 cursor-pointer';
+          tr.onclick = () => openInspector(t);
+          const own = stopOk(t);
+          tr.innerHTML = `
+            <td class="py-2.5 px-3 text-white">${esc(t.date)}</td>
+            <td class="py-2.5 px-3 text-slate-400">${esc(t.time || '—')}</td>
+            <td class="py-2.5 px-3 text-slate-500">no alert</td>
+            <td class="py-2.5 px-3 font-bold text-white">${esc(t.symbol)}</td>
+            <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${t.direction === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(t.direction.toUpperCase())}</span></td>
+            <td class="py-2.5 px-3">${esc(cleanNum(t.entry))}</td>
+            <td class="py-2.5 px-3 text-slate-400">${own ? esc(cleanNum(t.stop)) : '—'}</td>
+            <td class="py-2.5 px-3 text-slate-500">${own ? (Math.abs(t.entry - t.stop) / t.entry * 100).toFixed(2) + '%' : '—'}</td>
+            <td class="py-2.5 px-3 text-slate-600">—</td>
+            <td class="py-2.5 px-3 whitespace-nowrap"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-500/20 text-violet-300">No alert</span></td>
+            <td class="py-2.5 px-3 text-slate-600">—</td>
+            <td class="py-2.5 px-3 font-bold whitespace-nowrap">${t.r != null ? `<span class="${t.r >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(t.r)}</span>` : '<span class="text-slate-600 font-normal">—</span>'}</td>
+            <td class="py-2.5 px-3 font-bold whitespace-nowrap"><span class="${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(pnl, a.currency)}</span></td>
+            <td class="py-2.5 px-3 text-right text-[10px] text-slate-500">Inspect</td>`;
+          tbody.appendChild(tr);
+        });
+        return;
+      }
       if (!shown.length) {
         tbody.innerHTML = `<tr><td colspan="14" class="text-center py-8 text-slate-500">${pairs.length ? "No alerts match this filter." : (state.signals && state.signals.length ? "No signals in this period." : "No signals yet. Press Load scanner alerts, or paste messages out of an alerts channel.")}</td></tr>`;
         return;
       }
-      shown.slice().sort((x, y) => {
+      const sortedShown = shown.slice().sort((x, y) => {
         const kx = (x.signal.date || "") + " " + (x.signal.time || ""), ky = (y.signal.date || "") + " " + (y.signal.time || "");
         return kx < ky ? 1 : kx > ky ? -1 : 0;
-      }).forEach(pair => {
+      });
+      // Only the newest handful are drawn; the rest are one click away.
+      const visibleCount = renderMore(sortedShown.length);
+      sortedShown.slice(0, visibleCount).forEach(pair => {
         const sig = pair.signal, t = pair.trade;
         const entry = signalEntry(sig);
         const sp = slPct(sig);
@@ -2125,14 +2236,27 @@
         const label = t ? "Taken" : (sig.filled === false ? "No fill" : "Skipped");
         // Two separate numbers: what the alert itself did (Signal R), and what
         // this trade did against the alert's stop (My R), plus the real money.
-        const sigRv = (sig.filled !== false) ? ((typeof sig.resultR === "number" && isFinite(sig.resultR)) ? sig.resultR : sigR(sig)) : null;
+        // The scanner grades one alert per zone and counts later alerts on the same
+        // zone as repeats. A repeat you traded takes the result of the alert that
+        // was graded (zr), shown as such and kept out of the edge statistics.
+        const zr = (sig.filled == null && sig.zoneResult) ? sig.zoneResult : null;
+        const ownR = (sig.filled !== false) ? ((typeof sig.resultR === "number" && isFinite(sig.resultR)) ? sig.resultR : sigR(sig)) : null;
+        const sigRv = ownR != null ? ownR : (zr && typeof zr.resultR === "number" ? zr.resultR : null);
         const myRv = (t && o && o.source === "traded") ? o.r : null;
         const rCls = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
         const outcomeTxt = { "+2R": "hit +2R", "+1R": "hit +1R", "BE": "breakeven", "SL": "stopped out", "Neither": "neither" };
-        const ageDays = (Date.now() - new Date(sig.date + "T00:00:00").getTime()) / 864e5;
+        const gs = gradingState(sig);
+        // The scanner can know a trade was entered without having a result yet.
+        const entered = sig.filled === true && sigRv == null;
+        const enteredLabel = /pending/i.test(sig.outcome || "")
+          ? { label: "entered · open", why: "The scanner saw price reach this entry, but the trade was still inside its 6-hour evaluation window when the report ran. It gets its result in the next report." }
+          : { label: "entered · unclear", why: "The scanner saw this entry, but stop and target traded inside the same candle and it could not tell which came first, so it gives no result." };
+        const zoneNote = zr ? `<div class="text-[10px] font-normal text-slate-500" title="The scanner graded the ${esc(zr.from)} alert on this same zone and counts this one as a repeat of it">zone result · ${esc(zr.from)} alert${zr.outcome && zr.resultR != null ? " · " + esc(outcomeTxt[zr.outcome] || zr.outcome) : ""}</div>` : "";
         const sigHtml = sig.filled === false ? '<span class="text-slate-600 font-normal" title="Price never reached the entry zone">—</span>'
-          : sigRv != null ? `<span class="${rCls(sigRv)}">${rfmt(sigRv)}</span>${sig.outcome ? `<div class="text-[10px] font-normal text-slate-500">${esc(outcomeTxt[sig.outcome] || sig.outcome)}</div>` : ""}`
-          : `<span class="text-slate-500 font-normal">${ageDays < 2 ? "pending" : "no result"}</span>`;
+          : (ownR != null) ? `<span class="${rCls(ownR)}">${rfmt(ownR)}</span>${sig.outcome ? `<div class="text-[10px] font-normal text-slate-500">${esc(outcomeTxt[sig.outcome] || sig.outcome)}</div>` : ""}`
+          : (zr && sigRv != null) ? `<span class="${rCls(sigRv)}">${rfmt(sigRv)}</span>${zoneNote}`
+          : zr ? `<span class="text-slate-500 font-normal" title="The ${esc(zr.from)} alert on this same zone was entered; its result comes in the next scanner report">zone entered · open</span>${zoneNote}`
+          : `<span class="text-slate-500 font-normal" title="${esc((entered ? enteredLabel : gs).why)}">${esc((entered ? enteredLabel : gs).label)}</span>`;
         let myHtml = '<span class="text-slate-600 font-normal">—</span>', pnlHtml = '<span class="text-slate-600 font-normal">—</span>';
         if (t) {
           const pnl = derive(t).pnl || 0, cur2 = acct(t.accountId).currency;
@@ -2165,7 +2289,7 @@
           <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${sig.side === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(sig.side.toUpperCase())}</span></td>
           <td class="py-2.5 px-3">${entry != null ? (+entry).toFixed(4) : '—'}</td>
           <td class="py-2.5 px-3 text-slate-400">${sig.stop != null ? (+sig.stop).toFixed(4) : '—'}</td>
-          <td class="py-2.5 px-3 text-slate-500">${sp == null ? '—' : sp.toFixed(2) + '%'}</td>
+          <td class="py-2.5 px-3 text-slate-500">${slDistHtml(sp, sig)}</td>
           <td class="py-2.5 px-3 text-amber-300">${esc(sig.score || '—')}</td>
           <td class="py-2.5 px-3 whitespace-nowrap"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${badgeCls}">${label}</span></td>
           <td class="py-2.5 px-3 font-bold whitespace-nowrap">${sigHtml}</td>
@@ -3683,6 +3807,22 @@
       const v = Math.abs(e - sig.stop) / Math.abs(e) * 100;
       return isFinite(v) ? v : null;
     }
+    // The Victus Alert System backtest and paper trading do not take a trade whose
+    // round-trip fees alone would cost more than 0.5R ("Too Tight"): fees are a
+    // fixed share of price, so on a thin stop they turn a full stop into -2R or -3R.
+    // Same numbers here so a thin stop is visible before it is taken. Crypto rate
+    // 0.10% round trip; NSE 0.1063%.
+    const MAX_COST_R = 0.5;
+    function feeRate(sig) { return /nse/i.test(String(sig.channel || "") + " " + String(sig.symbol || "")) ? 0.1063 : 0.10; }
+    function slDistHtml(sp, sig) {
+      if (sp == null) return '—';
+      const costR = sp > 0 ? feeRate(sig) / sp : Infinity;
+      const tight = costR > MAX_COST_R;
+      const worst = 1 + (feeRate(sig) + 0.05) / Math.max(sp, 1e-9);
+      const tip = `Fees alone are ${isFinite(costR) ? costR.toFixed(2) : "huge"}R on this stop. A full stop with fees and 0.05% slippage would be about -${isFinite(worst) ? worst.toFixed(2) : "huge"}R.` + (tight ? " Victus backtest and paper trading do not take this trade (Too Tight: fees over 0.5R)." : "");
+      return `<span title="${tip}">${sp.toFixed(2)}%</span>` +
+        `<div class="text-[10px] font-normal ${tight ? 'text-amber-400' : 'text-slate-600'}" title="${tip}">${tight ? 'too tight · ' : ''}fees ${isFinite(costR) ? costR.toFixed(2) : '∞'}R</div>`;
+    }
     const SL_BANDS = [
       { label: "under 0.2%", lo: 0, hi: 0.2 }, { label: "0.2 - 0.3%", lo: 0.2, hi: 0.3 },
       { label: "0.3 - 0.4%", lo: 0.3, hi: 0.4 }, { label: "0.4 - 0.5%", lo: 0.4, hi: 0.5 },
@@ -3765,27 +3905,52 @@
       if (strip) {
         strip.innerHTML = '';
         const rs = scored.map(pr => outcomeOf(pr).r);
+        // Name the alert behind the best and worst figure, and its stop width: an
+        // extreme R almost always comes from a stop so tight that costs dwarf it.
+        const pick = better => scored.reduce((b, pr) => (b == null || better(outcomeOf(pr).r, outcomeOf(b).r)) ? pr : b, null);
+        const describe = pr => pr ? `${esc(pr.signal.symbol)} · ${esc(String(pr.signal.date).slice(5))} · ${slPct(pr.signal) != null ? slPct(pr.signal).toFixed(2) + "% stop" : "no stop"}` : "single signal";
+        const tipFor = pr => {
+          const p = pr ? slPct(pr.signal) : null;
+          return (p != null && p < 0.3) ? `The stop was only ${p.toFixed(2)}% from entry. Fees (0.10%) and stop slippage (0.05%) are fixed shares of price, so on a stop this tight they alone cost about ${(0.15 / p).toFixed(1)}R.` : "";
+        };
         const wins = rs.filter(r => r > 0).length;
         const gw = sum(rs.filter(r => r > 0)), gl = -sum(rs.filter(r => r < 0));
         const taken = pairs.filter(pr => pr.trade).length;
         const unfilled = pairs.filter(pr => pr.signal.filled === false).length;
+        const filledN = pairs.filter(pr => pr.signal.filled === true).length;
+        const ungraded = pairs.length - filledN - unfilled;
         const items = [
           { label: "ALERTS", val: String(pairs.length), sub: `${taken} taken by you`, color: "text-slate-200" },
-          { label: "FILLED", val: pairs.length ? String(pairs.length - unfilled) : "—", sub: unfilled ? `${pct((pairs.length - unfilled) / pairs.length * 100)} reached zone` : "all of them", color: "text-slate-200" },
+          { label: "FILLED", val: String(filledN), sub: `${unfilled} never reached zone · ${ungraded} not graded yet`, color: "text-slate-200" },
           { label: "WIN RATE", val: scored.length ? pct(wins / scored.length * 100) : "—", sub: `${wins}W / ${scored.length - wins}L`, color: "text-emerald-400" },
           { label: "TOTAL R", val: scored.length ? rfmt(sum(rs)) : "—", sub: "across all signals", color: sum(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
           { label: "AVERAGE R", val: scored.length ? rfmt(avg(rs)) : "—", sub: "per signal", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
           { label: "PROFIT FACTOR", val: gl > 0 ? (gw / gl).toFixed(2) : (gw > 0 ? "∞" : "—"), sub: gw / Math.max(gl, 0.0001) >= 1.5 ? "healthy" : "thin", color: gw >= gl ? "text-emerald-400" : "text-rose-400" },
-          { label: "BEST", val: scored.length ? rfmt(Math.max(...rs)) : "—", sub: "single signal", color: "text-emerald-400" },
-          { label: "WORST", val: scored.length ? rfmt(Math.min(...rs)) : "—", sub: "single signal", color: "text-rose-400" }
+          { label: "BEST", val: scored.length ? rfmt(Math.max(...rs)) : "—", sub: describe(pick((a, b) => a > b)), tip: tipFor(pick((a, b) => a > b)), color: "text-emerald-400" },
+          { label: "WORST", val: scored.length ? rfmt(Math.min(...rs)) : "—", sub: describe(pick((a, b) => a < b)), tip: tipFor(pick((a, b) => a < b)), color: "text-rose-400" }
         ];
         items.forEach(it => {
           const card = document.createElement('div');
+          if (it.tip) card.title = it.tip;
           card.className = 'bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors';
           card.innerHTML = `<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${it.label}</span>
             <div class="my-0.5"><div class="text-base sm:text-lg font-bold ${it.color} mono-num">${it.val}</div><div class="text-[10px] text-slate-400 truncate">${it.sub}</div></div>`;
           strip.appendChild(card);
         });
+        // Say why numbers are missing instead of leaving dashes unexplained.
+        const waiting = pairs.filter(pr => pr.signal.filled !== true && pr.signal.filled !== false);
+        if (waiting.length) {
+          const by = { weekend: 0, pending: 0, "not in report": 0 };
+          waiting.forEach(pr => { by[gradingState(pr.signal).label]++; });
+          const bits = [];
+          if (by.weekend) bits.push(`${by.weekend} from a weekend (the scanner grades Monday to Friday only, so these never get a result)`);
+          if (by.pending) bits.push(`${by.pending} waiting for the 16:35 IST daily report`);
+          if (by["not in report"]) bits.push(`${by["not in report"]} left out of the scanner's report (usually repeats on a zone it already graded)`);
+          const note = document.createElement('div');
+          note.className = 'col-span-full text-[11px] text-slate-500 font-mono';
+          note.innerText = `${waiting.length} of these alerts have no result yet: ` + bits.join("; ") + ".";
+          strip.appendChild(note);
+        }
       }
       const note = pairs.length ? "Only alerts with a result from the scanner (or an exit price you add) can be measured." : "Import some signals first.";
       sigPerfBars('sigByScore', groupPerf(pairs, scoreBand), null, note);
@@ -3816,7 +3981,13 @@
       if (p.mode === "custom") return { from: p.from || "", to: p.to || "" };
       return { from: "", to: "" };
     }
+    const TINY_STOP_PCT = 0.2;
+    // How many alert rows are drawn: the newest ten, more on request. Changing the
+    // period or the filter starts again from ten.
+    const SIG_PAGE = 10;
+    let sigVisible = SIG_PAGE;
     function setSigPeriod(mode) {
+      sigVisible = SIG_PAGE;
       const p = sigPeriod();
       p.mode = mode;
       if (mode === "custom") {
@@ -3827,6 +3998,7 @@
       renderSignalsTable();
     }
     function setSigMode(mode) {
+      sigVisible = SIG_PAGE;
       state.ui.sigFilter = mode;
       save();
       renderSignalsTable();
@@ -3997,7 +4169,12 @@
     // identified by its symbol and the minute it was sent instead.
     const IST_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
     function istParts(d) { const p = {}; IST_FMT.formatToParts(d).forEach(x => { p[x.type] = x.value; }); return p; }
-    function alertKey(symbol, when) { return String(symbol || "").toUpperCase() + "|" + when.toISOString().slice(0, 16); }
+    // Symbol and minute alone are not enough: a 30m and a 4h alert (or a long and a
+    // short) can fire on the same symbol in the same minute, and merging them would
+    // silently drop one. Timeframe and side tell them apart.
+    function alertKey(symbol, when, timeframe, side) {
+      return [String(symbol || "").toUpperCase(), when.toISOString().slice(0, 16), String(timeframe || ""), side === "short" ? "short" : "long"].join("|");
+    }
     // Finalized / pending records: already one row per alert with its outcome.
     // Their own "date" is the day the result was settled, not the day the alert
     // was sent, so the date comes from the alert time.
@@ -4010,7 +4187,7 @@
         if (!r || !when || isNaN(when)) { bad++; return; }
         const ip = istParts(when);
         out.push({
-          id: uid(), tradeId: r.trade_id || null, key: alertKey(r.symbol, when),
+          id: uid(), tradeId: r.trade_id || null, key: alertKey(r.symbol, when, r.timeframe, r.side),
           date: `${ip.year}-${ip.month}-${ip.day}`,
           time: `${ip.hour}:${ip.minute}`,
           symbol: String(r.symbol || r.display_symbol || "").split("/")[0].replace(/\.NS$/i, "").toUpperCase(),
@@ -4041,7 +4218,7 @@
         const p = {}; fmt.formatToParts(d).forEach(x => { p[x.type] = x.value; });
         const n = v => (typeof v === "number" && isFinite(v)) ? v : null;
         out.push({
-          id: uid(), tradeId: r.trade_id || null, key: alertKey(r.symbol, d),
+          id: uid(), tradeId: r.trade_id || null, key: alertKey(r.symbol, d, r.timeframe, r.side),
           date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}`,
           symbol: String(r.symbol || "").split("/")[0].replace(/\.NS$/i, "").toUpperCase(),
           side: r.side === "short" ? "short" : "long",
@@ -4065,8 +4242,11 @@
         if (k === "id" || k === "filled") return;
         if (hi[k] !== null && hi[k] !== undefined && hi[k] !== "") out[k] = hi[k];
       });
-      // pending records do not know yet whether the zone was touched
-      if (hi.srcRank >= 3) out.filled = hi.filled; else if (lo.filled !== undefined) out.filled = lo.filled;
+      // A pending record that says the entry was reached is real information (the
+      // trade is open, just not graded); one that says "not filled" is not final.
+      if (hi.srcRank >= 3) out.filled = hi.filled;
+      else if (hi.filled === true) out.filled = true;
+      else if (lo.filled !== undefined) out.filled = lo.filled;
       out.srcRank = hi.srcRank;
       return out;
     }
@@ -4163,20 +4343,40 @@
             });
             const incoming = [...best.values()];
 
+            // The scanner grades one alert per zone. A later alert on the same zone
+            // is a repeat it does not grade, so it borrows the result of the most
+            // recent earlier alert on that zone that did fill (never a "not touched").
+            const zoneKey = r => (r.zoneLow != null && r.zoneHigh != null) ? [r.symbol, r.side, (+r.zoneLow).toFixed(8), (+r.zoneHigh).toFixed(8)].join("|") : null;
+            const when = r => Date.parse(r.date + "T" + (r.time || "00:00") + ":00");
+            const byZone = {};
+            incoming.forEach(r => { const k = zoneKey(r); if (k && r.filled === true) (byZone[k] = byZone[k] || []).push(r); });
+            incoming.forEach(r => {
+              if (r.filled === true || r.filled === false) return;
+              const k = zoneKey(r); if (!k || !byZone[k]) return;
+              const prior = byZone[k].filter(x => when(x) < when(r) && when(r) - when(x) <= 36 * 3600e3).sort((a, b) => when(b) - when(a))[0];
+              if (prior) r.zoneResult = { from: prior.time, filled: true, outcome: prior.outcome || "", resultR: typeof prior.resultR === "number" ? prior.resultR : null };
+            });
+
+            // Copies saved with the older, shorter key are replaced by the fresh ones
+            // rather than shown twice (their old key is the first two parts of the new one).
+            const oldKey = r => r.key.split("|").slice(0, 2).join("|");
+            const incomingOld = {}; incoming.forEach(r => { incomingOld[oldKey(r)] = 1; });
+            const staleIds = new Set((state.signals || []).filter(g => g.key && g.key.split("|").length < 4 && incomingOld[g.key]).map(g => g.id));
             const have = {};
-            (state.signals || []).forEach(g => { if (g.key) have[g.key] = g; });
+            (state.signals || []).forEach(g => { if (g.key && !staleIds.has(g.id)) have[g.key] = g; });
             const fresh = [], upgrades = [];
             incoming.forEach(r => {
               const ex = have[r.key];
               if (!ex) fresh.push(r);
-              else if (r.srcRank > signalRank(ex)) upgrades.push({ ex, r });
+              else if (r.srcRank > signalRank(ex) || (r.zoneResult && !ex.zoneResult)) upgrades.push({ ex, r });
             });
-            plan = { fresh, upgrades };
+            plan = { fresh, upgrades, staleIds };
             const legacy = (state.signals || []).filter(g => !g.key && g.tradeId).length;
 
             const filled = incoming.filter(r => r.filled === true && typeof r.resultR === "number");
             const latest = incoming.map(r => r.date + " " + (r.time || "")).sort().pop();
-            status.innerText = `${incoming.length} alerts in range · latest ${latest || "—"}`
+            const graded = incoming.filter(r => r.filled === true || r.filled === false).map(r => r.date + " " + (r.time || "")).sort().pop();
+            status.innerText = `${incoming.length} alerts in range · latest ${latest || "—"} · latest graded by the scanner ${graded || "none"}`
               + (filled.length ? ` · ${Math.round(filled.filter(r => r.resultR > 0).length / filled.length * 100)}% of ${filled.length} resolved won` : "");
             out.innerText = `${fresh.length} new · ${upgrades.length} to update with a result · ${incoming.length - fresh.length - upgrades.length} already up to date`
               + (legacy ? ` · ${legacy} signals were loaded by an older version, so press "Delete all signals" first, then load again, or they will show twice.` : "");
@@ -4197,7 +4397,7 @@
           Object.assign(ex, combineAlert(ex, r), { id: ex.id });
           stamp(ex);
         });
-        state.signals = (state.signals || []).concat(plan.fresh.map(stamp));
+        state.signals = (state.signals || []).filter(g => !(plan.staleIds && plan.staleIds.has(g.id))).concat(plan.fresh.map(stamp));
         sortSignals();
         save(); renderAll();
         toast(`Imported ${plan.fresh.length} new, updated ${plan.upgrades.length}`);
