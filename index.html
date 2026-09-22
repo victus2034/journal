@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-09-20.44">
+  <meta name="app-version" content="2026-09-22.48">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -726,6 +726,13 @@
           </div>
         </div>
 
+      </div>
+
+      <!-- Trading books: balance and limits -->
+      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+        <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Trading Books</h3>
+        <p class="text-slate-400 text-[11px] leading-relaxed">Each book's balance and daily loss limit. The limit drives the breach counter and the red day markers.</p>
+        <div id="booksList" class="space-y-2"></div>
       </div>
 
       <!-- Manual Trade Entry -->
@@ -1528,7 +1535,7 @@
       // The book whose limits apply: the selected one, or (all books) the first
       // one in the currency being shown, so a rupee limit is never shown as dollars.
       const defAcct = isAll() ? (state.accounts.find(a => a.currency === cur) || state.accounts[0] || acct('')) : acct(selected());
-      const maxLoss = defAcct.dailyLossLimit || 250;
+      const maxLoss = defAcct.dailyLossLimit > 0 ? defAcct.dailyLossLimit : 0; // 0 = limit off
 
       const todayPnl = sum(todayTrades.map(t => t.pnl));
       const todayRisk = sum(todayTrades.map(t => t.risk || 0));
@@ -1556,7 +1563,7 @@
         countEl.innerText = `${todayTrades.length} execution${todayTrades.length === 1 ? '' : 's'}`;
       }
       if (maxEl) {
-        maxEl.innerText = money(maxLoss, cur);
+        maxEl.innerText = maxLoss > 0 ? money(maxLoss, cur) : "off";
       }
     }
 
@@ -1654,7 +1661,6 @@
       document.getElementById('chartStartLabel').innerText = signedMoney(0, cur);
       document.getElementById('chartPeakLabel').innerText = signedMoney(peak, cur);
       document.getElementById('chartTroughLabel').innerText = signedMoney(Math.min(0, ...dataNet), cur);
-      document.getElementById('chartBalLabel').innerText = money(curBal, cur);
       document.getElementById('topBalVal').innerText = money(curBal, cur);
       lastComputedBalance = { value: curBal, cur };
       applyLiveBalance();
@@ -2303,7 +2309,81 @@
       });
     }
 
+    // A book's balance as the journal computes it: starting balance plus every trade in it.
+    function bookNet(id) { return sum(state.trades.filter(t => t.accountId === id).map(t => derive(t).pnl || 0)); }
+    function bookComputedBalance(a) { return (a.startBalance || 0) + bookNet(a.id); }
+    // While Delta has ever answered for this book and the key is still configured,
+    // its own wallet figure is the truth — it also reflects funding, deposits and
+    // open-position P&L, none of which come through in the imported fills. A
+    // disconnect freezes this at the last figure Delta gave; it does not clear it.
+    function deltaLiveFresh() { return liveDeltaBalance && liveDeltaBalance.value != null && Date.now() - liveDeltaBalance.at < 5 * 60 * 1000; }
+    function bookBalance(a) {
+      if (deltaReady() && a.id === deltaAccountId() && deltaLiveKnown()) return liveDeltaBalance.value;
+      return bookComputedBalance(a);
+    }
+    function renderBooks() {
+      const host = document.getElementById('booksList');
+      if (!host) return;
+      host.innerHTML = '';
+      state.accounts.forEach(a => {
+        const live = deltaReady() && a.id === deltaAccountId() && deltaLiveKnown();
+        const fresh = live && deltaLiveFresh();
+        const row = document.createElement('div');
+        row.className = 'flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-[#080D16] border border-terminal-border';
+        const dotCls = fresh ? 'bg-emerald-400' : 'bg-amber-400';
+        const wordCls = fresh ? 'text-emerald-400' : 'text-amber-400';
+        const liveTitle = live ? 'Delta ' + esc(liveDeltaBalance.field) + ', fetched ' + new Date(liveDeltaBalance.at).toLocaleTimeString()
+          + (fresh ? '' : ' — Delta hasn\'t answered since; holding this last known figure') + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
+        row.innerHTML = `
+          <div>
+            <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Live from Delta' : 'Last known balance from Delta — not currently reachable'}"></span>` : ''}</div>
+            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${live ? ` <span class="${wordCls}">· ${fresh ? 'live' : 'last known'}</span>` : ''} · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
+          </div>
+          <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
+        host.appendChild(row);
+      });
+    }
+    function openBookEditor(id) {
+      const a = state.accounts.find(x => x.id === id);
+      if (!a) return;
+      const net = bookNet(a.id);
+      const field = (label, elId, val, step, hint) => `
+          <div>
+            <label class="text-slate-400 block mb-1">${label}</label>
+            <input type="number" step="${step}" min="0" id="${elId}" value="${esc(val)}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            ${hint ? `<span class="text-[10px] text-slate-500">${hint}</span>` : ''}
+          </div>`;
+      openModalSheet(`Edit ${a.name} book`, body => {
+        body.innerHTML = `
+          ${field(`Balance right now (${esc(a.currency)})`, 'bkBalance', +bookBalance(a).toFixed(2), 'any', (deltaReady() && a.id === deltaAccountId() && deltaLiveKnown())
+            ? `This is prefilled from Delta's own wallet, fetched ${new Date(liveDeltaBalance.at).toLocaleTimeString()}${deltaLiveFresh() ? '' : ' (Delta is not reachable right now; this is the last figure it gave)'}. Saving it here only sets the starting balance the journal falls back on if Delta's key is ever removed — Delta's own figure keeps winning otherwise, even while it's disconnected.`
+            : `Type your real broker balance. The journal keeps the difference from your logged trades (${signedMoney(net, a.currency)}) as the starting balance. Once Delta answers for this book, its own live figure takes over here — and stays even if Delta later disconnects.`)}
+          ${field(`Daily loss limit (${esc(a.currency)})`, 'bkLimit', a.dailyLossLimit || 0, 'any', 'A day that loses this much or more counts as a breach. 0 turns it off.')}
+          <div class="grid grid-cols-3 gap-2">
+            ${field('Max risk per trade %', 'bkRisk', a.maxRiskPct || 1, 'any', '')}
+            ${field('Max trades a day', 'bkTrades', a.maxTradesPerDay || 5, '1', '')}
+            ${field('Default leverage', 'bkLev', a.defaultLeverage || 1, 'any', '')}
+          </div>`;
+      }, () => {
+        const bal = parseFloat(document.getElementById('bkBalance').value);
+        const lim = parseFloat(document.getElementById('bkLimit').value);
+        const risk = parseFloat(document.getElementById('bkRisk').value);
+        const cnt = parseFloat(document.getElementById('bkTrades').value);
+        const lev = parseFloat(document.getElementById('bkLev').value);
+        if (!isFinite(bal) || bal < 0) { toast("Enter your balance (0 or more)"); return false; }
+        if (!isFinite(lim) || lim < 0) { toast("Daily loss limit must be 0 or more"); return false; }
+        if (!(risk > 0) || !(cnt > 0) || !(lev > 0)) { toast("Risk %, trades a day and leverage must be above 0"); return false; }
+        a.startBalance = +(bal - net).toFixed(2);
+        a.dailyLossLimit = lim; a.maxRiskPct = risk; a.maxTradesPerDay = Math.round(cnt); a.defaultLeverage = lev;
+        stamp(a);
+        save(); renderAll(); renderBooks();
+        toast(`${a.name} book updated`);
+        return true;
+      });
+    }
+
     function renderDataView() {
+      renderBooks();
       const sync = state.sync || {};
       const delta = state.delta || {};
 
@@ -2503,8 +2583,11 @@
       document.getElementById('modalSheetTitle').innerText = title;
       const body = document.getElementById('modalSheetBody');
       body.innerHTML = '';
-      buildFn(body);
+      // An earlier dialog (the alert import) can leave the button reading "Import" and
+      // disabled; every dialog starts from a plain, working Save.
       const saveBtn = document.getElementById('modalSheetSaveBtn');
+      saveBtn.innerText = "Save"; saveBtn.disabled = false; saveBtn.classList.remove('opacity-50');
+      buildFn(body);
       saveBtn.onclick = () => {
         if (onSaveFn() !== false) closeModalSheet();
       };
@@ -3327,33 +3410,61 @@
       if (vals.length) return { value: sum(vals), field: "wallet balance" };
       return null;
     }
+    let liveDeltaLastError = null; // last fetch failure, kept separate so it never overwrites a real balance
     function fetchLiveBalance() {
       if (!deltaReady() || liveBalanceBusy || document.hidden) return Promise.resolve();
       liveBalanceBusy = true;
       return deltaCall("/v2/wallet/balances").then(r => {
         if (!r.ok) throw new Error("http " + r.status);
         const parsed = parseDeltaBalance(r.body);
-        liveDeltaBalance = parsed ? { value: parsed.value, field: parsed.field, at: Date.now() } : { error: "Unrecognised balance response", at: Date.now() };
+        if (!parsed) throw new Error("Unrecognised balance response");
+        liveDeltaLastError = null;
+        liveDeltaBalance = { value: parsed.value, field: parsed.field, at: Date.now() };
+        // Kept across a reload too, so closing and reopening the tab doesn't
+        // itself count as a disconnect and drop back to the computed figure.
+        if (state.delta) { state.delta.liveBalance = liveDeltaBalance; save(); }
       }).catch(err => {
-        liveDeltaBalance = { error: String((err && err.message) || err), at: Date.now() };
+        // A failed poll — offline, Delta down, a rejected key — records only the
+        // error. The last real balance this device saw is never overwritten by
+        // it, so the header keeps showing $50 instead of snapping back to
+        // whatever the journal itself computes the moment one poll misses.
+        liveDeltaLastError = String((err && err.message) || err);
       }).then(() => { liveBalanceBusy = false; applyLiveBalance(); });
     }
+    // True once Delta has ever answered for this account and the key is still
+    // configured. Not time-limited — a disconnect freezes the figure, it
+    // doesn't clear it. Only removing the key (or switching to a Delta account
+    // this key was never connected for) falls back to the computed balance.
+    function deltaLiveKnown() { return deltaReady() && liveDeltaBalance && liveDeltaBalance.value != null; }
     function applyLiveBalance() {
       const valEl = document.getElementById('topBalVal');
       const tag = document.getElementById('topBalLive');
+      const chartEl = document.getElementById('chartBalLabel');
       if (!valEl || !tag || !lastComputedBalance) return;
-      const c = deltaCfg();
-      const inScope = deltaReady() && (isAll() || selected() === deltaAccountId()) && lastComputedBalance.cur === "USD";
-      const fresh = liveDeltaBalance && liveDeltaBalance.value != null && Date.now() - liveDeltaBalance.at < 5 * 60 * 1000;
-      if (inScope && fresh) {
+      const inScope = deltaLiveKnown() && (isAll() || selected() === deltaAccountId()) && lastComputedBalance.cur === "USD";
+      const fresh = deltaLiveFresh();
+      // The header and the chart's own "Balance" line are two views of the same
+      // number — they used to show different figures (live up top, journal-computed
+      // under the chart) whenever Delta was connected, because only the header
+      // picked up the live figure. Both follow it now.
+      if (inScope) {
         valEl.innerText = money(liveDeltaBalance.value, "USD");
         tag.classList.remove('hidden');
-        tag.title = "Delta " + liveDeltaBalance.field + ", fetched " + new Date(liveDeltaBalance.at).toLocaleTimeString()
-          + ". Journal-computed balance: " + money(lastComputedBalance.value, "USD");
+        tag.innerText = fresh ? 'LIVE' : 'LAST KNOWN';
+        tag.className = 'text-[9px] font-bold px-1 py-0.5 rounded border align-middle '
+          + (fresh ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40');
+        const since = "Delta " + liveDeltaBalance.field + ", fetched " + new Date(liveDeltaBalance.at).toLocaleTimeString();
+        tag.title = fresh ? since + ". Journal-computed balance: " + money(lastComputedBalance.value, "USD")
+          : since + " — Delta hasn't answered since" + (liveDeltaLastError ? " (" + liveDeltaLastError + ")" : "") + ". Holding this last known figure rather than falling back to the journal's own computed balance (" + money(lastComputedBalance.value, "USD") + ").";
+        if (chartEl) { chartEl.innerText = money(liveDeltaBalance.value, "USD"); chartEl.title = tag.title; }
       } else {
         valEl.innerText = money(lastComputedBalance.value, lastComputedBalance.cur);
         tag.classList.add('hidden');
+        if (chartEl) { chartEl.innerText = money(lastComputedBalance.value, lastComputedBalance.cur); chartEl.title = ''; }
       }
+      // The live figure can arrive well after the Books panel was drawn (it is
+      // fetched on a timer), so the panel is kept in step whenever it changes.
+      if (document.getElementById('booksList') && !(document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) renderBooks();
     }
     setInterval(fetchLiveBalance, 60000);
     setTimeout(fetchLiveBalance, 2000);
@@ -4489,6 +4600,12 @@
       if (pill && ver) { pill.innerText = 'v' + ver.slice(5); pill.title = 'This copy: ' + ver + '. Devices on different builds can disagree, so check they match.'; }
       state = load();
       migrateConfidence();
+      // A balance Delta gave a past session survives a reload too — reopening the
+      // tab is not itself a disconnect, and the last known figure should hold
+      // until Delta actually answers again or falls silent for good.
+      if (state.delta && state.delta.liveBalance && typeof state.delta.liveBalance.value === "number") {
+        liveDeltaBalance = state.delta.liveBalance;
+      }
       renderAll();
       window.addEventListener('resize', () => {
         if (mainEquityChartInstance) mainEquityChartInstance.resize();
