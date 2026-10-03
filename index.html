@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-03.82">
+  <meta name="app-version" content="2026-10-03.90">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -19,6 +19,7 @@
   <style id="app-extra">
     /* Phone: tabs move to a bar at the bottom, with a quick-add button in the middle. */
     .h-24{height:6rem}.rounded-t{border-top-left-radius:.25rem;border-top-right-radius:.25rem}.bg-emerald-500\/60{background-color:rgba(16,185,129,.6)}.bg-rose-500\/60{background-color:rgba(244,63,94,.6)}.border-rose-400{border-color:#fb7185}
+    .bg-amber-400\/70{background-color:rgba(251,191,36,.7)}.min-w-\[160px\]{min-width:160px}.pt-4{padding-top:1rem}
     .mnav{display:none}
     @media (max-width:639px){
       .mnav{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:45;background:#090E17;border-top:1px solid #182438;padding:4px 4px calc(4px + env(safe-area-inset-bottom));justify-content:space-around;align-items:center}
@@ -5816,7 +5817,88 @@
         + '<div class="grid grid-cols-7 gap-1 font-mono">' + cells + '</div>'
         + '<p class="text-[10px] text-slate-500 mt-2">A day counts as sideways when BTC\'s close is within ' + MKT_SIDE_PCT + '% of its open. This reads the crypto market only, not NSE.</p>'
         + err + '</div>'
-        + '<div class="xl:col-span-3">' + (Object.keys(mktCache().byDate).length ? mktAuditHtml(hostId, ctx) : '') + '</div></div>';
+        + '<div class="xl:col-span-3">' + (Object.keys(mktCache().byDate).length ? mktAuditHtml(hostId, ctx) : '') + '</div></div>'
+        + mktHourlyHtml(hostId, ctx);
+    }
+
+    /* =================== BTC HOUR BY HOUR =================== */
+    // Delta's hourly BTC candles for the last 60 days, kept under their own key
+    // (about 1,400 candles) so they never weigh on the journal's own save.
+    const MKT_HR_KEY = "tapeAndTarget.mktHourly", MKT_HR_DAYS = 60;
+    let mktHr = null, mktHrLoading = false, mktHrErr = "", mktHrFailedAt = 0;
+    function mktHrCache() {
+      if (!mktHr) { try { mktHr = JSON.parse(localStorage.getItem(MKT_HR_KEY) || "null"); } catch (e) { mktHr = null; } }
+      if (!mktHr || typeof mktHr !== "object" || !mktHr.bars) mktHr = { fetchedAt: 0, bars: {} };
+      return mktHr;
+    }
+    function mktHrNeedsFetch() {
+      if (mktHrLoading || (mktHrFailedAt && Date.now() - mktHrFailedAt < 60000)) return false;
+      const c = mktHrCache();
+      return !Object.keys(c.bars).length || Date.now() - (c.fetchedAt || 0) > 30 * 60000;
+    }
+    function mktHrFetch() {
+      if (mktHrLoading) return Promise.resolve();
+      mktHrLoading = true; mktHrErr = "";
+      const end = Math.floor(Date.now() / 1000), start = end - MKT_HR_DAYS * 86400;
+      return fetch(DELTA_BASE + "/v2/history/candles?resolution=1h&symbol=" + MKT_SYMBOL + "&start=" + start + "&end=" + end)
+        .then(res => res.json())
+        .then(j => {
+          if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad response");
+          const c = mktHrCache(), cutoff = start;
+          j.result.forEach(k => { if (k.open > 0) c.bars[k.time] = [k.open, k.high, k.low, k.close]; });
+          Object.keys(c.bars).forEach(t => { if (+t < cutoff) delete c.bars[t]; });
+          c.fetchedAt = Date.now(); mktHrFailedAt = 0;
+          try { localStorage.setItem(MKT_HR_KEY, JSON.stringify(c)); } catch (e) {}
+        })
+        .catch(e => { mktHrFailedAt = Date.now(); mktHrErr = "Could not load hourly BTC candles (" + (e.message || e) + ")."; })
+        .finally(() => { mktHrLoading = false; });
+    }
+    // Delta's hourly candles start on the UTC hour, which is :30 in IST. An alert at
+    // 00:10 IST falls in the candle that opened at 23:30 IST.
+    function istHourSlot(time) { const m = toMin(time); return m == null ? null : Math.floor(((m - 30 + 1440) % 1440) / 60); }
+    function setMktHrDays(hostId, d) { state.ui.mktHrDays = d; save(); renderMarketCalendar(hostId); }
+    function mktHourlyHtml(hostId, ctx) {
+      if (mktHrNeedsFetch()) mktHrFetch().then(() => renderMarketCalendar(hostId));
+      const days = [7, 30, 60].indexOf(state.ui.mktHrDays) !== -1 ? state.ui.mktHrDays : 30;
+      const since = Date.now() / 1000 - days * 86400;
+      const slots = Array.from({ length: 24 }, () => ({ rng: [], mv: [], sr: [], sp: [], tn: 0, tp: 0 }));
+      Object.keys(mktHrCache().bars).forEach(t => {
+        if (+t < since) return;
+        const [o, h, l, c] = mktHr.bars[t];
+        const ist = new Date((+t + 19800) * 1000), slot = ist.getUTCHours();
+        slots[slot].rng.push((h - l) / o * 100); slots[slot].mv.push((c - o) / o * 100);
+      });
+      (ctx.pairs || []).forEach(pr => { const o = outcomeOf(pr), sl = istHourSlot(pr.signal.time); if (!o || sl == null) return; slots[sl].sr.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) slots[sl].sp.push(p); });
+      (ctx.trades || []).forEach(t => { const sl = istHourSlot(t.time); if (sl == null) return; slots[sl].tn++; slots[sl].tp += derive(t).pnl || 0; });
+      const cur = ctx.cur || viewCur();
+      const have = slots.some(x => x.rng.length);
+      const avgRng = slots.map(x => x.rng.length ? avg(x.rng) : null);
+      const maxRng = Math.max(0.0001, ...avgRng.filter(v => v != null));
+      const ranked = avgRng.map((v, i) => ({ v, i })).filter(x => x.v != null).sort((a, b) => b.v - a.v);
+      const busy = ranked.slice(0, 3).map(x => x.i), quiet = ranked.slice(-3).map(x => x.i);
+      const lbl = i => String(i).padStart(2, '0') + ':30';
+      const btn = d => '<button type="button" onclick="setMktHrDays(\'' + hostId + '\',' + d + ')" class="px-2 py-0.5 rounded text-[10px] ' + (d === days ? 'bg-amber-500 text-black font-bold' : 'border border-terminal-border text-slate-300 hover:border-amber-500') + '">' + d + 'D</button>';
+      const loading = mktHrLoading ? '<span class="text-[10px] text-slate-500 ml-2">loading…</span>' : '';
+      let h = '<div class="mt-5 pt-4 border-t border-terminal-border font-mono text-[11px]">'
+        + '<div class="flex flex-wrap items-center justify-between gap-2 mb-2"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-sm font-bold text-white uppercase tracking-wider">BTC hour by hour</h3><span class="text-[10px] text-slate-500">IST, last ' + days + ' days' + loading + '</span></div>'
+        + '<div class="flex gap-1">' + btn(7) + btn(30) + btn(60) + '</div></div>';
+      if (!have) return h + '<p class="text-slate-500">' + (mktHrErr ? esc(mktHrErr) + ' <button type="button" onclick="mktHrFailedAt=0;mktHrFetch().then(()=>renderMarketCalendar(\'' + hostId + '\'))" class="underline">Retry</button>' : 'Loading hourly candles…') + '</p></div>';
+      h += '<p class="text-slate-500 mb-2">How much BTC moves in each hour, with your alerts and trades placed by the hour they fired. <span class="text-amber-300">Busiest: ' + busy.map(lbl).join(', ') + '</span> · <span class="text-slate-400">Quietest: ' + quiet.map(lbl).join(', ') + '</span></p>'
+        + '<div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">Hour</th><th class="pr-3 min-w-[160px]">Avg range (high-low)</th><th class="pr-3">Avg move</th><th class="pr-3">Up hours</th><th class="pr-3">Alerts graded</th><th class="pr-3">My trades</th></tr></thead><tbody>'
+        + slots.map((x, i) => {
+          if (!x.rng.length && !x.sr.length && !x.tn) return '';
+          const r = avgRng[i], mv = x.mv.length ? avg(x.mv) : null, up = x.mv.length ? x.mv.filter(v => v > 0).length / x.mv.length * 100 : null;
+          const tag = busy.indexOf(i) !== -1 ? ' <span class="px-1 rounded bg-amber-500/15 text-amber-300 text-[9px]">busy</span>' : quiet.indexOf(i) !== -1 ? ' <span class="px-1 rounded bg-slate-700/40 text-slate-400 text-[9px]">quiet</span>' : '';
+          const sAvg = x.sr.length ? avg(x.sr) : null;
+          return '<tr class="border-t border-terminal-border/60"><td class="py-1.5 pr-3 text-slate-200 whitespace-nowrap">' + lbl(i) + tag + '</td>'
+            + '<td class="pr-3">' + (r != null ? '<div class="flex items-center gap-2"><div style="width:100px;flex:none"><div class="h-1.5 rounded bg-amber-400/70" style="width:' + Math.max(3, r / maxRng * 100).toFixed(0) + '%"></div></div><span class="text-slate-200">' + r.toFixed(2) + '%</span></div>' : '<span class="text-slate-600">—</span>') + '</td>'
+            + '<td class="pr-3 ' + (mv == null ? 'text-slate-600' : mv >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + (mv != null ? pfmt(mv) : '—') + '</td>'
+            + '<td class="pr-3 text-slate-400">' + (up != null ? pct(up) : '—') + '</td>'
+            + '<td class="pr-3 ' + (sAvg == null ? 'text-slate-600' : sAvg >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + (sAvg != null ? x.sr.length + ' · ' + rfmt(sAvg) + pTag(x.sp.length ? avg(x.sp) : null) + ' avg' : '—') + '</td>'
+            + '<td class="pr-3 ' + (!x.tn ? 'text-slate-600' : x.tp >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + (x.tn ? x.tn + ' · ' + signedMoney(x.tp, cur) : '—') + '</td></tr>';
+        }).join('')
+        + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Range is the hour\'s high-to-low as a % of its open; move is close vs open. Hours start at :30 IST because Delta\'s candles start on the UTC hour. Alerts and trades follow this tab\'s period and channel filters' + (ctx.scope ? ' (' + esc(ctx.scope) + ')' : '') + '.</p></div>';
+      return h;
     }
     /* =================== SECTION TABS (Signals and Analysis) =================== */
     const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
