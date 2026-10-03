@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-03.81">
+  <meta name="app-version" content="2026-10-03.82">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -6063,6 +6063,9 @@
       let res = {};
       try { res = JSON.parse(resText || "{}") || {}; } catch (e) { res = {}; }
       const COST = { crypto: 0.10, nse: 0.1063 };
+      // Breakeven stop, % past entry once +0.5R trades - the scanner's
+      // CRYPTO_BREAK_EVEN_OFFSET_PCT / BREAK_EVEN_OFFSET_PCT.
+      const BE_PCT = { crypto: 0.1129, nse: 0.120 };
       const TF = { "30m": "30M", "4h": "4H", "1d": "1D", "1w": "1W", "1M": "1MO" };
       const n = v => (typeof v === "number" && isFinite(v)) ? v : null;
       const out = [];
@@ -6082,6 +6085,7 @@
             if (x.outcome === "2R") { outcome = "+2R"; resultR = 2 - costR; }
             else if (x.outcome === "1R") { outcome = "+1R"; resultR = 1 - costR; }
             else if (x.outcome === "SL") { outcome = "SL"; resultR = -1 - costR; }
+            else if (x.outcome === "BE") { outcome = "BE"; resultR = (riskPct > 0 ? (BE_PCT[r.market] || 0.1129) / riskPct : 0) - costR; }
             else outcome = x.outcome === "timeout" ? "timeout" : "open";
           }
         }
