@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-03.91">
+  <meta name="app-version" content="2026-10-03.92">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -5803,9 +5803,11 @@
         const bias = mktBias(k.pct); const tn = MKT_TONE[bias];
         known++; if (bias === 'bull') bull++; else if (bias === 'bear') bear++; else side++;
         if (monthOpen == null) monthOpen = k.o; monthClose = k.c;
-        const ring = picked || (ds === today ? ' ring-1 ring-amber-400' : '');
+        // Only the clicked day gets a ring; today is marked with a small dot instead,
+        // so it never reads as a second selected day.
+        const ring = picked;
         cells += '<div' + pick + ' class="h-11 p-1 rounded ' + tn[0] + ' border ' + tn[1] + ' flex flex-col justify-between cursor-pointer hover:border-amber-500' + ring + '" title="' + MKT_LABEL[bias] + ', ' + (k.pct >= 0 ? '+' : '') + k.pct.toFixed(2) + '% · open ' + k.o + ' close ' + k.c + '. Click to see this day hour by hour.">'
-          + '<span class="text-[10px] text-slate-300">' + d + '</span>'
+          + '<span class="text-[10px] text-slate-300">' + d + (ds === today ? ' <span class="text-amber-400" title="today">&bull;</span>' : '') + '</span>'
           + '<span class="text-[10px] sm:text-[11px] font-bold ' + tn[2] + ' mono-num">' + (k.pct >= 0 ? '+' : '') + k.pct.toFixed(1) + '%</span></div>';
       }
       const monthPct = (monthOpen && monthClose) ? (monthClose - monthOpen) / monthOpen * 100 : null;
