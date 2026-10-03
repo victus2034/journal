@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-03.71">
+  <meta name="app-version" content="2026-10-03.72">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -2062,6 +2062,7 @@
       const capBooks = isAll() ? state.accounts.filter(a => a.currency === cur) : [defAcct];
       const cap = sum(capBooks.map(bookBalance));
       const riskPct = cap > 0 ? (todayRisk / cap * 100) : 0;
+      const noBalance = !(cap > 0) && todayRisk > 0;
       
       const pnlEl = document.getElementById('riskTodayPnl');
       const usedEl = document.getElementById('riskPctUsed');
@@ -2075,7 +2076,9 @@
       if (usedEl) {
         // Risk needs a stop. Trades without one carry no risk figure, and saying
         // 0.0% would read as "no risk taken".
-        usedEl.innerHTML = (todayTrades.length && !todayRisk)
+        usedEl.innerHTML = noBalance
+          ? `<span class="text-slate-500">set balance in Books</span> <span class="text-slate-500 text-[10px]">/ ${esc(defAcct.maxRiskPct || 1)}% max</span>`
+          : (todayTrades.length && !todayRisk)
           ? `<span class="text-slate-500">no stop set</span> <span class="text-slate-500 text-[10px]">/ ${esc(defAcct.maxRiskPct || 1)}% max</span>`
           : `${riskPct.toFixed(1)}% <span class="text-slate-500 text-[10px]">/ ${esc(defAcct.maxRiskPct || 1)}% max</span>${unsized ? ` <span class="text-slate-500 text-[10px]">(${unsized} without a stop)</span>` : ''}`;
       }
@@ -4355,7 +4358,8 @@
         if (!(contractValues[sym] > 0)) { deltaSkippedSymbols.push(sym); return; }
         const cv = contractValues[sym];
         const openAt = resume && resume.open ? resume.open[sym] : null;
-        const fresh = f => { const t = deltaMicros(f.created_at); return openAt ? t >= openAt : t > resume.upTo; };
+        const skipTo = resume ? Math.max(resume.upTo || 0, (resume.skip && resume.skip[sym]) || 0) : 0;
+        const fresh = f => { const t = deltaMicros(f.created_at); return openAt ? t >= openAt : t > skipTo; };
         const use = resume ? list.filter(fresh) : list;
         let pos = 0, eQty = 0, eVal = 0, xQty = 0, xVal = 0, fees = 0, dir = null, startT = null;
         function emit(closeOrderId, closeAt) {
@@ -4443,8 +4447,25 @@
       // in the journal are matched by their order tag and skipped).
       const known = c.lastFillTime && c.openPositions && typeof c.openPositions === "object";
       const openStarts = known ? Object.keys(c.openPositions).map(k => c.openPositions[k]).filter(v => v > 0) : [];
-      const since = known ? Math.min(c.lastFillTime, ...openStarts) : 0;
-      const resume = known ? { upTo: c.lastFillTime, open: c.openPositions } : null;
+      let since, resume;
+      if (known) {
+        since = Math.min(c.lastFillTime, ...openStarts);
+        resume = { upTo: c.lastFillTime, open: c.openPositions };
+      } else if (c.lastFillTime) {
+        // First import after positions started being tracked: keep the old day of
+        // overlap (a full re-read would bring back every Delta trade ever deleted),
+        // but skip each symbol's fills up to the close of the last trade already
+        // imported, which is what used to turn into a fake trade.
+        since = c.lastFillTime - 86400e6;
+        const skip = {};
+        state.trades.forEach(t => {
+          if (!t.src || t.src.indexOf("delta:") !== 0 || !t.exitTime) return;
+          const d = t.exitDate || t.date, hm = t.exitTime.split(":");
+          const closeAt = new Date(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), +hm[0], +hm[1], 59, 999).getTime() * 1000;
+          if (closeAt >= since && closeAt > (skip[t.symbol] || 0)) skip[t.symbol] = closeAt;
+        });
+        resume = { upTo: 0, skip: skip, open: {} };
+      } else { since = 0; resume = null; }
       return Promise.all([deltaFetchFills(since), deltaFetchContractValues()]).then(res => {
         const r = res[0], contractValues = res[1];
         if (!Object.keys(contractValues).length) return Promise.reject({ message: "contract sizes unavailable" });
