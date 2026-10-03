@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-03.80">
+  <meta name="app-version" content="2026-10-03.81">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1454,6 +1454,17 @@
       if (v == null || !isFinite(v)) return "—";
       return (v >= 0 ? "+" : "-") + Math.abs(v).toFixed(2) + "R";
     }
+    // The % price move behind an R figure, shown next to it: R × the stop distance
+    // as a % of entry, so -1R on a 0.5% stop reads (-0.50%).
+    function pctOfR(r, stopPct) { return (r != null && isFinite(r) && stopPct != null && isFinite(stopPct)) ? r * stopPct : null; }
+    function pfmt(v) { return (v == null || !isFinite(v)) ? "" : (v >= 0 ? "+" : "-") + Math.abs(v).toFixed(2) + "%"; }
+    function pTag(v) { const t = pfmt(v); return t ? ` <span class="text-[10px] font-normal opacity-80" title="% move from entry (net of fees for your trades)">(${t})</span>` : ""; }
+    // Your trade's net result (after fees) as a % of the position's value at entry.
+    function tradePct(t) {
+      if (!t || !(t.entry > 0) || !(t.qty > 0)) return null;
+      const v = derive(t).pnl / (t.entry * t.qty) * 100;
+      return isFinite(v) ? v : null;
+    }
     function iso(d) {
       return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
     }
@@ -2685,7 +2696,7 @@
           <td class="py-2.5 px-3 text-right tabular-nums">${esc(trade.entry)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${esc(trade.exit)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${fmtQty(trade.qty)}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums ${trade.pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}">${signedMoney(trade.pnl, a.currency)}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums ${trade.pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}">${signedMoney(trade.pnl, a.currency)}${pTag(tradePct(trade))}</td>
           <td class="py-2.5 px-3 text-right">
             <button data-id="${esc(trade.id)}" onclick="openTrade(this.dataset.id)" class="px-2 py-0.5 rounded bg-terminal-card border border-terminal-border hover:border-amber-500 text-[10px]">Edit</button>
           </td>
@@ -2786,7 +2797,7 @@
         filled: pairs.filter(pr => pr.signal.filled === true).length,
         unfilled: pairs.filter(pr => pr.signal.filled === false).length,
         waiting: pairs.filter(pr => pr.signal.filled !== true && pr.signal.filled !== false).length,
-        graded: scored.length, wins: rs.filter(r => r > 0).length, net: sum(rs),
+        graded: scored.length, wins: rs.filter(r => r > 0).length, net: sum(rs), netPct: sumPct(scored.map(sigOutPct)),
         taken: taken.length, pnl: sum(taken.map(pr => derive(pr.trade).pnl || 0)),
         // Rupee and dollar trades can't be added together, so P&L is kept per currency.
         pnlBy: taken.reduce((o, pr) => { const c = acct(pr.trade.accountId).currency; o[c] = (o[c] || 0) + (derive(pr.trade).pnl || 0); return o; }, {}), myR: mine.length ? sum(mine) : null, myRn: mine.length
@@ -2818,7 +2829,7 @@
           const good = f.graded ? f.net >= 0 : null;
           cls += (good === null ? 'bg-slate-800/40 border-slate-700 hover:border-amber-500' : good ? 'bg-emerald-950/40 border-emerald-700/60 hover:border-emerald-400' : 'bg-rose-950/40 border-rose-700/60 hover:border-rose-400') + ' cursor-pointer';
           cell.innerHTML = '<span class="text-[10px] text-slate-300">' + d + (f.taken ? ' <span class="text-amber-300" title="you took a trade">&bull;</span>' : '') + '</span>'
-            + '<span><span class="block text-[10px] sm:text-[11px] font-bold mono-num ' + (good === null ? 'text-slate-400' : good ? 'text-emerald-400' : 'text-rose-400') + '">' + (f.graded ? rfmt(f.net) : 'not graded') + '</span>'
+            + '<span><span class="block text-[10px] sm:text-[11px] font-bold mono-num ' + (good === null ? 'text-slate-400' : good ? 'text-emerald-400' : 'text-rose-400') + '">' + (f.graded ? rfmt(f.net) : 'not graded') + '</span>' + (f.graded && f.netPct != null ? '<span class="block text-[9px] mono-num ' + (good ? 'text-emerald-400/80' : 'text-rose-400/80') + '">' + pfmt(f.netPct) + '</span>' : '')
             + '<span class="block text-[9px] text-slate-500">' + f.n + ' alert' + (f.n === 1 ? '' : 's') + '</span></span>';
           cell.onclick = () => sigPickDay(ds);
           cell.title = f.n + ' alerts, ' + f.filled + ' filled, ' + f.graded + ' graded' + (f.taken ? ', ' + f.taken + ' taken by you' : '') + '. Click to see this day only.';
@@ -2844,7 +2855,7 @@
           + item('Never filled', f.unfilled)
           + item('Not graded', f.waiting)
           + item('Win / loss', f.graded ? '<span class="text-emerald-400">' + f.wins + 'W</span> / <span class="text-rose-400">' + (f.graded - f.wins) + 'L</span>' : '&mdash;')
-          + item('Signal R', f.graded ? rfmt(f.net) : '&mdash;', f.graded ? (f.net >= 0 ? 'text-emerald-400' : 'text-rose-400') : '')
+          + item('Signal R', f.graded ? rfmt(f.net) + pTag(f.netPct) : '&mdash;', f.graded ? (f.net >= 0 ? 'text-emerald-400' : 'text-rose-400') : '')
           + item('Taken by me', f.taken)
           + item('My P&amp;L', f.taken ? Object.keys(f.pnlBy).map(c => '<span class="' + (f.pnlBy[c] >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + signedMoney(f.pnlBy[c], c) + '</span>').join(' · ') : '&mdash;')
           + '</div>' : '<div class="text-slate-500">No alerts in this ' + (picked ? 'day' : 'period') + '.</div>');
@@ -3015,7 +3026,7 @@
             <td class="py-2.5 px-3 text-slate-600">—</td>
             <td class="py-2.5 px-3 whitespace-nowrap"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-500/20 text-violet-300">No alert</span></td>
             <td class="py-2.5 px-3 text-slate-600">—</td>
-            <td class="py-2.5 px-3 font-bold whitespace-nowrap">${t.r != null ? `<span class="${t.r >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(t.r)}</span>` : '<span class="text-slate-600 font-normal">—</span>'}</td>
+            <td class="py-2.5 px-3 font-bold whitespace-nowrap">${t.r != null ? `<span class="${t.r >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(t.r)}</span>${pTag(tradePct(t))}` : `<span class="text-slate-600 font-normal">—</span>${pTag(tradePct(t))}`}</td>
             <td class="py-2.5 px-3 font-bold whitespace-nowrap"><span class="${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(pnl, a.currency)}</span></td>
             <td class="py-2.5 px-3 text-right text-[10px] text-slate-500">Inspect</td>`;
           tbody.appendChild(tr);
@@ -3029,7 +3040,7 @@
       if (mode === "missed") {
         const totalR = sum(shown.map(missedR));
         const cap = document.createElement('tr');
-        cap.innerHTML = `<td colspan="14" class="py-2 px-3 text-[11px] font-mono"><span class="text-emerald-400 font-bold">${rfmt(totalR)}</span> <span class="text-slate-400">left on the table: ${shown.length} alert${shown.length === 1 ? '' : 's'} in this view went on to win and you had no trade on them.</span></td>`;
+        cap.innerHTML = `<td colspan="14" class="py-2 px-3 text-[11px] font-mono"><span class="text-emerald-400 font-bold">${rfmt(totalR)}${pTag(sumPct(shown.map(sigOutPct)))}</span> <span class="text-slate-400">left on the table: ${shown.length} alert${shown.length === 1 ? '' : 's'} in this view went on to win and you had no trade on them.</span></td>`;
         tbody.appendChild(cap);
       }
       const sortedShown = shown.slice().sort((x, y) => {
@@ -3065,8 +3076,8 @@
           : { label: "entered · unclear", why: "The scanner saw this entry, but stop and target traded inside the same candle and it could not tell which came first, so it gives no result." };
         const zoneNote = zr ? `<div class="text-[10px] font-normal text-slate-500" title="The scanner graded the ${esc(zr.from)} alert on this same zone and counts this one as a repeat of it">zone result · ${esc(zr.from)} alert${zr.outcome && zr.resultR != null ? " · " + esc(outcomeTxt[zr.outcome] || zr.outcome) : ""}</div>` : "";
         const sigHtml = sig.filled === false ? '<span class="text-slate-600 font-normal" title="Price never reached the entry zone">—</span>'
-          : (ownR != null) ? `<span class="${rCls(ownR)}">${rfmt(ownR)}</span>${sig.outcome ? `<div class="text-[10px] font-normal text-slate-500">${esc(outcomeTxt[sig.outcome] || sig.outcome)}</div>` : ""}`
-          : (zr && sigRv != null) ? `<span class="${rCls(sigRv)}">${rfmt(sigRv)}</span>${zoneNote}`
+          : (ownR != null) ? `<span class="${rCls(ownR)}">${rfmt(ownR)}</span>${pTag(pctOfR(ownR, sp))}${sig.outcome ? `<div class="text-[10px] font-normal text-slate-500">${esc(outcomeTxt[sig.outcome] || sig.outcome)}</div>` : ""}`
+          : (zr && sigRv != null) ? `<span class="${rCls(sigRv)}">${rfmt(sigRv)}</span>${pTag(pctOfR(sigRv, sp))}${zoneNote}`
           : zr ? `<span class="text-slate-500 font-normal" title="The ${esc(zr.from)} alert on this same zone was entered; its result comes in the next scanner report">zone entered · open</span>${zoneNote}`
           : `<span class="text-slate-500 font-normal" title="${esc((entered ? enteredLabel : gs).why)}">${esc((entered ? enteredLabel : gs).label)}</span>`;
         let myHtml = '<span class="text-slate-600 font-normal">—</span>', pnlHtml = '<span class="text-slate-600 font-normal">—</span>';
@@ -3081,7 +3092,7 @@
                 : diff >= 0.3 ? `<span class="text-emerald-400">${diff.toFixed(1)}R more than signal</span>`
                 : `<span class="text-slate-400">same as signal</span>`;
             }
-            myHtml = `<span class="${rCls(myRv)}" title="Your net P&L divided by the risk from your entry to the alert's stop">${rfmt(myRv)}</span>${note ? `<div class="text-[10px] font-normal">${note}</div>` : ""}`;
+            myHtml = `<span class="${rCls(myRv)}" title="Your net P&L divided by the risk from your entry to the alert's stop">${rfmt(myRv)}</span>${pTag(tradePct(t))}${note ? `<div class="text-[10px] font-normal">${note}</div>` : ""}`;
           } else {
             // Either the alert had no stop, or your entry was already past it (above a
             // short's stop, below a long's), so there is no risk distance to measure.
@@ -3398,7 +3409,7 @@
           <td class="py-2.5 px-3 text-right tabular-nums text-slate-300">${money(x.notional, a.currency)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums font-bold ${isOver ? 'text-rose-400' : 'text-slate-200'}">${x.xBal != null ? x.xBal.toFixed(1) + '×' : '—'}</td>
           <td class="py-2.5 px-3 text-right tabular-nums ${x.riskPct != null && isOver ? 'text-rose-400' : 'text-slate-300'}" title="${x.riskPct != null ? 'If the ' + esc(x.stopSrc) + ' had been hit' : 'No stop known: what the trade actually lost'}">${x.riskPct != null ? x.riskPct.toFixed(2) + '%' : (x.lossPct > 0 ? '<span class="text-slate-500">lost </span>' + x.lossPct.toFixed(2) + '%' : '—')}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(t.pnl, a.currency)}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(t.pnl, a.currency)}${pTag(tradePct(t))}</td>
           <td class="py-2.5 px-3">${chips || '<span class="text-emerald-400">clean</span>'}</td>`;
         body.appendChild(tr);
       });
@@ -3611,7 +3622,7 @@
       document.getElementById('inspExit').innerText = fmtPrice(trade.exit, a.currency);
       document.getElementById('inspSetup').innerText = trade.setup || 'Discretionary';
       document.getElementById('inspDuration').innerText = fmtHeld(heldMins(trade));
-      document.getElementById('inspR').innerText = rfmt(trade.r);
+      document.getElementById('inspR').innerText = rfmt(trade.r) + (pfmt(tradePct(trade)) ? ' (' + pfmt(tradePct(trade)) + ')' : '');
       document.getElementById('inspFees').innerText = money(trade.fees || 0, a.currency);
       document.getElementById('inspNotes').innerText = trade.notes ? `"${trade.notes}"` : '"No execution reflection notes entered."';
 
@@ -5366,6 +5377,9 @@
       const v = Math.abs(e - sig.stop) / Math.abs(e) * 100;
       return isFinite(v) ? v : null;
     }
+    // The alert's result as a % price move (its R × its stop width).
+    function sigOutPct(pr) { const o = outcomeOf(pr); return o ? pctOfR(o.r, slPct(pr.signal)) : null; }
+    function sumPct(list) { const v = list.filter(x => x != null && isFinite(x)); return v.length ? sum(v) : null; }
     // The Victus Alert System backtest and paper trading do not take a trade whose
     // round-trip fees alone would cost more than 0.5R ("Too Tight"): fees are a
     // fixed share of price, so on a thin stop they turn a full stop into -2R or -3R.
@@ -5419,14 +5433,16 @@
         const o = outcomeOf(pr);
         if (!o) return;
         const k = keyFn(pr.signal);
-        if (!by[k]) by[k] = { key: k, n: 0, wins: 0, rs: [] };
+        if (!by[k]) by[k] = { key: k, n: 0, wins: 0, rs: [], ps: [] };
         by[k].n++;
         if (o.r > 0) by[k].wins++;
         by[k].rs.push(o.r);
+        by[k].ps.push(pctOfR(o.r, slPct(pr.signal)));
       });
       return Object.keys(by).map(k => {
         const g = by[k];
-        return { key: k, n: g.n, winRate: g.wins / g.n * 100, avgR: avg(g.rs), totR: sum(g.rs) };
+        const ps = g.ps.filter(x => x != null);
+        return { key: k, n: g.n, winRate: g.wins / g.n * 100, avgR: avg(g.rs), totR: sum(g.rs), avgPct: ps.length ? avg(ps) : null, totPct: ps.length ? sum(ps) : null };
       }).sort((a, b) => b.totR - a.totR);
     }
     function sigPerfBars(hostId, rows, order, emptyNote) {
@@ -5445,8 +5461,8 @@
         const row = document.createElement('div');
         row.innerHTML = `
           <div class="flex justify-between items-baseline gap-2">
-            <span class="text-slate-300">${esc(r.key)} <span class="text-slate-500 text-[10px]">${r.n} · ${pct(r.winRate)} won · ${rfmt(r.totR)} total</span></span>
-            <span class="font-bold ${pos2 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(r.avgR)} avg</span>
+            <span class="text-slate-300">${esc(r.key)} <span class="text-slate-500 text-[10px]">${r.n} · ${pct(r.winRate)} won · ${rfmt(r.totR)}${pTag(r.totPct)} total</span></span>
+            <span class="font-bold ${pos2 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(r.avgR)}${pTag(r.avgPct)} avg</span>
           </div>
           <div class="h-1.5 bg-[#131C2D] rounded-full relative mt-1 overflow-hidden">
             <div class="absolute inset-y-0 w-px bg-terminal-borderLight" style="left:50%"></div>
@@ -5477,7 +5493,8 @@
         if (so.r > 0 && mo.r < so.r - 0.3) { verdict = 'Exited early'; tone = 'text-amber-300'; }
         else if (so.r <= 0 && mo.r < so.r - 0.3) { verdict = 'Lost more than the alert'; tone = 'text-rose-300'; }
         else if (mo.r > so.r + 0.3) { verdict = 'Beat the alert'; tone = 'text-emerald-300'; }
-        list.push({ sig, t, sr: so.r, mr: mo.r, gap, slip, verdict, tone });
+        const sp = pctOfR(so.r, slPct(sig)), mp = tradePct(t);
+        list.push({ sig, t, sr: so.r, mr: mo.r, gap, slip, verdict, tone, sp, mp, gp: sp != null && mp != null ? mp - sp : null });
       });
       list.sort((a, b) => (b.t.date + (b.t.time || '')).localeCompare(a.t.date + (a.t.time || '')));
       const head = '<div class="flex items-center gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Alert vs my trade</h3></div>';
@@ -5489,8 +5506,8 @@
       const left = sum(early.map(x => x.sr - x.mr)), extra = sum(worse.map(x => x.sr - x.mr));
       let h = head + '<p class="text-slate-500 text-[11px] mb-3">The ' + list.length + ' alerts you took, with the alert\'s own result next to yours. R for both is measured against the alert\'s stop.</p>'
         + '<div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">'
-        + card('Alerts made', rfmt(sTot), 'if you had followed them exactly', sTot >= 0 ? 'text-emerald-400' : 'text-rose-400')
-        + card('You made', rfmt(mTot), 'gap ' + rfmt(mTot - sTot), mTot >= 0 ? 'text-emerald-400' : 'text-rose-400')
+        + card('Alerts made', rfmt(sTot) + pTag(sumPct(list.map(x => x.sp))), 'if you had followed them exactly', sTot >= 0 ? 'text-emerald-400' : 'text-rose-400')
+        + card('You made', rfmt(mTot) + pTag(sumPct(list.map(x => x.mp))), 'gap ' + rfmt(mTot - sTot), mTot >= 0 ? 'text-emerald-400' : 'text-rose-400')
         + card('Exited early', early.length, 'left about ' + Math.abs(left).toFixed(1) + 'R behind', early.length ? 'text-amber-300' : 'text-slate-100')
         + card('Lost more than alert', worse.length, 'cost about ' + Math.abs(extra).toFixed(1) + 'R extra', worse.length ? 'text-rose-300' : 'text-slate-100')
         + card('Entry price', slips.length ? (avg(slips) >= 0 ? '+' : '') + avg(slips).toFixed(2) + '%' : '—', slips.length ? (avg(slips) > 0 ? 'worse than the alert on average' : 'better than the alert on average') : 'no entry to compare', slips.length && avg(slips) > 0.05 ? 'text-amber-300' : 'text-slate-100')
@@ -5499,8 +5516,8 @@
       h += '<div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">Date</th><th class="pr-3">Symbol</th><th class="pr-3">Side</th><th class="pr-3">Entry vs alert</th><th class="pr-3">Alert R</th><th class="pr-3">My R</th><th class="pr-3">Gap</th><th>Verdict</th></tr></thead><tbody>'
         + shown.map(x => '<tr class="border-t border-terminal-border/60"><td class="py-1.5 pr-3 text-slate-300">' + esc(x.t.date.slice(5)) + ' ' + esc(x.t.time || '') + '</td><td class="pr-3 font-bold text-white">' + esc(x.t.symbol) + '</td><td class="pr-3 ' + (x.t.direction === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + esc(x.t.direction.toUpperCase()) + '</td>'
           + '<td class="pr-3 ' + (x.slip != null && x.slip > 0.05 ? 'text-amber-300' : 'text-slate-400') + '">' + (x.slip != null ? (x.slip >= 0 ? '+' : '') + x.slip.toFixed(2) + '%' : '—') + '</td>'
-          + '<td class="pr-3 ' + (x.sr >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(x.sr) + '</td><td class="pr-3 ' + (x.mr >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(x.mr) + '</td>'
-          + '<td class="pr-3 ' + (x.gap >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(x.gap) + '</td><td class="' + x.tone + '">' + esc(x.verdict) + '</td></tr>').join('')
+          + '<td class="pr-3 ' + (x.sr >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(x.sr) + pTag(x.sp) + '</td><td class="pr-3 ' + (x.mr >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(x.mr) + pTag(x.mp) + '</td>'
+          + '<td class="pr-3 ' + (x.gap >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(x.gap) + pTag(x.gp) + '</td><td class="' + x.tone + '">' + esc(x.verdict) + '</td></tr>').join('')
         + '</tbody></table></div><div id="vsMoreBar" class="flex flex-wrap items-center justify-center gap-3 pt-3"></div>';
       host.innerHTML = h;
       const mb = document.getElementById('vsMoreBar');
@@ -5527,7 +5544,7 @@
       };
       const names = Object.keys(dims);
       const items = [];
-      pairs.forEach(pr => { const o = outcomeOf(pr); if (!o) return; const v = {}; names.forEach(n => { v[n] = dims[n](pr.signal); }); items.push({ v, r: o.r }); });
+      pairs.forEach(pr => { const o = outcomeOf(pr); if (!o) return; const v = {}; names.forEach(n => { v[n] = dims[n](pr.signal); }); items.push({ v, r: o.r, p: pctOfR(o.r, slPct(pr.signal)) }); });
       const minN = items.length >= 60 ? 8 : 5;
       if (items.length < 20) { host.innerHTML = head + '<p class="text-slate-500">Needs at least 20 alerts with a result in this view (now ' + items.length + '). Widen the period or channel.</p>'; return; }
       const subsets = [];
@@ -5536,14 +5553,14 @@
       items.forEach(it => subsets.forEach(sub => {
         if (sub.some(n => it.v[n] == null)) return;
         const key = sub.map(n => it.v[n]).join(' + ');
-        (groups[key] = groups[key] || { key, size: sub.length, rs: [] }).rs.push(it.r);
+        const g = (groups[key] = groups[key] || { key, size: sub.length, rs: [], ps: [] }); g.rs.push(it.r); if (it.p != null) g.ps.push(it.p);
       }));
-      let rows = Object.keys(groups).map(k => groups[k]).filter(g => g.rs.length >= minN).map(g => ({ key: g.key, size: g.size, n: g.rs.length, win: g.rs.filter(r => r > 0).length / g.rs.length * 100, avgR: avg(g.rs), tot: sum(g.rs) }));
+      let rows = Object.keys(groups).map(k => groups[k]).filter(g => g.rs.length >= minN).map(g => ({ key: g.key, size: g.size, n: g.rs.length, win: g.rs.filter(r => r > 0).length / g.rs.length * 100, avgR: avg(g.rs), tot: sum(g.rs), avgPct: g.ps.length ? avg(g.ps) : null }));
       // A shorter description that covers the same alerts wins over a longer one.
       const best = rows.filter(r => r.avgR > 0).sort((a, b) => b.avgR - a.avgR).slice(0, 6);
       const worst = rows.filter(r => r.avgR < 0).sort((a, b) => a.avgR - b.avgR).slice(0, 6);
       const tbl = (title, list, tone) => '<div><div class="text-[10px] uppercase tracking-wider font-bold mb-1 ' + tone + '">' + title + '</div>'
-        + (list.length ? '<table class="w-full text-left"><tbody>' + list.map(r => '<tr class="border-t border-terminal-border/60"><td class="py-1.5 pr-2 text-slate-200">' + esc(r.key) + '</td><td class="pr-2 text-slate-500 whitespace-nowrap">' + r.n + ' alerts · ' + pct(r.win) + '</td><td class="text-right font-bold whitespace-nowrap ' + (r.avgR >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(r.avgR) + ' avg</td></tr>').join('') + '</tbody></table>' : '<div class="text-slate-500">None with ' + minN + '+ alerts.</div>') + '</div>';
+        + (list.length ? '<table class="w-full text-left"><tbody>' + list.map(r => '<tr class="border-t border-terminal-border/60"><td class="py-1.5 pr-2 text-slate-200">' + esc(r.key) + '</td><td class="pr-2 text-slate-500 whitespace-nowrap">' + r.n + ' alerts · ' + pct(r.win) + '</td><td class="text-right font-bold whitespace-nowrap ' + (r.avgR >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(r.avgR) + pTag(r.avgPct) + ' avg</td></tr>').join('') + '</tbody></table>' : '<div class="text-slate-500">None with ' + minN + '+ alerts.</div>') + '</div>';
       host.innerHTML = head + '<p class="text-slate-500 text-[11px] mb-3">Combinations of channel, score, stop width and time of day (IST), from ' + items.length + ' alerts with a result. Only setups with ' + minN + ' or more alerts are listed. Past results, so treat them as a lead to check, not a rule.</p>'
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">' + tbl('Best: take these', best, 'text-emerald-300') + tbl('Worst: skip these', worst, 'text-rose-300') + '</div>';
     }
@@ -5590,6 +5607,8 @@
       if (strip) {
         strip.innerHTML = '';
         const rs = scored.map(pr => outcomeOf(pr).r);
+        const psAll = scored.map(sigOutPct);
+        const pOfPick = pr => pr ? sigOutPct(pr) : null;
         // Name the alert behind the best and worst figure, and its stop width: an
         // extreme R almost always comes from a stop so tight that costs dwarf it.
         const pick = better => scored.reduce((b, pr) => (b == null || better(outcomeOf(pr).r, outcomeOf(b).r)) ? pr : b, null);
@@ -5608,11 +5627,11 @@
           { label: "ALERTS", val: String(pairs.length), sub: `${taken} taken by you`, color: "text-slate-200" },
           { label: "FILLED", val: String(filledN), sub: `${unfilled} never reached zone · ${ungraded} not graded yet`, color: "text-slate-200" },
           { label: "WIN RATE", val: scored.length ? pct(wins / scored.length * 100) : "—", sub: `${wins}W / ${scored.length - wins}L`, color: "text-emerald-400" },
-          { label: "TOTAL R", val: scored.length ? rfmt(sum(rs)) : "—", sub: "across all signals", color: sum(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
-          { label: "AVERAGE R", val: scored.length ? rfmt(avg(rs)) : "—", sub: "per signal", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
+          { label: "TOTAL R", val: scored.length ? rfmt(sum(rs)) + pTag(sumPct(psAll)) : "—", sub: "across all signals", color: sum(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
+          { label: "AVERAGE R", val: scored.length ? rfmt(avg(rs)) + (psAll.some(x => x != null) ? pTag(sumPct(psAll) / psAll.filter(x => x != null).length) : "") : "—", sub: "per signal", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
           { label: "PROFIT FACTOR", val: gl > 0 ? (gw / gl).toFixed(2) : (gw > 0 ? "∞" : "—"), sub: gw / Math.max(gl, 0.0001) >= 1.5 ? "healthy" : "thin", color: gw >= gl ? "text-emerald-400" : "text-rose-400" },
-          { label: "BEST", val: scored.length ? rfmt(Math.max(...rs)) : "—", sub: describe(pick((a, b) => a > b)), tip: tipFor(pick((a, b) => a > b)), color: "text-emerald-400" },
-          { label: "WORST", val: scored.length ? rfmt(Math.min(...rs)) : "—", sub: describe(pick((a, b) => a < b)), tip: tipFor(pick((a, b) => a < b)), color: "text-rose-400" }
+          { label: "BEST", val: scored.length ? rfmt(Math.max(...rs)) + pTag(pOfPick(pick((a, b) => a > b))) : "—", sub: describe(pick((a, b) => a > b)), tip: tipFor(pick((a, b) => a > b)), color: "text-emerald-400" },
+          { label: "WORST", val: scored.length ? rfmt(Math.min(...rs)) + pTag(pOfPick(pick((a, b) => a < b))) : "—", sub: describe(pick((a, b) => a < b)), tip: tipFor(pick((a, b) => a < b)), color: "text-rose-400" }
         ];
         items.forEach(it => {
           const card = document.createElement('div');
@@ -5716,8 +5735,8 @@
     function mktAuditHtml(hostId, ctx) {
       const pairs = ctx.pairs || [], trades = ctx.trades || [], cur = ctx.cur || viewCur();
       const kinds = ["bull", "bear", "side"];
-      const by = {}; kinds.concat(["none"]).forEach(k => { by[k] = { sr: [], tr: [] }; });
-      pairs.forEach(pr => { const o = outcomeOf(pr); if (!o) return; by[mktBiasOn(pr.signal.date, pr.signal.time) || "none"].sr.push(o.r); });
+      const by = {}; kinds.concat(["none"]).forEach(k => { by[k] = { sr: [], tr: [], sp: [] }; });
+      pairs.forEach(pr => { const o = outcomeOf(pr); if (!o) return; const g = by[mktBiasOn(pr.signal.date, pr.signal.time) || "none"]; g.sr.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) g.sp.push(p); });
       trades.forEach(t => { by[mktBiasOn(t.date, t.time) || "none"].tr.push(derive(t).pnl || 0); });
       const verdict = (n, v) => n < 3 ? '<span class="text-slate-500">too few</span>' : v > 0 ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-bold">Good</span>' : '<span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 font-bold">Bad</span>';
       const mf = mktFilter();
@@ -5730,7 +5749,7 @@
         return '<tr class="border-t border-terminal-border/60' + (k !== "none" ? ' cursor-pointer hover:bg-white/5' : '') + (mf === k ? ' bg-amber-500/10' : '') + '"' + click + '>'
           + '<td class="py-1.5 pr-3 font-bold ' + tone + '">' + lbl + '</td>'
           + '<td class="pr-3">' + (g.sr.length ? g.sr.length + ' <span class="text-slate-500">· ' + pct(sw / g.sr.length * 100) + ' won</span>' : '<span class="text-slate-600">—</span>') + '</td>'
-          + '<td class="pr-3 ' + (sAvg >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.sr.length ? rfmt(sAvg) + ' <span class="text-slate-500">avg · ' + rfmt(sum(g.sr)) + '</span>' : '') + '</td>'
+          + '<td class="pr-3 ' + (sAvg >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.sr.length ? rfmt(sAvg) + pTag(g.sp.length ? avg(g.sp) : null) + ' <span class="text-slate-500">avg · ' + rfmt(sum(g.sr)) + pfmt(g.sp.length ? sum(g.sp) : null).replace(/^(.+)$/, ' ($1)') + '</span>' : '') + '</td>'
           + '<td class="pr-3">' + verdict(g.sr.length, sAvg) + '</td>'
           + '<td class="pr-3">' + (g.tr.length ? g.tr.length + ' <span class="text-slate-500">· ' + pct(tw / g.tr.length * 100) + ' won</span>' : '<span class="text-slate-600">—</span>') + '</td>'
           + '<td class="pr-3 ' + (tNet >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.tr.length ? signedMoney(tNet, cur) + ' <span class="text-slate-500">· ' + signedMoney(tAvg, cur) + ' each</span>' : '') + '</td>'
@@ -6485,7 +6504,7 @@
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
           ${card("Net P&L", `<span class="${cls(s.net)}">${signedMoney(s.net, cur)}</span>`, `${ts.length} trade${ts.length === 1 ? '' : 's'}`)}
           ${card("Win rate", `${(ts.filter(t => t.pnl > 0).length / ts.length * 100).toFixed(0)}%`, `${ts.filter(t => t.pnl > 0).length} won · ${ts.filter(t => t.pnl < 0).length} lost`)}
-          ${card("Avg R", rs.length ? `<span class="${cls(avg(rs))}">${rfmt(avg(rs))}</span>` : '<span class="text-slate-500">—</span>', rs.length ? `${rs.length} with a stop` : 'no stops set')}
+          ${card("Avg R", rs.length ? `<span class="${cls(avg(rs))}">${rfmt(avg(rs))}</span>${pTag(avg(ts.map(tradePct).filter(v => v != null)))}` : '<span class="text-slate-500">—</span>', rs.length ? `${rs.length} with a stop` : 'no stops set')}
           ${card("Rules broken", rated.length ? `<span class="${broke.length ? 'text-rose-400' : 'text-emerald-400'}">${broke.length} of ${rated.length}</span>` : '<span class="text-slate-500">—</span>', rated.length ? 'trades with rules ticked' : 'tick rules when logging')}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2">
