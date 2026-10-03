@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-03.72">
+  <meta name="app-version" content="2026-10-03.73">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -19,7 +19,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.js" integrity="sha384-zYPBGXwO4633CABX/5Spf6emCKUJCfoOkhOMYyxMsatqQZPnDblmmOewfjsIVWCM" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script async onload="window.chartReady && chartReady()" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.js" integrity="sha384-zYPBGXwO4633CABX/5Spf6emCKUJCfoOkhOMYyxMsatqQZPnDblmmOewfjsIVWCM" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <style>
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #05080E; }
@@ -2794,11 +2794,12 @@
       }
       const hint = document.getElementById('sigPeriodHint');
       if (hint) hint.innerText = state.ui.sigDay ? `Showing ${state.ui.sigDay} only. Click the day again to go back.` : ((range.from || range.to) ? `${range.from || "start"} → ${range.to || "now"}` : "All available history");
-      renderSigCalendar(state.ui.sigChan ? matchSignals(kind).filter(pr => chanKey(pr.signal) === state.ui.sigChan) : matchSignals(kind), range);
+      const allPairs = matchSignals(kind);
+      renderSigCalendar(state.ui.sigChan ? allPairs.filter(pr => chanKey(pr.signal) === state.ui.sigChan) : allPairs, range);
       if (hint && mktFilter()) hint.innerText += ` · BTC ${MKT_LABEL[mktFilter()].toLowerCase()} days only`;
 
       // --- signals scoped to the period, matched against trades ---
-      let pairs = matchSignals(kind);
+      let pairs = allPairs;
       // Channel filter (market + timeframe) applies to everything on the tab.
       const chan = state.ui.sigChan || "";
       const chanCount = {}; pairs.forEach(pr => { const k = chanKey(pr.signal); chanCount[k] = (chanCount[k] || 0) + 1; });
@@ -2860,7 +2861,7 @@
 
       // Trades of yours that no alert explains. Only days from the first loaded
       // alert onwards can be judged: before that there is simply no alert data.
-      const matchedIds = new Set(matchSignals(kind).filter(p => p.trade).map(p => p.trade.id));
+      const matchedIds = new Set(allPairs.filter(p => p.trade).map(p => p.trade.id));
       const firstSigDate = (state.signals || []).filter(g => (g.kind || "zone") === kind).map(g => g.date).sort()[0] || null;
       let orphans = firstSigDate ? state.trades.filter(t => t.date >= firstSigDate && !matchedIds.has(t.id)) : [];
       if (chan) orphans = []; // your own trades carry no channel
@@ -5200,9 +5201,13 @@
       const trades = (state.trades || []).slice().sort(byWhen);
       const sigs = (state.signals || []).filter(g => (g.kind || "zone") === want);
       const taken = {}; // signal id -> trade
+      // Bucket alerts by day and side once, so each trade only looks at its own
+      // day instead of scanning every alert (thousands once the scanner is loaded).
+      const byDay = {};
+      sigs.forEach(g => { const k = g.date + "|" + g.side; (byDay[k] || (byDay[k] = [])).push(g); });
       trades.forEach(t => {
         const tm = toMin(t.time);
-        const cands = sigs.filter(g => !taken[g.id] && g.date === t.date && g.side === t.direction && symbolsAgree(t.symbol, g.symbol));
+        const cands = (byDay[t.date + "|" + t.direction] || []).filter(g => !taken[g.id] && symbolsAgree(t.symbol, g.symbol));
         if (!cands.length) return;
         const cost = g => {
           let c = g.filled === false ? 1000 : 0;
@@ -6321,7 +6326,10 @@
       setTimeout(() => t.remove(), 2800);
     }
 
-    window.onload = function() {
+    // Chart.js loads on its own (async), so a slow CDN never holds up the journal.
+    // When it arrives after the first render, draw again to fill in the charts.
+    function chartReady() { if (state) renderAll(); }
+    function startApp() {
       const ver = (document.querySelector('meta[name="app-version"]') || {}).content || '';
       const pill = document.getElementById('appVerPill');
       if (pill && ver) { pill.innerText = 'v' + ver.slice(5); pill.title = 'This copy: ' + ver + '. Devices on different builds can disagree, so check they match.'; }
@@ -6345,7 +6353,8 @@
       });
       setSyncStatus(syncReady() ? "Sync ready" : "Sync not connected");
       setTimeout(syncPull, 1500);
-    };
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startApp); else startApp();
   </script>
 </body>
 </html>
