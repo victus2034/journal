@@ -20,3 +20,7 @@ An intraday trading journal and workstation in a single file, `index.html`. No b
 
 Replace `index.html` and bump `<meta name="app-version">` near the top, so the version pill in the header shows which build each device is on.
 Chart.js loads from jsDelivr; without it, charts are skipped and the rest still works.
+
+## Checks
+
+Every push runs `tests/smoke.mjs` on GitHub: it opens the page in a headless browser, with an empty journal and with made-up sample trades, on desktop and phone widths, opens every tab, and fails on any script error. To run it locally: `npm install`, `npx playwright install chromium`, then `npm test`.
