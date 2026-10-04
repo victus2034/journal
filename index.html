@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-03.92">
+  <meta name="app-version" content="2026-10-04.93">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -19,7 +19,7 @@
   <style id="app-extra">
     /* Phone: tabs move to a bar at the bottom, with a quick-add button in the middle. */
     .h-24{height:6rem}.rounded-t{border-top-left-radius:.25rem;border-top-right-radius:.25rem}.bg-emerald-500\/60{background-color:rgba(16,185,129,.6)}.bg-rose-500\/60{background-color:rgba(244,63,94,.6)}.border-rose-400{border-color:#fb7185}
-    .bg-amber-400\/70{background-color:rgba(251,191,36,.7)}.min-w-\[160px\]{min-width:160px}.pt-4{padding-top:1rem}
+    .bg-amber-400\/70{background-color:rgba(251,191,36,.7)}.bg-amber-950\/40{background-color:rgba(69,26,3,.4)}.border-amber-800\/60{border-color:rgba(146,64,14,.6)}.min-w-\[160px\]{min-width:160px}.pt-4{padding-top:1rem}
     .mnav{display:none}
     @media (max-width:639px){
       .mnav{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:45;background:#090E17;border-top:1px solid #182438;padding:4px 4px calc(4px + env(safe-area-inset-bottom));justify-content:space-around;align-items:center}
@@ -135,6 +135,7 @@
   <!-- Alert Banners -->
   <div class="max-w-[1600px] w-full mx-auto px-3 sm:px-6 pt-2">
     <div id="storageAlert" class="hidden p-3 rounded-lg bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs font-mono mb-2"></div>
+    <div id="storageWarn" class="hidden p-3 rounded-lg bg-amber-950/40 border border-amber-800/60 text-amber-300 text-xs font-mono mb-2"></div>
     <div id="limitBanner" class="hidden p-3 rounded-lg bg-rose-600 border border-rose-400 text-white text-sm font-mono font-bold mb-2 flex items-center gap-2"></div>
     <div id="updateAlert" class="hidden p-3 rounded-lg bg-sky-950/40 border border-sky-800/60 text-sky-300 text-xs font-mono mb-2"></div>
   </div>
@@ -1029,6 +1030,7 @@
           <button onclick="copyBackupToClipboard()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Copy Backup to Clipboard</button>
           <button onclick="openWipeModal()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded ml-auto">Purge Data</button>
         </div>
+        <p id="storageUsage" class="text-[10px] text-slate-500"></p>
       </div>
     </div>
 
@@ -1198,6 +1200,48 @@
       } else {
         el.classList.add("hidden");
       }
+    }
+    // Browsers give each site roughly 5 million characters of storage, keys
+    // included. Warn at 80%, while there is still room to save a backup or
+    // clear old alerts, instead of only finding out once a save has failed.
+    const STORAGE_LIMIT_CHARS = 5000000, STORAGE_WARN_PCT = 80;
+    let storageCheckTimer = null;
+    function storageUsage() {
+      const parts = { journal: 0, alerts: 0, btc: 0, other: 0 };
+      let total = 0;
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i), n = k.length + (localStorage.getItem(k) || "").length;
+          total += n;
+          if (k === KEY || k === SAFE_KEY) parts.journal += n;
+          else if (k === SIG_KEY) parts.alerts += n;
+          else if (k === "tapeAndTarget.mktHourly") parts.btc += n;
+          else parts.other += n;
+        }
+      } catch (e) { return null; }
+      return { total, parts, pct: total / STORAGE_LIMIT_CHARS * 100 };
+    }
+    function renderStorageUsage() {
+      const u = storageUsage();
+      const line = document.getElementById("storageUsage");
+      const warn = document.getElementById("storageWarn");
+      if (!u) { if (line) line.innerText = ""; if (warn) warn.classList.add("hidden"); return; }
+      const mb = n => (n / 1e6).toFixed(2);
+      const split = "journal " + mb(u.parts.journal) + ", alerts " + mb(u.parts.alerts) + ", BTC hourly cache " + mb(u.parts.btc) + ", other " + mb(u.parts.other);
+      if (line) line.innerText = "Browser storage used: " + mb(u.total) + " of about " + mb(STORAGE_LIMIT_CHARS) + " MB (" + Math.round(u.pct) + "%): " + split + ".";
+      if (!warn) return;
+      // Once a save has actually failed, the red alert above says so; one banner is enough.
+      if (u.pct < STORAGE_WARN_PCT || storageBroken) { warn.classList.add("hidden"); return; }
+      warn.classList.remove("hidden");
+      warn.innerText = "Browser storage is " + Math.round(u.pct) + "% full (" + split + " MB). "
+        + "When it fills up, new trades are kept in memory only and lost when the page closes. "
+        + "Save a backup file in Sync & Settings, then free space: "
+        + (u.parts.alerts > u.parts.journal ? "alerts take the most room, so use \"Delete all signals\" on the Signals tab and load a shorter range." : "delete old alerts on the Signals tab, or delete trades you no longer need once the backup is saved.");
+    }
+    // Measuring reads every stored value, so it waits for a quiet moment after saves.
+    function checkStorageSoon() {
+      if (storageCheckTimer) return;
+      storageCheckTimer = setTimeout(() => { storageCheckTimer = null; renderStorageUsage(); }, 2000);
     }
     function writeSettings() {
       try {
@@ -1400,6 +1444,7 @@
       writeSignals();
       writeSettings();
       syncSoon();
+      checkStorageSoon();
       return ok;
     }
     function readSignals() {
@@ -6691,6 +6736,7 @@
       });
       setSyncStatus(syncReady() ? "Sync ready" : "Sync not connected");
       applyThemeButton();
+      renderStorageUsage();
       setTimeout(syncPull, 1500);
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startApp); else startApp();
