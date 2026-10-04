@@ -32,11 +32,13 @@ function fixture() {
       symbol: crypto ? 'BTCUSD' : 'RELIANCE', direction: long ? 'long' : 'short',
       entry, exit, stop, qty, fees: 0.1, leverage: crypto ? 10 : 5, setup: i % 2 ? 'Breakout' : 'Pullback',
       rules: [true, false, true, false, true], notes: 'smoke test', updatedAt: now,
+      playRules: i % 2 ? { 'Volume spike': true, 'Above VWAP': i % 3 !== 0 } : undefined,
       pnl, risk, r: pnl / risk,
     });
   }
   const goals = [{ id: 'g1', title: 'Test goal', target: 20, metric: 'net_pnl', targets: { net_pnl: 20 }, period: 'month', accountId: 'all', days: 'weekdays', updatedAt: now }];
-  return { version: 1, savedAt: now, accounts, trades, signals: [], goals, aliases: [], tombstones: [], reviews: [], reviewsAt: [] };
+  const playbook = [{ id: 'pb1', name: 'Breakout', rules: ['Volume spike', 'Above VWAP'], updatedAt: now }];
+  return { version: 1, savedAt: now, accounts, trades, signals: [], goals, playbook, aliases: [], tombstones: [], reviews: [], reviewsAt: [] };
 }
 
 const server = http.createServer((req, res) => {

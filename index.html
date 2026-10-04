@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-04.93">
+  <meta name="app-version" content="2026-10-04.94">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1009,6 +1009,19 @@
         <div id="booksList" class="space-y-2"></div>
       </div>
 
+      <!-- Setup Playbook -->
+      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+        <div class="flex items-center justify-between border-b border-terminal-border pb-2">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <h3 class="font-bold text-white uppercase tracking-wider">Setup playbook</h3>
+          </div>
+          <button onclick="openPlay(null)" class="px-2.5 py-1 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">+ Add setup</button>
+        </div>
+        <p class="text-slate-400 text-[11px] leading-relaxed">Rules for each setup. Pick the setup when you log a trade and its checklist shows up; the win rate below compares trades that kept every rule with trades that broke one.</p>
+        <div id="playbookList" class="space-y-2"></div>
+      </div>
+
       <!-- Manual Trade Entry -->
       <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
         <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Manual Trade Entry</h3>
@@ -1338,6 +1351,11 @@
       if (t.src !== undefined) o.src = cText(t.src, 60);
       o.leverage = cNum(t.leverage) > 0 ? cNum(t.leverage) : 1;
       o.rules = Array.isArray(t.rules) ? t.rules.slice(0, 12).map(Boolean) : [];
+      // The setup's own checklist, by rule text: the playbook can be edited later
+      // without shifting which box meant which rule.
+      if (t.playRules && typeof t.playRules === "object" && !Array.isArray(t.playRules)) {
+        const pr = {}; Object.keys(t.playRules).slice(0, 20).forEach(k => { pr[cText(k, 120)] = !!t.playRules[k]; }); o.playRules = pr;
+      } else delete o.playRules;
       const tags = (list, all) => (Array.isArray(list) ? list : []).filter(x => all.indexOf(x) !== -1);
       if (t.tagsPositives !== undefined) o.tagsPositives = tags(t.tagsPositives, POSITIVE_TAGS);
       if (t.tagsMistakes !== undefined) o.tagsMistakes = tags(t.tagsMistakes, MISTAKE_TAGS);
@@ -1376,6 +1394,15 @@
       o.metric = GK.filter(k => t[k] != null)[0]; o.target = t[o.metric];
       return o;
     }
+    function cleanPlay(p) {
+      if (!p || typeof p !== "object" || !p.id) return null;
+      const name = cText(p.name, 100).trim();
+      if (!name) return null;
+      const o = Object.assign({}, p);
+      o.id = cText(p.id, 40); o.name = name;
+      o.rules = (Array.isArray(p.rules) ? p.rules : []).map(r => cText(r, 120).trim()).filter(Boolean).slice(0, 20);
+      return o;
+    }
     function cleanSignal(g) {
       if (!g || typeof g !== "object" || !g.id || !DATE_RE.test(String(g.date))) return null;
       if (g.side !== "long" && g.side !== "short") return null;
@@ -1399,7 +1426,7 @@
       const out = {}, cutoff = new Date(Date.now() - 183 * 864e5).toISOString();
       if (!t || typeof t !== "object") return out;
       Object.keys(t).forEach(k => {
-        if (!/^(trades|goals|accounts|reviews):/.test(k) || k.length > 80) return;
+        if (!/^(trades|goals|accounts|reviews|playbook):/.test(k) || k.length > 80) return;
         if (typeof t[k] === "string" && t[k] >= cutoff) out[k] = t[k];
       });
       return out;
@@ -1410,6 +1437,7 @@
       s.trades = list(s.trades, cleanTrade);
       s.goals = list(s.goals, cleanGoal);
       s.signals = list(s.signals, cleanSignal);
+      s.playbook = list(s.playbook, cleanPlay);
       s.tombstones = cleanTombstones(s.tombstones);
       s.aliases = (s.aliases && typeof s.aliases === "object" && !Array.isArray(s.aliases)) ? s.aliases : {};
       if (s.reviews && typeof s.reviews === "object" && !Array.isArray(s.reviews)) {
@@ -3538,13 +3566,14 @@
 
     function renderDataView() {
       renderBooks();
+      renderPlaybook();
       const sync = state.sync || {};
       const delta = state.delta || {};
 
       if (document.getElementById('syncRepoInput')) document.getElementById('syncRepoInput').value = sync.repo || '';
       if (document.getElementById('syncBranchInput')) document.getElementById('syncBranchInput').value = sync.branch || 'main';
       if (document.getElementById('syncTokenInput')) document.getElementById('syncTokenInput').value = sync.token || '';
-      if (document.getElementById('syncAutoCheckbox')) document.getElementById('syncAutoCheckbox').checked = !!sync.auto;
+      if (document.getElementById('syncAutoCheckbox')) document.getElementById('syncAutoCheckbox').checked = sync.token ? !!sync.auto : true; // on by default for a new connection
 
       const syncBadge = document.getElementById('syncStatusBadge');
       if (syncBadge) syncBadge.innerText = sync.token ? (sync.lastAt ? `Synced ${new Date(sync.lastAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Connected') : 'Disconnected';
@@ -3681,6 +3710,19 @@
         row.innerHTML = `<span>${kept ? '✓' : '✕'}</span> <span>${r}</span>`;
         chk.appendChild(row);
       });
+      const pr = trade.playRules || {};
+      if (Object.keys(pr).length) {
+        const head = document.createElement('div');
+        head.className = 'text-slate-400 pt-1.5 mt-1 border-t border-terminal-border';
+        head.textContent = 'Setup checklist';
+        chk.appendChild(head);
+        Object.keys(pr).forEach(r => {
+          const row = document.createElement('div');
+          row.className = pr[r] ? 'flex items-center gap-2 text-emerald-400' : 'flex items-center gap-2 text-slate-500';
+          row.innerHTML = `<span>${pr[r] ? '✓' : '✕'}</span> <span>${esc(r)}</span>`;
+          chk.appendChild(row);
+        });
+      }
 
       const conf = tradeConfidence(trade);
       document.getElementById('inspConfidence').innerHTML = conf
@@ -3847,8 +3889,10 @@
           </div>
           <div>
             <label class="text-slate-400 block mb-1">Setup / Strategy</label>
-            <input type="text" id="mSetup" value="${esc(v.setup)}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            <input type="text" id="mSetup" value="${esc(v.setup)}" list="mSetupList" oninput="renderPlayRules()" autocomplete="off" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            <datalist id="mSetupList">${(state.playbook || []).map(p => `<option value="${esc(p.name)}"></option>`).join('')}</datalist>
           </div>
+          <div id="mPlayRules"></div>
           <div>
             <label class="text-slate-400 block mb-1">Execution Reflection Notes</label>
             <textarea id="mNotes" rows="2" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">${esc(v.notes || '')}</textarea>
@@ -3883,6 +3927,7 @@
             </div>
           </div>
         `;
+        renderPlayRules(v.playRules || {});
       }, () => {
         const sym = document.getElementById('mSymbol').value.trim().toUpperCase();
         if (!sym) { toast("Enter a ticker symbol"); return false; }
@@ -3915,6 +3960,8 @@
           notes: document.getElementById('mNotes').value,
           rules: RULES.map((r, i) => !!(document.getElementById('mRule' + i) || {}).checked)
         });
+        const pr = readPlayRules();
+        if (pr) rec.playRules = pr; else delete rec.playRules;
 
         stamp(rec);
         if (existing) {
@@ -3927,6 +3974,99 @@
         toast(`Recorded ${sym}`);
         return true;
       });
+    }
+
+    /* =================== SETUP PLAYBOOK =================== */
+    function findPlay(name) {
+      const k = String(name || "").trim().toLowerCase();
+      return k ? (state.playbook || []).find(p => p.name.toLowerCase() === k) : null;
+    }
+    // The checklist under the setup field follows whatever setup is typed. Boxes
+    // already ticked stay ticked while the name is being typed or changed.
+    function renderPlayRules(prev) {
+      const host = document.getElementById('mPlayRules');
+      if (!host) return;
+      const had = prev || readPlayRules() || {};
+      const play = findPlay((document.getElementById('mSetup') || {}).value);
+      if (!play || !play.rules.length) { host.innerHTML = ''; return; }
+      host.innerHTML = `<label class="text-slate-400 block mb-1">${esc(play.name)} checklist</label>
+        <div class="space-y-1 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2">
+          ${play.rules.map((r, i) => `<label class="flex items-center gap-2 text-slate-300"><input type="checkbox" data-play-rule="${esc(r)}" ${had[r] ? 'checked' : ''} class="accent-emerald-500"> ${esc(r)}</label>`).join('')}
+        </div>`;
+    }
+    function readPlayRules() {
+      const boxes = document.querySelectorAll('#mPlayRules [data-play-rule]');
+      if (!boxes.length) return null;
+      const out = {};
+      boxes.forEach(b => { out[b.dataset.playRule] = b.checked; });
+      return out;
+    }
+    // Trades logged under the setup with its checklist filled: kept every rule vs broke one.
+    function playStats(play) {
+      const ts = allTrades().filter(t => (t.setup || "").trim().toLowerCase() === play.name.toLowerCase());
+      const rated = ts.filter(t => t.playRules && Object.keys(t.playRules).length);
+      const kept = rated.filter(t => Object.keys(t.playRules).every(k => t.playRules[k]));
+      const broke = rated.filter(t => !Object.keys(t.playRules).every(k => t.playRules[k]));
+      const wr = list => list.length ? Math.round(100 * list.filter(t => t.pnl > 0).length / list.length) + "%" : "—";
+      return { n: ts.length, kept: kept.length, broke: broke.length, keptWr: wr(kept), brokeWr: wr(broke) };
+    }
+    function renderPlaybook() {
+      const host = document.getElementById('playbookList');
+      if (!host) return;
+      const list = state.playbook || [];
+      if (!list.length) { host.innerHTML = '<p class="text-slate-500 text-[11px]">No setups yet. Add one, for example "ORB Breakout", with the rules you check before entering.</p>'; return; }
+      host.innerHTML = list.map(p => {
+        const s = playStats(p);
+        return `<div class="rounded-lg bg-[#070A11] border border-terminal-border p-2.5">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-amber-300 font-bold">${esc(p.name)}</span>
+            <span class="flex gap-1">
+              <button onclick="openPlay('${esc(p.id)}')" class="px-2 py-0.5 rounded border border-terminal-border text-slate-300 hover:border-amber-500">Edit</button>
+              <button onclick="removePlay('${esc(p.id)}')" class="px-2 py-0.5 rounded text-rose-400 hover:bg-rose-500/10">Delete</button>
+            </span>
+          </div>
+          <div class="text-slate-500 text-[10px] mt-1">${p.rules.length} rule${p.rules.length === 1 ? '' : 's'} · ${s.n} trade${s.n === 1 ? '' : 's'}</div>
+          <div class="grid grid-cols-2 gap-2 mt-2">
+            <div class="rounded bg-emerald-500/10 border border-emerald-500/30 p-1.5"><span class="text-[10px] text-slate-400 block">Kept every rule</span><span class="text-emerald-300 font-bold">${s.keptWr}</span> <span class="text-slate-500 text-[10px]">win · ${s.kept} trade${s.kept === 1 ? '' : 's'}</span></div>
+            <div class="rounded bg-rose-500/10 border border-rose-500/30 p-1.5"><span class="text-[10px] text-slate-400 block">Broke a rule</span><span class="text-rose-300 font-bold">${s.brokeWr}</span> <span class="text-slate-500 text-[10px]">win · ${s.broke} trade${s.broke === 1 ? '' : 's'}</span></div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+    function openPlay(id) {
+      const existing = id ? (state.playbook || []).find(p => p.id === id) : null;
+      openModalSheet(existing ? "Edit setup" : "Add setup", body => {
+        body.innerHTML = `
+          <div>
+            <label class="text-slate-400 block mb-1">Setup name</label>
+            <input type="text" id="pName" value="${esc(existing ? existing.name : '')}" placeholder="ORB Breakout" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Rules <span class="text-slate-600">(one per line)</span></label>
+            <textarea id="pRules" rows="6" placeholder="Price above VWAP&#10;Volume above average&#10;Stop below the opening range" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">${esc(existing ? existing.rules.join('\n') : '')}</textarea>
+          </div>`;
+      }, () => {
+        const name = document.getElementById('pName').value.trim();
+        if (!name) { toast("Name the setup"); return false; }
+        const clash = findPlay(name);
+        if (clash && (!existing || clash.id !== existing.id)) { toast("A setup with that name already exists"); return false; }
+        const rules = uniq(document.getElementById('pRules').value.split('\n').map(r => r.trim().slice(0, 120)).filter(Boolean)).slice(0, 20);
+        const rec = stamp(Object.assign({}, existing || {}, { id: existing ? existing.id : uid(), name: name.slice(0, 100), rules }));
+        state.playbook = existing ? state.playbook.map(p => p.id === existing.id ? rec : p) : (state.playbook || []).concat([rec]);
+        save();
+        renderPlaybook();
+        toast(existing ? "Setup updated" : "Setup added");
+        return true;
+      });
+    }
+    function removePlay(id) {
+      const p = (state.playbook || []).find(x => x.id === id);
+      if (!p || !confirm('Delete the setup "' + p.name + '"? Trades logged under it keep their checklist.')) return;
+      state.playbook = state.playbook.filter(x => x.id !== id);
+      noteDeleted("playbook", id);
+      save();
+      renderPlaybook();
+      toast("Setup deleted");
     }
 
     function removeGoal(id) {
@@ -4084,7 +4224,7 @@
     // newer instead of guessing from file order.
     function stampAll() {
       const now = new Date().toISOString();
-      ["trades", "signals", "goals", "accounts"].forEach(k => {
+      ["trades", "signals", "goals", "accounts", "playbook"].forEach(k => {
         (state[k] || []).forEach(r => { if (!r.updatedAt) r.updatedAt = now; });
       });
     }
@@ -4167,6 +4307,7 @@
         trades: mergeList(local.trades, remote.trades, "trades", tombs),
         signals: local.signals || [],
         goals: mergeList(local.goals, remote.goals, "goals", tombs),
+        playbook: mergeList(local.playbook, remote.playbook, "playbook", tombs),
         aliases: Object.assign({}, remote.aliases || {}, local.aliases || {}),
         tombstones: tombs
       }, mergeReviews(local, remote, tombs));
@@ -4182,7 +4323,7 @@
         // Signals are left out on purpose: the scanner history is thousands of
         // records (megabytes), GitHub stops returning file contents above 1 MB, and
         // any device can reload them from the scanner in one click.
-        signals: [], goals: st.goals || [],
+        signals: [], goals: st.goals || [], playbook: st.playbook || [],
         // aliases: no longer edited or read; carried so files from older builds round-trip.
         aliases: st.aliases || {}, tombstones: st.tombstones || {},
         reviews: st.reviews || {}, reviewsAt: st.reviewsAt || {}
@@ -4198,7 +4339,7 @@
       if (lastSyncFp !== null && syncFingerprint(state) === lastSyncFp) return;
       clearTimeout(syncTimer);
       // Batched, so importing three hundred rows is one push, not three hundred.
-      syncTimer = setTimeout(() => syncNow({ quiet: true }), 4000);
+      syncTimer = setTimeout(() => { syncTimer = null; syncNow({ quiet: true }); }, 4000);
     }
     function setSyncStatus(text, bad) {
       const dot = document.getElementById('syncPulse');
@@ -4333,6 +4474,8 @@
         if (r && r.ok) {
           setSyncStatus("Synced " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
           if (!opts.quiet) toast(r.changed ? "GitHub sync successful" : "Already up to date");
+          // A trade saved while this sync was running was skipped by syncSoon; send it now.
+          syncSoon();
         }
         return r;
       });
@@ -4343,6 +4486,13 @@
       if (state && syncReady() && state.sync && state.sync.auto && !document.hidden) syncNow({ quiet: true });
     }
     document.addEventListener("visibilitychange", syncPull);
+    // Leaving the app (switching apps on the phone, closing the tab) inside the
+    // short wait before a push would hold the trade back until the next open.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden || !syncTimer) return;
+      clearTimeout(syncTimer); syncTimer = null;
+      syncNow({ quiet: true });
+    });
     window.addEventListener("online", syncPull);
     setInterval(syncPull, 120000);
     // Two open tabs share one saved copy but each keeps its own in memory, so
