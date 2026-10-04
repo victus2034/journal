@@ -2,7 +2,8 @@
 // Runs twice: with an empty browser, and with a small made-up journal so the
 // charts, tables and stats actually render. Every tab is opened on desktop
 // and phone widths. Outside requests (CDN, GitHub, Delta) are blocked, so the
-// check never depends on the network.
+// check never depends on the network. One more pass fills storage to 86%
+// and expects the storage warning.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,8 +51,9 @@ const base = 'http://127.0.0.1:' + server.address().port + '/';
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const failures = [];
 
-async function run(label, viewport, seed) {
+async function run(label, viewport, seed, filler = 0) {
   const ctx = await browser.newContext({ viewport });
+  if (filler) await ctx.addInitScript(n => { try { localStorage.setItem('tapeAndTarget.test-filler', 'x'.repeat(n)); } catch (e) {} }, filler);
   await ctx.route(url => !url.href.startsWith(base), r => r.abort());
   if (seed) await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
   const page = await ctx.newPage();
@@ -67,6 +69,8 @@ async function run(label, viewport, seed) {
     const shown = await page.evaluate(t => { const v = document.getElementById('view-' + t); return !!v && !v.classList.contains('hidden') && v.offsetHeight > 0; }, tab);
     if (!shown) errs.push('tab "' + tab + '" did not show');
   }
+  const warned = await page.evaluate(() => { const w = document.getElementById('storageWarn'); return !!w && !w.classList.contains('hidden'); });
+  if (warned !== !!filler) errs.push(filler ? 'storage warning did not show with storage nearly full' : 'storage warning showed with storage nearly empty');
   if (seed) {
     const kept = await page.evaluate(() => (state.trades || []).length);
     if (kept !== seed.trades.length) errs.push('expected ' + seed.trades.length + ' trades after load, found ' + kept);
@@ -81,6 +85,7 @@ for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', {
   await run(name + ', empty journal', vp, null);
   await run(name + ', sample journal', vp, data);
 }
+await run('desktop, storage nearly full', { width: 1366, height: 900 }, data, 4300000);
 
 await browser.close();
 server.close();
