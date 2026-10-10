@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.102">
+  <meta name="app-version" content="2026-10-11.103">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -194,6 +194,7 @@
               <span id="goalNavLabel" class="px-1"></span>
               <button type="button" onclick="stepGoal(1)" class="px-2 py-0.5 rounded border border-terminal-border hover:border-amber-500/50">&rsaquo;</button>
             </div>
+            <button type="button" onclick="openWithdraw()" title="Log money you took out to your bank" class="text-[11px] text-emerald-300 hover:text-emerald-200 px-2 py-0.5 rounded border border-emerald-500/30 hover:border-emerald-500/60">Withdraw</button>
             <button type="button" onclick="openGoal('new')" class="text-[11px] text-slate-400 hover:text-amber-300 px-2 py-0.5 rounded border border-terminal-border hover:border-amber-500/50">+ Add</button>
             <button type="button" id="goalEditBtn" onclick="openGoal(currentGoalId())" class="text-[11px] text-amber-400 hover:text-amber-300 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 hover:border-amber-500/40">Edit</button>
           </div>
@@ -1508,6 +1509,10 @@
       if (a.fxRate !== undefined) { if (cNum(a.fxRate) > 0) o.fxRate = cNum(a.fxRate); else delete o.fxRate; } // rupees per dollar, when changed from the default
       return o;
     }
+    function cleanWithdrawal(w) {
+      if (!w || typeof w !== "object" || !w.id || !DATE_RE.test(String(w.date)) || !(cNum(w.amount) > 0)) return null;
+      return { id: cText(w.id, 40), accountId: cText(w.accountId, 40), date: String(w.date), amount: cNum(w.amount), note: cText(w.note || "", 120), updatedAt: typeof w.updatedAt === "string" ? w.updatedAt.slice(0, 30) : "" };
+    }
     function cleanGoal(g) {
       if (!g || typeof g !== "object" || !g.id) return null;
       const o = Object.assign({}, g);
@@ -1518,7 +1523,7 @@
       if (typeof g.startsOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(g.startsOn) && (o.period === "week" || o.period === "month")) o.startsOn = g.startsOn; else delete o.startsOn; // planned ahead: waits for this day
       if (g.cur === "INR" || g.cur === "USD") o.cur = g.cur; else delete o.cur; // the currency its money targets were typed in
       // A goal is a set of optional targets. Older goals carried one metric and one target.
-      const GK = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance"];
+      const GK = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance", "withdraw"];
       const t = {};
       if (g.targets && typeof g.targets === "object") GK.forEach(k => { const v = cNum(g.targets[k]); if (v > 0) t[k] = v; });
       else { const m = GK.indexOf(g.metric) !== -1 ? g.metric : "net_pnl"; t[m] = o.target; }
@@ -1560,7 +1565,7 @@
       const out = {}, cutoff = new Date(Date.now() - 183 * 864e5).toISOString();
       if (!t || typeof t !== "object") return out;
       Object.keys(t).forEach(k => {
-        if (!/^(trades|goals|accounts|reviews|playbook|backtest):/.test(k) || k.length > 80) return;
+        if (!/^(trades|goals|accounts|reviews|playbook|backtest|withdrawals):/.test(k) || k.length > 80) return;
         if (typeof t[k] === "string" && t[k] >= cutoff) out[k] = t[k];
       });
       return out;
@@ -1570,6 +1575,7 @@
       s.accounts = list(s.accounts, cleanAccount);
       s.trades = list(s.trades, cleanTrade);
       s.goals = list(s.goals, cleanGoal);
+      s.withdrawals = list(s.withdrawals, cleanWithdrawal);
       s.signals = list(s.signals, cleanSignal);
       s.playbook = list(s.playbook, cleanPlay);
       s.backtest = cleanBacktest(s.backtest);
@@ -1978,7 +1984,7 @@
     // it, so a book whose starting balance was never typed still has an opening.
     function balanceAtStart(a, from) {
       const off = bookBalance(a) - bookComputedBalance(a);
-      const before = from ? sum(bookTrades(a.id).filter(t => t.date < from).map(t => t.pnl || 0)) : 0;
+      const before = from ? sum(bookTrades(a.id).filter(t => t.date < from).map(t => t.pnl || 0)) - bookWithdrawn(a.id, from) : 0;
       return (a.startBalance || 0) + off + before;
     }
     // The card next to win rate: how much the account grew or shrank over the period
@@ -2095,7 +2101,7 @@
       const gc = goalCur(g);
       return gc === cur ? 1 : cur === "INR" ? FX_DEFAULT : 1 / FX_DEFAULT;
     }
-    const MONEY_GOALS = ["net_pnl", "max_loss", "balance"];
+    const MONEY_GOALS = ["net_pnl", "max_loss", "balance", "withdraw"];
     function goalProgress(g) {
       const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
       const book = g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId) ? g.accountId : null;
@@ -2110,7 +2116,7 @@
         gw: sum(ts.filter(t => t.pnl > 0).map(t => t.pnl)), gl: -sum(ts.filter(t => t.pnl < 0).map(t => t.pnl)),
         overDays: perDay, todayN: perDay[iso(new Date())] || 0 };
     }
-    const GOAL_ORDER = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance"];
+    const GOAL_ORDER = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance", "withdraw"];
     // The targets of a goal, whichever way it was saved.
     function goalTargets(g) {
       if (g && g.targets && typeof g.targets === "object" && Object.keys(g.targets).length) return g.targets;
@@ -2148,6 +2154,7 @@
       else if (key === "trade_cap") { const over = Object.keys(gp.overDays).filter(d => gp.overDays[d] > T).length; label = "Trade cap"; text = over + " day" + (over === 1 ? "" : "s") + " over " + T; pct = gp.tradedDays ? clamp01((gp.tradedDays - over) / gp.tradedDays * 100) : 100; tone = over ? "bad" : "ok"; }
       else if (key === "no_revenge") { const st = goalCalmStreak(g0, cur); label = "No revenge"; text = st + " / " + T + " in a row"; pct = clamp01(st / T * 100); tone = st >= T ? "ok" : "mid"; }
       else if (key === "avg_risk") { const r = inWin(goalRows(g0, cur)).map(x => x.riskPct).filter(v => v != null); const a = r.length ? avg(r) : null; label = "Avg risk"; text = (a == null ? "—" : a.toFixed(2) + "%") + " / " + T + "%"; pct = a == null ? 0 : a <= T ? 100 : clamp01(T / a * 100); tone = a == null ? "mid" : a <= T ? "ok" : "bad"; }
+      else if (key === "withdraw") { const w = goalWithdrawn(g0, cur); label = "Withdrawn"; text = money(w, cur, 2) + " / " + money(T, cur, 0); pct = clamp01(w / T * 100); tone = w >= T ? "ok" : "mid"; }
       else { const books = goalBooksOf(g0), now = sum(books.map(a => balIn(a, cur))), st = sum(books.map(a => balanceAtStart(a, start) * fxk(a, cur))), span = T - st; label = "Balance"; text = money(now, cur, 2) + " / " + money(T, cur, 0); pct = span > 0 ? clamp01((now - st) / span * 100) : (now >= T ? 100 : 0); tone = now >= T ? "ok" : "mid"; }
       return { label, text, pct, tone };
     }
@@ -2177,8 +2184,66 @@
         host.appendChild(b);
       });
     }
-    const GOAL_KINDS = { net_pnl: "Profit", win_days: "Winning days", win_rate: "Win rate", profit_factor: "Profit factor", max_loss: "Loss limit (stay above)", rule_follow: "Follow my rules", trade_cap: "Trades per day cap", no_revenge: "No revenge trades", avg_risk: "Average risk per trade", balance: "Account balance" };
-    const COUNT_GOALS = ["win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance"];
+    const GOAL_KINDS = { net_pnl: "Profit", win_days: "Winning days", win_rate: "Win rate", profit_factor: "Profit factor", max_loss: "Loss limit (stay above)", rule_follow: "Follow my rules", trade_cap: "Trades per day cap", no_revenge: "No revenge trades", avg_risk: "Average risk per trade", balance: "Account balance", withdraw: "Money withdrawn (banked)" };
+    const COUNT_GOALS = ["win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance", "withdraw"];
+    /* ---- withdrawals: money actually taken out of a book ---- */
+    // Withdrawn from the goal's books inside its window, in the given currency.
+    function goalWithdrawn(g, cur) {
+      const ids = goalBooksOf(g).map(a => a.id), start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
+      return sum((state.withdrawals || []).filter(w => ids.indexOf(w.accountId) !== -1 && w.date >= start && w.date <= end).map(w => w.amount * fxk(acct(w.accountId), cur)));
+    }
+    function bookWithdrawn(id, before) { return sum((state.withdrawals || []).filter(w => w.accountId === id && (!before || w.date < before)).map(w => w.amount)); }
+    function openWithdraw() {
+      const g = state.goals[Math.min(state.ui.goalIdx || 0, state.goals.length - 1)];
+      const defBook = g && g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId) ? g.accountId : (!isAll() ? selected() : state.accounts[0].id);
+      const list = (state.withdrawals || []).slice().sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
+      openModalSheet("Log a withdrawal", body => {
+        body.innerHTML = `
+          <div class="text-[11px] text-slate-500">Money you took out of a trading account to your bank. It counts toward any goal with a "Money withdrawn" target, and lowers a book's worked-out balance (a live Delta or CoinDCX wallet already shows it).</div>
+          <div>
+            <label class="text-slate-400 block mb-1">From book</label>
+            <select id="wdAcc" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+              ${state.accounts.map(a => `<option value="${esc(a.id)}" ${a.id === defBook ? 'selected' : ''}>${esc(a.name)} (${esc(a.currency)})</option>`).join('')}
+            </select>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="text-slate-400 block mb-1">Date</label>
+              <input type="date" id="wdDate" value="${iso(new Date())}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            </div>
+            <div>
+              <label class="text-slate-400 block mb-1">Amount <span class="text-slate-600">(book's currency)</span></label>
+              <input type="number" step="any" min="0" id="wdAmt" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            </div>
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Note</label>
+            <input type="text" id="wdNote" placeholder="e.g. weekly payout to bank" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Withdrawals so far</label>
+            <div id="wdList" class="space-y-1 max-h-48 overflow-y-auto">
+              ${list.length ? list.map(w => `<div class="flex items-center justify-between gap-2 rounded bg-[#080D15] border border-terminal-border px-2.5 py-1.5 text-[11px]"><span class="text-slate-300">${esc(w.date)} · ${esc(acct(w.accountId).name)}${w.note ? ' · <span class="text-slate-500">' + esc(w.note) + '</span>' : ''}</span><span class="flex items-center gap-2"><span class="text-emerald-300 font-bold">${esc(money(w.amount, acct(w.accountId).currency))}</span><button type="button" data-wdrm="${esc(w.id)}" title="Remove" class="text-rose-400 hover:text-rose-300">✕</button></span></div>`).join('') : '<div class="text-slate-500 text-[11px]">None logged yet.</div>'}
+            </div>
+          </div>`;
+        body.querySelectorAll('[data-wdrm]').forEach(b => { b.onclick = () => {
+          const w = state.withdrawals.find(x => x.id === b.dataset.wdrm);
+          if (!w || !confirm('Remove the ' + money(w.amount, acct(w.accountId).currency) + ' withdrawal of ' + w.date + '?')) return;
+          noteDeleted("withdrawals", w.id);
+          state.withdrawals = state.withdrawals.filter(x => x.id !== w.id);
+          save(); renderAll(); closeModalSheet(); openWithdraw();
+        }; });
+      }, () => {
+        const amount = parseFloat(document.getElementById('wdAmt').value);
+        if (!(amount > 0)) { toast("Enter the amount you withdrew"); return false; }
+        state.withdrawals = state.withdrawals || [];
+        state.withdrawals.push(stamp({ id: uid(), accountId: document.getElementById('wdAcc').value, date: document.getElementById('wdDate').value || iso(new Date()), amount, note: document.getElementById('wdNote').value.trim().slice(0, 120) }));
+        save();
+        renderAll();
+        toast("Withdrawal logged");
+        return true;
+      });
+    }
     // The books a goal counts, same choice the profit goal uses.
     function goalBooksOf(g) {
       return (g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId)) ? [acct(g.accountId)] : state.accounts.slice();
@@ -2277,6 +2342,17 @@
         else if (!left) { $('goalToGo').innerText = money(rem, cur) + ' short'; $('goalRunRate').innerText = '—'; }
         else { $('goalToGo').innerText = perDay(left); $('goalRunRate').innerText = left > 1 ? perDay(left - 1) : 'Last day'; }
         $('goalToGo').title = 'Balance at the start of the window: ' + money(start, cur) + (deltaLiveKnown() ? '. Delta balance is live.' : '.');
+      } else if (g.metric === 'withdraw') {
+        // Real money taken out, not just a number on screen: what was withdrawn from the goal's books in its window.
+        const cur = gp.cur, w = goalWithdrawn(g, cur), rem = Math.max(0, t - w), pd = Math.min(100, Math.round(w / t * 100));
+        $('goalCurrent').innerText = money(w, cur) + ' banked';
+        $('goalCurrent').className = 'text-3xl font-bold mono-num ' + (w >= t ? 'text-emerald-400' : 'text-slate-200');
+        $('goalTarget').innerText = '/ ' + money(t, cur) + ' to withdraw';
+        $('goalPct').innerText = pd + '% withdrawn'; $('goalBar').style.width = Math.max(2, pd) + '%';
+        lbl1.innerText = 'Still to withdraw'; lbl2.innerText = 'Profit in the window';
+        $('goalToGo').innerText = rem ? money(rem, cur) : 'Goal banked';
+        $('goalRunRate').innerText = signedMoney(gp.net, cur) + (gp.net > 0 ? ' · ' + Math.min(100, Math.round(w / gp.net * 100)) + '% of it taken out' : '');
+        $('goalToGo').title = 'Log a withdrawal with the Withdraw button on this card.';
       } else if (g.metric === 'profit_factor') {
         const cur = gp.cur, have = gp.gl > 0 ? gp.gw / gp.gl : (gp.gw > 0 ? Infinity : null);
         $('goalCurrent').innerText = have == null ? '—' : isFinite(have) ? have.toFixed(2) : '∞';
@@ -3802,7 +3878,7 @@
 
     // A book's balance as the journal computes it: starting balance plus every trade in it.
     function bookNet(id) { return sum(bookTrades(id).map(t => t.pnl || 0)); }
-    function bookComputedBalance(a) { return (a.startBalance || 0) + bookNet(a.id); }
+    function bookComputedBalance(a) { return (a.startBalance || 0) + bookNet(a.id) - bookWithdrawn(a.id); }
     // While Delta has ever answered for this book and the key is still configured,
     // its own wallet figure is the truth — it also reflects funding, deposits and
     // open-position P&L, none of which come through in the imported fills. A
@@ -4497,7 +4573,7 @@
           <div>
             <label class="text-slate-400 block mb-1">Targets <span class="text-slate-600">(tick the ones you want, leave the rest off)</span></label>
             <div class="space-y-1.5">
-              ${GOAL_ORDER.map(k => { const on = existing ? goalTargets(existing)[k] != null : k === "net_pnl"; const sym = curSym(symCur); const DEF = {"net_pnl":[20,sym + " to earn","any"],"win_days":[12,"winning days","1"],"win_rate":[60,"% of trades win","1"],"profit_factor":[1.5,"× profit ÷ loss","any"],"max_loss":[5,sym + " most you may lose","any"],"rule_follow":[80,"% of trades follow every rule","1"],"trade_cap":[3,"trades a day, at most","1"],"no_revenge":[10,"trades in a row, no revenge","1"],"avg_risk":[1,"% of balance risked per trade, at most","any"],"balance":[100,sym + " account balance to reach","any"]}; return `<label class="flex items-center gap-2 rounded-lg bg-[#080D15] border border-terminal-border px-2.5 py-1.5"><input type="checkbox" id="gk_${k}" ${on ? "checked" : ""} onchange="document.getElementById('gv_${k}').disabled = !this.checked" class="accent-amber-500"><span class="flex-1 text-slate-200">${GOAL_KINDS[k]}<span class="block text-[10px] text-slate-500">${DEF[k][1]}</span></span><input type="number" id="gv_${k}" step="${DEF[k][2]}" min="0" ${on ? "" : "disabled"} value="${esc(existing && goalTargets(existing)[k] != null ? goalTargets(existing)[k] : DEF[k][0])}" class="w-24 bg-[#05080E] border border-terminal-border p-1.5 rounded text-white text-right disabled:opacity-40"></label>`; }).join("")}
+              ${GOAL_ORDER.map(k => { const on = existing ? goalTargets(existing)[k] != null : k === "net_pnl"; const sym = curSym(symCur); const DEF = {"net_pnl":[20,sym + " to earn","any"],"win_days":[12,"winning days","1"],"win_rate":[60,"% of trades win","1"],"profit_factor":[1.5,"× profit ÷ loss","any"],"max_loss":[5,sym + " most you may lose","any"],"rule_follow":[80,"% of trades follow every rule","1"],"trade_cap":[3,"trades a day, at most","1"],"no_revenge":[10,"trades in a row, no revenge","1"],"avg_risk":[1,"% of balance risked per trade, at most","any"],"balance":[100,sym + " account balance to reach","any"],"withdraw":[10,sym + " taken out to your bank","any"]}; return `<label class="flex items-center gap-2 rounded-lg bg-[#080D15] border border-terminal-border px-2.5 py-1.5"><input type="checkbox" id="gk_${k}" ${on ? "checked" : ""} onchange="document.getElementById('gv_${k}').disabled = !this.checked" class="accent-amber-500"><span class="flex-1 text-slate-200">${GOAL_KINDS[k]}<span class="block text-[10px] text-slate-500">${DEF[k][1]}</span></span><input type="number" id="gv_${k}" step="${DEF[k][2]}" min="0" ${on ? "" : "disabled"} value="${esc(existing && goalTargets(existing)[k] != null ? goalTargets(existing)[k] : DEF[k][0])}" class="w-24 bg-[#05080E] border border-terminal-border p-1.5 rounded text-white text-right disabled:opacity-40"></label>`; }).join("")}
             </div>
           </div>
           <div>
@@ -4693,6 +4769,7 @@
         accounts: (local.accounts || []).filter(a => !map[a.id]),
         trades: (local.trades || []).map(t => map[t.accountId] ? Object.assign({}, t, { accountId: map[t.accountId] }) : t),
         goals: (local.goals || []).map(g => g.accountId && map[g.accountId] ? Object.assign({}, g, { accountId: map[g.accountId] }) : g),
+        withdrawals: (local.withdrawals || []).map(w => map[w.accountId] ? Object.assign({}, w, { accountId: map[w.accountId] }) : w),
         ui: Object.assign({}, local.ui, { account: fix((local.ui || {}).account) }),
         calculatorSettings: local.calculatorSettings ? Object.assign({}, local.calculatorSettings, { accountId: fix(local.calculatorSettings.accountId) }) : local.calculatorSettings
       });
@@ -4723,6 +4800,7 @@
         trades: mergeList(local.trades, remote.trades, "trades", tombs),
         signals: local.signals || [],
         goals: mergeList(local.goals, remote.goals, "goals", tombs),
+        withdrawals: mergeList(local.withdrawals, remote.withdrawals, "withdrawals", tombs),
         playbook: mergeList(local.playbook, remote.playbook, "playbook", tombs),
         backtest: mergeBacktest(local.backtest, remote.backtest, tombs),
         repReviews: mergeRepReviews(local.repReviews, remote.repReviews),
@@ -4751,6 +4829,7 @@
       // uploads a broker report stays exactly as it was.
       if (st.backtest && st.backtest.files && st.backtest.files.length) p.backtest = st.backtest;
       if (st.repReviews && Object.keys(st.repReviews).length) p.repReviews = st.repReviews;
+      if (st.withdrawals && st.withdrawals.length) p.withdrawals = st.withdrawals;
       return p;
     }
     let syncBusy = false, syncTimer = null;
@@ -7184,6 +7263,7 @@
           // Older backups have no backtest; the uploads on this device stay then.
           if (p.backtest && typeof p.backtest === "object") state.backtest = p.backtest;
           if (p.repReviews && typeof p.repReviews === "object") state.repReviews = cleanRepReviews(p.repReviews);
+          if (Array.isArray(p.withdrawals)) state.withdrawals = p.withdrawals.map(cleanWithdrawal).filter(Boolean);
           sanitizeState(state);
           save();
           renderAll();
