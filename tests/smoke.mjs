@@ -140,10 +140,23 @@ async function currencyRun(seed) {
     // Converting changes money only: sizes, risk % and mistakes are the same.
     const same = await page.evaluate(() => {
       const key = rows => rows.map(x => [x.t.id, x.xBal, x.riskPct, x.lossPct, x.r, x.flags.join('+')].join('|')).sort().join('\n');
-      state.ui.allCur = 'INR';
-      return key(analyzeTrades(statScoped())) === key(analyzeTrades(allTrades()));
+      const native = key(analyzeTrades(allTrades()));
+      return ['INR', 'USD'].every(c => { state.ui.allCur = c; return key(analyzeTrades(statScoped())) === native; });
     });
     check(same, 'analysis flags or sizes changed with the currency');
+    // A dollar day is held to its own $2.50 limit in either currency: a $1 loss is
+    // not a breach when shown as ₹85, a $3 loss is.
+    const breach = await page.evaluate(() => {
+      const d = iso(new Date()), t0 = state.trades.length;
+      const add = (id, exit) => state.trades.push({ id, accountId: 'acc_cry', date: d, exitDate: d, time: '23:58', exitTime: '23:59', symbol: 'ETHUSD', direction: 'long', entry: 100, exit, stop: 0, qty: 1, fees: 0, rules: [] });
+      const day = () => tradingDays(statScoped()).find(x => x.accountId === 'acc_cry' && x.date === d);
+      const r = {};
+      add('lossA', 99); state.ui.allCur = 'INR'; r.small = day().breached;
+      add('lossB', 97); r.big = day().breached; state.ui.allCur = 'USD'; r.bigUsd = day().breached;
+      state.trades.length = t0;
+      return r;
+    });
+    check(breach.small === false && breach.big === true && breach.bigUsd === true, 'daily limit breach in another currency: ' + JSON.stringify(breach));
     await page.evaluate(() => { state.ui.allCur = 'INR'; renderAll(); switchTab('analysis'); });
     const an = await page.evaluate(() => ({ body: document.getElementById('anBody').innerText, brokers: [...document.querySelectorAll('#anBrokers tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()) }));
     check(an.body.includes('₹') && !an.body.includes('$'), 'Analysis trade list not in rupees: ' + an.body.slice(0, 200));
