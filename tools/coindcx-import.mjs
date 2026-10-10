@@ -31,9 +31,10 @@ const CDX_FILE = 'cdx-api', CDX_BROKER = 'CoinDCX';
 const CDX_PAGE = 100, CDX_MAX_PAGES = 100;
 const TX_PATH = '/exchange/v1/derivatives/futures/positions/transactions', POS_PATH = '/exchange/v1/derivatives/futures/positions';
 const WALLET_PATH = '/exchange/v1/derivatives/futures/wallets', FILLS_PATH = '/exchange/v1/derivatives/futures/trades';
-// Fills: the first read goes back 90 days, later ones from 3 days before the
-// newest fill kept, a week per call; the journal keeps the newest 5000.
-const FILL_FIRST_DAYS = 90, FILL_OVERLAP_DAYS = 3, FILL_STEP_DAYS = 7, FILL_MAX = 5000, DAY_MS = 864e5;
+// Fills: the first read goes back 90 days, later ones to 3 days before the
+// newest fill kept, newest first, a week (7 days counting both ends) per call;
+// the journal keeps the newest 5000.
+const FILL_FIRST_DAYS = 90, FILL_OVERLAP_DAYS = 3, FILL_STEP_DAYS = 6, FILL_MAX = 5000, DAY_MS = 864e5;
 
 // ---- the journal's own helpers, as index.html has them ----
 function num(v) {
@@ -218,17 +219,26 @@ function walletOf(w) {
   return Object.keys(o).length ? o : null;
 }
 
-// Every fill of the INR and USDT futures from `fromMs` to tomorrow: what the
-// transactions leave out, the price, side and size of each. A margin type
-// CoinDCX won't list only skips that one, as with the transactions.
+// Every fill of the INR and USDT futures from today (Indian date) back to
+// `fromMs`: what the transactions leave out, the price, side and size of each.
+// CoinDCX only goes back so far and says "From Date not in range" past that,
+// so the weeks are read newest first and stop there. A margin type CoinDCX
+// won't list only skips that one, as with the transactions.
 function cdxDay(ms) { return new Date(ms).toISOString().slice(0, 10); }
+function dayPlus(day, n) { return cdxDay(Date.parse(day + 'T00:00:00Z') + n * DAY_MS); }
+function cdxOutOfRange(r) { return !!r && r.status === 400 && /range/i.test(String(r.body && (r.body.message || r.body.error) || '')); }
 async function readFills(fromMs) {
-  const got = [], skipped = [];
+  const got = [], skipped = [], stop = cdxDay(fromMs);
   for (const mc of ['INR', 'USDT']) {
     try {
-      for (let t = fromMs; t <= Date.now() + DAY_MS; t += FILL_STEP_DAYS * DAY_MS) {
-        const r = await cdxPages(FILLS_PATH, { from_date: cdxDay(t), to_date: cdxDay(t + FILL_STEP_DAYS * DAY_MS), margin_currency_short_name: [mc] });
+      for (let to = cdxLocalTime(Date.now()).slice(0, 10), first = true; ; first = false) {
+        const from = dayPlus(to, -FILL_STEP_DAYS);
+        let r;
+        try { r = await cdxPages(FILLS_PATH, { from_date: from, to_date: to, margin_currency_short_name: [mc] }); }
+        catch (e) { if (!first && cdxOutOfRange(e)) break; throw e; }
         r.rows.forEach(x => got.push([x, mc]));
+        if (from <= stop) break;
+        to = from;
       }
     } catch (r) {
       if (cdxFatal(r)) throw r;
