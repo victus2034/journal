@@ -5884,15 +5884,17 @@
     }
     // An alert whose zone was never touched did not happen, so it has no
     // result to measure — different from a result of zero.
-    // What the trade you took did, in R. Trades that came in from Delta carry no
-    // stop of their own, so the alert's stop is the risk they are measured against
-    // (when it sits on the losing side of your entry).
+    // What the trade you took did, in R. Trades that came in from Delta or CoinDCX
+    // carry no stop of their own, so they are measured in the alert's own R: its
+    // entry to its stop, on your size. An entry right by (or past) the alert's stop
+    // then can't blow the figure up, and yours and the alert's are in one unit.
     function myOutcome(pair) {
       if (!pair.trade) return null;
       const t = pair.trade.orig || pair.trade, sig = pair.signal; // R from the stored trade's own prices
       let r = derive(t).r;
-      if ((r == null || !isFinite(r)) && stopOk(Object.assign({}, t, { stop: sig.stop }))) {
-        const risk = Math.abs(t.entry - sig.stop) * t.qty;
+      if (r == null || !isFinite(r)) {
+        const width = Math.abs(signalEntry(sig) - sig.stop);
+        const risk = (isFinite(width) && width > 0 ? width : stopOk(Object.assign({}, t, { stop: sig.stop })) ? Math.abs(t.entry - sig.stop) : 0) * t.qty;
         if (risk > 0) r = pricePnl(t) / risk;
       }
       return (r != null && isFinite(r)) ? { r, source: "traded" } : null;
