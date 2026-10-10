@@ -3761,8 +3761,19 @@
     // open-position P&L, none of which come through in the imported fills. A
     // disconnect freezes this at the last figure Delta gave; it does not clear it.
     function deltaLiveFresh() { return liveDeltaBalance && liveDeltaBalance.value != null && Date.now() - liveDeltaBalance.at < 5 * 60 * 1000; }
+    // A CoinDCX book's balance is CoinDCX's own futures wallet (rupee or USDT),
+    // as GitHub's hourly import last read it: deposits, withdrawals and fees are
+    // in it, which a balance worked out from the trades can't know.
+    function cdxWallet(a) {
+      if (!a || !a.reportBroker) return null;
+      const f = btState().files.find(x => x.id === CDX_FILE && x.broker === a.reportBroker);
+      const v = f && f.wallet ? f.wallet[a.currency === "INR" ? "INR" : "USD"] : undefined;
+      return typeof v === "number" && isFinite(v) ? { value: v, at: f.wallet.at } : null;
+    }
     function bookBalance(a) {
       if (deltaReady() && a.id === deltaAccountId() && deltaLiveKnown()) return liveDeltaBalance.value;
+      const w = cdxWallet(a);
+      if (w) return w.value;
       return bookComputedBalance(a);
     }
     function renderBooks() {
@@ -3776,12 +3787,14 @@
         row.className = 'flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-[#080D16] border border-terminal-border';
         const dotCls = fresh ? 'bg-emerald-400' : 'bg-amber-400';
         const wordCls = fresh ? 'text-emerald-400' : 'text-amber-400';
+        const wallet = !live && cdxWallet(a);
         const liveTitle = live ? 'Delta ' + esc(liveDeltaBalance.field) + ', fetched ' + new Date(liveDeltaBalance.at).toLocaleTimeString()
-          + (fresh ? '' : ' — Delta hasn\'t answered since; holding this last known figure') + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
+          + (fresh ? '' : ' — Delta hasn\'t answered since; holding this last known figure') + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency))
+          : wallet ? esc(cdxWalletTitle(wallet)) + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
         row.innerHTML = `
           <div>
             <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Live from Delta' : 'Last known balance from Delta — not currently reachable'}"></span>` : ''}</div>
-            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'live' : 'last known'}</span>` : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
+            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'live' : 'last known'}</span>` : wallet ? ` <span class="text-emerald-400">· CoinDCX wallet</span>` : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
           </div>
           <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
         host.appendChild(row);
@@ -3801,6 +3814,7 @@
         body.innerHTML = `
           ${field(`Balance right now (${esc(a.currency)})`, 'bkBalance', +bookBalance(a).toFixed(2), 'any', (deltaReady() && a.id === deltaAccountId() && deltaLiveKnown())
             ? `This is prefilled from Delta's own wallet, fetched ${new Date(liveDeltaBalance.at).toLocaleTimeString()}${deltaLiveFresh() ? '' : ' (Delta is not reachable right now; this is the last figure it gave)'}. Saving it here only sets the starting balance the journal falls back on if Delta's key is ever removed — Delta's own figure keeps winning otherwise, even while it's disconnected.`
+            : cdxWallet(a) ? `This is CoinDCX's own wallet balance (${esc(cdxWalletTitle(cdxWallet(a)))}). Saving it here only sets the starting balance the journal falls back on without it.`
             : `Type your real broker balance. The journal keeps the difference from your logged trades (${signedMoney(net, a.currency)}) as the starting balance. Once Delta answers for this book, its own live figure takes over here — and stays even if Delta later disconnects.`)}
           ${field(`Daily loss limit (${esc(a.currency)})`, 'bkLimit', a.dailyLossLimit || 0, 'any', 'A day that loses this much or more counts as a breach. 0 turns it off.')}
           <div class="grid grid-cols-3 gap-2">
@@ -5185,7 +5199,8 @@
       const chartEl = document.getElementById('chartBalLabel');
       if (!valEl || !tag || !lastComputedBalance) return;
       const cur = lastComputedBalance.cur;
-      const inScope = deltaLiveKnown() && viewBooks().some(a => a.id === deltaAccountId());
+      const deltaIn = deltaLiveKnown() && viewBooks().some(a => a.id === deltaAccountId());
+      const wallets = viewBooks().map(cdxWallet).filter(Boolean), inScope = deltaIn || wallets.length > 0;
       // The books in view with Delta's own wallet figure in place of its computed one.
       const liveTotal = inScope ? sum(viewBooks().map(a => balIn(a, cur))) : null;
       const fresh = deltaLiveFresh();
@@ -5196,12 +5211,14 @@
       if (inScope) {
         valEl.innerText = money(liveTotal, cur);
         tag.classList.remove('hidden');
-        tag.innerText = fresh ? 'LIVE' : 'LAST KNOWN';
+        const ok = !deltaIn || fresh;
+        tag.innerText = deltaIn ? (fresh ? 'LIVE' : 'LAST KNOWN') : 'WALLET';
         tag.className = 'text-[9px] font-bold px-1 py-0.5 rounded border align-middle '
-          + (fresh ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40');
-        const since = "Delta " + liveDeltaBalance.field + ", fetched " + new Date(liveDeltaBalance.at).toLocaleTimeString();
-        tag.title = fresh ? since + ". Journal-computed balance: " + money(lastComputedBalance.value, cur)
-          : since + " — Delta hasn't answered since" + (liveDeltaLastError ? " (" + liveDeltaLastError + ")" : "") + ". Holding this last known figure rather than falling back to the journal's own computed balance (" + money(lastComputedBalance.value, cur) + ").";
+          + (ok ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40');
+        const since = deltaIn ? "Delta " + liveDeltaBalance.field + ", fetched " + new Date(liveDeltaBalance.at).toLocaleTimeString() : "";
+        const cdx = wallets.length ? cdxWalletTitle(wallets[0]) : "";
+        tag.title = [since + (deltaIn && !fresh ? " — Delta hasn't answered since" + (liveDeltaLastError ? " (" + liveDeltaLastError + ")" : "") + "; holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
+          + ". Journal-computed balance: " + money(lastComputedBalance.value, cur);
         if (chartEl) { chartEl.innerText = money(liveTotal, cur); chartEl.title = tag.title; }
       } else {
         valEl.innerText = money(lastComputedBalance.value, lastComputedBalance.cur);
@@ -5240,6 +5257,7 @@
     // the CoinDCX book an uploaded report fills. A failed run leaves its reason
     // on that file (`note`), and this card shows it.
     const CDX_FILE = "cdx-api";
+    function cdxWalletTitle(w) { return "CoinDCX futures wallet, read by GitHub's hourly import" + (w.at ? "; last changed " + new Date(w.at).toLocaleString() : ""); }
     function renderCdxCard() {
       const badge = document.getElementById("cdxStatusBadge"), status = document.getElementById("cdxStatus"), steps = document.getElementById("cdxSteps");
       if (!badge || !status || !steps) return;
@@ -5249,7 +5267,8 @@
       badge.className = "text-[10px] px-2 py-0.5 rounded " + (f && f.note ? "bg-rose-950/60 text-rose-300" : f ? "bg-slate-800 text-emerald-300" : "bg-slate-800 text-slate-300");
       status.className = "text-[11px] leading-relaxed " + (f && f.note ? "text-rose-300" : "text-slate-300");
       status.innerText = !f ? "Nothing from CoinDCX yet. After the steps below, its trades show up here once GitHub has run and this device has synced."
-        : (f.note ? "GitHub's last run failed: " + f.note + " " : "") + `${n} CoinDCX row${n === 1 ? "" : "s"} in the journal, last changed ${new Date(f.updatedAt).toLocaleString()}.`;
+        : (f.note ? "GitHub's last run failed: " + f.note + " " : "") + `${n} CoinDCX row${n === 1 ? "" : "s"} in the journal, last changed ${new Date(f.updatedAt).toLocaleString()}.`
+          + (f.wallet ? " Wallet: " + [["INR", "INR futures"], ["USD", "USDT futures"]].filter(([k]) => k in f.wallet).map(([k, label]) => money(f.wallet[k], k) + " " + label).join(" · ") + "." : "");
       const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">${esc(text)}</a>`;
       const gh = "https://github.com/" + repo;
       steps.innerHTML = !repo
@@ -7099,6 +7118,12 @@
         };
         // Why GitHub's last CoinDCX import failed, if it did.
         if (typeof f.note === "string" && f.note.trim()) o.note = cText(f.note, 300);
+        // CoinDCX's own wallet balances, as that import last read them.
+        if (f.wallet && typeof f.wallet === "object") {
+          const w = { at: cText(f.wallet.at, 30) };
+          ["INR", "USD"].forEach(k => { const v = f.wallet[k]; if (typeof v === "number" && isFinite(v)) w[k] = v; });
+          if ("INR" in w || "USD" in w) o.wallet = w;
+        }
         files[id] = o; out.files.push(o);
       });
       (Array.isArray(b.rows) ? b.rows : []).forEach(r => {

@@ -5,6 +5,8 @@
 // Actions secrets and adds the new ones to journal.json, the file the journal
 // syncs. Each device gets them with its next sync, in the CoinDCX book an
 // uploaded report fills; a transaction a report already has counts once there.
+// It also reads the futures wallets, so the journal can show CoinDCX's own
+// balance for the CoinDCX book instead of one worked out from the trades.
 //
 // Environment (GitHub sets the ones marked *):
 //   COINDCX_API_KEY, COINDCX_API_SECRET   the repo's Actions secrets
@@ -15,6 +17,8 @@
 //   COINDCX_BASE                          tests point this at a fake CoinDCX
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 
 const env = process.env;
 const CDX_BASE = (env.COINDCX_BASE || 'https://api.coindcx.com').replace(/\/+$/, '');
@@ -24,6 +28,7 @@ const TZ = env.JOURNAL_TZ || 'Asia/Kolkata';
 const CDX_FILE = 'cdx-api', CDX_BROKER = 'CoinDCX';
 const CDX_PAGE = 100, CDX_MAX_PAGES = 100;
 const TX_PATH = '/exchange/v1/derivatives/futures/positions/transactions', POS_PATH = '/exchange/v1/derivatives/futures/positions';
+const WALLET_PATH = '/exchange/v1/derivatives/futures/wallets';
 
 // ---- the journal's own helpers, as index.html has them ----
 function num(v) {
@@ -42,26 +47,33 @@ function btHash(s) {
 }
 
 // ---- CoinDCX ----
-// Every private call is a POST whose JSON body carries a millisecond timestamp,
-// signed with an HMAC-SHA256 (hex) of that exact body.
-async function cdxCall(path, params) {
+// Every private call sends a JSON body carrying a millisecond timestamp,
+// signed with an HMAC-SHA256 (hex) of that exact body. Most are POSTs; the
+// wallets are a GET that still carries the body, which fetch() won't send,
+// so the request is made by hand.
+function send(url, method, headers, body) {
+  return new Promise(resolve => {
+    const u = new URL(url), lib = u.protocol === 'http:' ? http : https;
+    const req = lib.request(u, { method, headers: Object.assign({ 'Content-Length': Buffer.byteLength(body) }, headers), timeout: 30000 }, res => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', c => { text += c; });
+      res.on('end', () => resolve({ status: res.statusCode, text }));
+      res.on('error', e => resolve({ status: 0, network: e.code || e.message }));
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('no answer in 30 seconds'), { code: 'no answer in 30 seconds' })));
+    // No answer at all; kept apart from a mistake in this script.
+    req.on('error', e => resolve({ status: 0, network: e.code || e.message }));
+    req.end(body);
+  });
+}
+async function cdxCall(path, params, method = 'POST') {
   const body = JSON.stringify(Object.assign({ timestamp: Date.now() }, params || {}));
   const sig = crypto.createHmac('sha256', env.COINDCX_API_SECRET).update(body).digest('hex');
-  let res, text;
-  try {
-    res = await fetch(CDX_BASE + path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-AUTH-APIKEY': env.COINDCX_API_KEY, 'X-AUTH-SIGNATURE': sig },
-      body, signal: AbortSignal.timeout(30000)
-    });
-    text = await res.text();
-  } catch (e) {
-    // No answer at all; kept apart from a mistake in this script.
-    const why = e && e.name === 'TimeoutError' ? 'no answer in 30 seconds' : String((e && e.cause && (e.cause.code || e.cause.message)) || (e && e.message) || e);
-    return { ok: false, status: 0, network: why, body: null };
-  }
-  let data; try { data = text ? JSON.parse(text) : null; } catch (e) { data = { raw: text.slice(0, 400) }; }
-  return { ok: res.status === 200, status: res.status, body: data };
+  const r = await send(CDX_BASE + path, method, { 'Content-Type': 'application/json', 'X-AUTH-APIKEY': env.COINDCX_API_KEY, 'X-AUTH-SIGNATURE': sig }, body);
+  if (!r.status) return { ok: false, status: 0, network: String(r.network), body: null };
+  let data; try { data = r.text ? JSON.parse(r.text) : null; } catch (e) { data = { raw: r.text.slice(0, 400) }; }
+  return { ok: r.status === 200, status: r.status, body: data };
 }
 // A list, or a list inside an object. An empty answer or a bare message
 // (not an error) means nothing to list; anything else is not understood.
@@ -176,6 +188,31 @@ async function readCoindcx() {
   return { rows, unread, skipped, capped };
 }
 
+// The INR and USDT futures wallets (for the rupee and dollar CoinDCX books).
+// The total is what is free plus the margin locked in orders and positions,
+// isolated (locked_balance) and cross; CoinDCX's docs give balance +
+// locked_balance, and INR futures have no cross margin.
+async function readWallets() {
+  const r = await cdxCall(WALLET_PATH, {}, 'GET');
+  const list = r.ok ? cdxList(r.body) : null;
+  if (!list) throw (r.ok ? { status: r.status, body: { raw: 'an answer that is not a list' } } : r);
+  const w = {};
+  list.forEach(x => {
+    if (!x || typeof x !== 'object') return;
+    const c = String(x.currency_short_name || '').toUpperCase(), k = c === 'INR' ? 'INR' : c === 'USDT' ? 'USD' : null;
+    const parts = [x.balance, x.locked_balance, x.cross_order_margin, x.cross_user_margin].map(num);
+    if (k && isFinite(parts[0])) w[k] = btRound(sum(parts.map(v => isFinite(v) ? v : 0)));
+  });
+  return w;
+}
+// In one order, INR then USD, as the journal keeps them.
+function walletOf(w) {
+  const o = {};
+  if (w && typeof w.INR === 'number') o.INR = w.INR;
+  if (w && typeof w.USD === 'number') o.USD = w.USD;
+  return Object.keys(o).length ? o : null;
+}
+
 // ---- journal.json on GitHub ----
 function gh(path, opts = {}) {
   return fetch(`${GH_API}/repos/${REPO}${path}`, Object.assign({}, opts, {
@@ -219,21 +256,33 @@ async function writeJournal(data, sha, message) {
 // New transactions go in as rows of the fixed "cdx-api" file, in the same
 // shape (and key order) the journal writes its own, so its next sync finds
 // nothing to rewrite. A failed run leaves its reason on that file (`note`)
-// for the journal to show; nothing changes when there is nothing new to say.
-function apply(data, rows, note) {
+// for the journal to show, and the wallets go there too (`wallet`, dated by
+// when they last changed); nothing changes when there is nothing new to say.
+function fileRecord(f, note, wallet) {
+  const rec = {
+    id: f.id, name: f.name, sheet: f.sheet, broker: f.broker, importedAt: f.importedAt, updatedAt: f.updatedAt,
+    rows: f.rows, added: f.added, net: f.net, cur: f.cur, checked: f.checked
+  };
+  if (note) rec.note = note;
+  if (wallet) rec.wallet = wallet;
+  return rec;
+}
+function apply(data, rows, note, wallet) {
   const old = data.backtest;
   const bt = old && Array.isArray(old.files) && Array.isArray(old.rows) ? old : { files: [], rows: [] };
   const have = {};
   bt.rows.forEach(r => { if (r && r.id) have[r.id] = 1; });
   const fresh = rows.filter(r => !have[r.id]);
   const i = bt.files.findIndex(x => x && x.id === CDX_FILE), f = i >= 0 ? bt.files[i] : null;
-  if (!fresh.length && (!f || (f.note || '') === (note || ''))) return { changed: false, added: 0, file: f };
-  const now = new Date().toISOString();
+  const was = f ? walletOf(f.wallet) : null, now = walletOf(wallet);
+  const walletMoved = !!now && JSON.stringify(now) !== JSON.stringify(was);
+  const noteMoved = (f && f.note || '') !== (note || '');
+  if (!fresh.length && (!f || (!noteMoved && !walletMoved))) return { changed: false, added: 0, file: f };
+  const at = new Date().toISOString();
+  const keep = walletMoved ? Object.assign({ at }, now) : f && f.wallet;
   let rec;
   if (!fresh.length) {
-    rec = Object.assign({}, f, { updatedAt: now });
-    delete rec.note;
-    if (note) rec.note = note;
+    rec = fileRecord(Object.assign({}, f, { updatedAt: at }), note, keep);
   } else {
     // Under the broker name an uploaded CoinDCX report already uses, so both land in one book.
     const named = bt.files.find(x => x && x.id !== CDX_FILE && /coindcx/i.test(String(x.broker || '')));
@@ -244,15 +293,14 @@ function apply(data, rows, note) {
     // Read back: every transaction CoinDCX sent is in the file once, adding up to the same total.
     const checked = rows.every(r => byId[r.id]) && Math.abs(sum(rows.map(r => Number(byId[r.id].net))) - sum(rows.map(r => r.net))) < 0.005;
     const mine = bt.rows.filter(r => r && r.file === CDX_FILE), cur = mine.some(r => r.cur === 'INR') ? 'INR' : 'USD';
-    rec = {
-      id: CDX_FILE, name: 'CoinDCX API', sheet: 'Futures transactions', broker, importedAt: f && f.importedAt ? f.importedAt : now, updatedAt: now,
+    rec = fileRecord({
+      id: CDX_FILE, name: 'CoinDCX API', sheet: 'Futures transactions', broker, importedAt: f && f.importedAt ? f.importedAt : at, updatedAt: at,
       rows: rows.length, added: fresh.length, net: sum(mine.filter(r => r.cur === cur).map(r => Number(r.net))), cur, checked
-    };
-    if (note) rec.note = note;
+    }, note, keep);
   }
   if (i >= 0) bt.files[i] = rec; else bt.files.push(rec);
   data.backtest = bt;
-  return { changed: true, added: fresh.length, file: rec };
+  return { changed: true, added: fresh.length, file: rec, noteMoved, walletMoved };
 }
 
 function report(text, bad) {
@@ -272,15 +320,18 @@ async function main() {
   let got = null, failed = null;
   try { got = await readCoindcx(); } catch (r) { failed = cdxWhy(r); }
   const rows = got ? got.rows : [];
+  // The balance is a bonus: a wallet CoinDCX won't show doesn't stop the import.
+  let wallet = null, walletWhy = '';
+  if (got) { try { wallet = walletOf(await readWallets()); } catch (r) { walletWhy = cdxWhy(r); } }
   // The journal keeps 300 characters of it; the same here, or each would keep rewriting the other.
   const note = failed ? failed.slice(0, 300) : null;
 
   let res;
   for (let attempt = 1; ; attempt++) {
-    res = apply(data, rows, note);
+    res = apply(data, rows, note, wallet);
     if (!res.changed) break;
     data.savedAt = new Date().toISOString();
-    const message = res.added ? `CoinDCX: ${res.added} new row${res.added === 1 ? '' : 's'}` : failed ? 'CoinDCX import failed' : 'CoinDCX import working again';
+    const message = res.added ? `CoinDCX: ${res.added} new row${res.added === 1 ? '' : 's'}` : failed ? 'CoinDCX import failed' : res.noteMoved ? 'CoinDCX import working again' : 'CoinDCX wallet balance';
     if (await writeJournal(data, sha, message)) break;
     if (attempt >= 4) throw new Error(`${SYNC_PATH} kept changing while saving; the next run tries again.`);
     ({ data, sha } = await readJournal());
@@ -292,6 +343,8 @@ async function main() {
   if (got.unread) msg += ` · ${got.unread} unreadable transaction${got.unread === 1 ? '' : 's'} skipped`;
   got.skipped.forEach(x => { msg += ` · ${x.mc} futures not read (${cdxWhy(x.r).replace(/\.$/, '')})`; });
   if (got.capped) msg += ' · stopped at the read cap, so the oldest part may be missing';
+  if (wallet) msg += ' · wallet ' + Object.keys(wallet).map(k => (k === 'USD' ? 'USDT' : k) + ' ' + wallet[k]).join(', ');
+  else if (walletWhy) msg += ` · wallet balance not read (${walletWhy.replace(/\.$/, '')})`;
   if (res.added && !res.file.checked) msg += " · ⚠ the stored rows don't add up to what CoinDCX sent";
   report(msg, res.added > 0 && !res.file.checked);
   return res.added > 0 && !res.file.checked ? 1 : 0;
