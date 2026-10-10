@@ -162,8 +162,9 @@ async function currencyRun(seed) {
     check(an.body.includes('₹') && !an.body.includes('$'), 'Analysis trade list not in rupees: ' + an.body.slice(0, 200));
     check(an.brokers.some(l => l.startsWith('Test Crypto USD @ ₹85 ' + (cryNet >= 0 ? '+' : '') + inr(cryNet * 85))), 'results by broker in rupees: ' + an.brokers.join(' | '));
     // The inspector shows the rupee figure and the book's own dollars.
-    const insp = await page.evaluate(() => { const t = statScoped().find(x => x.accountId === 'acc_cry'); openInspector(t); return { pnl: document.getElementById('inspPnl').innerText, fees: document.getElementById('inspFees').innerText }; });
-    check(/^[+-]₹[\d,.]+ \([+-]\$[\d.]+\)$/.test(insp.pnl) && insp.fees === inr(0.1 * 85) + ' (' + usd(0.1) + ')', 'inspector: ' + JSON.stringify(insp));
+    const insp = await page.evaluate(() => { const t = statScoped().find(x => x.id === 'tr1'); openInspector(t); return { pnl: document.getElementById('inspPnl').innerText, fees: document.getElementById('inspFees').innerText }; });
+    const p1 = pnlOf(seed.trades.find(t => t.id === 'tr1')), sg = p1 >= 0 ? '+' : '';
+    check(insp.pnl === sg + inr(p1 * 85) + ' (' + sg + usd(p1) + ')' && insp.fees === inr(0.1 * 85) + ' (' + usd(0.1) + ')', 'inspector: ' + JSON.stringify(insp) + ' expected ' + p1);
     await page.evaluate(() => closeInspector());
     // A book's rate is changed in its editor and used everywhere.
     await page.evaluate(() => { switchTab('data'); openBookEditor('acc_cry'); });
@@ -188,6 +189,11 @@ async function currencyRun(seed) {
     await page.click('#modalSheetSaveBtn');
     check(near(goals.inr[0], 20) && near(goals.usd[0], 20 / 85) && near(goals.inr[1], 900) && near(goals.usd[1], 10) && goals.win === 50, 'goal targets: ' + JSON.stringify(goals));
     check(await page.evaluate(() => (state.goals.find(g => g.title === 'New dollar goal') || {}).cur) === 'USD', 'a new all-books goal did not keep its currency');
+    // Editing the older goal while dollars are on screen keeps it in rupees.
+    const label = await page.evaluate(() => { state.ui.allCur = 'USD'; openGoal('g1'); return document.getElementById('gk_net_pnl').parentElement.innerText; });
+    await page.click('#modalSheetSaveBtn');
+    const g1 = await page.evaluate(() => { const g = state.goals.find(x => x.id === 'g1'); return { cur: g.cur, t: g.targets.net_pnl }; });
+    check(label.includes('₹ to earn') && g1.cur === 'INR' && g1.t === 20, 'editing an older goal in dollars: ' + JSON.stringify(g1) + ' ' + label);
     // Rates and goal currencies survive a sync clean-up; bad ones don't.
     const kept = await page.evaluate(() => {
       const s = sanitizeState(JSON.parse(JSON.stringify(state)));
