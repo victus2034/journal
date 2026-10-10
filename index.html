@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-10.97">
+  <meta name="app-version" content="2026-10-11.98">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -159,7 +159,7 @@
               <button type="button" id="dupWarn" onclick="removeDuplicateTrades()" class="hidden text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25"></button>
             </div>
             <div class="text-xs text-slate-400 mt-0.5 font-mono">
-              Net P&amp;L Delta: <span id="activePnlDeltaText" class="font-bold text-rose-400">-$4.98</span> • <span id="monthDaysRemainingText"></span>
+              Net P&amp;L: <span id="activePnlDeltaText" class="font-bold text-slate-200">—</span> • <span id="monthDaysRemainingText"></span>
             </div>
           </div>
         </div>
@@ -1620,10 +1620,12 @@
     function curLocale(c) { return c === "INR" ? "en-IN" : "en-US"; }
     function money(v, cur = "USD", dp = 2) {
       if (v == null || !isFinite(v)) return "—";
+      if (Math.abs(v) < 0.5 * Math.pow(10, -dp)) v = 0; // -0.001 reads ₹0.00, not -₹0.00
       return (v < 0 ? "-" : "") + curSym(cur) + Math.abs(v).toLocaleString(curLocale(cur), { minimumFractionDigits: dp, maximumFractionDigits: dp });
     }
     function signedMoney(v, cur = "USD", dp = 2) {
       if (v == null || !isFinite(v)) return "—";
+      if (Math.abs(v) < 0.5 * Math.pow(10, -dp)) v = 0;
       return (v >= 0 ? "+" : "-") + curSym(cur) + Math.abs(v).toLocaleString(curLocale(cur), { minimumFractionDigits: dp, maximumFractionDigits: dp });
     }
     // Quantity for display: at most 2 decimals, no trailing zeros. A tiny size
@@ -1958,9 +1960,11 @@
     }
 
     // Balance a book had at the start of a period: its starting balance plus every
-    // trade before that date, anchored to Delta's live figure when it has one.
+    // trade before that date, anchored to the broker's own figure when there is
+    // one (Delta's live wallet, CoinDCX's wallet): deposits and withdrawals are in
+    // it, so a book whose starting balance was never typed still has an opening.
     function balanceAtStart(a, from) {
-      const off = (a.id === deltaAccountId() && deltaLiveKnown()) ? liveDeltaBalance.value - bookComputedBalance(a) : 0;
+      const off = bookBalance(a) - bookComputedBalance(a);
       const before = from ? sum(bookTrades(a.id).filter(t => t.date < from).map(t => t.pnl || 0)) : 0;
       return (a.startBalance || 0) + off + before;
     }
@@ -1993,7 +1997,7 @@
         // Expectancy in money per trade always works; R only exists for trades with a real stop.
         { label: "EXPECTANCY", val: s.n ? signedMoney(s.net / s.n, cur) : "—", sub: s.rCount ? `per trade · ${rfmt(s.expectancy)} avg on ${s.rCount} with a stop` : "per trade · no stops to work out R", color: s.net >= 0 ? "text-emerald-400" : "text-rose-400" },
         greenOrReturn(greenDays, days, s, cur),
-        { label: "BEST DAY", val: days.length ? signedMoney(Math.max(...days.map(d => d.net)), cur) : "—", sub: days.length ? `worst ${signedMoney(Math.min(...days.map(d => d.net)), cur)}` : "", color: "text-emerald-400" },
+        { label: "BEST DAY", val: days.length ? signedMoney(Math.max(...days.map(d => d.net)), cur) : "—", sub: days.length ? `worst ${signedMoney(Math.min(...days.map(d => d.net)), cur)}` : "", color: !days.length || Math.max(...days.map(d => d.net)) >= 0 ? "text-emerald-400" : "text-rose-400" },
         { label: "MAX DRAWDOWN", val: money(-s.maxDD, cur), sub: "peak to trough", color: "text-rose-400" },
         { label: "LIMIT BREACHES", val: String(breaches), sub: breaches === 0 ? "rule intact" : "plan violations", color: breaches === 0 ? "text-emerald-400" : "text-rose-400" }
       ];
@@ -2427,6 +2431,9 @@
       if (maxEl) {
         maxEl.innerText = maxLoss > 0 ? money(maxLoss, cur) : "off";
       }
+      updateLimitBanner(cur);
+    }
+    function updateLimitBanner(cur) {
       const banner = document.getElementById('limitBanner');
       if (banner) {
         const lim = dailyLimitState(cur);
@@ -2541,10 +2548,13 @@
 
       // Balance is start balance plus every trade ever taken in the books in view,
       // not just the month on screen, each book converted at its own rate.
-      const curBal = sum(viewBooks().map(a => bookComputedBalance(a) * fxk(a, cur)));
       document.getElementById('chartStartLabel').innerText = signedMoney(0, cur);
       document.getElementById('chartPeakLabel').innerText = signedMoney(peak, cur);
       document.getElementById('chartTroughLabel').innerText = signedMoney(Math.min(0, ...dataNet), cur);
+      updateTopBalance(cur);
+    }
+    function updateTopBalance(cur) {
+      const curBal = sum(viewBooks().map(a => bookComputedBalance(a) * fxk(a, cur)));
       document.getElementById('topBalVal').innerText = money(curBal, cur);
       lastComputedBalance = { value: curBal, cur };
       applyLiveBalance();
@@ -2615,7 +2625,7 @@
         slotCard.classList.add('cursor-pointer', 'hover:border-amber-500/60', 'transition-colors');
         slotCard.title = 'Show these trades in the ledger below';
         slotCard.onclick = () => focusLedger(`${hhmm(k)} - ${hhmm((k + 30) % 1440)}`, t => {
-          const m = toMin(t.time);
+          const m = toMin(t.rep ? t.openTime : t.time);
           return m != null && Math.floor(m / 30) * 30 === k;
         });
         container.appendChild(slotCard);
@@ -3914,7 +3924,9 @@
       const days = tradingDays(ts);
       const cur = viewCur();
 
-      document.getElementById('activePnlDeltaText').innerText = signedMoney(s.net, cur);
+      const pnlEl0 = document.getElementById('activePnlDeltaText');
+      pnlEl0.innerText = signedMoney(s.net, cur);
+      pnlEl0.className = 'font-bold ' + (s.net >= 0 ? 'text-emerald-400' : 'text-rose-400');
       document.getElementById('activeTradesCountBadge').innerText = `${s.n} trades`;
       document.getElementById('activeMonthStatusBadge').innerText = s.net >= 0 ? "Ahead" : "Behind";
       document.getElementById('activeMonthStatusBadge').className = s.net >= 0
@@ -3923,12 +3935,15 @@
 
       const accFilterSel = document.getElementById('filterAccountSelect');
       if (accFilterSel) {
+        // Rebuilt on every render; the book picked in it stays picked.
+        const keep = accFilterSel.value;
         accFilterSel.innerHTML = '<option value="ALL">All Accounts</option>';
         state.accounts.forEach(a => {
           const opt = document.createElement('option');
           opt.value = a.id; opt.innerText = a.name;
           accFilterSel.appendChild(opt);
         });
+        accFilterSel.value = state.accounts.some(a => a.id === keep) ? keep : 'ALL';
       }
 
       renderKPIRibbon(s, days, cur);
@@ -3946,7 +3961,11 @@
     // Refresh the dashboard and whichever other tab is open, so an import, a
     // delete or a sync shows up where you are looking instead of on the next visit.
     function renderAll() {
-      renderDashboard();
+      // The dashboard is drawn in full only while it is on screen (switching to it
+      // draws it); elsewhere just the header it shares with every tab is refreshed.
+      const dash = document.getElementById('view-dashboard');
+      if (!dash || !dash.classList.contains('hidden')) renderDashboard();
+      else { const cur = viewCur(); renderAccountsBar(); updateTopBalance(cur); updateLimitBanner(cur); }
       const open = ['signals', 'analysis', 'data'].find(t => { const v = document.getElementById('view-' + t); return v && !v.classList.contains('hidden'); });
       if (open === 'signals') renderSignalsTable();
       else if (open === 'analysis') renderAnalysis();
@@ -4127,14 +4146,18 @@
               ${state.accounts.filter(a => !a.reportBroker || a.id === v.accountId).map(a => `<option value="${esc(a.id)}" ${a.id === v.accountId ? 'selected' : ''}>${esc(a.name)} (${esc(a.market)})</option>`).join('')}
             </select>
           </div>
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-3 gap-2">
             <div>
               <label class="text-slate-400 block mb-1">Date</label>
               <input type="date" id="mDate" value="${esc(v.date)}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
             </div>
             <div>
-              <label class="text-slate-400 block mb-1">Time</label>
+              <label class="text-slate-400 block mb-1">Entry time</label>
               <input type="time" id="mTime" value="${esc(v.time || '')}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            </div>
+            <div>
+              <label class="text-slate-400 block mb-1">Exit time</label>
+              <input type="time" id="mExitTime" value="${esc(v.exitTime || '')}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
             </div>
           </div>
           <div class="grid grid-cols-2 gap-2">
@@ -4225,6 +4248,9 @@
         if (!(entry > 0) || !(exit > 0) || !(qty > 0)) { toast("Entry, exit and quantity must be numbers above 0"); return false; }
         const stopIn = parseFloat(document.getElementById('mStop').value), feesIn = parseFloat(document.getElementById('mFees').value);
         if (stopIn < 0 || feesIn < 0) { toast("Stop loss and fees can't be negative"); return false; }
+        // A stop on the wrong side of the entry would be dropped silently on the next load.
+        const sideIn = document.getElementById('mSide').value;
+        if (stopIn > 0 && (sideIn === 'long' ? stopIn >= entry : stopIn <= entry)) { toast(sideIn === 'long' ? "A long's stop must be below its entry" : "A short's stop must be above its entry"); return false; }
 
         const pickedTags = group => [...document.querySelectorAll(`#modalSheetBody [data-tag-group="${group}"].active`)].map(b => b.dataset.tag);
         // Start from the existing record so fields this form doesn't edit
@@ -4237,6 +4263,7 @@
           accountId: document.getElementById('mAcc').value,
           date: document.getElementById('mDate').value || today,
           time: document.getElementById('mTime').value,
+          exitTime: document.getElementById('mExitTime').value,
           symbol: sym,
           direction: document.getElementById('mSide').value,
           entry: entry, exit: exit,
@@ -4249,6 +4276,10 @@
         });
         const pr = readPlayRules();
         if (pr) rec.playRules = pr; else delete rec.playRules;
+        // A same-day trade moved to another date takes its exit day along; an
+        // overnight one keeps the exit day it was imported with.
+        if (existing && existing.exitDate && existing.exitDate === existing.date) rec.exitDate = rec.date;
+        else if (existing && existing.exitDate && rec.exitDate < rec.date) delete rec.exitDate;
 
         stamp(rec);
         if (existing) {
@@ -4718,7 +4749,7 @@
         }
         if (got.remote) state = mergeState(state, got.remote);
         const after = syncPayload(state);
-        const body = JSON.stringify(after, null, 2);
+        const body = JSON.stringify(after); // compact: a third smaller than indented, on every sync
         // Compared without the save time, which differs on every call.
         const unchanged = got.remote && JSON.stringify(after) === JSON.stringify(Object.assign({}, got.remote, { savedAt: after.savedAt }));
         if (unchanged) {

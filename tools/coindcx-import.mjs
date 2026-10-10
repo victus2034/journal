@@ -321,7 +321,7 @@ async function writeJournal(data, sha, message) {
   const res = await gh('/contents/' + SYNC_PATH, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, content: Buffer.from(JSON.stringify(data, null, 2)).toString('base64'), branch: BRANCH, sha })
+    body: JSON.stringify({ message, content: Buffer.from(JSON.stringify(data)).toString('base64'), branch: BRANCH, sha })
   });
   if (res.status === 409) return false;
   if (!res.ok) throw new Error(`GitHub refused to save ${SYNC_PATH} (${res.status}). The workflow needs "permissions: contents: write".`);
