@@ -368,6 +368,22 @@ async function backtestRun(seed) {
     await page.evaluate(() => setBtSec('trades'));
     await page.click('#btBody tr[data-bttrade]');
     check(/report rows?/.test(await page.innerText('#btBody')), 'clicking a trade did not list its report rows');
+    // A report trade gets its own review from its row, kept apart from the report and synced.
+    const btnId = await page.getAttribute('#btBody [data-repreview]', 'data-repreview');
+    await page.click('#btBody [data-repreview]');
+    await page.waitForSelector('#modalSheet:not(.hidden)');
+    await page.check('#mRule0'); await page.check('#mRule2');
+    await page.click('#modalSheetBody [data-tag="FOMO Entry"]'); await page.click('#modalSheetBody [data-tag="Trailed Stop Loss"]');
+    await page.fill('#mNotes', 'chased it'); await page.click('#mConfRow [data-conf="4"]');
+    await page.click('#modalSheetSaveBtn');
+    const rv = await page.evaluate(id => {
+      const t = reportTrades().find(x => x.id === id), sp = syncPayload(state), back = sanitizeState(JSON.parse(JSON.stringify(sp)));
+      const merged = mergeState(JSON.parse(JSON.stringify(state)), { accounts: state.accounts, trades: [], repReviews: { [id]: Object.assign({}, sp.repReviews[id], { notes: 'older', updatedAt: '2000-01-01' }) } });
+      return { rules: t && t.rules, mis: t && t.tagsMistakes, pos: t && t.tagsPositives, notes: t && t.notes, conf: t && t.confidence, btn: document.querySelector('#btBody [data-repreview="' + id + '"]').innerText,
+        synced: !!(sp.repReviews && sp.repReviews[id]), back: (back.repReviews[id] || {}).notes, merged: merged.repReviews[id].notes, net: t && t.pnl };
+    }, btnId);
+    check(JSON.stringify(rv.rules) === '[true,false,true,false,false]' && rv.mis[0] === 'FOMO Entry' && rv.pos[0] === 'Trailed Stop Loss' && rv.notes === 'chased it' && rv.conf === 4
+      && rv.btn.includes('2/5') && rv.synced && rv.back === 'chased it' && rv.merged === 'chased it', 'report trade review: ' + JSON.stringify(rv));
     await page.evaluate(() => { btPick('btPair', 'B-AAA_USDT'); });
     check((await page.evaluate(() => btShown.length)) === 2, 'pair filter did not narrow to 2 trades');
     await page.evaluate(() => { btPick('btPair', 'all'); });
