@@ -229,6 +229,7 @@ function dayPlus(day, n) { return cdxDay(Date.parse(day + 'T00:00:00Z') + n * DA
 function cdxOutOfRange(r) { return !!r && r.status === 400 && /range/i.test(String(r.body && (r.body.message || r.body.error) || '')); }
 async function readFills(fromMs) {
   const got = [], skipped = [], stop = cdxDay(fromMs);
+  let w = 0;
   for (const mc of ['INR', 'USDT']) {
     try {
       for (let to = cdxLocalTime(Date.now()).slice(0, 10), first = true; ; first = false) {
@@ -236,7 +237,8 @@ async function readFills(fromMs) {
         let r;
         try { r = await cdxPages(FILLS_PATH, { from_date: from, to_date: to, margin_currency_short_name: [mc] }); }
         catch (e) { if (!first && cdxOutOfRange(e)) break; throw e; }
-        r.rows.forEach(x => got.push([x, mc]));
+        r.rows.forEach(x => got.push([x, mc, w]));
+        w++;
         if (from <= stop) break;
         to = from;
       }
@@ -247,10 +249,13 @@ async function readFills(fromMs) {
   }
   if (skipped.length === 2) throw skipped[0];
   // Weeks share their end day, so a fill can come twice; each counts once.
-  const fills = [], seen = {}, bad = {};
+  // CoinDCX's fills carry no id, and two parts of one order can agree in every
+  // field: inside one week's answer a second such fill is a fill of its own.
+  const fills = [], seen = {}, bad = {}, twins = {};
   let unread = 0, fields = '';
-  got.forEach(([x, mc]) => {
+  got.forEach(([x, mc, w]) => {
     const f = cdxFill(x, mc);
+    if (f && !x.id) { const k = w + '|' + f.id, n = twins[k] = (twins[k] || 0) + 1; if (n > 1) f.id += '-' + n; }
     if (f) { if (!seen[f.id]) { seen[f.id] = 1; fills.push(f); } return; }
     const k = JSON.stringify(x);
     if (bad[k]) return;

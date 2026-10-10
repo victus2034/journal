@@ -481,8 +481,9 @@ async function coindcxRun(seed) {
   usdt[1].created_at = '2026-09-06T08:30:00.000Z'; // a time written out instead of milliseconds
   // Five days ago (whatever today is), two trades whose fills come in too: LNK
   // bought at 11.99 and 12.015 (12.00 on average) and sold at 12.05 and 12.15
-  // (12.10), and ORF shorted at 2.00, closed at 2.004 (its closing fill comes
-  // in later). One more fill 20 days back, which only the first read reaches.
+  // (12.10), and ORF shorted at 2.00, closed at 2.004 (its closing fills come
+  // in later: two halves of one order alike in every field, as CoinDCX's carry
+  // no id). One more fill 20 days back, which only the first read reaches.
   const D = new Date(Date.now() - 5 * 864e5 + 5.5 * 3600e3).toISOString().slice(0, 10);
   inr.push(tx('B-LNK_USDT', D + ' 10:05:00', 'default', 0, 1, 0), tx('B-LNK_USDT', D + ' 14:00:00', 'exit', 993, 1, 0));
   inr.push(tx('B-ORF_USDT', D + ' 11:00:00', 'default', 0, 0.5, 0), tx('B-ORF_USDT', D + ' 11:30:00', 'tpsl_exit', -20, 0.5, 0));
@@ -491,7 +492,7 @@ async function coindcxRun(seed) {
   const fills = [fill('B-LNK_USDT', D + ' 10:05:00', 'buy', '11.99', 60), fill('B-LNK_USDT', D + ' 10:05:00', 'buy', 12.015, '40', 400),
     fill('B-LNK_USDT', D + ' 14:00:00', 'sell', 12.05, 50), fill('B-LNK_USDT', D + ' 14:00:00', 'sell', 12.15, 50, 900),
     fill('B-ORF_USDT', D + ' 11:00:00', 'sell', 2, 50), fill('B-OLD_USDT', OLD + ' 09:00:00', 'buy', 1, 10)];
-  const orfClose = fill('B-ORF_USDT', D + ' 11:30:00', 'buy', 2.004, 50);
+  const orfClose = [fill('B-ORF_USDT', D + ' 11:30:00', 'buy', 2.004, 25), fill('B-ORF_USDT', D + ' 11:30:00', 'buy', 2.004, 25)];
   // One without a side: counted as unreadable, its field names shown.
   const noSide = Object.assign({}, fill('B-LNK_USDT', D + ' 12:00:00', 'buy', 12, 1));
   delete noSide.side;
@@ -751,13 +752,14 @@ async function coindcxRun(seed) {
       && JSON.stringify(fl.map(x => [x.at, x.sym, x.side, x.price, x.qty, x.cur]).sort()) === JSON.stringify([[D + ' 10:05:00', 'B-LNK_USDT', 'buy', 11.99, 60, 'INR'], [D + ' 10:05:00', 'B-LNK_USDT', 'buy', 12.015, 40, 'INR'],
         [D + ' 11:00:00', 'B-ORF_USDT', 'sell', 2, 50, 'INR'], [D + ' 14:00:00', 'B-LNK_USDT', 'sell', 12.05, 50, 'INR'], [D + ' 14:00:00', 'B-LNK_USDT', 'sell', 12.15, 50, 'INR'], [OLD + ' 09:00:00', 'B-OLD_USDT', 'buy', 1, 10, 'INR']].sort()), 'fills on the file: ' + JSON.stringify(cdxRec).slice(-700));
     // With them, the alert LNK was bought off finds the trade: its side, entry and
-    // exit from the fills, dated when it opened, and R against the alert's stop
-    // (₹991 is $9.98 at ₹99.30; 100 × the 0.10 to the stop is $10 of risk).
+    // exit from the fills, dated when it opened, and R in the alert's own R: its
+    // entry 12.11 to its stop 12.01, on the trade's size (₹991 is $9.98 at ₹99.30;
+    // 100 × 0.10 is $10). Bought at 12.00, past that stop, it still has an R.
     // ORF (a short, its close not in yet) has no prices, so no alert can claim it.
     const sigs = () => page.evaluate(([D]) => {
       const sg = (id, sym, time, side, entry, stop) => ({ id, key: 'tl|' + sym, kind: 'trendline', date: D, time, symbol: sym, side, score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
         filled: true, outcome: '+2R', resultR: 1.9, hasReportR: true, price: entry, stop, entry });
-      state.signals = [sg('sg-lnk', 'LNKUSD', '09:50', 'long', 12, 11.9), sg('sg-orf', 'ORFUSD', '10:30', 'long', 2, 1.98),
+      state.signals = [sg('sg-lnk', 'LNKUSD', '09:50', 'long', 12.11, 12.01), sg('sg-orf', 'ORFUSD', '10:30', 'long', 2, 1.98),
         Object.assign(sg('sg-lnk-zone', 'LNKUSD', '09:55', 'long', 12, 11.9), { kind: undefined, key: 'zone|LNKUSD' })];
       // "Fill stops from signals" only touches journal trades: a CoinDCX trade has no stop of its own to fill.
       const said = [], realToast = toast;
@@ -920,10 +922,10 @@ async function coindcxRun(seed) {
 
     // ORF's closing fill comes in on its own: one commit; synced, ORF has its prices
     // and shows as a trade no alert explains (a short; the only ORF alert is a long).
-    fills.push(orfClose);
-    const F2 = F.replace('5 fills', '6 fills');
+    fills.push(...orfClose);
+    const F2 = F.replace('5 fills', '7 fills');
     r = await runImport();
-    check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX trade prices"]' && r.out.endsWith(F2) && stored().backtest.files.find(f => f.id === 'cdx-api').fills.length === 7, 'a new fill: ' + JSON.stringify(r));
+    check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX trade prices"]' && r.out.endsWith(F2) && stored().backtest.files.find(f => f.id === 'cdx-api').fills.length === 8, 'new fills: ' + JSON.stringify(r));
     s = await sync();
     v = await sigs();
     check(s.ok && /ORF\/USDT SHORT 2 .*No alert/.test(v.orphans) && !v.orf && v.strip.includes('1 taken by you'), 'a CoinDCX trade with no alert: ' + JSON.stringify(v));
@@ -948,17 +950,18 @@ async function coindcxRun(seed) {
     mock.fillsMode = 'none';
     r = await runImport();
     mock.fillsMode = '';
-    check(r.code === 0 && r.out.endsWith(' · trade prices not read (CoinDCX answered 404: Not found)') && !r.puts.length && stored().backtest.files.find(f => f.id === 'cdx-api').fills.length === 7, 'fills not shown: ' + JSON.stringify(r));
+    check(r.code === 0 && r.out.endsWith(' · trade prices not read (CoinDCX answered 404: Not found)') && !r.puts.length && stored().backtest.files.find(f => f.id === 'cdx-api').fills.length === 8, 'fills not shown: ' + JSON.stringify(r));
     // Even this week's dates refused: said with CoinDCX's words, nothing written.
     mock.fillsMode = 'range';
     r = await runImport();
     mock.fillsMode = '';
     check(r.code === 0 && r.out.endsWith(' · trade prices not read (CoinDCX answered 400: From Date not in range)') && !r.puts.length, 'fill dates refused: ' + JSON.stringify(r));
-    // An answer that ignores the dates (every fill for every week) still keeps each one once.
+    // An answer that ignores the dates (every fill for every week) still keeps each
+    // one once, ORF's two alike halves included.
     mock.fillsMode = 'allDates';
     r = await runImport();
     mock.fillsMode = '';
-    check(r.code === 0 && r.out.endsWith(F2.replace('6 fills', '7 fills')) && !r.puts.length, 'fill dates ignored: ' + JSON.stringify(r));
+    check(r.code === 0 && r.out.endsWith(F2.replace('7 fills', '8 fills')) && !r.puts.length, 'fill dates ignored: ' + JSON.stringify(r));
 
     // Every tab still draws with the API rows in.
     for (const tab of TABS) {
