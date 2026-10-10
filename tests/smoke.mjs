@@ -207,6 +207,24 @@ async function currencyRun(seed) {
       return { rate: s.accounts.find(a => a.id === 'acc_cry').fxRate, cur: (s.goals.find(g => g.title === 'New dollar goal') || {}).cur, bad: 'fxRate' in bad };
     });
     check(kept.rate === 90 && kept.cur === 'USD' && !kept.bad, 'sanitize: ' + JSON.stringify(kept));
+    // Goals planned for next week / next month wait for their window, then run like any other.
+    for (const [pick, period] of [['next_week', 'week'], ['next_month', 'month']]) {
+      await page.evaluate(p => { openGoal('new'); document.getElementById('gTitle').value = 'Plan ' + p; document.getElementById('gPeriod').value = p; }, pick);
+      await page.click('#modalSheetSaveBtn');
+      const ahead = await page.evaluate(([p, per]) => {
+        const g = state.goals.find(x => x.title === 'Plan ' + p), d = new Date();
+        const want = per === 'week' ? iso(new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7) + 7)) : iso(new Date(d.getFullYear(), d.getMonth() + 1, 1));
+        state.ui.goalIdx = state.goals.indexOf(g); updateGoalDisplays();
+        openGoal(g.id); const sel = document.getElementById('gPeriod').value; closeModalSheet();
+        const past = Object.assign({}, g, { startsOn: '2000-01-03' });
+        return { period: g.period, startsOn: g.startsOn, want, start: iso(goalWindowStart(g)), end: iso(goalPeriodEnd(g)), n: goalProgress(g).n,
+          days: goalDaysLeft(g), up: goalUpcoming(g), title: document.getElementById('goalTitle').innerText, sel,
+          pastStart: iso(goalWindowStart(past)), nowStart: iso(goalWindowStart(per)), kept: (sanitizeState(JSON.parse(JSON.stringify(state))).goals.find(x => x.id === g.id) || {}).startsOn };
+      }, [pick, period]);
+      const endOk = period === 'week' ? ahead.end > ahead.start && (Date.parse(ahead.end) - Date.parse(ahead.start)) === 6 * 864e5 : ahead.end.slice(0, 7) === ahead.start.slice(0, 7);
+      check(ahead.period === period && ahead.startsOn === ahead.want && ahead.start === ahead.want && endOk && ahead.n === 0 && ahead.up && ahead.days >= 5 && ahead.title.includes('starts') && ahead.sel === pick && ahead.pastStart === ahead.nowStart && ahead.kept === ahead.want, pick + ' goal: ' + JSON.stringify(ahead));
+    }
+    check(!('startsOn' in await page.evaluate(() => cleanGoal({ id: 'z', period: 'year', startsOn: '2099-01-01' }))) && !('startsOn' in await page.evaluate(() => cleanGoal({ id: 'z', period: 'week', startsOn: 'soon' }))), 'a bad start date survived the clean-up');
     // Every tab, every book, both currencies: no errors and no NaN on screen.
     for (const cur of ['INR', 'USD']) for (const acc of ['all', 'acc_nse', 'acc_cry']) for (const tab of TABS) {
       const bad = await page.evaluate(([c, a, t]) => { state.ui.allCur = c; state.ui.account = a; switchTab(t); renderAll(); const m = document.getElementById('view-' + t).innerText.match(/.{0,40}(NaN|undefined|Infinity%).{0,40}/); return m ? m[0] : ''; }, [cur, acc, tab]);

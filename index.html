@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.98">
+  <meta name="app-version" content="2026-10-11.99">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1504,6 +1504,7 @@
       o.target = cNum(g.target) > 0 ? cNum(g.target) : 20;
       o.period = ["day", "week", "month", "quarter", "year"].indexOf(g.period) !== -1 ? g.period : "month";
       o.accountId = cText(g.accountId || "all", 40);
+      if (typeof g.startsOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(g.startsOn) && (o.period === "week" || o.period === "month")) o.startsOn = g.startsOn; else delete o.startsOn; // planned ahead: waits for this day
       if (g.cur === "INR" || g.cur === "USD") o.cur = g.cur; else delete o.cur; // the currency its money targets were typed in
       // A goal is a set of optional targets. Older goals carried one metric and one target.
       const GK = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance"];
@@ -2030,25 +2031,38 @@
       save();
       renderDashboard();
     }
-    // Last calendar day of the goal's planning window.
-    function goalPeriodEnd(period) {
+    // A goal saved for next week or next month waits until its window opens:
+    // until then it is measured over that coming window, afterwards like any other.
+    function goalUpcoming(g) { return !!(g && typeof g === "object" && g.startsOn && g.startsOn > iso(new Date())); }
+    function goalRef(p) { return goalUpcoming(p) ? parseDay(p.startsOn) : new Date(); }
+    // First day of next week (Monday) or next month, for a goal planned ahead.
+    function nextWindowStart(period) {
       const d = new Date();
+      if (period === "week") return new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7) + 7);
+      return new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    }
+    // Last calendar day of the goal's planning window (takes a goal, or a bare period).
+    function goalPeriodEnd(p) {
+      const period = typeof p === "string" ? p : p.period, d = goalRef(p);
       if (period === "day") return new Date(d.getFullYear(), d.getMonth(), d.getDate());
       if (period === "week") return new Date(d.getFullYear(), d.getMonth(), d.getDate() + ((7 - d.getDay()) % 7)); // this Sunday
       if (period === "year") return new Date(d.getFullYear(), 11, 31);
       if (period === "quarter") return new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3 + 3, 0);
       return new Date(d.getFullYear(), d.getMonth() + 1, 0);
     }
-    function goalDaysLeft(period) { return period === "day" ? 1 : weekdaysLeft(goalPeriodEnd(period)); }
-    // Weekdays from today through the end date, today included.
-    function weekdaysLeft(end) {
+    function goalDaysLeft(p) {
+      if ((typeof p === "string" ? p : p.period) === "day") return 1;
+      return weekdaysLeft(goalPeriodEnd(p), goalUpcoming(p) ? goalWindowStart(p) : null);
+    }
+    // Weekdays from today (or a later start) through the end date, both included.
+    function weekdaysLeft(end, from) {
       let n = 0;
-      const d = new Date(); d.setHours(0, 0, 0, 0);
+      const d = from ? new Date(from) : new Date(); d.setHours(0, 0, 0, 0);
       while (d <= end) { const w = d.getDay(); if (w !== 0 && w !== 6) n++; d.setDate(d.getDate() + 1); }
       return n;
     }
-    function goalWindowStart(period) {
-      const d = new Date();
+    function goalWindowStart(p) {
+      const period = typeof p === "string" ? p : p.period, d = goalRef(p);
       if (period === "day") return new Date(d.getFullYear(), d.getMonth(), d.getDate());
       if (period === "week") return new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)); // this Monday
       if (period === "year") return new Date(d.getFullYear(), 0, 1);
@@ -2071,7 +2085,7 @@
     }
     const MONEY_GOALS = ["net_pnl", "max_loss", "balance"];
     function goalProgress(g) {
-      const start = iso(goalWindowStart(g.period)), end = iso(goalPeriodEnd(g.period));
+      const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
       const book = g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId) ? g.accountId : null;
       const cur = viewCur();
       const ts = allTrades().filter(t => t.date >= start && t.date <= end
@@ -2110,7 +2124,7 @@
     function goalChipStatus(g0, key, gp) {
       const cur = gp.cur, T = goalTargetIn(g0, key, cur);
       const clamp01 = v => Math.max(0, Math.min(100, v));
-      const start = iso(goalWindowStart(g0.period)), end = iso(goalPeriodEnd(g0.period));
+      const start = iso(goalWindowStart(g0)), end = iso(goalPeriodEnd(g0));
       const inWin = rows => rows.filter(x => x.t.date >= start && x.t.date <= end);
       let label, text, pct, tone;
       if (key === "net_pnl") { label = "Profit"; text = signedMoney(gp.net, cur, 2) + " / " + money(T, cur, 0); pct = clamp01(gp.net / T * 100); tone = gp.net >= T ? "ok" : gp.net < 0 ? "bad" : "mid"; }
@@ -2160,7 +2174,7 @@
     // Share of trades in the goal's window that broke none of the five rules.
     function goalRuleStats(g, cur) {
       const ids = goalBooksOf(g, cur).map(a => a.id);
-      const start = iso(goalWindowStart(g.period)), end = iso(goalPeriodEnd(g.period));
+      const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
       // Balances and "after a loss" need the trades before the window too, so analyse all and cut afterwards.
       const rows = analyzeTrades(allTrades().filter(t => ids.indexOf(t.accountId) !== -1)).filter(x => x.t.date >= start && x.t.date <= end);
       const firstSig = (state.signals || []).map(x => x.date).sort()[0] || null;
@@ -2172,7 +2186,7 @@
     // Goals counted in days or percent instead of money.
     function renderCountGoal(g, gp) {
       const $ = id => document.getElementById(id);
-      const left = goalDaysLeft(g.period);
+      const left = goalDaysLeft(g);
       const t = g.target;
       const lbl1 = $('goalLbl1'), lbl2 = $('goalLbl2');
       $('goalDaysLeft').innerText = left ? left + ' day' + (left === 1 ? '' : 's') : 'none';
@@ -2235,7 +2249,7 @@
       } else if (g.metric === 'balance') {
         const cur = gp.cur, books = goalBooksOf(g);
         const now = sum(books.map(a => balIn(a, cur)));
-        const from = iso(goalWindowStart(g.period));
+        const from = iso(goalWindowStart(g));
         const start = sum(books.map(a => balanceAtStart(a, from) * fxk(a, cur)));
         const span = t - start;
         const pd = span > 0 ? Math.max(0, Math.min(100, Math.round((now - start) / span * 100))) : (now >= t ? 100 : 0);
@@ -2286,7 +2300,7 @@
         $('goalRunRate').innerText = slip || 'none';
         $('goalToGo').title = 'Revenge = a trade within 15 minutes of a loss. Size-up = over 1.5 times the size of the trade before, after a loss.';
       } else if (g.metric === 'avg_risk') {
-        const start = iso(goalWindowStart(g.period)), end = iso(goalPeriodEnd(g.period));
+        const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
         const all = goalRows(g, gp.cur).filter(x => x.t.date >= start && x.t.date <= end);
         const r = all.map(x => x.riskPct).filter(v => v != null), a = r.length ? avg(r) : null;
         $('goalCurrent').innerText = a == null ? '—' : a.toFixed(2) + '%';
@@ -2318,7 +2332,7 @@
       document.getElementById('goalNavLabel').innerText = `${idx + 1} / ${state.goals.length}`;
       const l1 = document.getElementById('goalLbl1'), l2 = document.getElementById('goalLbl2');
       renderGoalChips(g0, gp);
-      if (COUNT_GOALS.indexOf(g.metric) !== -1) { renderCountGoal(g, gp); return; }
+      if (COUNT_GOALS.indexOf(g.metric) !== -1) { renderCountGoal(g, gp); markUpcomingGoal(g); return; }
       if (l1) l1.innerText = 'To go today'; if (l2) l2.innerText = 'If you miss today';
 
       const target = g.target || 1;
@@ -2339,7 +2353,7 @@
         return;
       }
       const remaining = Math.max(0, g.target - s.net);
-      const left = goalDaysLeft(g.period);
+      const left = goalDaysLeft(g);
       document.getElementById('goalDaysLeft').innerText = left ? `${left} day${left === 1 ? '' : 's'}` : 'none';
       if (remaining === 0) {
         document.getElementById('goalToGo').innerText = 'Goal reached';
@@ -2359,6 +2373,16 @@
         toGo.innerHTML = `${esc(money(remaining / left, cur))} / day${share(remaining / left)}`; toGo.title = tip;
         runRate.innerHTML = left > 1 ? `${esc(money(remaining / (left - 1), cur))} / day${share(remaining / (left - 1))}` : "Last day"; runRate.title = tip;
       }
+      markUpcomingGoal(g);
+    }
+    // A goal planned for next week or month: say when it starts instead of "today".
+    function markUpcomingGoal(g) {
+      if (!goalUpcoming(g)) return;
+      const $ = id => document.getElementById(id), day = fmtDay(g.startsOn), left = goalDaysLeft(g);
+      $('goalTitle').innerText = g.title + ' · starts ' + day;
+      $('goalPct').innerText = 'Starts ' + day;
+      $('goalDaysLeft').innerText = left + ' day' + (left === 1 ? '' : 's') + ' from ' + day;
+      if (MONEY_GOALS.indexOf(g.metric) !== -1 && g.metric !== 'max_loss') { $('goalLbl1').innerText = 'Per day from ' + day; $('goalLbl2').innerText = 'If you miss a day'; }
     }
 
     // Two trades identical in every field the exchange records are the same
@@ -4419,7 +4443,7 @@
           <div>
             <label class="text-slate-400 block mb-1">Planning Window</label>
             <select id="gPeriod" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
-              ${[["day", "Today"], ["week", "This Week"], ["month", "This Month"], ["quarter", "This Quarter"], ["year", "This Year"]].map(o => `<option value="${o[0]}" ${(existing ? existing.period : "month") === o[0] ? "selected" : ""}>${o[1]}</option>`).join("")}
+              ${[["day", "Today"], ["week", "This Week"], ["next_week", "Next Week"], ["month", "This Month"], ["next_month", "Next Month"], ["quarter", "This Quarter"], ["year", "This Year"]].map(o => `<option value="${o[0]}" ${(existing ? (goalUpcoming(existing) ? "next_" : "") + existing.period : "month") === o[0] ? "selected" : ""}>${o[1]}</option>`).join("")}
             </select>
           </div>
           <div>
@@ -4445,7 +4469,11 @@
         if (!Object.keys(targets).length) targets.net_pnl = 20;
         const first = GOAL_ORDER.filter(k => targets[k] != null)[0];
         const metric = first;
-        const period = document.getElementById('gPeriod').value;
+        const pick = document.getElementById('gPeriod').value;
+        // Next week / next month: saved now, counted from the day that window opens.
+        const ahead = pick === "next_week" || pick === "next_month";
+        const period = ahead ? pick.slice(5) : pick;
+        const startsOn = ahead ? iso(nextWindowStart(period)) : null;
         const accountId = document.getElementById('gAccount').value;
         // A book in the other currency: its money targets are turned into that currency at its rate.
         const bk = accountId !== "all" ? state.accounts.find(a => a.id === accountId) : null;
@@ -4457,11 +4485,14 @@
           existing.metric = metric;
           existing.targets = targets;
           existing.period = period;
+          if (startsOn) existing.startsOn = startsOn; else delete existing.startsOn;
           existing.accountId = accountId;
           existing.cur = cur;
           stamp(existing);
         } else {
-          state.goals.push(stamp({ id: uid(), title, target, metric, targets, period, accountId, cur }));
+          const ng = { id: uid(), title, target, metric, targets, period, accountId, cur };
+          if (startsOn) ng.startsOn = startsOn;
+          state.goals.push(stamp(ng));
         }
         save();
         renderAll();
@@ -5505,13 +5536,13 @@
       // goal select + auto-filled fields
       const sel = document.getElementById('gpGoal');
       if (sel && (force || document.activeElement !== sel)) {
-        sel.innerHTML = gpMoneyGoals().map(x => '<option value="' + esc(x.id) + '">' + esc(x.title) + ' (' + esc(money(x.target, goalProgress(x).cur, 0)) + ' ' + esc(x.period) + ')</option>').join('') + '<option value="custom">Custom target</option>';
+        sel.innerHTML = gpMoneyGoals().map(x => '<option value="' + esc(x.id) + '">' + esc(x.title) + ' (' + esc(money(x.target, goalProgress(x).cur, 0)) + ' ' + (goalUpcoming(x) ? 'next ' : '') + esc(x.period) + ')</option>').join('') + '<option value="custom">Custom target</option>';
         sel.value = g ? g.id : "custom";
       }
       let need, days;
       if (g) {
         need = Math.max(0, (g.target || 0) - goalProgress(g).net);
-        days = goalDaysLeft(g.period);
+        days = goalDaysLeft(g);
         if (need > 0) need = +need.toFixed(2);
       } else { need = num(s.gpTarget); days = Math.floor(num(s.gpDays)); }
       const setv = (id, v, locked) => { const e = document.getElementById(id); if (!e) return; if (document.activeElement !== e) e.value = v; e.disabled = !!locked; e.classList.toggle('opacity-60', !!locked); };
