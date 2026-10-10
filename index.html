@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-10.95">
+  <meta name="app-version" content="2026-10-10.97">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -110,7 +110,6 @@
           <button onclick="switchTab('dashboard')" id="navTab-dashboard" class="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-terminal-card border border-terminal-borderLight text-amber-400 transition-all">Dashboard</button>
           <button onclick="switchTab('signals')" id="navTab-signals" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Signals</button>
           <button onclick="switchTab('analysis')" id="navTab-analysis" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Analysis</button>
-          <button onclick="switchTab('backtest')" id="navTab-backtest" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Backtest</button>
           <button onclick="switchTab('calculator')" id="navTab-calculator" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Calculator</button>
           <button onclick="switchTab('data')" id="navTab-data" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Sync &amp; Settings</button>
         </nav>
@@ -129,7 +128,6 @@
     <button type="button" class="mnav-btn" data-tab="signals" onclick="switchTab('signals')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Signals</button>
     <button type="button" class="mnav-btn" data-tab="analysis" onclick="switchTab('analysis')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 19V9m6 10V5m6 14v-7m4 7H2"/></svg>Analysis</button>
     <button type="button" class="mnav-add" onclick="openTrade(null)" aria-label="Log trade"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg></button>
-    <button type="button" class="mnav-btn" data-tab="backtest" onclick="switchTab('backtest')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v16h16M8 15l3-4 3 2 5-6"/></svg>Backtest</button>
     <button type="button" class="mnav-btn" data-tab="calculator" onclick="switchTab('calculator')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 3h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2zm1 4h8M8 11h2m4 0h2m-8 4h2m4 0h2"/></svg>Calc</button>
     <button type="button" class="mnav-btn" data-tab="data" onclick="switchTab('data')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15a3 3 0 100-6 3 3 0 000 6zm7.4-3a7.4 7.4 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 00-2-1.2L14.5 2h-5l-.4 2.6a7.6 7.6 0 00-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 000 2.4l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 002 1.2l.4 2.6h5l.4-2.6a7.6 7.6 0 002-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg>Settings</button>
   </nav>
@@ -816,22 +814,36 @@
       <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
         <div>
           <h3 class="text-sm font-bold text-white uppercase tracking-wider">Trade Analysis</h3>
-          <p class="text-slate-400 text-[11px] mt-0.5">Every trade checked against your balance at that moment, and what went wrong.</p>
+          <p class="text-slate-400 text-[11px] mt-0.5">Every trade checked against your balance at that moment, and what went wrong. Pick a broker to see its results on their own.</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Broker</span>
+          <div id="anBrokerBar" class="flex flex-wrap gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
+          <button type="button" onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX" class="px-2.5 py-1 rounded-md border border-terminal-border text-[11px] text-slate-300 hover:text-white hover:border-amber-500">+ Upload broker report</button>
+          <input type="file" id="btFileInput" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" class="hidden" onchange="handleBacktestFile(this)">
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Period</span>
           <div id="anPeriodBar" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
+        <div id="anMktRow" class="flex flex-wrap items-center gap-2">
           <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">BTC day</span>
           <div id="anMktBar"></div>
         </div>
-        <details class="text-[11px] text-slate-500">
+        <details id="anHowLive" class="text-[11px] text-slate-500">
           <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How this is worked out</summary>
           <p class="leading-relaxed mt-1.5" id="anAssumptions"></p>
         </details>
+        <details id="anHowReport" class="hidden text-[11px] text-slate-500">
+          <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How trades are built from a broker report</summary>
+          <p class="leading-relaxed mt-1.5">The report lists events, not trades: orders, and funding paid or received every few hours while a position is open. Rows are grouped by pair in time order. An order with no P&amp;L (only a fee) opens a trade or adds to it; an order with P&amp;L closes part or all of it. The next fee-only order after a close starts a new trade. Funding goes to the trade open on that pair at the time. Net P&amp;L is the report's own net column (gross plus settlement, less fees). A trade with no closing order yet counts as open and stays out of the win rate. Times are as written in the report. Closed trades also count on the Dashboard, in goals and in the book's balance, on the day they closed; open ones wait for their close.</p>
+        </details>
       </div>
 
+      <!-- One line per broker: journal books and uploaded broker reports -->
+      <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
+
+      <div id="anLive" class="space-y-4">
       <!-- Headline numbers -->
       <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="anStrip"></section>
 
@@ -925,96 +937,89 @@
       <section data-ansec="market" class="space-y-4 hidden">
         <div class="bg-terminal-card border border-terminal-border rounded-xl p-4" id="mktCalAnalysis"></div>
       </section>
-    </div>
+      </div>
 
-    <!-- TAB: BACKTEST — trades from an uploaded Excel / CSV report, kept apart from the journal -->
-    <div id="view-backtest" class="hidden space-y-4">
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div class="min-w-0">
-            <h3 class="text-sm font-bold text-white uppercase tracking-wider">Backtest</h3>
-            <p class="text-slate-400 text-[11px] mt-0.5">Trades from an Excel or CSV trade report (such as a CoinDCX futures report). They stay here, apart from your journal, so they never change your live stats.</p>
+      <!-- A broker from an uploaded report (CoinDCX ...): trades rebuilt from its rows -->
+      <div id="anReport" class="hidden space-y-4">
+        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-2">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 id="btTitle" class="text-sm font-bold text-white uppercase tracking-wider">Broker report</h3>
+            <span id="btSub" class="text-slate-500 text-[11px]"></span>
           </div>
-          <button type="button" onclick="pickBacktestFile()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400 shrink-0">Upload Excel / CSV</button>
-          <input type="file" id="btFileInput" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" class="hidden" onchange="handleBacktestFile(this)">
+          <div id="btFilters" class="flex flex-wrap items-center gap-2"></div>
         </div>
-        <div id="btFilters" class="flex flex-wrap items-center gap-2"></div>
-        <details class="text-[11px] text-slate-500">
-          <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How trades are built from the report</summary>
-          <p class="leading-relaxed mt-1.5">The report lists events, not trades: orders, and funding paid or received every few hours while a position is open. Rows are grouped by pair in time order. An order with no P&amp;L (only a fee) opens a trade or adds to it; an order with P&amp;L closes part or all of it. The next fee-only order after a close starts a new trade. Funding goes to the trade open on that pair at the time. Net P&amp;L is the report's own net column (gross plus settlement, less fees). A trade with no closing order yet counts as open and stays out of the win rate. Times are as written in the report.</p>
-        </details>
-      </div>
 
-      <div id="btEmpty" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-6 font-mono text-xs text-center space-y-2">
-        <p class="text-slate-200 font-bold">No backtest trades yet</p>
-        <p class="text-slate-400 text-[11px] leading-relaxed">Upload an Excel (.xlsx) or CSV trade report. It needs a header row with a time column, a pair or symbol column and a P&amp;L column; fee, funding type and transaction ID columns are used when present. Uploading the same report twice adds nothing twice.</p>
-      </div>
+        <div id="btEmpty" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-6 font-mono text-xs text-center space-y-2">
+          <p class="text-slate-200 font-bold">No trades in this report yet</p>
+          <p class="text-slate-400 text-[11px] leading-relaxed">Upload an Excel (.xlsx) or CSV trade report. It needs a header row with a time column, a pair or symbol column and a P&amp;L column; fee, funding type and transaction ID columns are used when present. Uploading the same report twice adds nothing twice.</p>
+        </div>
 
-      <div id="btMain" class="space-y-4">
-        <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="btStrip"></section>
-        <div id="btCheck" class="font-mono text-[11px]"></div>
-        <div id="btSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+        <div id="btMain" class="space-y-4">
+          <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="btStrip"></section>
+          <div id="btCheck" class="font-mono text-[11px]"></div>
+          <div id="btSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
 
-        <section data-btsec="overview" class="space-y-4">
-          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
-            <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
-              <h3 class="font-bold text-white uppercase tracking-wider">Equity curve</h3>
-              <span class="text-slate-500 text-[11px]">Running net P&amp;L after each closed trade.</span>
+          <section data-btsec="overview" class="space-y-4">
+            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
+              <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                <h3 class="font-bold text-white uppercase tracking-wider">Equity curve</h3>
+                <span class="text-slate-500 text-[11px]">Running net P&amp;L after each closed trade.</span>
+              </div>
+              <div class="relative" style="height:260px"><canvas id="btEquityChart"></canvas></div>
             </div>
-            <div class="relative" style="height:260px"><canvas id="btEquityChart"></canvas></div>
-          </div>
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
-            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-              <h3 class="font-bold text-white uppercase tracking-wider mb-1">By pair</h3>
-              <p class="text-slate-500 text-[11px] mb-3">Closed trades per pair. Click one to filter by it.</p>
-              <div id="btPairs" class="space-y-2"></div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
+              <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
+                <h3 class="font-bold text-white uppercase tracking-wider mb-1">By pair</h3>
+                <p class="text-slate-500 text-[11px] mb-3">Closed trades per pair. Click one to filter by it.</p>
+                <div id="btPairs" class="space-y-2"></div>
+              </div>
+              <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
+                <h3 class="font-bold text-white uppercase tracking-wider mb-1">By day</h3>
+                <p class="text-slate-500 text-[11px] mb-3">Closed trades by the day they closed.</p>
+                <div id="btDays" class="space-y-2"></div>
+              </div>
             </div>
-            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-              <h3 class="font-bold text-white uppercase tracking-wider mb-1">By day</h3>
-              <p class="text-slate-500 text-[11px] mb-3">Closed trades by the day they closed.</p>
-              <div id="btDays" class="space-y-2"></div>
-            </div>
-          </div>
-        </section>
+          </section>
 
-        <section data-btsec="trades" class="space-y-4 hidden">
-          <div class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs">
-            <div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-terminal-border">
-              <h3 class="font-bold text-white uppercase tracking-wider">Trade by trade</h3>
-              <span class="text-slate-500 text-[11px]">Newest first. Click a trade to see its report rows.</span>
+          <section data-btsec="trades" class="space-y-4 hidden">
+            <div class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs">
+              <div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-terminal-border">
+                <h3 class="font-bold text-white uppercase tracking-wider">Trade by trade</h3>
+                <span class="text-slate-500 text-[11px]">Newest first. Click a trade to see its report rows.</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs font-mono">
+                  <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border">
+                    <tr>
+                      <th class="py-2.5 px-3">Opened</th>
+                      <th class="py-2.5 px-3">Pair</th>
+                      <th class="py-2.5 px-3 text-right">Net P&amp;L</th>
+                      <th class="py-2.5 px-3">Closed</th>
+                      <th class="py-2.5 px-3 text-right">Held</th>
+                      <th class="py-2.5 px-3 text-right">Gross</th>
+                      <th class="py-2.5 px-3 text-right">Fees</th>
+                      <th class="py-2.5 px-3 text-right">Funding</th>
+                      <th class="py-2.5 px-3">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="btBody" class="text-slate-300"></tbody>
+                </table>
+              </div>
+              <div id="btMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
             </div>
-            <div class="overflow-x-auto">
-              <table class="w-full text-left text-xs font-mono">
-                <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border">
-                  <tr>
-                    <th class="py-2.5 px-3">Opened</th>
-                    <th class="py-2.5 px-3">Pair</th>
-                    <th class="py-2.5 px-3 text-right">Net P&amp;L</th>
-                    <th class="py-2.5 px-3">Closed</th>
-                    <th class="py-2.5 px-3 text-right">Held</th>
-                    <th class="py-2.5 px-3 text-right">Gross</th>
-                    <th class="py-2.5 px-3 text-right">Fees</th>
-                    <th class="py-2.5 px-3 text-right">Funding</th>
-                    <th class="py-2.5 px-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody id="btBody" class="text-slate-300"></tbody>
-              </table>
-            </div>
-            <div id="btMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
-          </div>
-        </section>
+          </section>
 
-        <section data-btsec="files" class="space-y-4 hidden">
-          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
-            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
-              <h3 class="font-bold text-white uppercase tracking-wider">Uploaded files</h3>
-              <button type="button" onclick="deleteAllBacktest()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded">Delete all backtest data</button>
+          <section data-btsec="files" class="space-y-4 hidden">
+            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
+                <h3 class="font-bold text-white uppercase tracking-wider">Uploaded files</h3>
+                <button type="button" id="btDeleteAll" onclick="deleteAllBacktest()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded">Delete this broker's report data</button>
+              </div>
+              <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
+              <div id="btFiles" class="space-y-2"></div>
             </div>
-            <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
-            <div id="btFiles" class="space-y-2"></div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
     </div>
 
@@ -1131,7 +1136,7 @@
         <div class="flex flex-wrap gap-2">
           <button onclick="downloadBackupFile()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Save Backup File (.JSON)</button>
           <button onclick="exportTradesCsv()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Export Trades (.CSV)</button>
-          <button onclick="pickBacktestFile()" title="Upload an Excel or CSV trade report. Its trades go to the Backtest tab, not your journal." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Upload Excel to Backtest (.XLSX / .CSV)</button>
+          <button onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX. Its trades go into a book for that broker and count on the Dashboard." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Upload Broker Report (.XLSX / .CSV)</button>
           <button onclick="triggerRestoreFileInput()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Open Backup File</button>
           <input type="file" id="restoreFileInput" accept=".json" class="hidden" onchange="handleRestoreFile(this)">
           <button onclick="copyBackupToClipboard()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Copy Backup to Clipboard</button>
@@ -1469,6 +1474,7 @@
       o.maxRiskPct = pos(a.maxRiskPct, 1); o.dailyLossLimit = pos(a.dailyLossLimit, 0);
       o.maxTradesPerDay = pos(a.maxTradesPerDay, 5); o.defaultLeverage = pos(a.defaultLeverage, 1);
       o.maxNotionalX = pos(a.maxNotionalX, 3); // biggest position, as a multiple of balance, before it counts as oversized
+      if (a.reportBroker !== undefined) { o.reportBroker = cText(a.reportBroker, 40).trim(); if (!o.reportBroker) delete o.reportBroker; }
       return o;
     }
     function cleanGoal(g) {
@@ -1543,8 +1549,10 @@
         const r = {}; Object.keys(s.reviewsAt).forEach(k => { if (DATE_RE.test(k) && typeof s.reviewsAt[k] === "string") r[k] = s.reviewsAt[k].slice(0, 30); }); s.reviewsAt = r;
       } else delete s.reviewsAt;
       if (!s.accounts.length) s.accounts = defaultAccounts();
+      ensureReportBooks(s);
       if (!s.ui || typeof s.ui !== "object") s.ui = {};
       s.ui.account = cText(s.ui.account || "all", 40);
+      if (s.ui.account !== "all" && !s.accounts.some(a => a.id === s.ui.account)) s.ui.account = "all";
       s.ui.month = cText(s.ui.month || "current", 10);
       return s;
     }
@@ -1643,6 +1651,7 @@
     function toMin(t) { if (!t) return null; const p = t.split(":"); return (+p[0]) * 60 + (+p[1]); }
     function hhmm(m) { return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); }
     function heldMins(t) {
+      if (t.rep) return t.held;
       const a = toMin(t.time), b = toMin(t.exitTime);
       if (a == null || b == null) return null;
       // Newer imports record the exit day, so a hold of more than a day is exact.
@@ -1665,7 +1674,8 @@
       for (let i = 0; i < state.accounts.length; i++) if (state.accounts[i].id === id) return state.accounts[i];
       return state.accounts[0] || { name: "General", currency: "USD", startBalance: 5000, market: "crypto", defaultLeverage: 10 };
     }
-    function selected() { return state.ui.account || "all"; }
+    // A book removed elsewhere (a deleted broker report, a sync) falls back to All.
+    function selected() { const id = state.ui.account || "all"; return id === "all" || state.accounts.some(a => a.id === id) ? id : "all"; }
     function isAll() { return selected() === "all"; }
 
     // A stop only counts if it sits on the losing side of the entry (below a
@@ -1675,6 +1685,7 @@
       return isFinite(s) && s > 0 && isFinite(e) && (t.direction === "long" ? s < e : s > e);
     }
     function derive(t) {
+      if (t.rep) return { pnl: t.pnl, risk: 0, r: null }; // from a broker report: its net, no prices or size
       const dir = t.direction === "long" ? 1 : -1;
       const pnl = (t.exit - t.entry) * t.qty * dir - (t.fees || 0);
       const risk = stopOk(t) ? Math.abs(t.entry - t.stop) * t.qty : 0;
@@ -1691,9 +1702,13 @@
       const x = a.date + " " + (a.time || ""), y = b.date + " " + (b.time || "");
       return x < y ? -1 : x > y ? 1 : 0;
     }
+    // Journal trades plus the closed trades of every uploaded broker report,
+    // each in its broker's book, so the dashboard, goals and balances count them.
     function allTrades() {
-      return state.trades.map(hydrate).sort(byWhen);
+      return state.trades.map(hydrate).concat(reportTrades()).sort(byWhen);
     }
+    // Every trade of one book, journal and report alike.
+    function bookTrades(id) { return allTrades().filter(t => t.accountId === id); }
     function scoped() {
       const ts = allTrades();
       return isAll() ? ts : ts.filter(t => t.accountId === selected());
@@ -1701,7 +1716,8 @@
     function viewCur() {
       if (!isAll()) return acct(selected()).currency;
       const cs = uniq(state.accounts.map(a => a.currency));
-      return cs.length === 1 ? cs[0] : "USD";
+      if (cs.length === 1) return cs[0];
+      return cs.indexOf(state.ui.allCur) !== -1 ? state.ui.allCur : "USD";
     }
     // Money figures can only be added within one currency. With rupee and dollar
     // books together, the dashboard totals cover the books in the view currency.
@@ -1828,7 +1844,8 @@
     /* =================== VIEWPORT & TAB NAVIGATION =================== */
     function switchTab(tabId) {
       if (tabId === 'journal') tabId = 'analysis'; // the trade list now lives at the end of Analysis
-      const tabs = ['dashboard', 'signals', 'analysis', 'backtest', 'calculator', 'data'];
+      if (tabId === 'backtest') tabId = 'analysis'; // broker reports now live in Analysis, under their broker
+      const tabs = ['dashboard', 'signals', 'analysis', 'calculator', 'data'];
       tabs.forEach(t => {
         const elView = document.getElementById('view-' + t);
         const elNav = document.getElementById('navTab-' + t);
@@ -1848,8 +1865,6 @@
         renderSignalsTable();
       } else if (tabId === 'analysis') {
         renderAnalysis();
-      } else if (tabId === 'backtest') {
-        renderBacktest();
       } else if (tabId === 'calculator') {
         renderCalculator();
       } else if (tabId === 'data') {
@@ -1874,8 +1889,27 @@
       };
 
       bar.appendChild(createBtn('all', `All accounts <span class="text-amber-400 font-bold ml-1">${state.accounts.length} BOOKS</span>`, selected() === 'all'));
+      // Rupee and dollar books can't be added together: All shows one currency
+      // at a time, and this picks which.
+      const curs = uniq(state.accounts.map(a => a.currency));
+      if (isAll() && curs.length > 1) {
+        const sw = document.createElement('span');
+        sw.id = 'allCurSwitch';
+        sw.className = 'flex items-center gap-1 shrink-0 mr-1';
+        curs.forEach(c => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.dataset.cur = c;
+          b.title = 'Add up the ' + c + ' books';
+          b.className = c === viewCur() ? 'px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/40' : 'px-1.5 py-0.5 rounded text-[10px] text-slate-400 hover:text-white border border-terminal-border';
+          b.innerText = curSym(c) + ' ' + c;
+          b.onclick = () => { state.ui.allCur = c; save(); renderAll(); };
+          sw.appendChild(b);
+        });
+        bar.appendChild(sw);
+      }
       state.accounts.forEach(a => {
-        bar.appendChild(createBtn(a.id, `${esc(a.name)} <span class="text-slate-500">${esc(a.defaultLeverage || 1)}x</span>`, selected() === a.id));
+        bar.appendChild(createBtn(a.id, `${esc(a.name)} <span class="text-slate-500">${a.reportBroker ? 'report' : esc(a.defaultLeverage || 1) + 'x'}</span>`, selected() === a.id));
       });
     }
 
@@ -1883,7 +1917,7 @@
     // trade before that date, anchored to Delta's live figure when it has one.
     function balanceAtStart(a, from) {
       const off = (a.id === deltaAccountId() && deltaLiveKnown()) ? liveDeltaBalance.value - bookComputedBalance(a) : 0;
-      const before = from ? sum(state.trades.filter(t => t.accountId === a.id && t.date < from).map(t => derive(t).pnl || 0)) : 0;
+      const before = from ? sum(bookTrades(a.id).filter(t => t.date < from).map(t => t.pnl || 0)) : 0;
       return (a.startBalance || 0) + off + before;
     }
     // The card next to win rate: how much the account grew or shrank over the period
@@ -2479,7 +2513,7 @@
 
       const by = {};
       ts.forEach(t => {
-        const m = toMin(t.time);
+        const m = toMin(t.rep ? t.openTime : t.time); // a report trade is dated by its close; the slot is when it opened
         if (m == null) return;
         const slot = Math.floor(m / 30) * 30;
         (by[slot] = by[slot] || []).push(t);
@@ -2764,7 +2798,7 @@
 
       const filtered = dayTrades.filter(t => {
         const matchesQuery = t.symbol.toLowerCase().includes(query) || (t.setup || '').toLowerCase().includes(query);
-        const matchesSide = side === 'ALL' || (t.direction === 'long' ? 'BUY' : 'SHORT') === side;
+        const matchesSide = side === 'ALL' || (!t.rep && (t.direction === 'long' ? 'BUY' : 'SHORT') === side);
         const matchesAcc = acc === 'ALL' || t.accountId === acc;
         return matchesQuery && matchesSide && matchesAcc;
       });
@@ -2789,13 +2823,15 @@
         const isWin = trade.pnl >= 0;
         const pnlFormatted = signedMoney(trade.pnl, a.currency);
         const pnlClass = isWin ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
-        const sidePill = trade.direction === 'long'
+        const sidePill = trade.rep
+          ? '<span class="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 text-[10px] font-bold" title="From an uploaded broker report">REPORT</span>'
+          : trade.direction === 'long'
           ? '<span class="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">BUY</span>'
           : '<span class="px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] font-bold">SHORT</span>';
 
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-terminal-cardHover/80 transition-colors cursor-pointer border-b border-terminal-border/60';
-        tr.onclick = () => openInspector(trade);
+        tr.onclick = () => trade.rep ? openReportTrade(trade) : openInspector(trade);
 
         tr.innerHTML = `
           <td class="py-3 px-4 align-middle text-slate-400 whitespace-nowrap">
@@ -2809,8 +2845,8 @@
           </td>
           <td class="py-3 px-4 align-middle whitespace-nowrap">${sidePill}</td>
           <td class="py-3 px-4 align-middle text-slate-300 whitespace-nowrap">${esc(trade.setup || '—')}</td>
-          <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${esc(trade.entry)}</td>
-          <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${esc(trade.exit)}</td>
+          <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${trade.rep ? '—' : esc(trade.entry)}</td>
+          <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${trade.rep ? '—' : esc(trade.exit)}</td>
           <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-400 whitespace-nowrap">${fmtHeld(heldMins(trade))}</td>
           <td class="py-3 px-4 align-middle text-right tabular-nums ${pnlClass} whitespace-nowrap">${pnlFormatted}</td>
           <td class="py-3 px-4 align-middle text-right whitespace-nowrap">
@@ -2864,15 +2900,16 @@
           <td class="py-2.5 px-3 text-slate-400">${esc(trade.time || '—')}</td>
           <td class="py-2.5 px-3 text-slate-400">${esc(a.name)}</td>
           <td class="py-2.5 px-3 font-bold text-white">${esc(trade.symbol)}</td>
-          <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${trade.direction === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(trade.direction.toUpperCase())}</span></td>
-          <td class="py-2.5 px-3 text-right tabular-nums">${esc(trade.entry)}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums">${esc(trade.exit)}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums">${fmtQty(trade.qty)}</td>
+          <td class="py-2.5 px-3">${trade.rep ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300">REPORT</span>' : `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${trade.direction === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(trade.direction.toUpperCase())}</span>`}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : esc(trade.entry)}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : esc(trade.exit)}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : fmtQty(trade.qty)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums ${trade.pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}">${signedMoney(trade.pnl, a.currency)}${pTag(tradePct(trade))}</td>
           <td class="py-2.5 px-3 text-right">
-            <button data-id="${esc(trade.id)}" onclick="openTrade(this.dataset.id)" class="px-2 py-0.5 rounded bg-terminal-card border border-terminal-border hover:border-amber-500 text-[10px]">Edit</button>
+            <button data-id="${esc(trade.id)}" class="px-2 py-0.5 rounded bg-terminal-card border border-terminal-border hover:border-amber-500 text-[10px]">${trade.rep ? 'Report' : 'Edit'}</button>
           </td>
         `;
+        tr.querySelector('button[data-id]').onclick = () => trade.rep ? openReportTrade(trade) : openTrade(trade.id);
         tbody.appendChild(tr);
       });
     }
@@ -3325,6 +3362,7 @@
     // Delta reports today. Deposits, withdrawals and funding are invisible to this,
     // so older balances are estimates.
     function analyzeTrades(ts) {
+      ts = ts.filter(t => !t.rep); // report trades have no price or size to judge
       const byAcc = {};
       ts.forEach(t => { (byAcc[t.accountId] = byAcc[t.accountId] || []).push(t); });
       const sigOf = {}; ["trendline", "fib", "zone"].forEach(k => matchSignals(k).forEach(p => { if (p.trade) sigOf[p.trade.id] = p.signal; }));
@@ -3425,6 +3463,71 @@
         }
       });
     }
+    function renderAnPeriodBar() {
+      const bar = document.getElementById('anPeriodBar');
+      bar.innerHTML = '';
+      AN_PERIODS.forEach(p => {
+        const b = document.createElement('button');
+        b.className = 'px-2.5 py-1 rounded-md font-semibold transition-all ' + (p.k === (state.ui.anPeriod || "all") ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
+        b.innerText = p.label;
+        b.onclick = () => { state.ui.anPeriod = p.k; anVisible = AN_PAGE; btVisible = BT_PAGE; save(); renderAnalysis(); };
+        bar.appendChild(b);
+      });
+    }
+    // Brokers: each journal book (Delta, Dhan ...) and each broker with an
+    // uploaded report (CoinDCX ...), which is a book of its own. It is the same
+    // pick as the account picker in the header. A report book shows the trades
+    // rebuilt from its report; the others show the journal analysis.
+    function anReportBook() {
+      if (isAll()) return null;
+      const a = state.accounts.find(x => x.id === selected());
+      return a && a.reportBroker ? a : null;
+    }
+    function anBrokerPick(k) {
+      // "rep:CoinDCX" from older links: that broker's first book.
+      if (k.indexOf("rep:") === 0) { const b = state.accounts.find(a => a.reportBroker === k.slice(4)); k = b ? "acct:" + b.id : "all"; }
+      state.ui.account = k === "all" ? "all" : k.slice(5);
+      anVisible = AN_PAGE; btVisible = BT_PAGE; btOpenTrade = null;
+      save(); renderAll();
+    }
+    function renderAnBrokers() {
+      const from = anRange();
+      const current = isAll() ? "all" : "acct:" + selected();
+      const list = [{ k: "all", label: "All books", tip: "Your books together, in the currency picked at the top" }]
+        .concat(state.accounts.map(a => ({ k: "acct:" + a.id, label: a.name, tip: a.reportBroker ? "Trades from your uploaded " + a.reportBroker + " report (" + a.currency + ")" : "Journal book (" + a.currency + ")" })));
+      const bar = document.getElementById("anBrokerBar");
+      bar.innerHTML = list.map(x => `<button type="button" data-anbroker="${esc(x.k)}" title="${esc(x.tip)}" class="px-2.5 py-1 rounded-md font-semibold transition-all ${x.k === current ? "bg-terminal-card border border-terminal-borderLight text-amber-400" : "text-slate-400 hover:text-white"}">${esc(x.label)}</button>`).join("");
+      bar.querySelectorAll("[data-anbroker]").forEach(b => { b.onclick = () => anBrokerPick(b.getAttribute("data-anbroker")); });
+
+      // ---- results by broker, each in its own currency ----
+      const live = allTrades().filter(t => !from || t.date >= from), open = reportBooks().open;
+      const lines = state.accounts.map(a => {
+        const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
+        return { k: "acct:" + a.id, name: a.name, report: !!a.reportBroker, cur: a.currency, n: s.n, wins: s.wins, losses: s.losses, net: s.net, pf: s.pf, fees: sum(ts.map(t => t.fees || 0)),
+          open: open.filter(t => t.accountId === a.id && (!from || t.day >= from)).length };
+      });
+      const period = (AN_PERIODS.find(p => p.k === (state.ui.anPeriod || "all")) || {}).label || "All";
+      const pos = v => v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-slate-400";
+      const host = document.getElementById("anBrokers");
+      host.innerHTML = `<div class="flex flex-wrap items-baseline justify-between gap-2 p-3 border-b border-terminal-border">
+          <h3 class="font-bold text-white uppercase tracking-wider">Results by broker</h3>
+          <span class="text-slate-500 text-[11px]">Closed trades · ${esc(period.toLowerCase() === "all" ? "all time" : "last " + period.toLowerCase())} · each in its own currency. Click one to open it.</span>
+        </div>
+        <div class="overflow-x-auto"><table class="w-full text-left text-xs font-mono">
+          <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border"><tr>
+            <th class="py-2 px-3">Broker</th><th class="py-2 px-3 text-right">Net P&amp;L</th><th class="py-2 px-3 text-right">Trades</th><th class="py-2 px-3 text-right">Win rate</th><th class="py-2 px-3 text-right">Profit factor</th><th class="py-2 px-3 text-right">Fees</th><th class="py-2 px-3">From</th>
+          </tr></thead>
+          <tbody>${lines.map(l => `<tr data-anbroker="${esc(l.k)}" class="border-t border-terminal-border cursor-pointer hover:bg-white/5${l.k === current ? " bg-white/5" : ""}">
+            <td class="py-2 px-3 font-bold whitespace-nowrap ${l.k === current ? "text-amber-400" : "text-white"}">${esc(l.name)}</td>
+            <td class="py-2 px-3 text-right font-bold whitespace-nowrap ${pos(l.net)}">${l.n ? signedMoney(l.net, l.cur) : "—"}</td>
+            <td class="py-2 px-3 text-right whitespace-nowrap">${l.n}${l.open ? ` <span class="text-sky-300" title="Still open">+${l.open} open</span>` : ""}</td>
+            <td class="py-2 px-3 text-right whitespace-nowrap">${l.n ? pct(l.wins / l.n * 100) + ` <span class="text-slate-500">${l.wins}/${l.losses}</span>` : "—"}</td>
+            <td class="py-2 px-3 text-right whitespace-nowrap">${!l.n ? "—" : l.pf === Infinity ? "∞" : l.pf.toFixed(2)}</td>
+            <td class="py-2 px-3 text-right whitespace-nowrap text-slate-400">${l.n || l.fees ? money(l.fees, l.cur) : "—"}</td>
+            <td class="py-2 px-3 whitespace-nowrap text-slate-500">${l.report ? "Uploaded report" : "Journal"}</td></tr>`).join("")}</tbody>
+        </table></div>`;
+      host.querySelectorAll("tr[data-anbroker]").forEach(tr => { tr.onclick = () => anBrokerPick(tr.getAttribute("data-anbroker")); });
+    }
     function anStats(rs) {
       const n = rs.length, wins = rs.filter(x => x.t.pnl > 0).length, net = sum(rs.map(x => x.t.pnl));
       return { n, wins, net, winRate: n ? wins / n * 100 : 0, avg: n ? net / n : 0 };
@@ -3432,6 +3535,13 @@
     function renderAnalysis() {
       const strip = document.getElementById('anStrip');
       if (!strip) return;
+      renderAnPeriodBar();
+      renderAnBrokers();
+      // A broker from an uploaded report replaces the journal analysis below.
+      const rep = anReportBook();
+      ['anLive', 'anMktRow', 'anHowLive'].forEach(id => document.getElementById(id).classList.toggle('hidden', !!rep));
+      ['anReport', 'anHowReport'].forEach(id => document.getElementById(id).classList.toggle('hidden', !rep));
+      if (rep) { renderBacktest(); return; }
       const cur = viewCur();
       const from = anRange();
       const all = analyzeTrades(statScoped());
@@ -3440,21 +3550,12 @@
       const rows = mfAn ? inPeriod.filter(x => mktBiasOn(x.t.date, x.t.time) === mfAn) : inPeriod;
       rows.anchored = all.anchored;
 
-      const bar = document.getElementById('anPeriodBar');
-      bar.innerHTML = '';
-      AN_PERIODS.forEach(p => {
-        const b = document.createElement('button');
-        b.className = 'px-2.5 py-1 rounded-md font-semibold transition-all ' + (p.k === (state.ui.anPeriod || "all") ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
-        b.innerText = p.label;
-        b.onclick = () => { state.ui.anPeriod = p.k; anVisible = AN_PAGE; save(); renderAnalysis(); };
-        bar.appendChild(b);
-      });
-
       const assume = document.getElementById('anAssumptions');
-      const book = (state.accounts.find(a => a.currency === cur && a.market === "crypto") || state.accounts[0] || {});
+      const book = (state.accounts.find(a => a.currency === cur && a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {});
       assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to Delta's balance today. " : "Balances before each trade are your starting balance plus the trades before it; connect Delta to anchor them to its live balance. ")
         + "Deposits, withdrawals and funding can't be seen, so older balances are estimates. "
-        + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Sync & Settings → Trading Books.`;
+        + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Sync & Settings → Trading Books.`
+        + (state.accounts.some(a => a.reportBroker) ? " Trades from broker reports have no price or size, so they are left out here; pick their broker above to see them." : "");
 
       renderJournalArchive();
       renderMarketCalendar('mktCalAnalysis', { pairs: matchSignals().filter(pr => !from || pr.signal.date >= from), trades: inPeriod.map(x => x.t), cur, rerender: renderAnalysis, scope: from ? 'from ' + from : 'all history' });
@@ -3588,7 +3689,7 @@
     }
 
     // A book's balance as the journal computes it: starting balance plus every trade in it.
-    function bookNet(id) { return sum(state.trades.filter(t => t.accountId === id).map(t => derive(t).pnl || 0)); }
+    function bookNet(id) { return sum(bookTrades(id).map(t => t.pnl || 0)); }
     function bookComputedBalance(a) { return (a.startBalance || 0) + bookNet(a.id); }
     // While Delta has ever answered for this book and the key is still configured,
     // its own wallet figure is the truth — it also reflects funding, deposits and
@@ -3761,10 +3862,9 @@
     // delete or a sync shows up where you are looking instead of on the next visit.
     function renderAll() {
       renderDashboard();
-      const open = ['signals', 'analysis', 'backtest', 'data'].find(t => { const v = document.getElementById('view-' + t); return v && !v.classList.contains('hidden'); });
+      const open = ['signals', 'analysis', 'data'].find(t => { const v = document.getElementById('view-' + t); return v && !v.classList.contains('hidden'); });
       if (open === 'signals') renderSignalsTable();
       else if (open === 'analysis') renderAnalysis();
-      else if (open === 'backtest') renderBacktest();
       else if (open === 'data' && !(document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) renderDataView();
     }
 
@@ -3921,7 +4021,8 @@
     function openTrade(id, preset) {
       const existing = id ? state.trades.find(x => x.id === id) : null;
       const today = iso(new Date());
-      const defAcct = isAll() ? state.accounts[0].id : selected();
+      const logBooks = state.accounts.filter(a => !a.reportBroker);
+      const defAcct = !isAll() && logBooks.some(a => a.id === selected()) ? selected() : (logBooks[0] || state.accounts[0]).id;
       if (!existing) {
         const lim = dailyLimitState(preset && preset.accountId ? acct(preset.accountId).currency : viewCur(), preset && preset.accountId);
         if (lim.hit && !confirm(lim.msg + "\n\nLog another trade anyway?")) return;
@@ -3936,7 +4037,7 @@
           <div>
             <label class="text-slate-400 block mb-1">Account Book</label>
             <select id="mAcc" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white focus:outline-none">
-              ${state.accounts.map(a => `<option value="${esc(a.id)}" ${a.id === v.accountId ? 'selected' : ''}>${esc(a.name)} (${esc(a.market)})</option>`).join('')}
+              ${state.accounts.filter(a => !a.reportBroker || a.id === v.accountId).map(a => `<option value="${esc(a.id)}" ${a.id === v.accountId ? 'selected' : ''}>${esc(a.name)} (${esc(a.market)})</option>`).join('')}
             </select>
           </div>
           <div class="grid grid-cols-2 gap-2">
@@ -4412,6 +4513,7 @@
         tombstones: tombs
       }, mergeReviews(local, remote, tombs));
       if (!merged.accounts.length) merged.accounts = local.accounts || remote.accounts || [];
+      ensureReportBooks(merged);
       return merged;
     }
     // What actually travels: never the token, the Delta key, or the webhook.
@@ -4429,7 +4531,7 @@
         reviews: st.reviews || {}, reviewsAt: st.reviewsAt || {}
       };
       // Only once something was uploaded, so the shared file of anyone who never
-      // uses the Backtest tab stays exactly as it was.
+      // uploads a broker report stays exactly as it was.
       if (st.backtest && st.backtest.files && st.backtest.files.length) p.backtest = st.backtest;
       return p;
     }
@@ -4643,7 +4745,7 @@
     // Delta is a crypto exchange, so its trades always land in the crypto book
     // (preferring one named Delta) rather than asking each time.
     function deltaAccountId() {
-      const crypto = state.accounts.filter(a => a.market === "crypto");
+      const crypto = state.accounts.filter(a => a.market === "crypto" && !a.reportBroker);
       const named = crypto.find(a => /delta/i.test(a.name));
       const a = named || crypto[0];
       return a ? a.id : "";
@@ -5160,8 +5262,7 @@
     function calcAccountBalance(a) {
       // Same rule as the header: Delta's last figure holds even if Delta has gone quiet.
       if (a.id === deltaAccountId() && deltaLiveKnown()) return liveDeltaBalance.value;
-      const net = state.trades.filter(t => t.accountId === a.id).reduce((s, t) => s + (derive(t).pnl || 0), 0);
-      return (a.startBalance || 0) + net;
+      return (a.startBalance || 0) + bookNet(a.id);
     }
     // Entry price and SL price are just another way to give the stop distance:
     // once both are typed the distance in % is worked out and shared with the
@@ -6860,7 +6961,8 @@
 
     /* =================== BACKTEST: EXCEL / CSV TRADE REPORTS =================== */
     // An uploaded trade report (a CoinDCX futures report, or any sheet with time,
-    // pair and P&L columns) becomes its own set of trades on the Backtest tab.
+    // pair and P&L columns) becomes its own set of trades in Analysis, under its
+    // broker (state.backtest, a name kept from when this was a Backtest tab).
     // They never join state.trades: a report has no entry, exit or size, and the
     // live stats must not move because a report was uploaded.
     // Stored as the report's own rows ({files, rows}); trades are rebuilt from
@@ -6883,7 +6985,7 @@
         if (files[id]) return;
         const at = cText(f.importedAt, 30);
         const o = {
-          id, name: cText(f.name || "report", 120), sheet: cText(f.sheet, 120), importedAt: at, updatedAt: cText(f.updatedAt || at, 30),
+          id, name: cText(f.name || "report", 120), sheet: cText(f.sheet, 120), broker: cText(f.broker, 40).trim() || btLegacyBroker(f), importedAt: at, updatedAt: cText(f.updatedAt || at, 30),
           rows: Math.max(0, Math.round(btFinite(f.rows))), added: Math.max(0, Math.round(btFinite(f.added))),
           net: btFinite(f.net), cur: f.cur === "INR" ? "INR" : "USD", checked: f.checked === true
         };
@@ -6901,6 +7003,20 @@
         if (r.noid === true) out.rows[out.rows.length - 1].noid = true;
       });
       return out;
+    }
+    // Uploads from before brokers were named: CoinDCX's sheets say INR-M / USDT-M.
+    function btLegacyBroker(f) { return /coindcx|\b(INR|USDT)-M\b/i.test(String(f.name || "") + " " + String(f.sheet || "")) ? "CoinDCX" : "Imported"; }
+    const BT_BROKERS = ["CoinDCX", "Delta Exchange", "Delta", "Dhan", "Binance", "Bybit", "Zerodha", "Upstox", "WazirX", "Mudrex", "Groww", "OKX", "Bitget"];
+    // The broker a report came from, from its file name, sheet names or the
+    // first rows of each sheet ("CoinDCX Trade Report"); else the last one used.
+    function btDetectBroker(sheets, name) {
+      const text = [String(name || "")].concat(sheets.map(sh => sh.name + " " + sh.rows.slice(0, 30).map(r => (r || []).filter(v => typeof v === "string").join(" ")).join(" "))).join(" ");
+      const hit = BT_BROKERS.find(b => new RegExp("\\b" + b.replace(/ /g, "\\s*") + "\\b", "i").test(text));
+      if (hit) return hit === "Delta Exchange" ? "Delta" : hit;
+      // CoinDCX's rupee futures sheet, or its pair names (B-BTC_USDT) in a CSV.
+      if (/\bINR-M\b/i.test(text) || /(^|\s)B-[A-Z0-9]+_(USDT|INR)\b/.test(text)) return "CoinDCX";
+      const files = btState().files;
+      return files.length ? files[files.length - 1].broker : "Imported";
     }
     // Files merge like any synced record (a removed file leaves a tombstone);
     // rows follow their file, one copy per transaction ID.
@@ -7262,7 +7378,7 @@
       el.click();
     }
     function btImportError(name, text) {
-      openModalSheet("Upload to Backtest", body => {
+      openModalSheet("Upload broker report", body => {
         body.innerHTML = `<p class="text-slate-300 text-[11px] font-bold">${esc(name)}</p><p class="text-rose-400 text-[11px] leading-relaxed">${esc(text)}</p>`;
         const b = document.getElementById("modalSheetSaveBtn");
         b.innerText = "Import"; b.disabled = true; b.classList.add("opacity-50");
@@ -7323,10 +7439,15 @@
       const pairs = {};
       res.rows.forEach(r => { pairs[r.sym] = (pairs[r.sym] || 0) + 1; });
       const line = (k, v, cls) => `<div class="flex justify-between gap-3 py-1 border-t border-terminal-border/60"><span class="text-slate-400">${k}</span><span class="text-right ${cls || 'text-slate-200'}">${v}</span></div>`;
-      openModalSheet("Upload to Backtest", body => {
+      const guess = btDetectBroker(sheets, name);
+      openModalSheet("Upload broker report", body => {
         body.innerHTML = `
           <p class="text-white font-bold text-[11px] break-all">${esc(name)}</p>
           <p class="text-slate-500 text-[11px]">Sheet: ${esc(res.sheets.join(", "))}</p>
+          <div>
+            <label class="text-slate-400 block mb-1 text-[11px]" for="btBrokerInput">Broker</label>
+            <input type="text" id="btBrokerInput" maxlength="40" value="${esc(guess)}" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white text-xs">
+          </div>
           <div class="text-[11px]">
             ${line("Rows read", `${res.rows.length} <span class="text-slate-500">(${kinds("order")} orders, ${kinds("funding")} funding${kinds("other") ? ", " + kinds("other") + " other" : ""})</span>`)}
             ${line("Dates", esc(fmtDay(ats[0].slice(0, 10)) + " " + ats[0].slice(0, 4) + " to " + fmtDay(ats[ats.length - 1].slice(0, 10)) + " " + ats[ats.length - 1].slice(0, 4)))}
@@ -7339,12 +7460,14 @@
             ${line("Already uploaded", String(res.rows.length - fresh.length), res.rows.length - fresh.length ? "text-slate-300" : "text-slate-500")}
             ${line("New rows to add", String(fresh.length), fresh.length ? "text-amber-300 font-bold" : "text-slate-500")}
           </div>
-          <p class="text-slate-500 text-[11px] leading-relaxed">These go to the Backtest tab only. Your journal, dashboard and goals are not changed.</p>`;
+          <p class="text-slate-500 text-[11px] leading-relaxed">They go into a book for this broker: closed trades count on the Dashboard (P&amp;L, calendar, goals, balance) on the day they closed, and Analysis shows them trade by trade.</p>`;
         const b = document.getElementById("modalSheetSaveBtn");
         if (fresh.length) b.innerText = `Import ${fresh.length} row${fresh.length === 1 ? "" : "s"}`;
         else { b.innerText = "Nothing new"; b.disabled = true; b.classList.add("opacity-50"); }
       }, () => {
         if (!fresh.length) return false;
+        const input = document.getElementById("btBrokerInput");
+        const broker = String((input && input.value) || "").replace(/\s+/g, " ").trim().slice(0, 40) || "Imported";
         const bt = btState(), now = new Date().toISOString();
         bt.rows = bt.rows.concat(fresh);
         // Read back what was stored: every row of the report, new or uploaded
@@ -7353,12 +7476,13 @@
         bt.rows.forEach(r => { byId[r.id] = r; });
         const stored = res.rows.map(r => byId[r.id] || (matched[r.id] && byId[matched[r.id].id]));
         const checked = stored.every(Boolean) && Math.abs(sum(stored.map(r => r.net)) - res.net) < 0.005;
-        bt.files = bt.files.concat([{ id: fileId, name: String(name).slice(0, 120), sheet: res.sheets.join(", ").slice(0, 120), importedAt: now, updatedAt: now, rows: res.rows.length, added: fresh.length, net: res.net, cur, checked }]);
-        state.ui.btPair = "all"; state.ui.btMonth = "all"; state.ui.btCur = cur; state.ui.btSec = "overview";
+        bt.files = bt.files.concat([{ id: fileId, name: String(name).slice(0, 120), sheet: res.sheets.join(", ").slice(0, 120), broker, importedAt: now, updatedAt: now, rows: res.rows.length, added: fresh.length, net: res.net, cur, checked }]);
+        ensureReportBooks(state);
+        state.ui.account = repBookId(broker, cur); state.ui.btPair = "all"; state.ui.btSec = "overview";
         btVisible = BT_PAGE; btOpenTrade = null;
         save();
-        switchTab("backtest");
-        toast(checked ? `Imported ${fresh.length} rows into Backtest; totals match the report` : `Imported ${fresh.length} rows, but the totals differ from the report; see Files`);
+        switchTab("analysis"); renderAccountsBar();
+        toast(checked ? `Imported ${fresh.length} rows to ${broker}; totals match the report and the dashboard counts them` : `Imported ${fresh.length} rows, but the totals differ from the report; see Files`);
         return true;
       });
     }
@@ -7366,26 +7490,107 @@
       const bt = btState(), f = bt.files.find(x => x.id === id);
       if (!f) return;
       const n = bt.rows.filter(r => r.file === id).length;
-      if (!confirm(`Remove "${f.name}" and its ${n} row${n === 1 ? "" : "s"} from Backtest?` + (syncReady() ? " With sync on, it goes from your other devices too." : ""))) return;
+      if (!confirm(`Remove "${f.name}" and its ${n} row${n === 1 ? "" : "s"} from ${f.broker}?` + (syncReady() ? " With sync on, it goes from your other devices too." : ""))) return;
       bt.rows = bt.rows.filter(r => r.file !== id);
       bt.files = bt.files.filter(x => x.id !== id);
       noteDeleted("backtest", id);
       btOpenTrade = null;
-      save(); renderBacktest();
-      toast("File removed from Backtest");
+      save(); renderAll();
+      toast("File removed");
     }
+    // Every uploaded report of the broker on screen.
     function deleteAllBacktest() {
-      const bt = btState();
-      if (!bt.files.length) { toast("Backtest is already empty"); return; }
-      if (!confirm(`Delete all backtest data (${bt.files.length} file${bt.files.length === 1 ? "" : "s"}, ${bt.rows.length} rows)? Your journal trades are not touched.` + (syncReady() ? " With sync on, it goes from your other devices too." : ""))) return;
-      bt.files.forEach(f => noteDeleted("backtest", f.id));
-      state.backtest = { files: [], rows: [] };
+      const book = anReportBook();
+      if (!book) return;
+      const bt = btState(), broker = book.reportBroker;
+      const gone = {};
+      bt.files.forEach(f => { if (f.broker === broker) gone[f.id] = 1; });
+      const nf = Object.keys(gone).length, nr = bt.rows.filter(r => gone[r.file]).length;
+      if (!nf) { toast("Nothing to delete"); return; }
+      if (!confirm(`Delete ${broker}'s report data (${nf} file${nf === 1 ? "" : "s"}, ${nr} rows) and its book? Your other books are not touched.` + (syncReady() ? " With sync on, it goes from your other devices too." : ""))) return;
+      Object.keys(gone).forEach(id => noteDeleted("backtest", id));
+      bt.files = bt.files.filter(f => !gone[f.id]);
+      bt.rows = bt.rows.filter(r => !gone[r.file]);
+      state.accounts.filter(a => a.reportBroker === broker).forEach(a => noteDeleted("accounts", a.id));
+      state.accounts = state.accounts.filter(a => a.reportBroker !== broker);
+      state.ui.account = "all";
       btOpenTrade = null;
-      save(); renderBacktest();
-      toast("Backtest data deleted");
+      save(); renderAll();
+      toast(`${broker} report data deleted`);
     }
 
-    // ---- the Backtest tab ----
+    // ---- broker report books ----
+    // Each broker with an uploaded report gets a book of its own (one per
+    // currency), with an id made from its name so every device arrives at the
+    // same one. Its closed trades count like journal trades on the dashboard,
+    // in goals and in the balance, dated by the day they closed.
+    const NSE_BROKER_RE = /^(dhan|zerodha|upstox|groww|angel|kotak|icici|5paisa|fyers)\b/i;
+    function repBookId(broker, cur) {
+      const slug = String(broker || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30) || "imported";
+      return "rep-" + slug + "-" + (cur === "INR" ? "inr" : "usd");
+    }
+    function ensureReportBooks(s) {
+      const bt = s.backtest;
+      if (!bt || !Array.isArray(bt.files) || !Array.isArray(bt.rows) || !Array.isArray(s.accounts)) return;
+      const fileOf = {}, want = {};
+      bt.files.forEach(f => { fileOf[f.id] = f; });
+      bt.rows.forEach(r => {
+        const f = fileOf[r.file];
+        if (!f) return;
+        const id = repBookId(f.broker, r.cur);
+        const w = want[id] || (want[id] = { broker: f.broker, cur: r.cur === "INR" ? "INR" : "USD", at: "" });
+        if ((f.importedAt || "") > w.at) w.at = f.importedAt || "";
+      });
+      Object.keys(want).forEach(id => {
+        if (s.accounts.some(a => a.id === id)) return;
+        const w = want[id], first = bt.files.find(f => f.broker === w.broker);
+        const mainCur = first && first.cur === "INR" ? "INR" : "USD";
+        const taken = s.accounts.some(a => !a.reportBroker && String(a.name || "").trim().toLowerCase() === w.broker.toLowerCase());
+        // Dated by its newest upload rather than now, so a book whose files were
+        // deleted on another device doesn't outlive their tombstone in a merge.
+        s.accounts.push({
+          id, name: ((taken ? w.broker + " report" : w.broker) + (w.cur !== mainCur ? " " + w.cur : "")).slice(0, 40), reportBroker: w.broker,
+          market: NSE_BROKER_RE.test(w.broker) ? "nse" : "crypto", currency: w.cur, startBalance: 0,
+          maxRiskPct: 1, dailyLossLimit: 0, maxTradesPerDay: 5, defaultLeverage: 1, maxNotionalX: 3, updatedAt: w.at || new Date().toISOString()
+        });
+      });
+    }
+    // Trades rebuilt from every report, worked out once per change to the uploads.
+    let repCache = null;
+    function reportBooks() {
+      const bt = btState(), brokers = bt.files.map(f => f.id + ":" + f.broker).join("|");
+      if (repCache && repCache.rows === bt.rows && repCache.n === bt.rows.length && repCache.brokers === brokers) return repCache;
+      const brokerOf = {}, groups = {}, closed = [], open = [];
+      bt.files.forEach(f => { brokerOf[f.id] = f.broker; });
+      bt.rows.forEach(r => { const b = brokerOf[r.file]; if (b !== undefined) (groups[b] = groups[b] || []).push(r); });
+      Object.keys(groups).forEach(b => btTrades(groups[b]).forEach(t => {
+        const accountId = repBookId(b, t.cur);
+        // Still open: no P&L booked yet, so it waits until a close shows up.
+        if (!t.closed) { open.push({ accountId, day: t.day }); return; }
+        closed.push({
+          id: "rep:" + t.legs[0].id, rep: true, broker: b, firstLeg: t.legs[0].id, accountId,
+          date: t.end.slice(0, 10), time: t.end.slice(11, 16), exitDate: t.end.slice(0, 10), exitTime: t.end.slice(11, 16),
+          openTime: t.start.slice(11, 16), held: t.held, symbol: btSym(t.sym), direction: "",
+          entry: 0, exit: 0, qty: 0, stop: 0, leverage: 1, fees: t.fees, funding: t.funding, gross: t.gross,
+          pnl: t.net, risk: 0, r: null, setup: "", notes: "", rules: []
+        });
+      }));
+      repCache = { rows: bt.rows, n: bt.rows.length, brokers, closed, open };
+      return repCache;
+    }
+    function reportTrades() { return reportBooks().closed; }
+    // From the dashboard: the trade's own report rows, in Analysis under its book.
+    function openReportTrade(trade) {
+      state.ui.account = trade.accountId; state.ui.btSec = "trades"; state.ui.btPair = "all";
+      const from = anRange();
+      if (from && trade.date < from) state.ui.anPeriod = "all";
+      btOpenTrade = null; btVisible = BT_PAGE;
+      save(); switchTab("analysis"); renderAccountsBar();
+      const list = btShown.slice().reverse(), i = list.findIndex(x => x.legs[0].id === trade.firstLeg);
+      if (i !== -1) { btOpenTrade = list[i].id; btVisible = Math.max(btVisible, i + 1); renderBacktestTable(); }
+    }
+
+    // ---- a report broker in Analysis ----
     function btSym(s) { return String(s || "").replace(/^B-/, "").replace(/_/g, "/"); }
     function btWhen(at) { return at ? fmtDay(at.slice(0, 10)) + " " + at.slice(11, 16) : "—"; }
     function btHeld(m) { return m == null ? "—" : m >= 1440 ? Math.floor(m / 1440) + "d " + Math.floor(m % 1440 / 60) + "h" : fmtHeld(m); }
@@ -7399,44 +7604,46 @@
     function setBtSec(k) { state.ui.btSec = k; save(); renderBacktest(); }
     let btShown = [], btCurShown = "USD";
     function renderBacktest() {
-      const view = document.getElementById("view-backtest");
-      if (!view) return;
-      const bt = btState();
-      const empty = !bt.rows.length;
+      if (!document.getElementById("anReport")) return;
+      const book = anReportBook();
+      if (!book) return;
+      const all0 = btState(), broker = book.reportBroker, from = anRange();
+      const mine = {};
+      all0.files.forEach(f => { if (f.broker === broker) mine[f.id] = 1; });
+      // Only this broker's uploads from here on.
+      const bt = { files: all0.files.filter(f => mine[f.id]), rows: all0.rows.filter(r => mine[r.file]) };
+      const mineRows = bt.rows.filter(r => repBookId(broker, r.cur) === book.id), empty = !mineRows.length;
+      const ats = mineRows.map(r => r.at).sort();
+      document.getElementById("btTitle").innerText = book.name + " · trades from its report";
+      document.getElementById("btSub").innerText = bt.files.length + " file" + (bt.files.length === 1 ? "" : "s") + " · " + mineRows.length + " row" + (mineRows.length === 1 ? "" : "s")
+        + (ats.length ? " · " + fmtDay(ats[0].slice(0, 10)) + " " + ats[0].slice(0, 4) + " to " + fmtDay(ats[ats.length - 1].slice(0, 10)) + " " + ats[ats.length - 1].slice(0, 4) : "");
       document.getElementById("btEmpty").classList.toggle("hidden", !empty);
-      document.getElementById("btMain").classList.toggle("hidden", empty && !bt.files.length);
       const filters = document.getElementById("btFilters");
-      renderSecBar("btSecBar", BT_SECS, "data-btsec", state.ui.btSec, setBtSec);
-      renderBacktestFiles();
+      // With no rows left, only Files has anything to show (and its Remove buttons).
+      renderSecBar("btSecBar", BT_SECS, "data-btsec", empty ? "files" : state.ui.btSec, setBtSec);
+      renderBacktestFiles(bt.files, all0.rows);
       if (empty) {
         filters.innerHTML = "";
         ["btStrip", "btCheck", "btPairs", "btDays", "btBody", "btMoreBar"].forEach(id => { document.getElementById(id).innerHTML = ""; });
         if (btChartInstance) { btChartInstance.destroy(); btChartInstance = null; }
         return;
       }
-      const all = btTrades(bt.rows);
-      const curs = uniq(all.map(t => t.cur));
-      const cur = curs.indexOf(state.ui.btCur) !== -1 ? state.ui.btCur : curs[0];
-      const inCur = all.filter(t => t.cur === cur);
+      // This book's currency only; the same broker in another currency is its own book.
+      const inCur = btTrades(bt.rows).filter(t => repBookId(broker, t.cur) === book.id);
+      const cur = book.currency;
       const pairs = uniq(inCur.map(t => t.sym)).sort();
-      const months = uniq(inCur.map(t => t.day.slice(0, 7))).sort().reverse();
       const pair = pairs.indexOf(state.ui.btPair) !== -1 ? state.ui.btPair : "all";
-      const month = months.indexOf(state.ui.btMonth) !== -1 ? state.ui.btMonth : "all";
-      const shown = inCur.filter(t => (pair === "all" || t.sym === pair) && (month === "all" || t.day.slice(0, 7) === month));
+      // The Analysis period applies here too, by the day a trade closed (or opened, if still open).
+      const shown = inCur.filter(t => (pair === "all" || t.sym === pair) && (!from || t.day >= from));
       btShown = shown; btCurShown = cur;
 
       // ---- filters ----
       const sel = "bg-[#070A11] border border-terminal-border rounded px-2 py-1 text-slate-200 text-[11px]";
-      const btn = on => "px-2.5 py-1 rounded-md font-semibold transition-all " + (on ? "bg-terminal-card border border-terminal-borderLight text-amber-400" : "text-slate-400 hover:text-white");
-      filters.innerHTML = (curs.length > 1 ? `<span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Currency</span><div class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]">${curs.map(c => `<button type="button" data-btcur="${esc(c)}" class="${btn(c === cur)}">${esc(c)}</button>`).join("")}</div>` : "")
-        + `<span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Pair</span><select id="btPairSel" class="${sel}"><option value="all">All pairs (${inCur.length})</option>${pairs.map(p => `<option value="${esc(p)}"${p === pair ? " selected" : ""}>${esc(btSym(p))} (${inCur.filter(t => t.sym === p).length})</option>`).join("")}</select>`
-        + `<span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Period</span><select id="btMonthSel" class="${sel}"><option value="all">All time</option>${months.map(m => `<option value="${m}"${m === month ? " selected" : ""}>${esc(monthLabel(m))}</option>`).join("")}</select>`
-        + (pair !== "all" || month !== "all" ? `<button type="button" id="btClear" class="text-[11px] text-amber-300 hover:text-amber-200">Clear filters</button>` : "");
-      filters.querySelectorAll("[data-btcur]").forEach(b => { b.onclick = () => btPick("btCur", b.getAttribute("data-btcur")); });
+      filters.innerHTML = `<span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Pair</span><select id="btPairSel" class="${sel}"><option value="all">All pairs (${inCur.length})</option>${pairs.map(p => `<option value="${esc(p)}"${p === pair ? " selected" : ""}>${esc(btSym(p))} (${inCur.filter(t => t.sym === p).length})</option>`).join("")}</select>`
+        + (pair !== "all" ? `<button type="button" id="btClear" class="text-[11px] text-amber-300 hover:text-amber-200">Clear pair</button>` : "");
       document.getElementById("btPairSel").onchange = e => btPick("btPair", e.target.value);
-      document.getElementById("btMonthSel").onchange = e => btPick("btMonth", e.target.value);
       const clr = document.getElementById("btClear");
-      if (clr) clr.onclick = () => { state.ui.btPair = "all"; btPick("btMonth", "all"); };
+      if (clr) clr.onclick = () => btPick("btPair", "all");
 
       // ---- headline numbers ----
       const s = btStats(shown);
@@ -7456,7 +7663,7 @@
           <div class="my-0.5"><div class="${c.val.length > 11 ? "text-sm" : "text-base sm:text-lg"} font-bold ${c.color} mono-num whitespace-nowrap">${esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${esc(c.sub)}</div></div></div>`).join("");
 
       // ---- check: every stored row of this currency is in exactly one trade ----
-      const rowsCur = bt.rows.filter(r => r.cur === cur);
+      const rowsCur = mineRows;
       const legs = sum(inCur.map(t => t.legs.length)), rowNet = sum(rowsCur.map(r => r.net)), tradeNet = sum(inCur.map(t => t.net));
       const ok = legs === rowsCur.length && Math.abs(rowNet - tradeNet) < 0.005;
       const filesBad = bt.files.filter(f => !f.checked).length;
@@ -7497,7 +7704,7 @@
           </div>
           <div class="h-1.5 bg-[#131C2D] rounded-full mt-1 overflow-hidden"><div class="h-full ${net >= 0 ? "bg-emerald-500" : "bg-rose-500"} rounded-full" style="width:${(Math.abs(net) / maxD * 100).toFixed(0)}%"></div></div>
         </div>`;
-      }).join("") + (days.length > DAY_MAX ? `<p class="text-slate-500 text-[11px]">and ${days.length - DAY_MAX} earlier days; pick a month above to see them.</p>` : "") : `<div class="text-slate-500 text-center py-4">No closed trades here.</div>`;
+      }).join("") + (days.length > DAY_MAX ? `<p class="text-slate-500 text-[11px]">and ${days.length - DAY_MAX} earlier days; pick a shorter period above to see them.</p>` : "") : `<div class="text-slate-500 text-center py-4">No closed trades here.</div>`;
 
       renderBacktestTable();
     }
@@ -7567,12 +7774,11 @@
         ? `<span class="text-slate-500 text-[11px]">Showing ${part.length} of ${list.length}</span><button type="button" onclick="btMore()" class="px-3 py-1 bg-terminal-surface border border-terminal-border rounded text-slate-200 hover:border-amber-500 text-[11px]">Show more</button>`
         : (list.length ? `<span class="text-slate-500 text-[11px]">${list.length} trade${list.length === 1 ? "" : "s"}</span>` : "");
     }
-    function renderBacktestFiles() {
+    function renderBacktestFiles(files, rows) {
       const host = document.getElementById("btFiles");
       if (!host) return;
-      const bt = btState();
-      host.innerHTML = bt.files.length ? bt.files.slice().reverse().map(f => {
-        const now = bt.rows.filter(r => r.file === f.id).length;
+      host.innerHTML = files.length ? files.slice().reverse().map(f => {
+        const now = rows.filter(r => r.file === f.id).length;
         return `<div class="flex flex-wrap items-start justify-between gap-2 border border-terminal-border rounded-lg p-2.5">
           <div class="min-w-0">
             <div class="text-slate-200 font-bold break-all">${esc(f.name)}</div>
@@ -7672,7 +7878,7 @@
     function exportTradesCsv() {
       const q = v => { const x = v == null ? "" : String(v); return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
       const cols = ["date", "time", "exit_date", "exit_time", "book", "currency", "symbol", "side", "entry", "exit", "stop", "qty", "fees", "pnl", "r", "setup", "mistakes", "positives", "confidence", "notes", "source"];
-      const rows = allTrades().map(t => { const a = acct(t.accountId); return [t.date, t.time, t.exitDate || t.date, t.exitTime, a.name, a.currency, t.symbol, t.direction, t.entry, t.exit, t.stop || "", t.qty, t.fees || 0, (t.pnl || 0).toFixed(2), t.r != null && isFinite(t.r) ? t.r.toFixed(2) : "", t.setup, (t.tagsMistakes || []).join("; "), (t.tagsPositives || []).join("; "), t.confidence || "", t.notes, t.src || "manual"]; });
+      const rows = allTrades().filter(t => !t.rep).map(t => { const a = acct(t.accountId); return [t.date, t.time, t.exitDate || t.date, t.exitTime, a.name, a.currency, t.symbol, t.direction, t.entry, t.exit, t.stop || "", t.qty, t.fees || 0, (t.pnl || 0).toFixed(2), t.r != null && isFinite(t.r) ? t.r.toFixed(2) : "", t.setup, (t.tagsMistakes || []).join("; "), (t.tagsPositives || []).join("; "), t.confidence || "", t.notes, t.src || "manual"]; });
       if (!rows.length) { toast("No trades to export"); return; }
       const csv = "﻿" + [cols].concat(rows).map(r => r.map(q).join(",")).join("\r\n");
       const a = document.createElement("a");
