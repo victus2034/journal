@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Test twice",
+      "type": "npm",
+      "script": "test:twice",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test once",
+      "type": "npm",
+      "script": "test",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}
