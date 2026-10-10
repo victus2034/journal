@@ -207,6 +207,24 @@ async function currencyRun(seed) {
       return { rate: s.accounts.find(a => a.id === 'acc_cry').fxRate, cur: (s.goals.find(g => g.title === 'New dollar goal') || {}).cur, bad: 'fxRate' in bad };
     });
     check(kept.rate === 90 && kept.cur === 'USD' && !kept.bad, 'sanitize: ' + JSON.stringify(kept));
+    // Goals planned for next week / next month wait for their window, then run like any other.
+    for (const [pick, period] of [['next_week', 'week'], ['next_month', 'month']]) {
+      await page.evaluate(p => { openGoal('new'); document.getElementById('gTitle').value = 'Plan ' + p; document.getElementById('gPeriod').value = p; }, pick);
+      await page.click('#modalSheetSaveBtn');
+      const ahead = await page.evaluate(([p, per]) => {
+        const g = state.goals.find(x => x.title === 'Plan ' + p), d = new Date();
+        const want = per === 'week' ? iso(new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7) + 7)) : iso(new Date(d.getFullYear(), d.getMonth() + 1, 1));
+        state.ui.goalIdx = state.goals.indexOf(g); updateGoalDisplays();
+        openGoal(g.id); const sel = document.getElementById('gPeriod').value; closeModalSheet();
+        const past = Object.assign({}, g, { startsOn: '2000-01-03' });
+        return { period: g.period, startsOn: g.startsOn, want, start: iso(goalWindowStart(g)), end: iso(goalPeriodEnd(g)), n: goalProgress(g).n,
+          days: goalDaysLeft(g), up: goalUpcoming(g), title: document.getElementById('goalTitle').innerText, sel,
+          pastStart: iso(goalWindowStart(past)), nowStart: iso(goalWindowStart(per)), kept: (sanitizeState(JSON.parse(JSON.stringify(state))).goals.find(x => x.id === g.id) || {}).startsOn };
+      }, [pick, period]);
+      const endOk = period === 'week' ? ahead.end > ahead.start && (Date.parse(ahead.end) - Date.parse(ahead.start)) === 6 * 864e5 : ahead.end.slice(0, 7) === ahead.start.slice(0, 7);
+      check(ahead.period === period && ahead.startsOn === ahead.want && ahead.start === ahead.want && endOk && ahead.n === 0 && ahead.up && ahead.days >= 5 && ahead.title.includes('starts') && ahead.sel === pick && ahead.pastStart === ahead.nowStart && ahead.kept === ahead.want, pick + ' goal: ' + JSON.stringify(ahead));
+    }
+    check(!('startsOn' in await page.evaluate(() => cleanGoal({ id: 'z', period: 'year', startsOn: '2099-01-01' }))) && !('startsOn' in await page.evaluate(() => cleanGoal({ id: 'z', period: 'week', startsOn: 'soon' }))), 'a bad start date survived the clean-up');
     // Every tab, every book, both currencies: no errors and no NaN on screen.
     for (const cur of ['INR', 'USD']) for (const acc of ['all', 'acc_nse', 'acc_cry']) for (const tab of TABS) {
       const bad = await page.evaluate(([c, a, t]) => { state.ui.allCur = c; state.ui.account = a; switchTab(t); renderAll(); const m = document.getElementById('view-' + t).innerText.match(/.{0,40}(NaN|undefined|Infinity%).{0,40}/); return m ? m[0] : ''; }, [cur, acc, tab]);
@@ -1047,6 +1065,63 @@ async function fixesRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// The header fits on one line on wide screens whatever book is picked, and a
+// trade's review (rules kept, what went right, mistakes) is marked from the
+// inspector, saved, and still there after a reload.
+async function reviewRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  for (const width of [1520, 1920]) {
+    const ctx = await browser.newContext({ viewport: { width, height: 900 } });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    for (const id of ['all', 'acc_nse', 'acc_cry']) {
+      const h = await page.evaluate(id => { state.ui.account = id; renderAll(); const t = document.getElementById('topBalLive'); t.classList.remove('hidden'); t.innerText = 'LAST KNOWN'; document.getElementById('topBalVal').innerText = '₹88,008.57';
+        const ab = document.getElementById('accountsBar'); return { h: document.querySelector('header').offsetHeight, cut: ab.scrollWidth - ab.clientWidth }; }, id);
+      check(h.h < 80 && h.cut === 0, width + 'px, ' + id + ': header not on one line ' + JSON.stringify(h));
+    }
+    await ctx.close();
+  }
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => openInspector(allTrades().find(t => t.id === 'tr1')));
+    const rows = () => page.evaluate(() => [...document.querySelectorAll('#inspChecklist button')].map(b => b.innerText.replace(/\s+/g, ' ')));
+    const before = await rows();
+    await page.click('#inspChecklist button:nth-of-type(2)'); // Risk within limit: missed -> kept
+    await page.click('#inspChecklist button:nth-of-type(1)'); // Traded a planned setup: kept -> missed
+    await page.click('#inspTagsPositive button:has-text("Trailed Stop Loss")');
+    await page.click('#inspTagsMistake button:has-text("FOMO Entry")');
+    await page.click('#inspChecklist button:has-text("Volume spike")');
+    const after = await rows();
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const saved = await page.evaluate(() => { const t = state.trades.find(x => x.id === 'tr1'); return { rules: t.rules, pos: t.tagsPositives, mis: t.tagsMistakes, play: t.playRules, notes: t.notes }; });
+    check(before.length === 7 && after.length === 7 && after[1].startsWith('✓') && after[0].startsWith('✕'), 'inspector rows: ' + JSON.stringify({ before, after }));
+    check(JSON.stringify(saved.rules) === '[false,true,true,false,true]' && JSON.stringify(saved.pos) === '["Trailed Stop Loss"]' && JSON.stringify(saved.mis) === '["FOMO Entry"]'
+      && saved.play['Volume spike'] === false && saved.play['Above VWAP'] === true && saved.notes === 'smoke test', 'review not saved: ' + JSON.stringify(saved));
+    // Tapping a tag again takes it off.
+    await page.evaluate(() => openInspector(allTrades().find(t => t.id === 'tr1')));
+    await page.click('#inspTagsMistake button:has-text("FOMO Entry")');
+    check(JSON.stringify(await page.evaluate(() => state.trades.find(x => x.id === 'tr1').tagsMistakes)) === '[]', 'a mistake tag did not come off');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'one-line header, trade review marked from the inspector';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1057,6 +1132,7 @@ await currencyRun(data);
 await backtestRun(data);
 await coindcxRun(data);
 await fixesRun(data);
+await reviewRun(data);
 
 await browser.close();
 server.close();

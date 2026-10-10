@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.98">
+  <meta name="app-version" content="2026-10-11.100">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -21,6 +21,15 @@
     .h-24{height:6rem}.rounded-t{border-top-left-radius:.25rem;border-top-right-radius:.25rem}.bg-emerald-500\/60{background-color:rgba(16,185,129,.6)}.bg-rose-500\/60{background-color:rgba(244,63,94,.6)}.border-rose-400{border-color:#fb7185}
     .bg-amber-400\/70{background-color:rgba(251,191,36,.7)}.bg-amber-950\/40{background-color:rgba(69,26,3,.4)}.border-amber-800\/60{border-color:rgba(146,64,14,.6)}.min-w-\[160px\]{min-width:160px}.pt-4{padding-top:1rem}
     .mnav{display:none}
+    /* Header stays on one line on wide screens: the subtitle and book count drop
+       out (and the "Balance:" word below 1900px) to make room, and the book
+       switcher scrolls sideways if it still runs out. */
+    @media (min-width:1500px){
+      .hdr-row,.hdr-left,.hdr-right{flex-wrap:nowrap}
+      .hdr-right{flex-shrink:0}
+      .hdr-wide,.hdr-bal{display:none!important}
+    }
+    @media (min-width:1900px){ .hdr-bal{display:inline!important} }
     @media (max-width:639px){
       .mnav{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:45;background:#090E17;border-top:1px solid #182438;padding:4px 4px calc(4px + env(safe-area-inset-bottom));justify-content:space-around;align-items:center}
       body{padding-bottom:68px}
@@ -82,11 +91,11 @@
 
   <!-- Top Terminal Header & Command Bar -->
   <header class="bg-terminal-surface border-b border-terminal-border sticky top-0 z-40 px-3 sm:px-6 py-2.5 shadow-subtle">
-    <div class="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-3">
+    <div class="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-3 hdr-row">
       
       <!-- Brand & Book Switcher -->
-      <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
-        <div class="flex items-center gap-2.5">
+      <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full hdr-left">
+        <div class="flex items-center gap-2.5 shrink-0">
           <img src="data:image/webp;base64,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" alt="Victus" width="40" height="40" class="w-10 h-10 rounded-full shrink-0 object-cover">
           <div>
             <div class="flex items-center gap-2">
@@ -94,18 +103,18 @@
               <span id="appVerPill" class="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-mono font-bold tracking-wide">v2.0</span>
               <span id="syncPulse" class="w-2 h-2 rounded-full bg-slate-500 hidden sm:inline-block" title="Sync not connected"></span>
             </div>
-            <p class="text-[10px] text-slate-400 font-mono tracking-wider uppercase -mt-0.5">Intraday Journal &amp; Goal Tracker</p>
+            <p class="text-[10px] text-slate-400 font-mono tracking-wider uppercase -mt-0.5 hdr-wide">Intraday Journal &amp; Goal Tracker</p>
           </div>
         </div>
 
-        <div class="h-6 w-[1px] bg-terminal-border hidden lg:block"></div>
+        <div class="h-6 w-[1px] bg-terminal-border hidden lg:block shrink-0 hdr-wide"></div>
 
         <!-- Multi-Account Selector -->
-        <div class="flex items-center bg-black/40 p-1 rounded-lg border border-terminal-border text-xs font-mono max-w-full overflow-x-auto" id="accountsBar"></div>
+        <div class="flex items-center bg-black/40 p-1 rounded-lg border border-terminal-border text-xs font-mono max-w-full min-w-0 overflow-x-auto" id="accountsBar"></div>
       </div>
 
       <!-- Navigation & Action Controls -->
-      <div class="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 max-w-full">
+      <div class="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 max-w-full hdr-right">
         <nav class="top-nav flex items-center bg-black/40 p-0.5 rounded-lg border border-terminal-border text-xs font-mono max-w-full overflow-x-auto">
           <button onclick="switchTab('dashboard')" id="navTab-dashboard" class="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-terminal-card border border-terminal-borderLight text-amber-400 transition-all">Dashboard</button>
           <button onclick="switchTab('signals')" id="navTab-signals" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Signals</button>
@@ -115,8 +124,8 @@
         </nav>
 
         <button type="button" id="themeBtn" onclick="toggleTheme()" title="Switch light / dark" class="px-2 py-1.5 rounded-lg border border-terminal-border bg-black/40 text-slate-300 hover:text-white text-xs font-mono">☀</button>
-        <div class="flex items-center gap-2 text-xs font-mono text-slate-400 bg-black/40 px-3 py-1.5 rounded-lg border border-terminal-border">
-          <span>Balance: <strong id="topBalVal" class="text-amber-400">$29.45</strong> <span id="topBalLive" class="hidden text-[9px] font-bold px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 align-middle" title="">LIVE</span></span>
+        <div class="flex items-center gap-2 text-xs font-mono text-slate-400 bg-black/40 px-3 py-1.5 rounded-lg border border-terminal-border whitespace-nowrap">
+          <span><span class="hdr-bal">Balance: </span> <strong id="topBalVal" title="Balance" class="text-amber-400">$29.45</strong> <span id="topBalLive" class="hidden text-[9px] font-bold px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 align-middle" title="">LIVE</span></span>
         </div>
       </div>
 
@@ -1504,6 +1513,7 @@
       o.target = cNum(g.target) > 0 ? cNum(g.target) : 20;
       o.period = ["day", "week", "month", "quarter", "year"].indexOf(g.period) !== -1 ? g.period : "month";
       o.accountId = cText(g.accountId || "all", 40);
+      if (typeof g.startsOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(g.startsOn) && (o.period === "week" || o.period === "month")) o.startsOn = g.startsOn; else delete o.startsOn; // planned ahead: waits for this day
       if (g.cur === "INR" || g.cur === "USD") o.cur = g.cur; else delete o.cur; // the currency its money targets were typed in
       // A goal is a set of optional targets. Older goals carried one metric and one target.
       const GK = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance"];
@@ -1953,7 +1963,7 @@
         sw.appendChild(b);
       });
       bar.appendChild(sw);
-      bar.appendChild(createBtn('all', `All accounts <span class="text-amber-400 font-bold ml-1">${state.accounts.length} BOOKS</span>`, selected() === 'all'));
+      bar.appendChild(createBtn('all', `All accounts <span class="text-amber-400 font-bold ml-1 hdr-wide">${state.accounts.length} BOOKS</span>`, selected() === 'all'));
       state.accounts.forEach(a => {
         bar.appendChild(createBtn(a.id, `${esc(a.name)} <span class="text-slate-500">${a.reportBroker ? 'report' : esc(a.defaultLeverage || 1) + 'x'}</span>`, selected() === a.id));
       });
@@ -2030,25 +2040,38 @@
       save();
       renderDashboard();
     }
-    // Last calendar day of the goal's planning window.
-    function goalPeriodEnd(period) {
+    // A goal saved for next week or next month waits until its window opens:
+    // until then it is measured over that coming window, afterwards like any other.
+    function goalUpcoming(g) { return !!(g && typeof g === "object" && g.startsOn && g.startsOn > iso(new Date())); }
+    function goalRef(p) { return goalUpcoming(p) ? parseDay(p.startsOn) : new Date(); }
+    // First day of next week (Monday) or next month, for a goal planned ahead.
+    function nextWindowStart(period) {
       const d = new Date();
+      if (period === "week") return new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7) + 7);
+      return new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    }
+    // Last calendar day of the goal's planning window (takes a goal, or a bare period).
+    function goalPeriodEnd(p) {
+      const period = typeof p === "string" ? p : p.period, d = goalRef(p);
       if (period === "day") return new Date(d.getFullYear(), d.getMonth(), d.getDate());
       if (period === "week") return new Date(d.getFullYear(), d.getMonth(), d.getDate() + ((7 - d.getDay()) % 7)); // this Sunday
       if (period === "year") return new Date(d.getFullYear(), 11, 31);
       if (period === "quarter") return new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3 + 3, 0);
       return new Date(d.getFullYear(), d.getMonth() + 1, 0);
     }
-    function goalDaysLeft(period) { return period === "day" ? 1 : weekdaysLeft(goalPeriodEnd(period)); }
-    // Weekdays from today through the end date, today included.
-    function weekdaysLeft(end) {
+    function goalDaysLeft(p) {
+      if ((typeof p === "string" ? p : p.period) === "day") return 1;
+      return weekdaysLeft(goalPeriodEnd(p), goalUpcoming(p) ? goalWindowStart(p) : null);
+    }
+    // Weekdays from today (or a later start) through the end date, both included.
+    function weekdaysLeft(end, from) {
       let n = 0;
-      const d = new Date(); d.setHours(0, 0, 0, 0);
+      const d = from ? new Date(from) : new Date(); d.setHours(0, 0, 0, 0);
       while (d <= end) { const w = d.getDay(); if (w !== 0 && w !== 6) n++; d.setDate(d.getDate() + 1); }
       return n;
     }
-    function goalWindowStart(period) {
-      const d = new Date();
+    function goalWindowStart(p) {
+      const period = typeof p === "string" ? p : p.period, d = goalRef(p);
       if (period === "day") return new Date(d.getFullYear(), d.getMonth(), d.getDate());
       if (period === "week") return new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7)); // this Monday
       if (period === "year") return new Date(d.getFullYear(), 0, 1);
@@ -2071,7 +2094,7 @@
     }
     const MONEY_GOALS = ["net_pnl", "max_loss", "balance"];
     function goalProgress(g) {
-      const start = iso(goalWindowStart(g.period)), end = iso(goalPeriodEnd(g.period));
+      const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
       const book = g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId) ? g.accountId : null;
       const cur = viewCur();
       const ts = allTrades().filter(t => t.date >= start && t.date <= end
@@ -2110,7 +2133,7 @@
     function goalChipStatus(g0, key, gp) {
       const cur = gp.cur, T = goalTargetIn(g0, key, cur);
       const clamp01 = v => Math.max(0, Math.min(100, v));
-      const start = iso(goalWindowStart(g0.period)), end = iso(goalPeriodEnd(g0.period));
+      const start = iso(goalWindowStart(g0)), end = iso(goalPeriodEnd(g0));
       const inWin = rows => rows.filter(x => x.t.date >= start && x.t.date <= end);
       let label, text, pct, tone;
       if (key === "net_pnl") { label = "Profit"; text = signedMoney(gp.net, cur, 2) + " / " + money(T, cur, 0); pct = clamp01(gp.net / T * 100); tone = gp.net >= T ? "ok" : gp.net < 0 ? "bad" : "mid"; }
@@ -2160,7 +2183,7 @@
     // Share of trades in the goal's window that broke none of the five rules.
     function goalRuleStats(g, cur) {
       const ids = goalBooksOf(g, cur).map(a => a.id);
-      const start = iso(goalWindowStart(g.period)), end = iso(goalPeriodEnd(g.period));
+      const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
       // Balances and "after a loss" need the trades before the window too, so analyse all and cut afterwards.
       const rows = analyzeTrades(allTrades().filter(t => ids.indexOf(t.accountId) !== -1)).filter(x => x.t.date >= start && x.t.date <= end);
       const firstSig = (state.signals || []).map(x => x.date).sort()[0] || null;
@@ -2172,7 +2195,7 @@
     // Goals counted in days or percent instead of money.
     function renderCountGoal(g, gp) {
       const $ = id => document.getElementById(id);
-      const left = goalDaysLeft(g.period);
+      const left = goalDaysLeft(g);
       const t = g.target;
       const lbl1 = $('goalLbl1'), lbl2 = $('goalLbl2');
       $('goalDaysLeft').innerText = left ? left + ' day' + (left === 1 ? '' : 's') : 'none';
@@ -2235,7 +2258,7 @@
       } else if (g.metric === 'balance') {
         const cur = gp.cur, books = goalBooksOf(g);
         const now = sum(books.map(a => balIn(a, cur)));
-        const from = iso(goalWindowStart(g.period));
+        const from = iso(goalWindowStart(g));
         const start = sum(books.map(a => balanceAtStart(a, from) * fxk(a, cur)));
         const span = t - start;
         const pd = span > 0 ? Math.max(0, Math.min(100, Math.round((now - start) / span * 100))) : (now >= t ? 100 : 0);
@@ -2286,7 +2309,7 @@
         $('goalRunRate').innerText = slip || 'none';
         $('goalToGo').title = 'Revenge = a trade within 15 minutes of a loss. Size-up = over 1.5 times the size of the trade before, after a loss.';
       } else if (g.metric === 'avg_risk') {
-        const start = iso(goalWindowStart(g.period)), end = iso(goalPeriodEnd(g.period));
+        const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
         const all = goalRows(g, gp.cur).filter(x => x.t.date >= start && x.t.date <= end);
         const r = all.map(x => x.riskPct).filter(v => v != null), a = r.length ? avg(r) : null;
         $('goalCurrent').innerText = a == null ? '—' : a.toFixed(2) + '%';
@@ -2318,7 +2341,7 @@
       document.getElementById('goalNavLabel').innerText = `${idx + 1} / ${state.goals.length}`;
       const l1 = document.getElementById('goalLbl1'), l2 = document.getElementById('goalLbl2');
       renderGoalChips(g0, gp);
-      if (COUNT_GOALS.indexOf(g.metric) !== -1) { renderCountGoal(g, gp); return; }
+      if (COUNT_GOALS.indexOf(g.metric) !== -1) { renderCountGoal(g, gp); markUpcomingGoal(g); return; }
       if (l1) l1.innerText = 'To go today'; if (l2) l2.innerText = 'If you miss today';
 
       const target = g.target || 1;
@@ -2339,7 +2362,7 @@
         return;
       }
       const remaining = Math.max(0, g.target - s.net);
-      const left = goalDaysLeft(g.period);
+      const left = goalDaysLeft(g);
       document.getElementById('goalDaysLeft').innerText = left ? `${left} day${left === 1 ? '' : 's'}` : 'none';
       if (remaining === 0) {
         document.getElementById('goalToGo').innerText = 'Goal reached';
@@ -2359,6 +2382,16 @@
         toGo.innerHTML = `${esc(money(remaining / left, cur))} / day${share(remaining / left)}`; toGo.title = tip;
         runRate.innerHTML = left > 1 ? `${esc(money(remaining / (left - 1), cur))} / day${share(remaining / (left - 1))}` : "Last day"; runRate.title = tip;
       }
+      markUpcomingGoal(g);
+    }
+    // A goal planned for next week or month: say when it starts instead of "today".
+    function markUpcomingGoal(g) {
+      if (!goalUpcoming(g)) return;
+      const $ = id => document.getElementById(id), day = fmtDay(g.startsOn), left = goalDaysLeft(g);
+      $('goalTitle').innerText = g.title + ' · starts ' + day;
+      $('goalPct').innerText = 'Starts ' + day;
+      $('goalDaysLeft').innerText = left + ' day' + (left === 1 ? '' : 's') + ' from ' + day;
+      if (MONEY_GOALS.indexOf(g.metric) !== -1 && g.metric !== 'max_loss') { $('goalLbl1').innerText = 'Per day from ' + day; $('goalLbl2').innerText = 'If you miss a day'; }
     }
 
     // Two trades identical in every field the exchange records are the same
@@ -4006,27 +4039,26 @@
       document.getElementById('inspFees').innerText = money((o.fees || 0) * k, cur) + (k !== 1 ? ' (' + money(o.fees || 0, a.currency) + ')' : '');
       document.getElementById('inspNotes').innerText = trade.notes ? `"${trade.notes}"` : '"No execution reflection notes entered."';
 
+      // A journal trade's review is marked right here: tap a rule or a tag to flip it.
+      const own = state.trades.find(t => t.id === trade.id);
       const chk = document.getElementById('inspChecklist');
       chk.innerHTML = '';
-      RULES.forEach((r, i) => {
-        const kept = (trade.rules || [])[i];
-        const row = document.createElement('div');
-        row.className = kept ? 'flex items-center gap-2 text-emerald-400' : 'flex items-center gap-2 text-slate-500';
-        row.innerHTML = `<span>${kept ? '✓' : '✕'}</span> <span>${r}</span>`;
+      const tickRow = (label, kept, flip) => {
+        const row = document.createElement(own ? 'button' : 'div');
+        row.className = 'w-full text-left flex items-center gap-2 ' + (kept ? 'text-emerald-400' : 'text-slate-500') + (own ? ' hover:text-white' : '');
+        row.innerHTML = `<span>${kept ? '✓' : '✕'}</span> <span>${esc(label)}</span>`;
+        if (own) { row.type = 'button'; row.title = kept ? 'Done right. Tap to mark it missed' : 'Missed. Tap to mark it done'; row.onclick = flip; }
         chk.appendChild(row);
-      });
+      };
+      if (own) { const hint = document.createElement('div'); hint.className = 'text-[10px] text-slate-500'; hint.textContent = 'Rules followed · tap to change'; chk.appendChild(hint); }
+      RULES.forEach((r, i) => tickRow(r, (trade.rules || [])[i], () => reviewTrade(own, t => { t.rules = RULES.map((x, j) => j === i ? !(t.rules || [])[j] : !!(t.rules || [])[j]); })));
       const pr = trade.playRules || {};
       if (Object.keys(pr).length) {
         const head = document.createElement('div');
         head.className = 'text-slate-400 pt-1.5 mt-1 border-t border-terminal-border';
         head.textContent = 'Setup checklist';
         chk.appendChild(head);
-        Object.keys(pr).forEach(r => {
-          const row = document.createElement('div');
-          row.className = pr[r] ? 'flex items-center gap-2 text-emerald-400' : 'flex items-center gap-2 text-slate-500';
-          row.innerHTML = `<span>${pr[r] ? '✓' : '✕'}</span> <span>${esc(r)}</span>`;
-          chk.appendChild(row);
-        });
+        Object.keys(pr).forEach(r => tickRow(r, pr[r], () => reviewTrade(own, t => { t.playRules = Object.assign({}, t.playRules, { [r]: !(t.playRules || {})[r] }); })));
       }
 
       const conf = tradeConfidence(trade);
@@ -4034,10 +4066,34 @@
         ? `Confidence: <span class="text-amber-300">${starsText(conf)}</span> <span class="text-slate-500">(${conf}/5 · ${CONFIDENCE_LABELS[conf]})</span>`
         : `Confidence: <span class="text-slate-500">not rated</span>`;
       const pills = (list, cls) => list.map(tg => `<span class="px-2 py-0.5 rounded-full border text-[10px] ${cls}">${esc(tg)}</span>`).join('');
-      document.getElementById('inspTagsPositive').innerHTML = pills(trade.tagsPositives || [], 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50');
-      document.getElementById('inspTagsMistake').innerHTML = pills(trade.tagsMistakes || [], 'bg-rose-500/20 text-rose-300 border-rose-500/50');
+      // Every tag as a chip to switch on or off; just the picked ones when the trade can't be edited here.
+      const chips = (host, key, all, on, title) => {
+        const el = document.getElementById(host), picked = trade[key] || [];
+        if (!own) { el.innerHTML = pills(picked, on); return; }
+        el.innerHTML = `<span class="w-full text-[10px] text-slate-500">${title} · tap to change</span>`;
+        uniq(all.concat(picked)).forEach(tg => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'px-2 py-0.5 rounded-full border text-[10px] ' + (picked.includes(tg) ? on : 'bg-[#080D15] text-slate-500 border-terminal-border hover:text-slate-300');
+          b.textContent = tg;
+          b.onclick = () => reviewTrade(own, t => { const l = t[key] || []; t[key] = l.includes(tg) ? l.filter(x => x !== tg) : l.concat(tg); });
+          el.appendChild(b);
+        });
+      };
+      chips('inspTagsPositive', 'tagsPositives', POSITIVE_TAGS, 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50', 'What went right');
+      chips('inspTagsMistake', 'tagsMistakes', MISTAKE_TAGS, 'bg-rose-500/20 text-rose-300 border-rose-500/50', 'Mistakes');
 
       document.getElementById('tradeInspectorDrawer').classList.remove('translate-x-full');
+    }
+
+    // Change one part of a journal trade's review from the inspector, save it, and redraw.
+    function reviewTrade(t, change) {
+      if (!t) return;
+      change(t);
+      stamp(t);
+      save();
+      renderAll();
+      openInspector(hydrate(t));
     }
 
     function closeInspector() {
@@ -4419,7 +4475,7 @@
           <div>
             <label class="text-slate-400 block mb-1">Planning Window</label>
             <select id="gPeriod" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
-              ${[["day", "Today"], ["week", "This Week"], ["month", "This Month"], ["quarter", "This Quarter"], ["year", "This Year"]].map(o => `<option value="${o[0]}" ${(existing ? existing.period : "month") === o[0] ? "selected" : ""}>${o[1]}</option>`).join("")}
+              ${[["day", "Today"], ["week", "This Week"], ["next_week", "Next Week"], ["month", "This Month"], ["next_month", "Next Month"], ["quarter", "This Quarter"], ["year", "This Year"]].map(o => `<option value="${o[0]}" ${(existing ? (goalUpcoming(existing) ? "next_" : "") + existing.period : "month") === o[0] ? "selected" : ""}>${o[1]}</option>`).join("")}
             </select>
           </div>
           <div>
@@ -4445,7 +4501,11 @@
         if (!Object.keys(targets).length) targets.net_pnl = 20;
         const first = GOAL_ORDER.filter(k => targets[k] != null)[0];
         const metric = first;
-        const period = document.getElementById('gPeriod').value;
+        const pick = document.getElementById('gPeriod').value;
+        // Next week / next month: saved now, counted from the day that window opens.
+        const ahead = pick === "next_week" || pick === "next_month";
+        const period = ahead ? pick.slice(5) : pick;
+        const startsOn = ahead ? iso(nextWindowStart(period)) : null;
         const accountId = document.getElementById('gAccount').value;
         // A book in the other currency: its money targets are turned into that currency at its rate.
         const bk = accountId !== "all" ? state.accounts.find(a => a.id === accountId) : null;
@@ -4457,11 +4517,14 @@
           existing.metric = metric;
           existing.targets = targets;
           existing.period = period;
+          if (startsOn) existing.startsOn = startsOn; else delete existing.startsOn;
           existing.accountId = accountId;
           existing.cur = cur;
           stamp(existing);
         } else {
-          state.goals.push(stamp({ id: uid(), title, target, metric, targets, period, accountId, cur }));
+          const ng = { id: uid(), title, target, metric, targets, period, accountId, cur };
+          if (startsOn) ng.startsOn = startsOn;
+          state.goals.push(stamp(ng));
         }
         save();
         renderAll();
@@ -5505,13 +5568,13 @@
       // goal select + auto-filled fields
       const sel = document.getElementById('gpGoal');
       if (sel && (force || document.activeElement !== sel)) {
-        sel.innerHTML = gpMoneyGoals().map(x => '<option value="' + esc(x.id) + '">' + esc(x.title) + ' (' + esc(money(x.target, goalProgress(x).cur, 0)) + ' ' + esc(x.period) + ')</option>').join('') + '<option value="custom">Custom target</option>';
+        sel.innerHTML = gpMoneyGoals().map(x => '<option value="' + esc(x.id) + '">' + esc(x.title) + ' (' + esc(money(x.target, goalProgress(x).cur, 0)) + ' ' + (goalUpcoming(x) ? 'next ' : '') + esc(x.period) + ')</option>').join('') + '<option value="custom">Custom target</option>';
         sel.value = g ? g.id : "custom";
       }
       let need, days;
       if (g) {
         need = Math.max(0, (g.target || 0) - goalProgress(g).net);
-        days = goalDaysLeft(g.period);
+        days = goalDaysLeft(g);
         if (need > 0) need = +need.toFixed(2);
       } else { need = num(s.gpTarget); days = Math.floor(num(s.gpDays)); }
       const setv = (id, v, locked) => { const e = document.getElementById(id); if (!e) return; if (document.activeElement !== e) e.value = v; e.disabled = !!locked; e.classList.toggle('opacity-60', !!locked); };
