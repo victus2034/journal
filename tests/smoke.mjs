@@ -538,6 +538,9 @@ async function coindcxRun(seed) {
     if (p0 === '/exchange/v1/derivatives/futures/trades') {
       if (mock.fillsMode === 'none') return [404, { message: 'Not found' }];
       if (!/^\d{4}-\d{2}-\d{2}$/.test(p.from_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(p.to_date || '') || p.to_date < p.from_date) { mock.bad.push('fill dates ' + body); return [400, { message: 'Invalid Request' }]; }
+      // As the real one: at most 7 days (both ends counted) a call, and only 30 days back.
+      const span = (Date.parse(p.to_date) - Date.parse(p.from_date)) / 864e5, oldest = new Date(Date.now() - 30 * 864e5 + 5.5 * 3600e3).toISOString().slice(0, 10);
+      if (span > 6 || p.from_date < oldest || mock.fillsMode === 'range') return [400, { code: 400, message: 'From Date not in range', status: 'error' }];
       if ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400') return [400, { code: 400, message: 'Invalid margin', status: 'error' }];
       const day = x => new Date(x.timestamp).toISOString().slice(0, 10);
       return [200, slice(mc === 'INR' ? fills.filter(x => mock.fillsMode === 'allDates' || (day(x) >= p.from_date && day(x) <= p.to_date)) : [])];
@@ -674,7 +677,7 @@ async function coindcxRun(seed) {
 
     // The right one: two pages of rupee futures and one of USDT, the wallets and
     // 90 days of fills a week at a time, saved in one commit.
-    const fromDay = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
+    const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
     r = await runImport();
     const want = `Imported ${NEW_ROWS} new rows from CoinDCX · 1 unreadable transaction skipped` + W + F1;
     check(r.code === 0 && r.out === want && r.summary === want, 'import: ' + JSON.stringify(r) + ', expected "' + want + '"');
@@ -683,12 +686,13 @@ async function coindcxRun(seed) {
     const isFill = x => x.path.endsWith('/trades');
     const paths = mock.calls.filter(x => !isFill(x)).map(x => [x.path.split('/').pop(), x.p.margin_currency_short_name, x.p.page].filter(v => v != null).join(':'));
     check(paths.join(',') === 'transactions:INR:1,transactions:INR:2,transactions:USDT:1,wallets', 'calls made: ' + paths.join(','));
-    // Fill windows: from 90 days back to tomorrow, a week each, every day covered, for both margins.
+    // Fill windows: from today (Indian date) back, 7 days each, every day covered,
+    // for both margins, until CoinDCX says the dates are out of its range (30 days here).
     const weeks = mc => mock.calls.filter(x => isFill(x) && x.p.margin_currency_short_name[0] === mc).map(x => [x.p.from_date, x.p.to_date, x.p.page]);
     const wk = weeks('INR'), dayMs = d => Date.parse(d + 'T00:00:00Z');
-    const covered = wk.length && wk[0][0] === fromDay && wk.every((w, i) => w[2] === '1' && dayMs(w[1]) - dayMs(w[0]) === 7 * 864e5 && (!i || w[0] === wk[i - 1][1]))
-      && wk[wk.length - 1][1] >= new Date(Date.now() + 864e5).toISOString().slice(0, 10) && JSON.stringify(weeks('USDT')) === JSON.stringify(wk);
-    check(covered && wk.length === 14, 'fill windows: ' + JSON.stringify(wk));
+    const covered = wk.length && wk[0][1] === today && wk.every((w, i) => w[2] === '1' && dayMs(w[1]) - dayMs(w[0]) === 6 * 864e5 && (!i || w[1] === wk[i - 1][0]))
+      && JSON.stringify(weeks('USDT')) === JSON.stringify(wk);
+    check(covered && wk.length === 6 && dayMs(wk[4][0]) === dayMs(today) - 30 * 864e5, 'fill windows: ' + JSON.stringify(wk));
     let j = stored();
     const ddd = j.backtest.rows.find(x => x.file === 'cdx-api' && x.sym === 'B-DDD_USDT' && x.gross === 30);
     check(ddd && ddd.at === '2026-09-05 09:00:00' && ddd.fee === 3 && ddd.net === 27 && ddd.kind === 'order' && ddd.cur === 'INR', 'stored in Indian time on a UTC server: ' + JSON.stringify(ddd));
@@ -791,7 +795,7 @@ async function coindcxRun(seed) {
     check(r.code === 0 && r.out === 'Up to date, nothing new from CoinDCX · 1 unreadable transaction skipped' + W + F && !r.puts.length, 'second run: ' + JSON.stringify(r));
     // Later runs read the fills from three days before the newest one kept.
     const later = mock.calls.filter(x => isFill(x) && x.p.margin_currency_short_name[0] === 'INR').map(x => x.p.from_date);
-    check(later[0] === new Date(Date.parse(D + 'T08:30:00Z') - 3 * 864e5).toISOString().slice(0, 10) && later.length <= 2, 'later fill reads: ' + JSON.stringify(later));
+    check(later.length === 2 && later[1] <= new Date(Date.parse(D + 'T08:30:00Z') - 3 * 864e5).toISOString().slice(0, 10) && later[0] > later[1], 'later fill reads: ' + JSON.stringify(later));
     // An answer that ignores paging (the whole list on every page) still ends.
     mock.mode = 'noPaging';
     r = await runImport();
@@ -945,6 +949,11 @@ async function coindcxRun(seed) {
     r = await runImport();
     mock.fillsMode = '';
     check(r.code === 0 && r.out.endsWith(' · trade prices not read (CoinDCX answered 404: Not found)') && !r.puts.length && stored().backtest.files.find(f => f.id === 'cdx-api').fills.length === 7, 'fills not shown: ' + JSON.stringify(r));
+    // Even this week's dates refused: said with CoinDCX's words, nothing written.
+    mock.fillsMode = 'range';
+    r = await runImport();
+    mock.fillsMode = '';
+    check(r.code === 0 && r.out.endsWith(' · trade prices not read (CoinDCX answered 400: From Date not in range)') && !r.puts.length, 'fill dates refused: ' + JSON.stringify(r));
     // An answer that ignores the dates (every fill for every week) still keeps each one once.
     mock.fillsMode = 'allDates';
     r = await runImport();
