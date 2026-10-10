@@ -1475,6 +1475,7 @@
       o.maxTradesPerDay = pos(a.maxTradesPerDay, 5); o.defaultLeverage = pos(a.defaultLeverage, 1);
       o.maxNotionalX = pos(a.maxNotionalX, 3); // biggest position, as a multiple of balance, before it counts as oversized
       if (a.reportBroker !== undefined) { o.reportBroker = cText(a.reportBroker, 40).trim(); if (!o.reportBroker) delete o.reportBroker; }
+      if (a.fxRate !== undefined) { if (cNum(a.fxRate) > 0) o.fxRate = cNum(a.fxRate); else delete o.fxRate; } // rupees per dollar, when changed from the default
       return o;
     }
     function cleanGoal(g) {
@@ -1484,6 +1485,7 @@
       o.target = cNum(g.target) > 0 ? cNum(g.target) : 20;
       o.period = ["day", "week", "month", "quarter", "year"].indexOf(g.period) !== -1 ? g.period : "month";
       o.accountId = cText(g.accountId || "all", 40);
+      if (g.cur === "INR" || g.cur === "USD") o.cur = g.cur; else delete o.cur; // the currency its money targets were typed in
       // A goal is a set of optional targets. Older goals carried one metric and one target.
       const GK = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance"];
       const t = {};
@@ -1639,6 +1641,7 @@
     function pTag(v) { const t = pfmt(v); return t ? ` <span class="text-[10px] font-normal opacity-80" title="% move from entry (net of fees for your trades)">(${t})</span>` : ""; }
     // Your trade's net result (after fees) as a % of the position's value at entry.
     function tradePct(t) {
+      if (t && t.orig) t = t.orig; // price and size are in the book's own currency
       if (!t || !(t.entry > 0) || !(t.qty > 0)) return null;
       const v = derive(t).pnl / (t.entry * t.qty) * 100;
       return isFinite(v) ? v : null;
@@ -1685,6 +1688,7 @@
       return isFinite(s) && s > 0 && isFinite(e) && (t.direction === "long" ? s < e : s > e);
     }
     function derive(t) {
+      if (t.fxk) return { pnl: t.pnl, risk: t.risk || 0, r: t.r != null ? t.r : null }; // a copy already converted to the view currency
       if (t.rep) return { pnl: t.pnl, risk: 0, r: null }; // from a broker report: its net, no prices or size
       const dir = t.direction === "long" ? 1 : -1;
       const pnl = (t.exit - t.entry) * t.qty * dir - (t.fees || 0);
@@ -1709,24 +1713,47 @@
     }
     // Every trade of one book, journal and report alike.
     function bookTrades(id) { return allTrades().filter(t => t.accountId === id); }
-    function scoped() {
-      const ts = allTrades();
-      return isAll() ? ts : ts.filter(t => t.accountId === selected());
+    // Rupees per dollar for a book. Delta India books deposits and withdrawals at
+    // a fixed ₹85; CoinDCX values USDT at its own price (₹99.30 on 10 Oct 2026).
+    // Either can be changed per book in Sync & Settings → Trading Books.
+    const FX_DEFAULT = 85, FX_COINDCX = 99.3;
+    function fxDefault(a) { return a && a.reportBroker && /coindcx/i.test(a.reportBroker) ? FX_COINDCX : FX_DEFAULT; }
+    function fxRate(a) { const r = Number(a && a.fxRate); return r > 0 && isFinite(r) ? r : fxDefault(a); }
+    // Multiplier taking a book's money into the given currency.
+    function fxk(a, cur) {
+      if (!a || !cur || a.currency === cur) return 1;
+      return cur === "INR" ? fxRate(a) : 1 / fxRate(a);
     }
+    // One trade with its money (P&L, fees, risk) in the given currency. Prices and
+    // size stay as traded; `orig` is the stored trade, for anything that needs them.
+    function toView(t, cur) {
+      const k = fxk(acct(t.accountId), cur);
+      if (k === 1) return t;
+      const c = Object.assign({}, t, { pnl: (t.pnl || 0) * k, fees: (t.fees || 0) * k, risk: (t.risk || 0) * k, fxk: k, orig: t });
+      if (t.gross != null) c.gross = t.gross * k;
+      if (t.funding != null) c.funding = t.funding * k;
+      return c;
+    }
+    // A trade's P&L in the given currency, from the stored trade or a converted copy alike.
+    function pnlIn(t, cur) { const o = t.orig || t; return (derive(o).pnl || 0) * fxk(acct(o.accountId), cur); }
+    // A book's balance in the given currency.
+    function balIn(a, cur) { return bookBalance(a) * fxk(a, cur); }
+    // The books in view: every book on All accounts, else the one picked.
+    function viewBooks() { return isAll() ? state.accounts.slice() : [acct(selected())]; }
+    // Every figure on screen is in this currency. One switch in the accounts bar
+    // sets it for every book and tab; until it is used a book shows its own.
     function viewCur() {
+      const c = state.ui.allCur;
+      if (c === "INR" || c === "USD") return c;
       if (!isAll()) return acct(selected()).currency;
-      const cs = uniq(state.accounts.map(a => a.currency));
-      if (cs.length === 1) return cs[0];
-      return cs.indexOf(state.ui.allCur) !== -1 ? state.ui.allCur : "USD";
+      return "USD";
     }
-    // Money figures can only be added within one currency. With rupee and dollar
-    // books together, the dashboard totals cover the books in the view currency.
-    function statScoped() {
-      const ts = scoped();
-      if (!isAll()) return ts;
-      const cur = viewCur();
-      return ts.filter(t => acct(t.accountId).currency === cur);
+    function scoped() {
+      const ts = allTrades(), cur = viewCur();
+      return (isAll() ? ts : ts.filter(t => t.accountId === selected())).map(t => toView(t, cur));
     }
+    // Rupee and dollar books are added up after converting each at its own rate.
+    function statScoped() { return scoped(); }
 
     function monthKey(dateStr) { return (dateStr || "").slice(0, 7); }
     function curMonthKey() {
@@ -1782,11 +1809,11 @@
         d.net = sum(d.trades.map(t => t.pnl));
         d.r = sum(d.trades.map(t => t.r || 0));
         d.count = d.trades.length;
-        const a = acct(d.accountId);
+        const a = acct(d.accountId), lim = a.dailyLossLimit * (d.trades[0].fxk || 1); // the limit in the trades' currency
         let run = 0, breached = false;
         d.trades.forEach(t => {
           run += t.pnl;
-          if (a.dailyLossLimit > 0 && run <= -a.dailyLossLimit) breached = true;
+          if (lim > 0 && run <= -lim) breached = true;
         });
         d.breached = breached;
         return d;
@@ -1888,26 +1915,24 @@
         return btn;
       };
 
+      // Every book and tab in rupees or dollars. Each book converts at its own
+      // rate (Delta ₹85, CoinDCX its USDT price), set in Trading Books.
+      const sw = document.createElement('span');
+      sw.id = 'allCurSwitch';
+      sw.className = 'flex items-center gap-1 shrink-0 mr-1';
+      sw.title = 'Show every amount in rupees or dollars. Rates: ' + state.accounts.map(a => a.name + ' ₹' + cleanNum(fxRate(a)) + '/$').join(', ');
+      ['INR', 'USD'].forEach(c => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.dataset.cur = c;
+        b.title = 'Show every amount in ' + (c === 'INR' ? 'rupees' : 'dollars');
+        b.className = c === viewCur() ? 'px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/40' : 'px-1.5 py-0.5 rounded text-[10px] text-slate-400 hover:text-white border border-terminal-border';
+        b.innerText = curSym(c) + ' ' + c;
+        b.onclick = () => { state.ui.allCur = c; save(); renderAll(); };
+        sw.appendChild(b);
+      });
+      bar.appendChild(sw);
       bar.appendChild(createBtn('all', `All accounts <span class="text-amber-400 font-bold ml-1">${state.accounts.length} BOOKS</span>`, selected() === 'all'));
-      // Rupee and dollar books can't be added together: All shows one currency
-      // at a time, and this picks which.
-      const curs = uniq(state.accounts.map(a => a.currency));
-      if (isAll() && curs.length > 1) {
-        const sw = document.createElement('span');
-        sw.id = 'allCurSwitch';
-        sw.className = 'flex items-center gap-1 shrink-0 mr-1';
-        curs.forEach(c => {
-          const b = document.createElement('button');
-          b.type = 'button';
-          b.dataset.cur = c;
-          b.title = 'Add up the ' + c + ' books';
-          b.className = c === viewCur() ? 'px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/40' : 'px-1.5 py-0.5 rounded text-[10px] text-slate-400 hover:text-white border border-terminal-border';
-          b.innerText = curSym(c) + ' ' + c;
-          b.onclick = () => { state.ui.allCur = c; save(); renderAll(); };
-          sw.appendChild(b);
-        });
-        bar.appendChild(sw);
-      }
       state.accounts.forEach(a => {
         bar.appendChild(createBtn(a.id, `${esc(a.name)} <span class="text-slate-500">${a.reportBroker ? 'report' : esc(a.defaultLeverage || 1) + 'x'}</span>`, selected() === a.id));
       });
@@ -1925,8 +1950,7 @@
     function greenOrReturn(greenDays, days, s, cur) {
       const showDays = state.ui.kpiGreenDays === true;
       const key = selectedMonthKey(), from = key === "all" ? "" : key + "-01";
-      const books = isAll() ? state.accounts.filter(a => a.currency === cur) : [acct(selected())];
-      const opening = sum(books.map(a => balanceAtStart(a, from)));
+      const opening = sum(viewBooks().map(a => balanceAtStart(a, from) * fxk(a, cur)));
       const pctRet = opening > 0 ? s.net / opening * 100 : null;
       const card = showDays
         ? { label: "GREEN DAYS", val: `${greenDays} of ${days.length}`, sub: days.length ? pct(greenDays / days.length * 100) : "0%", color: "text-slate-200" }
@@ -2008,12 +2032,27 @@
       if (period === "quarter") return new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3, 1);
       return new Date(d.getFullYear(), d.getMonth(), 1);
     }
+    // The currency a goal's money targets were typed in: its book's, or for an
+    // all-books goal the one it was saved in (older ones: rupees if a book uses them).
+    function goalCur(g) {
+      if (g && g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId)) return acct(g.accountId).currency;
+      if (g && (g.cur === "INR" || g.cur === "USD")) return g.cur;
+      return state.accounts.some(a => a.currency === "INR") ? "INR" : "USD";
+    }
+    // Multiplier taking a goal's money targets into the given currency: a book's
+    // goal at that book's rate, an all-books goal at ₹85 a dollar.
+    function goalK(g, cur) {
+      if (g && g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId)) return fxk(acct(g.accountId), cur);
+      const gc = goalCur(g);
+      return gc === cur ? 1 : cur === "INR" ? FX_DEFAULT : 1 / FX_DEFAULT;
+    }
+    const MONEY_GOALS = ["net_pnl", "max_loss", "balance"];
     function goalProgress(g) {
       const start = iso(goalWindowStart(g.period)), end = iso(goalPeriodEnd(g.period));
       const book = g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId) ? g.accountId : null;
-      const cur = book ? acct(book).currency : viewCur();
+      const cur = viewCur();
       const ts = allTrades().filter(t => t.date >= start && t.date <= end
-        && (book ? t.accountId === book : acct(t.accountId).currency === cur));
+        && (!book || t.accountId === book)).map(t => toView(t, cur));
       const byDay = {};
       ts.forEach(t => { byDay[t.date] = (byDay[t.date] || 0) + (t.pnl || 0); });
       const dayNets = Object.keys(byDay).map(d => byDay[d]);
@@ -2029,13 +2068,15 @@
       return g && g.target ? { [g.metric || "net_pnl"]: g.target } : {};
     }
     function goalKeys(g) { const t = goalTargets(g); return GOAL_ORDER.filter(k => t[k] != null); }
+    // One target in the given currency (money targets are converted, counts and % are not).
+    function goalTargetIn(g, key, cur) { const T = goalTargets(g)[key]; return T != null && MONEY_GOALS.indexOf(key) !== -1 ? T * goalK(g, cur) : T; }
     // The goal seen through one of its targets: the big card shows one at a time.
     function goalFocused(g0) {
       const keys = goalKeys(g0);
       if (!keys.length) return Object.assign({}, g0, { metric: "net_pnl", target: 0 });
       const f = state.ui.goalFocus && state.ui.goalFocus[g0.id];
       const key = keys.indexOf(f) !== -1 ? f : keys[0];
-      return Object.assign({}, g0, { metric: key, target: goalTargets(g0)[key] });
+      return Object.assign({}, g0, { metric: key, target: goalTargetIn(g0, key, viewCur()) });
     }
     // Trades of a goal's books, analysed with everything before them so balances and streaks are right.
     function goalRows(g, cur) {
@@ -2044,7 +2085,7 @@
     }
     // One line of status per target, for the row of chips under the goal.
     function goalChipStatus(g0, key, gp) {
-      const T = goalTargets(g0)[key], cur = gp.cur;
+      const cur = gp.cur, T = goalTargetIn(g0, key, cur);
       const clamp01 = v => Math.max(0, Math.min(100, v));
       const start = iso(goalWindowStart(g0.period)), end = iso(goalPeriodEnd(g0.period));
       const inWin = rows => rows.filter(x => x.t.date >= start && x.t.date <= end);
@@ -2058,7 +2099,7 @@
       else if (key === "trade_cap") { const over = Object.keys(gp.overDays).filter(d => gp.overDays[d] > T).length; label = "Trade cap"; text = over + " day" + (over === 1 ? "" : "s") + " over " + T; pct = gp.tradedDays ? clamp01((gp.tradedDays - over) / gp.tradedDays * 100) : 100; tone = over ? "bad" : "ok"; }
       else if (key === "no_revenge") { const st = goalCalmStreak(g0, cur); label = "No revenge"; text = st + " / " + T + " in a row"; pct = clamp01(st / T * 100); tone = st >= T ? "ok" : "mid"; }
       else if (key === "avg_risk") { const r = inWin(goalRows(g0, cur)).map(x => x.riskPct).filter(v => v != null); const a = r.length ? avg(r) : null; label = "Avg risk"; text = (a == null ? "—" : a.toFixed(2) + "%") + " / " + T + "%"; pct = a == null ? 0 : a <= T ? 100 : clamp01(T / a * 100); tone = a == null ? "mid" : a <= T ? "ok" : "bad"; }
-      else { const books = goalBooksOf(g0, cur), now = sum(books.map(bookBalance)), st = sum(books.map(a => balanceAtStart(a, start))), span = T - st; label = "Balance"; text = money(now, cur, 2) + " / " + money(T, cur, 0); pct = span > 0 ? clamp01((now - st) / span * 100) : (now >= T ? 100 : 0); tone = now >= T ? "ok" : "mid"; }
+      else { const books = goalBooksOf(g0), now = sum(books.map(a => balIn(a, cur))), st = sum(books.map(a => balanceAtStart(a, start) * fxk(a, cur))), span = T - st; label = "Balance"; text = money(now, cur, 2) + " / " + money(T, cur, 0); pct = span > 0 ? clamp01((now - st) / span * 100) : (now >= T ? 100 : 0); tone = now >= T ? "ok" : "mid"; }
       return { label, text, pct, tone };
     }
     // Trades in a row, ending with the latest, that were not revenge trades or size-ups after a loss.
@@ -2090,8 +2131,8 @@
     const GOAL_KINDS = { net_pnl: "Profit", win_days: "Winning days", win_rate: "Win rate", profit_factor: "Profit factor", max_loss: "Loss limit (stay above)", rule_follow: "Follow my rules", trade_cap: "Trades per day cap", no_revenge: "No revenge trades", avg_risk: "Average risk per trade", balance: "Account balance" };
     const COUNT_GOALS = ["win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance"];
     // The books a goal counts, same choice the profit goal uses.
-    function goalBooksOf(g, cur) {
-      return (g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId)) ? [acct(g.accountId)] : state.accounts.filter(a => a.currency === cur);
+    function goalBooksOf(g) {
+      return (g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId)) ? [acct(g.accountId)] : state.accounts.slice();
     }
     // Share of trades in the goal's window that broke none of the five rules.
     function goalRuleStats(g, cur) {
@@ -2169,10 +2210,10 @@
         $('goalRunRate').innerText = rs.n + ' trades · ' + rs.clean + ' clean / ' + rs.broke + ' broke a rule';
         $('goalToGo').title = 'Clean = none of the five rules in the Analysis tab was broken.';
       } else if (g.metric === 'balance') {
-        const cur = gp.cur, books = goalBooksOf(g, cur);
-        const now = sum(books.map(bookBalance));
+        const cur = gp.cur, books = goalBooksOf(g);
+        const now = sum(books.map(a => balIn(a, cur)));
         const from = iso(goalWindowStart(g.period));
-        const start = sum(books.map(a => balanceAtStart(a, from)));
+        const start = sum(books.map(a => balanceAtStart(a, from) * fxk(a, cur)));
         const span = t - start;
         const pd = span > 0 ? Math.max(0, Math.min(100, Math.round((now - start) / span * 100))) : (now >= t ? 100 : 0);
         $('goalCurrent').innerText = money(now, cur);
@@ -2288,8 +2329,7 @@
         // included; missing today spreads it over one fewer day.
         // The same figure as a share of the balance you have now, since a dollar a day
         // means something very different on $30 than on $3,000.
-        const goalBooks = (g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId)) ? [acct(g.accountId)] : state.accounts.filter(a => a.currency === cur);
-        const balNow = sum(goalBooks.map(bookBalance));
+        const balNow = sum(goalBooksOf(g).map(a => balIn(a, cur)));
         const share = v => balNow > 0 ? ` <span class="text-amber-300 font-normal">· ${(v / balNow * 100).toFixed(1)}%</span>` : "";
         const tip = balNow > 0 ? `Per day, as a share of your balance now (${money(balNow, cur)})` : "";
         const toGo = document.getElementById('goalToGo'), runRate = document.getElementById('goalRunRate');
@@ -2329,18 +2369,18 @@
       const ts = statScoped();
       const todayStr = iso(new Date());
       const todayTrades = ts.filter(t => t.date === todayStr);
-      // The book whose limits apply: the selected one, or (all books) the first
-      // one in the currency being shown, so a rupee limit is never shown as dollars.
+      // The book whose max risk % is shown: the selected one, or (all books) the
+      // first one in the currency being shown. The daily loss limit on All is
+      // every book's limit added up, each converted.
       const defAcct = isAll() ? (state.accounts.find(a => a.currency === cur) || state.accounts[0] || acct('')) : acct(selected());
-      const maxLoss = defAcct.dailyLossLimit > 0 ? defAcct.dailyLossLimit : 0; // 0 = limit off
+      const maxLoss = sum(viewBooks().map(a => a.dailyLossLimit > 0 ? a.dailyLossLimit * fxk(a, cur) : 0)); // 0 = limit off
 
       const todayPnl = sum(todayTrades.map(t => t.pnl));
       const todayRisk = sum(todayTrades.map(t => t.risk || 0));
       const unsized = todayTrades.filter(t => !(t.risk > 0)).length;
       // Risk is measured against the balance the books have now (Delta's live
       // figure where it has one), not the starting balance or a made-up default.
-      const capBooks = isAll() ? state.accounts.filter(a => a.currency === cur) : [defAcct];
-      const cap = sum(capBooks.map(bookBalance));
+      const cap = sum(viewBooks().map(a => balIn(a, cur)));
       const riskPct = cap > 0 ? (todayRisk / cap * 100) : 0;
       const noBalance = !(cap > 0) && todayRisk > 0;
       
@@ -2377,16 +2417,20 @@
     }
     // Whether today's daily loss limit or max-trades limit is reached, for the
     // book in view (or the given one). Feeds the red banner and the log-trade check.
+    // Each book is held to its own limits in its own currency; the message shows
+    // the figures in the currency on screen.
     function dailyLimitState(cur, accountId) {
-      const book = accountId ? acct(accountId) : (isAll() ? (state.accounts.find(a => a.currency === cur) || state.accounts[0] || acct('')) : acct(selected()));
       const todayStr = iso(new Date());
-      const ts = (accountId ? allTrades().filter(t => t.accountId === accountId) : statScoped()).filter(t => t.date === todayStr);
-      const pnl = sum(ts.map(t => t.pnl));
-      const lossHit = book.dailyLossLimit > 0 && pnl <= -book.dailyLossLimit;
-      const countHit = book.maxTradesPerDay > 0 && ts.length >= book.maxTradesPerDay;
-      const msg = lossHit ? `Daily loss limit hit: ${signedMoney(pnl, book.currency)} against a ${money(book.dailyLossLimit, book.currency)} limit (${book.name}).`
-        : countHit ? `Max trades reached: ${ts.length} of ${book.maxTradesPerDay} today (${book.name}).` : '';
-      return { hit: lossHit || countHit, msg };
+      const books = accountId ? [acct(accountId)] : viewBooks();
+      for (const book of books) {
+        const ts = allTrades().filter(t => t.accountId === book.id && t.date === todayStr);
+        const pnl = sum(ts.map(t => t.pnl)), k = fxk(book, cur);
+        const lossHit = book.dailyLossLimit > 0 && pnl <= -book.dailyLossLimit;
+        const countHit = book.maxTradesPerDay > 0 && ts.length >= book.maxTradesPerDay;
+        if (lossHit) return { hit: true, msg: `Daily loss limit hit: ${signedMoney(pnl * k, cur)} against a ${money(book.dailyLossLimit * k, cur)} limit (${book.name}).` };
+        if (countHit) return { hit: true, msg: `Max trades reached: ${ts.length} of ${book.maxTradesPerDay} today (${book.name}).` };
+      }
+      return { hit: false, msg: '' };
     }
 
     function renderMainEquityChart(ts, cur) {
@@ -2477,11 +2521,8 @@
       });
 
       // Balance is start balance plus every trade ever taken in the books in view,
-      // not just the month on screen, and never across two currencies.
-      const balBooks = isAll() ? state.accounts.filter(a => a.currency === cur) : [acct(selected())];
-      const balIds = {}; balBooks.forEach(a => { balIds[a.id] = 1; });
-      const curBal = sum(balBooks.map(a => a.startBalance || 0))
-        + sum(allTrades().filter(t => balIds[t.accountId]).map(t => t.pnl));
+      // not just the month on screen, each book converted at its own rate.
+      const curBal = sum(viewBooks().map(a => bookComputedBalance(a) * fxk(a, cur)));
       document.getElementById('chartStartLabel').innerText = signedMoney(0, cur);
       document.getElementById('chartPeakLabel').innerText = signedMoney(peak, cur);
       document.getElementById('chartTroughLabel').innerText = signedMoney(Math.min(0, ...dataNet), cur);
@@ -2502,8 +2543,7 @@
     // "Severe" means losing more than 1% of the balance in view, so it means the
     // same on a rupee book as on a dollar one (it used to be a flat 2 of either).
     function severeLossLimit(cur) {
-      const books = isAll() ? state.accounts.filter(a => a.currency === cur) : [acct(selected())];
-      const bal = sum(books.map(bookBalance));
+      const bal = sum(viewBooks().map(a => balIn(a, cur)));
       return bal > 0 ? bal * 0.01 : 2;
     }
     function renderTimeOfDaySlots(ts, cur) {
@@ -2686,10 +2726,9 @@
       const dim = new Date(Y, M, 0).getDate();
       const todayStr = iso(new Date());
 
-      // One cell per calendar day: add up every account's day in this view's currency.
+      // One cell per calendar day: every account's day, already in this view's currency.
       const byDate = {};
       days.forEach(d => {
-        if (acct(d.accountId).currency !== cur) return;
         const e = byDate[d.date] = byDate[d.date] || { net: 0, breached: false, count: 0 };
         e.net += d.net; e.breached = e.breached || d.breached; e.count += d.count;
       });
@@ -2821,7 +2860,7 @@
       filtered.forEach((trade) => {
         const a = acct(trade.accountId);
         const isWin = trade.pnl >= 0;
-        const pnlFormatted = signedMoney(trade.pnl, a.currency);
+        const pnlFormatted = signedMoney(trade.pnl, viewCur());
         const pnlClass = isWin ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
         const sidePill = trade.rep
           ? '<span class="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 text-[10px] font-bold" title="From an uploaded broker report">REPORT</span>'
@@ -2904,7 +2943,7 @@
           <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : esc(trade.entry)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : esc(trade.exit)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : fmtQty(trade.qty)}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums ${trade.pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}">${signedMoney(trade.pnl, a.currency)}${pTag(tradePct(trade))}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums ${trade.pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}">${signedMoney(trade.pnl, viewCur())}${pTag(tradePct(trade))}</td>
           <td class="py-2.5 px-3 text-right">
             <button data-id="${esc(trade.id)}" class="px-2 py-0.5 rounded bg-terminal-card border border-terminal-border hover:border-amber-500 text-[10px]">${trade.rep ? 'Report' : 'Edit'}</button>
           </td>
@@ -3007,9 +3046,9 @@
         unfilled: pairs.filter(pr => pr.signal.filled === false).length,
         waiting: pairs.filter(pr => pr.signal.filled !== true && pr.signal.filled !== false).length,
         graded: scored.length, wins: rs.filter(r => r > 0).length, net: sum(rs), netPct: sumPct(scored.map(sigOutPct)),
-        taken: taken.length, pnl: sum(taken.map(pr => derive(pr.trade).pnl || 0)),
-        // Rupee and dollar trades can't be added together, so P&L is kept per currency.
-        pnlBy: taken.reduce((o, pr) => { const c = acct(pr.trade.accountId).currency; o[c] = (o[c] || 0) + (derive(pr.trade).pnl || 0); return o; }, {}), myR: mine.length ? sum(mine) : null, myRn: mine.length
+        taken: taken.length, pnl: sum(taken.map(pr => pnlIn(pr.trade, viewCur()))),
+        // Every book's P&L converted into the currency on screen.
+        pnlBy: taken.length ? { [viewCur()]: sum(taken.map(pr => pnlIn(pr.trade, viewCur()))) } : {}, myR: mine.length ? sum(mine) : null, myRn: mine.length
       };
     }
     function renderSigCalendar(allPairs, range) {
@@ -3129,7 +3168,7 @@
       // Market-day filter (bullish / bearish / sideways BTC days) comes last, after the card has seen everything.
       {
         const cur0 = viewCur();
-        const tradesInRange = state.trades.filter(t => acct(t.accountId).currency === cur0 && (!range.from || t.date >= range.from) && (!range.to || t.date <= range.to)).map(hydrate);
+        const tradesInRange = state.trades.filter(t => (!range.from || t.date >= range.from) && (!range.to || t.date <= range.to)).map(hydrate).map(t => toView(t, cur0));
         renderMarketCalendar('mktCalSignals', { pairs, trades: tradesInRange, cur: cur0, rerender: renderSignalsTable, scope: (range.from || range.to) ? (range.from || 'start') + ' to ' + (range.to || 'now') + (chan ? ', ' + chanLabel(chan) : '') : 'all history' + (chan ? ', ' + chanLabel(chan) : '') });
       }
       const mfSig = mktFilter();
@@ -3218,7 +3257,7 @@
         }
         const nShown = renderMore(orphans.length);
         orphans.slice(0, nShown).forEach(t => {
-          const a = acct(t.accountId), pnl = t.pnl || 0;
+          const pnl = pnlIn(t, viewCur());
           const tr = document.createElement('tr');
           tr.className = 'hover:bg-terminal-cardHover/80 transition-colors border-b border-terminal-border/60 cursor-pointer';
           tr.onclick = () => openInspector(t);
@@ -3236,7 +3275,7 @@
             <td class="py-2.5 px-3 whitespace-nowrap"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-500/20 text-violet-300">No alert</span></td>
             <td class="py-2.5 px-3 text-slate-600">—</td>
             <td class="py-2.5 px-3 font-bold whitespace-nowrap">${t.r != null ? `<span class="${t.r >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(t.r)}</span>${pTag(tradePct(t))}` : `<span class="text-slate-600 font-normal">—</span>${pTag(tradePct(t))}`}</td>
-            <td class="py-2.5 px-3 font-bold whitespace-nowrap"><span class="${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(pnl, a.currency)}</span></td>
+            <td class="py-2.5 px-3 font-bold whitespace-nowrap"><span class="${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(pnl, viewCur())}</span></td>
             <td class="py-2.5 px-3 text-right text-[10px] text-slate-500">Inspect</td>`;
           tbody.appendChild(tr);
         });
@@ -3291,7 +3330,7 @@
           : `<span class="text-slate-500 font-normal" title="${esc((entered ? enteredLabel : gs).why)}">${esc((entered ? enteredLabel : gs).label)}</span>`;
         let myHtml = '<span class="text-slate-600 font-normal">—</span>', pnlHtml = '<span class="text-slate-600 font-normal">—</span>';
         if (t) {
-          const pnl = derive(t).pnl || 0, cur2 = acct(t.accountId).currency;
+          const cur2 = viewCur(), pnl = pnlIn(t, cur2);
           pnlHtml = `<span class="${rCls(pnl)}">${signedMoney(pnl, cur2)}</span>`;
           if (myRv != null) {
             let note = "";
@@ -3378,8 +3417,11 @@
         const maxRisk = a.maxRiskPct || 1, maxX = a.maxNotionalX || 3;
         let run = a.startBalance || 0, dayKey = null, dayN = 0, dayPnl = 0, prev = null;
         list.forEach(t => {
+          // Balance, size and risk come from the stored trade, in its book's own
+          // currency; t itself may be a copy converted to the currency on screen.
+          const o = t.orig || t, k = t.fxk || 1;
           const before = run + offset;
-          const notional = t.entry * t.qty;
+          const notional = o.entry * o.qty;
           const xBal = before > 0 ? notional / before : null;
           if (t.date !== dayKey) { dayKey = t.date; dayN = 0; dayPnl = 0; }
           dayN++;
@@ -3388,10 +3430,10 @@
           let stopUsed = null, stopSrc = null;
           if (stopOk(t)) { stopUsed = t.stop; stopSrc = "your stop"; }
           else if (sig && typeof sig.stop === "number" && stopOk(Object.assign({}, t, { stop: sig.stop }))) { stopUsed = sig.stop; stopSrc = "alert stop"; }
-          const riskAmt = stopUsed != null ? Math.abs(t.entry - stopUsed) * t.qty : null;
+          const riskAmt = stopUsed != null ? Math.abs(o.entry - stopUsed) * o.qty : null;
           const riskPct = (riskAmt != null && before > 0) ? riskAmt / before * 100 : null;
-          const lossPct = (t.pnl < 0 && before > 0) ? -t.pnl / before * 100 : 0;
-          const r = riskAmt > 0 ? t.pnl / riskAmt : null;
+          const lossPct = (o.pnl < 0 && before > 0) ? -o.pnl / before * 100 : 0;
+          const r = riskAmt > 0 ? o.pnl / riskAmt : null;
           const flags = [];
           if (before > 0) {
             if (riskPct != null ? riskPct > maxRisk : (xBal != null && xBal > maxX)) flags.push("oversize");
@@ -3405,10 +3447,11 @@
           }
           if (a.maxTradesPerDay > 0 && dayN > a.maxTradesPerDay) flags.push("overtrade");
           if (a.dailyLossLimit > 0 && dayPnlBefore <= -a.dailyLossLimit) flags.push("pastLimit");
-          if (t.pnl < 0 && t.pnl + (t.fees || 0) > 0) flags.push("feesAte");
+          if (o.pnl < 0 && o.pnl + (o.fees || 0) > 0) flags.push("feesAte");
           if (firstSig && t.date >= firstSig && !sig) flags.push("noAlert");
-          rows.push({ t, a, before, notional, xBal, riskPct, lossPct, r, stopSrc, flags });
-          run += t.pnl; dayPnl += t.pnl;
+          // k takes before and notional into t's currency for display.
+          rows.push({ t, a, before, notional, xBal, riskPct, lossPct, r, stopSrc, flags, k });
+          run += o.pnl; dayPnl += o.pnl;
           prev = { t, notional, exitMs: entryMs(t) + (heldMins(t) || 0) * 60000 };
         });
       });
@@ -3435,7 +3478,7 @@
             { label: 'Position ÷ balance', data: asc.map(x => x.xBal != null ? +x.xBal.toFixed(2) : null), borderColor: '#F59E0B', backgroundColor: 'rgba(245,158,11,0.12)', borderWidth: 2, tension: 0.2, fill: true, spanGaps: true, yAxisID: 'y',
               pointBackgroundColor: over.map(o => o ? '#F43F5E' : '#34D399'), pointBorderColor: '#05080E', pointBorderWidth: 1.5, pointRadius: 4, pointHoverRadius: 6 },
             { label: 'Your limit', data: asc.map(x => x.a.maxNotionalX || 3), borderColor: '#F43F5E', borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, fill: false, yAxisID: 'y' },
-            { label: 'Balance then', data: asc.map(x => x.before > 0 ? +x.before.toFixed(2) : null), borderColor: '#38BDF8', borderWidth: 1.5, pointRadius: 0, tension: 0.2, spanGaps: true, yAxisID: 'y2' }
+            { label: 'Balance then', data: asc.map(x => x.before > 0 ? +(x.before * x.k).toFixed(2) : null), borderColor: '#38BDF8', borderWidth: 1.5, pointRadius: 0, tension: 0.2, spanGaps: true, yAxisID: 'y2' }
           ]
         },
         options: {
@@ -3448,7 +3491,7 @@
                 title: items => { const x = asc[items[0].dataIndex]; return x ? x.t.date + ' ' + (x.t.time || '') + '  ' + x.t.symbol + ' ' + x.t.direction : ''; },
                 label: c => {
                   const x = asc[c.dataIndex];
-                  if (c.datasetIndex === 0) return 'Position ' + (x.xBal != null ? x.xBal.toFixed(1) + '× ' : '— ') + '(' + money(x.notional, x.a.currency) + ')' + (over[c.dataIndex] ? '  OVERSIZED' : '');
+                  if (c.datasetIndex === 0) return 'Position ' + (x.xBal != null ? x.xBal.toFixed(1) + '× ' : '— ') + '(' + money(x.notional * x.k, cur) + ')' + (over[c.dataIndex] ? '  OVERSIZED' : '');
                   if (c.datasetIndex === 1) return 'Limit ' + c.parsed.y + '×';
                   return 'Balance ' + money(c.parsed.y, cur);
                 }
@@ -3493,17 +3536,18 @@
     function renderAnBrokers() {
       const from = anRange();
       const current = isAll() ? "all" : "acct:" + selected();
-      const list = [{ k: "all", label: "All books", tip: "Your books together, in the currency picked at the top" }]
+      const list = [{ k: "all", label: "All books", tip: "Your books together, each converted into the currency picked at the top" }]
         .concat(state.accounts.map(a => ({ k: "acct:" + a.id, label: a.name, tip: a.reportBroker ? "Trades from your uploaded " + a.reportBroker + " report (" + a.currency + ")" : "Journal book (" + a.currency + ")" })));
       const bar = document.getElementById("anBrokerBar");
       bar.innerHTML = list.map(x => `<button type="button" data-anbroker="${esc(x.k)}" title="${esc(x.tip)}" class="px-2.5 py-1 rounded-md font-semibold transition-all ${x.k === current ? "bg-terminal-card border border-terminal-borderLight text-amber-400" : "text-slate-400 hover:text-white"}">${esc(x.label)}</button>`).join("");
       bar.querySelectorAll("[data-anbroker]").forEach(b => { b.onclick = () => anBrokerPick(b.getAttribute("data-anbroker")); });
 
-      // ---- results by broker, each in its own currency ----
-      const live = allTrades().filter(t => !from || t.date >= from), open = reportBooks().open;
+      // ---- results by broker, each converted into the currency on screen ----
+      const vc = viewCur();
+      const live = allTrades().filter(t => !from || t.date >= from).map(t => toView(t, vc)), open = reportBooks().open;
       const lines = state.accounts.map(a => {
         const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
-        return { k: "acct:" + a.id, name: a.name, report: !!a.reportBroker, cur: a.currency, n: s.n, wins: s.wins, losses: s.losses, net: s.net, pf: s.pf, fees: sum(ts.map(t => t.fees || 0)),
+        return { k: "acct:" + a.id, name: a.name, report: !!a.reportBroker, cur: vc, own: a.currency, rate: fxRate(a), n: s.n, wins: s.wins, losses: s.losses, net: s.net, pf: s.pf, fees: sum(ts.map(t => t.fees || 0)),
           open: open.filter(t => t.accountId === a.id && (!from || t.day >= from)).length };
       });
       const period = (AN_PERIODS.find(p => p.k === (state.ui.anPeriod || "all")) || {}).label || "All";
@@ -3511,14 +3555,14 @@
       const host = document.getElementById("anBrokers");
       host.innerHTML = `<div class="flex flex-wrap items-baseline justify-between gap-2 p-3 border-b border-terminal-border">
           <h3 class="font-bold text-white uppercase tracking-wider">Results by broker</h3>
-          <span class="text-slate-500 text-[11px]">Closed trades · ${esc(period.toLowerCase() === "all" ? "all time" : "last " + period.toLowerCase())} · each in its own currency. Click one to open it.</span>
+          <span class="text-slate-500 text-[11px]">Closed trades · ${esc(period.toLowerCase() === "all" ? "all time" : "last " + period.toLowerCase())} · in ${esc(curSym(vc) + " " + vc)}, each broker at its own rate. Click one to open it.</span>
         </div>
         <div class="overflow-x-auto"><table class="w-full text-left text-xs font-mono">
           <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border"><tr>
             <th class="py-2 px-3">Broker</th><th class="py-2 px-3 text-right">Net P&amp;L</th><th class="py-2 px-3 text-right">Trades</th><th class="py-2 px-3 text-right">Win rate</th><th class="py-2 px-3 text-right">Profit factor</th><th class="py-2 px-3 text-right">Fees</th><th class="py-2 px-3">From</th>
           </tr></thead>
           <tbody>${lines.map(l => `<tr data-anbroker="${esc(l.k)}" class="border-t border-terminal-border cursor-pointer hover:bg-white/5${l.k === current ? " bg-white/5" : ""}">
-            <td class="py-2 px-3 font-bold whitespace-nowrap ${l.k === current ? "text-amber-400" : "text-white"}">${esc(l.name)}</td>
+            <td class="py-2 px-3 font-bold whitespace-nowrap ${l.k === current ? "text-amber-400" : "text-white"}">${esc(l.name)}${l.own !== vc ? ` <span class="text-slate-500 font-normal text-[10px]" title="Converted from ${esc(l.own)}">${esc(l.own)} @ ₹${esc(cleanNum(l.rate))}</span>` : ""}</td>
             <td class="py-2 px-3 text-right font-bold whitespace-nowrap ${pos(l.net)}">${l.n ? signedMoney(l.net, l.cur) : "—"}</td>
             <td class="py-2 px-3 text-right whitespace-nowrap">${l.n}${l.open ? ` <span class="text-sky-300" title="Still open">+${l.open} open</span>` : ""}</td>
             <td class="py-2 px-3 text-right whitespace-nowrap">${l.n ? pct(l.wins / l.n * 100) + ` <span class="text-slate-500">${l.wins}/${l.losses}</span>` : "—"}</td>
@@ -3551,7 +3595,7 @@
       rows.anchored = all.anchored;
 
       const assume = document.getElementById('anAssumptions');
-      const book = (state.accounts.find(a => a.currency === cur && a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {});
+      const book = isAll() ? (state.accounts.find(a => a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {}) : acct(selected());
       assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to Delta's balance today. " : "Balances before each trade are your starting balance plus the trades before it; connect Delta to anchor them to its live balance. ")
         + "Deposits, withdrawals and funding can't be seen, so older balances are estimates. "
         + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Sync & Settings → Trading Books.`
@@ -3678,11 +3722,11 @@
           <td class="py-2.5 px-3 whitespace-nowrap"><span class="text-white">${esc(t.date)}</span> <span class="text-slate-500">${esc(t.time || '')}</span></td>
           <td class="py-2.5 px-3 font-bold text-white">${esc(t.symbol)}</td>
           <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${t.direction === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(t.direction.toUpperCase())}</span></td>
-          <td class="py-2.5 px-3 text-right tabular-nums text-slate-300">${x.before > 0 ? money(x.before, a.currency) : '—'}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums text-slate-300">${money(x.notional, a.currency)}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums text-slate-300">${x.before > 0 ? money(x.before * x.k, cur) : '—'}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums text-slate-300">${money(x.notional * x.k, cur)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums font-bold ${isOver ? 'text-rose-400' : 'text-slate-200'}">${x.xBal != null ? x.xBal.toFixed(1) + '×' : '—'}</td>
           <td class="py-2.5 px-3 text-right tabular-nums ${x.riskPct != null && isOver ? 'text-rose-400' : 'text-slate-300'}" title="${x.riskPct != null ? 'If the ' + esc(x.stopSrc) + ' had been hit' : 'No stop known: what the trade actually lost'}">${x.riskPct != null ? x.riskPct.toFixed(2) + '%' : (x.lossPct > 0 ? '<span class="text-slate-500">lost </span>' + x.lossPct.toFixed(2) + '%' : '—')}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(t.pnl, a.currency)}${pTag(tradePct(t))}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(t.pnl, cur)}${pTag(tradePct(t))}</td>
           <td class="py-2.5 px-3">${chips || '<span class="text-emerald-400">clean</span>'}</td>`;
         body.appendChild(tr);
       });
@@ -3716,7 +3760,7 @@
         row.innerHTML = `
           <div>
             <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Live from Delta' : 'Last known balance from Delta — not currently reachable'}"></span>` : ''}</div>
-            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${live ? ` <span class="${wordCls}">· ${fresh ? 'live' : 'last known'}</span>` : ''} · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
+            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'live' : 'last known'}</span>` : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
           </div>
           <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
         host.appendChild(row);
@@ -3743,7 +3787,8 @@
             ${field('Max trades a day', 'bkTrades', a.maxTradesPerDay || 5, '1', '')}
             ${field('Default leverage', 'bkLev', a.defaultLeverage || 1, 'any', '')}
           </div>
-          ${field('Biggest position (× balance)', 'bkNotional', a.maxNotionalX || 3, 'any', 'A trade whose position value is more than this many times your balance counts as oversized in Analysis when no stop is known. With a stop, the max risk % above decides.')}`;
+          ${field('Biggest position (× balance)', 'bkNotional', a.maxNotionalX || 3, 'any', 'A trade whose position value is more than this many times your balance counts as oversized in Analysis when no stop is known. With a stop, the max risk % above decides.')}
+          ${field('Rupees per $1', 'bkFx', fxRate(a), 'any', `Used to show this book in ₹ or $ with the switch at the top. Delta India uses a fixed ₹85; CoinDCX uses its USDT price (wallet ₹ ÷ $). Default for this book: ₹${cleanNum(fxDefault(a))}.`)}`;
       }, () => {
         const notionalX = parseFloat(document.getElementById('bkNotional').value);
         const bal = parseFloat(document.getElementById('bkBalance').value);
@@ -3751,11 +3796,14 @@
         const risk = parseFloat(document.getElementById('bkRisk').value);
         const cnt = parseFloat(document.getElementById('bkTrades').value);
         const lev = parseFloat(document.getElementById('bkLev').value);
+        const fx = parseFloat(document.getElementById('bkFx').value);
+        if (!(fx > 0) || !isFinite(fx)) { toast("Rupees per $1 must be above 0"); return false; }
         if (!isFinite(bal) || bal < 0) { toast("Enter your balance (0 or more)"); return false; }
         if (!isFinite(lim) || lim < 0) { toast("Daily loss limit must be 0 or more"); return false; }
         if (!(risk > 0) || !(cnt > 0) || !(lev > 0) || !(notionalX > 0)) { toast("Risk %, trades a day, leverage and biggest position must be above 0"); return false; }
         a.startBalance = +(bal - net).toFixed(2);
         a.dailyLossLimit = lim; a.maxRiskPct = risk; a.maxTradesPerDay = Math.round(cnt); a.defaultLeverage = lev; a.maxNotionalX = notionalX;
+        if (fx !== fxRate(a)) a.fxRate = fx; // only a changed rate is stored, so defaults can still improve later
         stamp(a);
         save(); renderAll(); renderBooks();
         toast(`${a.name} book updated`);
@@ -3889,15 +3937,17 @@
         ? 'text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
         : 'text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30';
 
-      const isWin = trade.pnl >= 0;
-      document.getElementById('inspPnl').innerText = signedMoney(trade.pnl, a.currency);
+      // P&L and fees in the currency on screen; the book's own figure alongside when converted.
+      const o = trade.orig || trade, cur = viewCur(), k = fxk(a, cur), pnl0 = derive(o).pnl || 0;
+      const isWin = pnl0 >= 0;
+      document.getElementById('inspPnl').innerText = signedMoney(pnl0 * k, cur) + (k !== 1 ? ' (' + signedMoney(pnl0, a.currency) + ')' : '');
       document.getElementById('inspPnl').className = isWin ? 'text-base font-bold text-emerald-400 mt-1' : 'text-base font-bold text-rose-400 mt-1';
       document.getElementById('inspEntry').innerText = fmtPrice(trade.entry, a.currency);
       document.getElementById('inspExit').innerText = fmtPrice(trade.exit, a.currency);
       document.getElementById('inspSetup').innerText = trade.setup || 'Discretionary';
       document.getElementById('inspDuration').innerText = fmtHeld(heldMins(trade));
       document.getElementById('inspR').innerText = rfmt(trade.r) + (pfmt(tradePct(trade)) ? ' (' + pfmt(tradePct(trade)) + ')' : '');
-      document.getElementById('inspFees').innerText = money(trade.fees || 0, a.currency);
+      document.getElementById('inspFees').innerText = money((o.fees || 0) * k, cur) + (k !== 1 ? ' (' + money(o.fees || 0, a.currency) + ')' : '');
       document.getElementById('inspNotes').innerText = trade.notes ? `"${trade.notes}"` : '"No execution reflection notes entered."';
 
       const chk = document.getElementById('inspChecklist');
@@ -4284,6 +4334,8 @@
     }
     function openGoal(id) {
       const existing = id === 'new' ? null : (id ? state.goals.find(g => g.id === id) : state.goals[0]);
+      // Money targets are typed in the goal's own currency (a new goal: the one on screen).
+      const symCur = existing ? goalCur(existing) : viewCur();
       openModalSheet("Configure Version Milestone Goal", body => {
         body.innerHTML = `
           <div>
@@ -4293,7 +4345,7 @@
           <div>
             <label class="text-slate-400 block mb-1">Targets <span class="text-slate-600">(tick the ones you want, leave the rest off)</span></label>
             <div class="space-y-1.5">
-              ${GOAL_ORDER.map(k => { const on = existing ? goalTargets(existing)[k] != null : k === "net_pnl"; const sym = curSym(existing && existing.accountId && existing.accountId !== "all" ? acct(existing.accountId).currency : viewCur()); const DEF = {"net_pnl":[20,sym + " to earn","any"],"win_days":[12,"winning days","1"],"win_rate":[60,"% of trades win","1"],"profit_factor":[1.5,"× profit ÷ loss","any"],"max_loss":[5,sym + " most you may lose","any"],"rule_follow":[80,"% of trades follow every rule","1"],"trade_cap":[3,"trades a day, at most","1"],"no_revenge":[10,"trades in a row, no revenge","1"],"avg_risk":[1,"% of balance risked per trade, at most","any"],"balance":[100,sym + " account balance to reach","any"]}; return `<label class="flex items-center gap-2 rounded-lg bg-[#080D15] border border-terminal-border px-2.5 py-1.5"><input type="checkbox" id="gk_${k}" ${on ? "checked" : ""} onchange="document.getElementById('gv_${k}').disabled = !this.checked" class="accent-amber-500"><span class="flex-1 text-slate-200">${GOAL_KINDS[k]}<span class="block text-[10px] text-slate-500">${DEF[k][1]}</span></span><input type="number" id="gv_${k}" step="${DEF[k][2]}" min="0" ${on ? "" : "disabled"} value="${esc(existing && goalTargets(existing)[k] != null ? goalTargets(existing)[k] : DEF[k][0])}" class="w-24 bg-[#05080E] border border-terminal-border p-1.5 rounded text-white text-right disabled:opacity-40"></label>`; }).join("")}
+              ${GOAL_ORDER.map(k => { const on = existing ? goalTargets(existing)[k] != null : k === "net_pnl"; const sym = curSym(symCur); const DEF = {"net_pnl":[20,sym + " to earn","any"],"win_days":[12,"winning days","1"],"win_rate":[60,"% of trades win","1"],"profit_factor":[1.5,"× profit ÷ loss","any"],"max_loss":[5,sym + " most you may lose","any"],"rule_follow":[80,"% of trades follow every rule","1"],"trade_cap":[3,"trades a day, at most","1"],"no_revenge":[10,"trades in a row, no revenge","1"],"avg_risk":[1,"% of balance risked per trade, at most","any"],"balance":[100,sym + " account balance to reach","any"]}; return `<label class="flex items-center gap-2 rounded-lg bg-[#080D15] border border-terminal-border px-2.5 py-1.5"><input type="checkbox" id="gk_${k}" ${on ? "checked" : ""} onchange="document.getElementById('gv_${k}').disabled = !this.checked" class="accent-amber-500"><span class="flex-1 text-slate-200">${GOAL_KINDS[k]}<span class="block text-[10px] text-slate-500">${DEF[k][1]}</span></span><input type="number" id="gv_${k}" step="${DEF[k][2]}" min="0" ${on ? "" : "disabled"} value="${esc(existing && goalTargets(existing)[k] != null ? goalTargets(existing)[k] : DEF[k][0])}" class="w-24 bg-[#05080E] border border-terminal-border p-1.5 rounded text-white text-right disabled:opacity-40"></label>`; }).join("")}
             </div>
           </div>
           <div>
@@ -4305,7 +4357,7 @@
           <div>
             <label class="text-slate-400 block mb-1">Counts results from</label>
             <select id="gAccount" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
-              <option value="all">All books in the view currency</option>
+              <option value="all">All books (each converted to ${esc(symCur === "INR" ? "₹" : "$")})</option>
               ${state.accounts.map(a => `<option value="${esc(a.id)}" ${existing && existing.accountId === a.id ? "selected" : ""}>${esc(a.name)} (${esc(a.currency)})</option>`).join("")}
             </select>
           </div>
@@ -4324,9 +4376,13 @@
         });
         if (!Object.keys(targets).length) targets.net_pnl = 20;
         const first = GOAL_ORDER.filter(k => targets[k] != null)[0];
-        const metric = first, target = targets[first];
+        const metric = first;
         const period = document.getElementById('gPeriod').value;
         const accountId = document.getElementById('gAccount').value;
+        // A book in the other currency: its money targets are turned into that currency at its rate.
+        const bk = accountId !== "all" ? state.accounts.find(a => a.id === accountId) : null;
+        if (bk && bk.currency !== symCur) MONEY_GOALS.forEach(k => { if (targets[k] != null) targets[k] = +(targets[k] * (bk.currency === "INR" ? fxRate(bk) : 1 / fxRate(bk))).toFixed(2); });
+        const target = targets[metric], cur = bk ? bk.currency : symCur;
         if (existing) {
           existing.title = title;
           existing.target = target;
@@ -4334,9 +4390,10 @@
           existing.targets = targets;
           existing.period = period;
           existing.accountId = accountId;
+          existing.cur = cur;
           stamp(existing);
         } else {
-          state.goals.push(stamp({ id: uid(), title, target, metric, targets, period, accountId }));
+          state.goals.push(stamp({ id: uid(), title, target, metric, targets, period, accountId, cur }));
         }
         save();
         renderAll();
@@ -5104,22 +5161,25 @@
       const tag = document.getElementById('topBalLive');
       const chartEl = document.getElementById('chartBalLabel');
       if (!valEl || !tag || !lastComputedBalance) return;
-      const inScope = deltaLiveKnown() && (isAll() || selected() === deltaAccountId()) && lastComputedBalance.cur === "USD";
+      const cur = lastComputedBalance.cur;
+      const inScope = deltaLiveKnown() && viewBooks().some(a => a.id === deltaAccountId());
+      // The books in view with Delta's own wallet figure in place of its computed one.
+      const liveTotal = inScope ? sum(viewBooks().map(a => balIn(a, cur))) : null;
       const fresh = deltaLiveFresh();
       // The header and the chart's own "Balance" line are two views of the same
       // number — they used to show different figures (live up top, journal-computed
       // under the chart) whenever Delta was connected, because only the header
       // picked up the live figure. Both follow it now.
       if (inScope) {
-        valEl.innerText = money(liveDeltaBalance.value, "USD");
+        valEl.innerText = money(liveTotal, cur);
         tag.classList.remove('hidden');
         tag.innerText = fresh ? 'LIVE' : 'LAST KNOWN';
         tag.className = 'text-[9px] font-bold px-1 py-0.5 rounded border align-middle '
           + (fresh ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40');
         const since = "Delta " + liveDeltaBalance.field + ", fetched " + new Date(liveDeltaBalance.at).toLocaleTimeString();
-        tag.title = fresh ? since + ". Journal-computed balance: " + money(lastComputedBalance.value, "USD")
-          : since + " — Delta hasn't answered since" + (liveDeltaLastError ? " (" + liveDeltaLastError + ")" : "") + ". Holding this last known figure rather than falling back to the journal's own computed balance (" + money(lastComputedBalance.value, "USD") + ").";
-        if (chartEl) { chartEl.innerText = money(liveDeltaBalance.value, "USD"); chartEl.title = tag.title; }
+        tag.title = fresh ? since + ". Journal-computed balance: " + money(lastComputedBalance.value, cur)
+          : since + " — Delta hasn't answered since" + (liveDeltaLastError ? " (" + liveDeltaLastError + ")" : "") + ". Holding this last known figure rather than falling back to the journal's own computed balance (" + money(lastComputedBalance.value, cur) + ").";
+        if (chartEl) { chartEl.innerText = money(liveTotal, cur); chartEl.title = tag.title; }
       } else {
         valEl.innerText = money(lastComputedBalance.value, lastComputedBalance.cur);
         tag.classList.add('hidden');
@@ -5284,7 +5344,7 @@
     }
     // Goals that have a profit target, seen through it.
     function gpMoneyGoals() {
-      return (state.goals || []).filter(x => goalTargets(x).net_pnl != null).map(x => Object.assign({}, x, { metric: "net_pnl", target: goalTargets(x).net_pnl }));
+      return (state.goals || []).filter(x => goalTargets(x).net_pnl != null).map(x => Object.assign({}, x, { metric: "net_pnl", target: goalTargetIn(x, "net_pnl", viewCur()) }));
     }
     function gpContext() {
       const s = calcSettings();
@@ -5294,14 +5354,14 @@
       const g = gid === "custom" ? null : (moneyGoals.find(x => x.id === gid) || (gid === "auto" ? (moneyGoals.find(x => state.goals[Math.min(state.ui.goalIdx || 0, state.goals.length - 1)] && x.id === state.goals[Math.min(state.ui.goalIdx || 0, state.goals.length - 1)].id) || moneyGoals[0]) : null) || null);
       let books, cur;
       if (g) {
-        books = (g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId)) ? [acct(g.accountId)] : state.accounts.filter(a => a.currency === goalProgress(g).cur);
+        books = goalBooksOf(g);
         cur = goalProgress(g).cur;
       } else {
         // Custom target: the book linked in the calculator, else the one selected on the dashboard.
         const linked = state.accounts.find(a => a.id === s.accountId) || (!isAll() ? acct(selected()) : null);
         books = linked ? [linked] : []; cur = linked ? linked.currency : s.currency;
       }
-      const balance = g || books.length ? sum(books.map(bookBalance)) : (Number(s.capital) || 0);
+      const balance = g || books.length ? sum(books.map(a => balIn(a, cur))) : (Number(s.capital) || 0);
       return { s, g, books, cur, balance: balance > 0 ? balance : (Number(s.capital) || 0) };
     }
     // What the trades so far say about you, from the same analysis as the Analysis tab.
@@ -5753,7 +5813,7 @@
     // (when it sits on the losing side of your entry).
     function myOutcome(pair) {
       if (!pair.trade) return null;
-      const t = pair.trade, sig = pair.signal;
+      const t = pair.trade.orig || pair.trade, sig = pair.signal; // R from the stored trade's own prices
       let r = derive(t).r;
       if ((r == null || !isFinite(r)) && stopOk(Object.assign({}, t, { stop: sig.stop }))) {
         const risk = Math.abs(t.entry - sig.stop) * t.qty;
@@ -7629,8 +7689,11 @@
         return;
       }
       // This book's currency only; the same broker in another currency is its own book.
-      const inCur = btTrades(bt.rows).filter(t => repBookId(broker, t.cur) === book.id);
-      const cur = book.currency;
+      // Its money is shown in the currency on screen, at the book's own rate.
+      const cur = viewCur(), k = fxk(book, cur);
+      const conv = r => k === 1 ? r : Object.assign({}, r, { gross: r.gross * k, settle: r.settle * k, fee: r.fee * k, net: r.net * k });
+      const inCur = btTrades(bt.rows.map(conv)).filter(t => repBookId(broker, t.cur) === book.id);
+      if (k !== 1) document.getElementById("btSub").innerText += " · shown in " + cur + " at ₹" + cleanNum(fxRate(book)) + "/$";
       const pairs = uniq(inCur.map(t => t.sym)).sort();
       const pair = pairs.indexOf(state.ui.btPair) !== -1 ? state.ui.btPair : "all";
       // The Analysis period applies here too, by the day a trade closed (or opened, if still open).
@@ -7663,7 +7726,7 @@
           <div class="my-0.5"><div class="${c.val.length > 11 ? "text-sm" : "text-base sm:text-lg"} font-bold ${c.color} mono-num whitespace-nowrap">${esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${esc(c.sub)}</div></div></div>`).join("");
 
       // ---- check: every stored row of this currency is in exactly one trade ----
-      const rowsCur = mineRows;
+      const rowsCur = mineRows.map(conv);
       const legs = sum(inCur.map(t => t.legs.length)), rowNet = sum(rowsCur.map(r => r.net)), tradeNet = sum(inCur.map(t => t.net));
       const ok = legs === rowsCur.length && Math.abs(rowNet - tradeNet) < 0.005;
       const filesBad = bt.files.filter(f => !f.checked).length;

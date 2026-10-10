@@ -85,6 +85,117 @@ async function run(label, viewport, seed, filler = 0) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Rupees and dollars: one switch shows every book in either currency, each
+// converted at its own rate. The expected figures are worked out here from the
+// fixture, apart from the app's own sums.
+async function currencyRun(seed) {
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+  const inr = v => (v < 0 ? '-' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const usd = v => (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForTimeout(300);
+  // The app's P&L: price move times size, less fees.
+  const pnlOf = t => (t.direction === 'long' ? t.exit - t.entry : t.entry - t.exit) * t.qty - (t.fees || 0);
+  const net = id => seed.trades.filter(t => t.accountId === id).reduce((s, t) => s + pnlOf(t), 0);
+  const nseNet = net('acc_nse'), cryNet = net('acc_cry');
+  const nseBal = 100000 + nseNet, cryBal = 100 + cryNet;
+  try {
+    const look = () => page.evaluate(() => {
+      const s = computeStats(statScoped());
+      return { n: s.n, net: s.net, cur: viewCur(), bal: document.getElementById('topBalVal').innerText,
+        sw: [...document.querySelectorAll('#allCurSwitch button')].map(b => b.innerText + (b.className.includes('amber') ? '*' : '')).join(','),
+        ledger: document.getElementById('tradeLedgerTableBody').innerText, maxLoss: document.getElementById('riskDailyMaxLoss').innerText };
+    });
+    // A dollar book on its own, before the switch is used: its own currency.
+    await page.evaluate(() => { delete state.ui.allCur; state.ui.account = 'acc_cry'; renderAll(); });
+    let v = await look();
+    check(v.cur === 'USD' && v.sw === '₹ INR,$ USD*' && v.n === 8 && near(v.net, cryNet) && v.bal === usd(cryBal), 'Test Crypto in its own dollars: ' + JSON.stringify(v));
+    // The switch on a single book turns it into rupees at ₹85.
+    await page.click('#allCurSwitch button[data-cur="INR"]');
+    v = await look();
+    check(v.cur === 'INR' && v.sw === '₹ INR*,$ USD' && v.n === 8 && near(v.net, cryNet * 85) && v.bal === inr(cryBal * 85), 'Test Crypto in rupees: ' + JSON.stringify(v));
+    check(v.ledger.includes('₹') && !v.ledger.includes('$'), 'ledger not in rupees: ' + v.ledger.slice(0, 200));
+    check(v.maxLoss === inr(2.5 * 85), 'daily loss limit in rupees: ' + v.maxLoss);
+    // All books together, either way.
+    await page.evaluate(() => { state.ui.account = 'all'; renderAll(); });
+    v = await look();
+    check(v.n === 16 && near(v.net, nseNet + cryNet * 85) && v.bal === inr(nseBal + cryBal * 85), 'All in rupees: ' + JSON.stringify(v));
+    check(v.maxLoss === inr(2 + 2.5 * 85), 'All: daily loss limits added up: ' + v.maxLoss);
+    await page.click('#allCurSwitch button[data-cur="USD"]');
+    v = await look();
+    check(v.n === 16 && near(v.net, nseNet / 85 + cryNet) && v.bal === usd(nseBal / 85 + cryBal), 'All in dollars: ' + JSON.stringify(v));
+    // Today's NSE loss breaks that book's own ₹2 limit; the message is in dollars.
+    const today = await page.evaluate(() => iso(new Date()));
+    const todayNse = seed.trades.filter(t => t.accountId === 'acc_nse' && t.date === today).reduce((s, t) => s + pnlOf(t), 0);
+    const lim = await page.evaluate(() => dailyLimitState('USD'));
+    check(todayNse < -2 && lim.hit && lim.msg.includes(usd(todayNse / 85)) && lim.msg.includes('Test NSE'), 'daily limit message: ' + JSON.stringify(lim) + ' today ' + todayNse);
+    // Converting changes money only: sizes, risk % and mistakes are the same.
+    const same = await page.evaluate(() => {
+      const key = rows => rows.map(x => [x.t.id, x.xBal, x.riskPct, x.lossPct, x.r, x.flags.join('+')].join('|')).sort().join('\n');
+      state.ui.allCur = 'INR';
+      return key(analyzeTrades(statScoped())) === key(analyzeTrades(allTrades()));
+    });
+    check(same, 'analysis flags or sizes changed with the currency');
+    await page.evaluate(() => { state.ui.allCur = 'INR'; renderAll(); switchTab('analysis'); });
+    const an = await page.evaluate(() => ({ body: document.getElementById('anBody').innerText, brokers: [...document.querySelectorAll('#anBrokers tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()) }));
+    check(an.body.includes('₹') && !an.body.includes('$'), 'Analysis trade list not in rupees: ' + an.body.slice(0, 200));
+    check(an.brokers.some(l => l.startsWith('Test Crypto USD @ ₹85 ' + (cryNet >= 0 ? '+' : '') + inr(cryNet * 85))), 'results by broker in rupees: ' + an.brokers.join(' | '));
+    // The inspector shows the rupee figure and the book's own dollars.
+    const insp = await page.evaluate(() => { const t = statScoped().find(x => x.accountId === 'acc_cry'); openInspector(t); return { pnl: document.getElementById('inspPnl').innerText, fees: document.getElementById('inspFees').innerText }; });
+    check(/^[+-]₹[\d,.]+ \([+-]\$[\d.]+\)$/.test(insp.pnl) && insp.fees === inr(0.1 * 85) + ' (' + usd(0.1) + ')', 'inspector: ' + JSON.stringify(insp));
+    await page.evaluate(() => closeInspector());
+    // A book's rate is changed in its editor and used everywhere.
+    await page.evaluate(() => { switchTab('data'); openBookEditor('acc_cry'); });
+    check(await page.inputValue('#bkFx') === '85', 'rate field: ' + await page.inputValue('#bkFx'));
+    await page.fill('#bkFx', '0');
+    await page.click('#modalSheetSaveBtn');
+    check(await page.evaluate(() => acct('acc_cry').fxRate === undefined && !document.getElementById('modalSheet').classList.contains('hidden')), 'a rate of 0 was accepted');
+    await page.fill('#bkFx', '90');
+    await page.click('#modalSheetSaveBtn');
+    await page.waitForTimeout(100);
+    v = await look();
+    check(await page.evaluate(() => acct('acc_cry').fxRate) === 90 && near(v.net, nseNet + cryNet * 90) && v.bal === inr(nseBal + cryBal * 90), 'after rate 90: ' + JSON.stringify(v));
+    check((await page.innerText('#booksList')).includes('Rate ₹90/$'), 'Books list does not show the rate');
+    // Goals: an older all-books goal reads as rupees; a book's goal is in its currency.
+    const goals = await page.evaluate(() => {
+      state.goals.push({ id: 'g2', title: 'Crypto goal', target: 10, metric: 'net_pnl', targets: { net_pnl: 10, win_rate: 50 }, period: 'month', accountId: 'acc_cry' });
+      const t = cur => { state.ui.allCur = cur; return state.goals.map(g => goalFocused(g).target); };
+      const r = { inr: t('INR'), usd: t('USD'), win: goalTargetIn(state.goals[1], 'win_rate', 'INR') };
+      state.ui.allCur = 'USD'; openGoal('new'); document.getElementById('gTitle').value = 'New dollar goal';
+      return r;
+    });
+    await page.click('#modalSheetSaveBtn');
+    check(near(goals.inr[0], 20) && near(goals.usd[0], 20 / 85) && near(goals.inr[1], 900) && near(goals.usd[1], 10) && goals.win === 50, 'goal targets: ' + JSON.stringify(goals));
+    check(await page.evaluate(() => (state.goals.find(g => g.title === 'New dollar goal') || {}).cur) === 'USD', 'a new all-books goal did not keep its currency');
+    // Rates and goal currencies survive a sync clean-up; bad ones don't.
+    const kept = await page.evaluate(() => {
+      const s = sanitizeState(JSON.parse(JSON.stringify(state)));
+      const bad = cleanAccount({ id: 'x', name: 'X', currency: 'USD', fxRate: -5 });
+      return { rate: s.accounts.find(a => a.id === 'acc_cry').fxRate, cur: (s.goals.find(g => g.title === 'New dollar goal') || {}).cur, bad: 'fxRate' in bad };
+    });
+    check(kept.rate === 90 && kept.cur === 'USD' && !kept.bad, 'sanitize: ' + JSON.stringify(kept));
+    // Every tab, every book, both currencies: no errors and no NaN on screen.
+    for (const cur of ['INR', 'USD']) for (const acc of ['all', 'acc_nse', 'acc_cry']) for (const tab of TABS) {
+      const bad = await page.evaluate(([c, a, t]) => { state.ui.allCur = c; state.ui.account = a; switchTab(t); renderAll(); const m = document.getElementById('view-' + t).innerText.match(/.{0,40}(NaN|undefined|Infinity%).{0,40}/); return m ? m[0] : ''; }, [cur, acc, tab]);
+      check(!bad, `${cur} ${acc} ${tab} shows: ${bad}`);
+    }
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'rupees and dollars: one switch for every book and tab';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 // Broker report upload: preview, import, grouping into trades, stats, the
 // broker's own book (Analysis and Dashboard), the duplicate checks, sync merge
 // and removal. Journal trades must stay exactly as they were.
@@ -192,8 +303,13 @@ async function backtestRun(seed) {
       const inr = res('INR'), usd = res('USD');
       return { inr, usd, sw: [...document.querySelectorAll('#allCurSwitch button')].map(b => b.innerText) };
     });
-    check(all.inr.n === before.nse.n + EXPECTED.closed.length && near(all.inr.net, before.nse.net + EXPECTED.closedNet), `All accounts in INR: ${JSON.stringify(all.inr)}, Test NSE alone ${before.nse.n} trades ${before.nse.net}`);
-    check(all.usd.n === before.usd.n && near(all.usd.net, before.usd.net), 'All accounts in USD changed: ' + JSON.stringify(all.usd));
+    // Every book counts in either currency: dollar books at ₹85, CoinDCX at ₹99.30.
+    const allN = before.nse.n + before.usd.n + EXPECTED.closed.length;
+    check(all.inr.n === allN && near(all.inr.net, before.nse.net + before.usd.net * 85 + EXPECTED.closedNet), `All accounts in INR: ${JSON.stringify(all.inr)}, NSE ${JSON.stringify(before.nse)}, USD ${JSON.stringify(before.usd)}`);
+    check(all.usd.n === allN && near(all.usd.net, before.nse.net / 85 + before.usd.net + EXPECTED.closedNet / 99.3), 'All accounts in USD: ' + JSON.stringify(all.usd));
+    const dcxUsd = await page.evaluate(id => { state.ui.allCur = 'USD'; state.ui.account = id; renderAll(); switchTab('analysis'); return document.getElementById('btStrip').innerText.replace(/\s+/g, ' '); }, BOOK);
+    check(dcxUsd.includes('+$' + (EXPECTED.closedNet / 99.3).toFixed(2)), 'CoinDCX report in dollars: ' + dcxUsd.slice(0, 200));
+    await page.evaluate(() => { state.ui.account = 'all'; renderAll(); switchTab('dashboard'); });
     check(all.sw.join(',') === '₹ INR,$ USD', 'currency switch: ' + all.sw.join(','));
     check(await page.evaluate(() => computeStats(bookTrades('acc_nse')).n) === before.nse.n, 'Test NSE book changed');
     check(!(await page.evaluate(() => { openTrade(); const o = [...document.querySelectorAll('#mAcc option')].map(x => x.innerText).join(','); closeModalSheet(); return o; })).includes('CoinDCX'), 'trade form offers the report book');
@@ -223,7 +339,7 @@ async function backtestRun(seed) {
     // The Analysis period narrows the report too (the made-up report is from early 2026).
     await page.evaluate(() => { state.ui.anPeriod = '7d'; renderAnalysis(); });
     v = await view();
-    check((await page.evaluate(() => btShown.length)) === 0 && (v.lines.find(l => l.startsWith('CoinDCX')) || '').startsWith('CoinDCX — 0'), 'period 7 days did not narrow the report: ' + v.lines.join(' | '));
+    check((await page.evaluate(() => btShown.length)) === 0 && (v.lines.find(l => l.startsWith('CoinDCX')) || '').startsWith('CoinDCX INR @ ₹99.3 — 0'), 'period 7 days did not narrow the report: ' + v.lines.join(' | '));
     await page.evaluate(() => { state.ui.anPeriod = 'all'; renderAnalysis(); });
 
     pv = await upload('report.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xlsx);
@@ -280,11 +396,11 @@ async function backtestRun(seed) {
       bt.files.push({ id: 'btother', name: 'other.csv', sheet: 'Sheet1', broker: 'Test Crypto', importedAt: now, updatedAt: now, rows: 1, added: 1, net: 5, cur: 'USD', checked: true });
       bt.rows.push({ id: 'other-1', file: 'btother', sym: 'BTCUSD', at: '2026-01-02 10:00:00', kind: 'order', type: 'Order', gross: 5, settle: 0, fee: 0, net: 5, cur: 'USD' },
         { id: 'other-2', file: 'btother', sym: 'ETHINR', at: '2026-01-03 10:00:00', kind: 'order', type: 'Order', gross: 7, settle: 0, fee: 0, net: 7, cur: 'INR' });
-      ensureReportBooks(state); renderAnalysis();
+      ensureReportBooks(state); state.ui.allCur = 'INR'; renderAnalysis();
     });
     v = await view();
     check(v.bar.join(',') === 'All books,Test NSE,Test Crypto,CoinDCX,Dhan,Test Crypto report,Test Crypto report INR', 'report broker named like a book, in two currencies: ' + v.bar.join(','));
-    check((v.lines.find(l => l.startsWith('Dhan')) || '').includes('+₹' + EXPECTED.closedNet.toFixed(2)) && v.lines.some(l => l.startsWith('Test Crypto report +$5.00 1 ')) && v.lines.some(l => l.startsWith('Test Crypto report INR +₹7.00 1 ')), 'results by broker mixed brokers: ' + v.lines.join(' | '));
+    check((v.lines.find(l => l.startsWith('Dhan')) || '').includes('+₹' + EXPECTED.closedNet.toFixed(2)) && v.lines.some(l => l.startsWith('Test Crypto report USD @ ₹85 +₹425.00 1 ')) && v.lines.some(l => l.startsWith('Test Crypto report INR +₹7.00 1 ')), 'results by broker mixed brokers: ' + v.lines.join(' | '));
     check((await page.textContent('#btSub')).startsWith(`1 file · ${EXPECTED.rows} rows`), 'Dhan view counts other brokers: ' + await page.textContent('#btSub'));
     await page.evaluate(() => anBrokerPick('acct:rep-test-crypto-usd'));
     check((await page.textContent('#btSub')).startsWith('1 file · 1 row ·') && (await page.evaluate(() => btShown.map(t => t.sym).join(','))) === 'BTCUSD', 'second broker, dollar book: ' + await page.textContent('#btSub'));
@@ -310,6 +426,7 @@ for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', {
   await run(name + ', sample journal', vp, data);
 }
 await run('desktop, storage nearly full', { width: 1366, height: 900 }, data, 4300000);
+await currencyRun(data);
 await backtestRun(data);
 
 await browser.close();
