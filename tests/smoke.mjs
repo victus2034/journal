@@ -979,6 +979,74 @@ async function coindcxRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Fixes from the 11 Oct audit: a CoinDCX book with only its wallet (no starting
+// balance typed) still has a % return; the month headline is coloured by its
+// sign; a time-of-day card lists the report trades it counts; the ledger's book
+// filter survives a re-render; the trade form refuses a stop on the wrong side.
+async function fixesRun(seed) {
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForTimeout(300);
+  try {
+    const v = await page.evaluate(() => {
+      const d = iso(new Date()), old = '2024-12-02';
+      // An old losing trade (before this month) and this month's winner: opened 10:05, closed 11:40.
+      const row = (id, at, kind, gross, fee) => ({ id, file: 'cdx-api', sym: 'B-ETH_USDT', at, kind, type: kind, gross, settle: 0, fee, net: gross - fee, cur: 'INR' });
+      state.backtest = cleanBacktest({ files: [{ id: 'cdx-api', name: 'CoinDCX API', broker: 'CoinDCX', importedAt: new Date().toISOString(), cur: 'INR', wallet: { at: new Date().toISOString(), INR: 5000 } }],
+        rows: [row('o1', old + ' 09:00:00', 'order', 0, 10), row('c1', old + ' 12:00:00', 'order', -3000, 10),
+          row('o2', d + ' 10:05:00', 'order', 0, 5), row('c2', d + ' 11:40:00', 'order', 505, 5)] });
+      ensureReportBooks(state);
+      Object.assign(state.ui, { account: 'rep-coindcx-inr', allCur: 'INR', month: 'current', kpiGreenDays: false, dashSec: 'habits' });
+      switchTab('dashboard'); renderAll();
+      const ret = [...document.querySelectorAll('#kpiRibbon > div')].find(c => /RETURN/.test(c.innerText)).innerText.replace(/\s+/g, ' ');
+      const head = document.getElementById('activePnlDeltaText');
+      const headLine = head.parentElement.innerText;
+      // The 10:00 card: clicking it lists the report trade that opened then.
+      const slot = [...document.querySelectorAll('#timeOfDayContainer > div')].find(c => c.innerText.includes('10:00 - 10:30'));
+      slot && slot.click();
+      const focused = document.getElementById('tradeLedgerTableBody').innerText;
+      clearLedgerFocus();
+      // Book filter in the ledger, then something re-renders.
+      state.ui.account = 'all'; renderAll();
+      const sel = document.getElementById('filterAccountSelect');
+      sel.value = 'rep-coindcx-inr'; renderAll();
+      const kept = sel.value;
+      // Trade form: a long with its stop above the entry is refused.
+      const said = [], realToast = toast; toast = m => said.push(m);
+      openTrade(null, { accountId: state.accounts.find(a => !a.reportBroker).id, symbol: 'TEST', direction: 'long', entry: 100, exit: 101, qty: 1, stop: 102 });
+      const n0 = state.trades.length;
+      const saveBtn = document.getElementById('modalSheetSaveBtn');
+      saveBtn && saveBtn.click();
+      const refused = state.trades.length === n0;
+      document.getElementById('mStop').value = '99'; document.getElementById('mExitTime').value = '11:30';
+      saveBtn && saveBtn.click();
+      const added = state.trades.length === n0 + 1 ? state.trades[0] : null;
+      toast = realToast;
+      return { ret, headLine, headCls: head.className, focused, kept, said, refused, saved: !!saveBtn, added: added && [added.stop, added.exitTime] };
+    });
+    // Opening balance: wallet 5000 less this month's 495 = 4505; 495 on it is +10.99%.
+    check(/RETURN \+10\.99% \+₹495\.00 on ₹4,505\.00/.test(v.ret), 'CoinDCX return from its wallet: ' + v.ret);
+    check(/^Net P&L: \+₹495\.00/.test(v.headLine) && v.headCls.includes('emerald'), 'month headline: ' + v.headLine + ' ' + v.headCls);
+    check(/ETH\/USDT/.test(v.focused), 'time-of-day card lists its report trade: ' + v.focused.replace(/\s+/g, ' ').slice(0, 200));
+    check(v.kept === 'rep-coindcx-inr', 'ledger book filter reset to ' + v.kept);
+    check(v.saved && v.refused && v.said.some(m => /stop must be below/.test(m)), 'wrong-side stop: ' + JSON.stringify(v.said));
+    check(JSON.stringify(v.added) === '[99,"11:30"]', 'trade with exit time: ' + JSON.stringify(v.added));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'audit fixes: wallet return, headline, time slot, ledger filter, trade form';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -988,6 +1056,7 @@ await run('desktop, storage nearly full', { width: 1366, height: 900 }, data, 43
 await currencyRun(data);
 await backtestRun(data);
 await coindcxRun(data);
+await fixesRun(data);
 
 await browser.close();
 server.close();
