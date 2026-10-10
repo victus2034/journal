@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.103">
+  <meta name="app-version" content="2026-10-11.104">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -38,8 +38,6 @@
     .mnav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;font:600 10px/1 'JetBrains Mono',monospace;color:#94a3b8;background:none;border:0}
     .mnav-btn svg{width:20px;height:20px}
     .mnav-btn.on{color:#fbbf24}
-    .mnav-add{width:48px;height:48px;margin-top:-22px;border-radius:9999px;background:linear-gradient(135deg,#f59e0b,#d97706);color:#000;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(245,158,11,.35);border:3px solid #05080E;flex:0 0 auto}
-    .mnav-add svg{width:22px;height:22px}
     /* Light theme: the dark palette remapped. Charts keep their own colours. */
     html.light body,html.light .bg-terminal-bg,html.light .bg-\[\#05080E\],html.light .bg-\[\#060910\]{background-color:#f3f5f9}
     html.light .bg-terminal-surface,html.light .bg-\[\#090E17\],html.light .bg-\[\#070A11\],html.light .bg-\[\#080D15\],html.light .bg-\[\#080D16\],html.light .bg-\[\#0A0F18\],html.light .bg-\[\#0B101A\]{background-color:#ffffff}
@@ -69,7 +67,6 @@
     html.light .hover\:bg-white\/5:hover{background-color:#eef2f7}
     html.light input,html.light select,html.light textarea{color:#0f172a;color-scheme:light}
     html.light .mnav{background:#fff;border-top-color:#dbe2ec}
-    html.light .mnav-add{border-color:#f3f5f9}
     html.light ::-webkit-scrollbar-track{background:#eef2f7}
     html.light ::-webkit-scrollbar-thumb{background:#c8d2e0}
   </style>
@@ -136,7 +133,6 @@
     <button type="button" class="mnav-btn on" data-tab="dashboard" onclick="switchTab('dashboard')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l9-9 9 9M5 10v10h14V10"/></svg>Home</button>
     <button type="button" class="mnav-btn" data-tab="signals" onclick="switchTab('signals')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Signals</button>
     <button type="button" class="mnav-btn" data-tab="analysis" onclick="switchTab('analysis')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 19V9m6 10V5m6 14v-7m4 7H2"/></svg>Analysis</button>
-    <button type="button" class="mnav-add" onclick="openTrade(null)" aria-label="Log trade"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg></button>
     <button type="button" class="mnav-btn" data-tab="calculator" onclick="switchTab('calculator')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 3h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2zm1 4h8M8 11h2m4 0h2m-8 4h2m4 0h2"/></svg>Calc</button>
     <button type="button" class="mnav-btn" data-tab="data" onclick="switchTab('data')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15a3 3 0 100-6 3 3 0 000 6zm7.4-3a7.4 7.4 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 00-2-1.2L14.5 2h-5l-.4 2.6a7.6 7.6 0 00-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 000 2.4l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 002 1.2l.4 2.6h5l.4-2.6a7.6 7.6 0 002-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg>Settings</button>
   </nav>
@@ -3894,7 +3890,7 @@
       return typeof v === "number" && isFinite(v) ? { value: v, at: f.wallet.at } : null;
     }
     function bookBalance(a) {
-      if (deltaReady() && a.id === deltaAccountId() && deltaLiveKnown()) return liveDeltaBalance.value;
+      if (a.id === deltaAccountId() && deltaLiveKnown()) return liveDeltaBalance.value;
       const w = cdxWallet(a);
       if (w) return w.value;
       return bookComputedBalance(a);
@@ -3904,14 +3900,14 @@
       if (!host) return;
       host.innerHTML = '';
       state.accounts.forEach(a => {
-        const live = deltaReady() && a.id === deltaAccountId() && deltaLiveKnown();
+        const live = a.id === deltaAccountId() && deltaLiveKnown();
         const fresh = live && deltaLiveFresh();
         const row = document.createElement('div');
         row.className = 'flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-[#080D16] border border-terminal-border';
         const dotCls = fresh ? 'bg-emerald-400' : 'bg-amber-400';
         const wordCls = fresh ? 'text-emerald-400' : 'text-amber-400';
         const wallet = !live && cdxWallet(a);
-        const liveTitle = live ? 'Delta ' + esc(liveDeltaBalance.field) + ', fetched ' + new Date(liveDeltaBalance.at).toLocaleTimeString()
+        const liveTitle = live ? 'Delta ' + esc(liveDeltaBalance.field) + ', ' + esc(deltaFetchedText())
           + (fresh ? '' : ' — Delta hasn\'t answered since; holding this last known figure') + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency))
           : wallet ? esc(cdxWalletTitle(wallet)) + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
         row.innerHTML = `
@@ -3935,7 +3931,7 @@
           </div>`;
       openModalSheet(`Edit ${a.name} book`, body => {
         body.innerHTML = `
-          ${field(`Balance right now (${esc(a.currency)})`, 'bkBalance', +bookBalance(a).toFixed(2), 'any', (deltaReady() && a.id === deltaAccountId() && deltaLiveKnown())
+          ${field(`Balance right now (${esc(a.currency)})`, 'bkBalance', +bookBalance(a).toFixed(2), 'any', (a.id === deltaAccountId() && deltaLiveKnown())
             ? `This is prefilled from Delta's own wallet, fetched ${new Date(liveDeltaBalance.at).toLocaleTimeString()}${deltaLiveFresh() ? '' : ' (Delta is not reachable right now; this is the last figure it gave)'}. Saving it here only sets the starting balance the journal falls back on if Delta's key is ever removed — Delta's own figure keeps winning otherwise, even while it's disconnected.`
             : cdxWallet(a) ? `This is CoinDCX's own wallet balance (${esc(cdxWalletTitle(cdxWallet(a)))}). Saving it here only sets the starting balance the journal falls back on without it.`
             : `Type your real broker balance. The journal keeps the difference from your logged trades (${signedMoney(net, a.currency)}) as the starting balance. Once Delta answers for this book, its own live figure takes over here — and stays even if Delta later disconnects.`)}
@@ -4808,8 +4804,23 @@
         tombstones: tombs
       }, mergeReviews(local, remote, tombs));
       if (!merged.accounts.length) merged.accounts = local.accounts || remote.accounts || [];
+      mergeDeltaBalance(merged, local, remote);
       ensureReportBooks(merged);
       return merged;
+    }
+    // The newest Delta wallet figure any device fetched wins. It replaces this
+    // device's own figure only when newer, and is marked synced so a device
+    // without the key can still show it.
+    function cleanDeltaBalance(b) {
+      return b && typeof b.value === "number" && isFinite(b.value) && typeof b.at === "number" && isFinite(b.at)
+        ? { value: b.value, field: String(b.field || "wallet balance").slice(0, 40), at: b.at } : null;
+    }
+    function mergeDeltaBalance(merged, local, remote) {
+      const mine = cleanDeltaBalance(local.delta && local.delta.shared), theirs = cleanDeltaBalance(remote.deltaBalance);
+      const shared = mine && theirs ? (theirs.at > mine.at ? theirs : mine) : mine || theirs;
+      if (!shared) return;
+      const d = merged.delta = Object.assign({}, local.delta || { key: "", secret: "", lastAt: "", lastFillTime: 0 }, { shared: shared });
+      if (shared !== mine && shared.at > ((d.liveBalance && d.liveBalance.at) || 0)) d.liveBalance = Object.assign({ synced: true }, shared);
     }
     // What actually travels: never the token, the Delta key, or the webhook.
     function syncPayload(st) {
@@ -4830,6 +4841,8 @@
       if (st.backtest && st.backtest.files && st.backtest.files.length) p.backtest = st.backtest;
       if (st.repReviews && Object.keys(st.repReviews).length) p.repReviews = st.repReviews;
       if (st.withdrawals && st.withdrawals.length) p.withdrawals = st.withdrawals;
+      // Delta's own wallet figure, never the key that fetched it.
+      if (st.delta && st.delta.shared) p.deltaBalance = st.delta.shared;
       return p;
     }
     let syncBusy = false, syncTimer = null;
@@ -4920,6 +4933,7 @@
           }
         }
         if (got.remote) state = mergeState(state, got.remote);
+        adoptSyncedBalance();
         const after = syncPayload(state);
         const body = JSON.stringify(after); // compact: a third smaller than indented, on every sync
         // Compared without the save time, which differs on every call.
@@ -5382,7 +5396,19 @@
         liveDeltaBalance = { value: parsed.value, field: parsed.field, at: Date.now() };
         // Kept across a reload too, so closing and reopening the tab doesn't
         // itself count as a disconnect and drop back to the computed figure.
-        if (state.delta) { state.delta.liveBalance = liveDeltaBalance; save(); }
+        if (state.delta) {
+          state.delta.liveBalance = liveDeltaBalance;
+          // Shared through GitHub sync so a device without the key (or one Delta
+          // won't answer, say an IP-locked key on a phone) shows this figure, not
+          // its own trade sum. Written only when it moves, and at most every ten
+          // minutes (hourly when it holds), so an open position doesn't push a
+          // commit on every one-minute poll.
+          const sh = state.delta.shared, age = sh ? liveDeltaBalance.at - sh.at : Infinity;
+          if (!sh || (Math.abs(sh.value - liveDeltaBalance.value) >= 0.005 && age >= 10 * 60 * 1000) || age >= 60 * 60 * 1000) {
+            state.delta.shared = { value: liveDeltaBalance.value, field: liveDeltaBalance.field, at: liveDeltaBalance.at };
+          }
+          save();
+        }
       }).catch(err => {
         // A failed poll — offline, Delta down, a rejected key — records only the
         // error. The last real balance this device saw is never overwritten by
@@ -5395,7 +5421,14 @@
     // configured. Not time-limited — a disconnect freezes the figure, it
     // doesn't clear it. Only removing the key (or switching to a Delta account
     // this key was never connected for) falls back to the computed balance.
-    function deltaLiveKnown() { return deltaReady() && liveDeltaBalance && liveDeltaBalance.value != null; }
+    // A figure synced from another device counts without a key here.
+    function deltaLiveKnown() { return !!(deltaAccountId() && liveDeltaBalance && liveDeltaBalance.value != null && (deltaReady() || liveDeltaBalance.synced)); }
+    function adoptSyncedBalance() {
+      const b = state.delta && state.delta.liveBalance;
+      if (b && typeof b.value === "number" && (!liveDeltaBalance || b.at > liveDeltaBalance.at)) liveDeltaBalance = b;
+    }
+    // "fetched 10:42" on the device that asked Delta, "fetched 10:42 on another device" elsewhere.
+    function deltaFetchedText() { return "fetched " + new Date(liveDeltaBalance.at).toLocaleTimeString() + (liveDeltaBalance.synced ? " on another device" : ""); }
     function applyLiveBalance() {
       const valEl = document.getElementById('topBalVal');
       const tag = document.getElementById('topBalLive');
@@ -5418,7 +5451,7 @@
         tag.innerText = deltaIn ? (fresh ? 'LIVE' : 'LAST KNOWN') : 'WALLET';
         tag.className = 'text-[9px] font-bold px-1 py-0.5 rounded border align-middle '
           + (ok ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40');
-        const since = deltaIn ? "Delta " + liveDeltaBalance.field + ", fetched " + new Date(liveDeltaBalance.at).toLocaleTimeString() : "";
+        const since = deltaIn ? "Delta " + liveDeltaBalance.field + ", " + deltaFetchedText() : "";
         const cdx = wallets.length ? cdxWalletTitle(wallets[0]) : "";
         tag.title = [since + (deltaIn && !fresh ? " — Delta hasn't answered since" + (liveDeltaLastError ? " (" + liveDeltaLastError + ")" : "") + "; holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
           + ". Journal-computed balance: " + money(lastComputedBalance.value, cur);

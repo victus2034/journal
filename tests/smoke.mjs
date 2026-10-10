@@ -80,6 +80,20 @@ async function run(label, viewport, seed, filler = 0) {
     const shown = await page.evaluate(t => { const v = document.getElementById('view-' + t); return !!v && !v.classList.contains('hidden') && v.offsetHeight > 0; }, tab);
     if (!shown) errs.push('tab "' + tab + '" did not show');
   }
+  // Phones: the bottom bar is tabs only; logging a trade lives in Settings.
+  if (viewport.width < 768) {
+    const nav = await page.evaluate(() => ({ shown: getComputedStyle(document.getElementById('mobileNav')).display !== 'none', add: !!document.querySelector('#mobileNav [onclick*="openTrade"]') }));
+    if (!nav.shown || nav.add) errs.push('mobile bar should show without a log-trade button: ' + JSON.stringify(nav));
+    try {
+      // A day past its loss limit asks first (dismissed here), so no form is right then.
+      const limHit = await page.evaluate(() => { switchTab('data'); return dailyLimitState(viewCur()).hit; });
+      await page.locator('#view-data button:has-text("Log trade")').click({ timeout: 2000 });
+      await page.waitForTimeout(200);
+      const form = await page.evaluate(() => ({ open: !document.getElementById('modalSheet').classList.contains('hidden'), title: document.getElementById('modalSheetTitle').textContent }));
+      if (limHit ? form.open : (!form.open || form.title !== 'Log Trade to Journal')) errs.push('Settings Log trade did not open the trade form: ' + JSON.stringify(form));
+      await page.keyboard.press('Escape');
+    } catch (e) { errs.push('Settings Log trade: ' + e.message.split('\n')[0]); }
+  }
   const warned = await page.evaluate(() => { const w = document.getElementById('storageWarn'); return !!w && !w.classList.contains('hidden'); });
   if (warned !== !!filler) errs.push(filler ? 'storage warning did not show with storage nearly full' : 'storage warning showed with storage nearly empty');
   if (seed) {
@@ -1204,6 +1218,62 @@ async function withdrawRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Delta's wallet figure travels through sync (never the key): the device with
+// the key fetches it, and a device without one shows that figure instead of its
+// own trade sum. Two pages stand in for a PC and a phone.
+async function deltaShareRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const open = async vp => {
+    const ctx = await browser.newContext({ viewport: vp });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+    page.on('dialog', d => d.accept());
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    return { ctx, page };
+  };
+  const pc = await open({ width: 1366, height: 900 }), phone = await open({ width: 390, height: 844 });
+  try {
+    const sent = await pc.page.evaluate(async () => {
+      state.delta = Object.assign(state.delta || {}, { key: 'k', secret: 's' });
+      let eq = '0.01';
+      window.deltaCall = () => Promise.resolve({ ok: true, status: 200, body: { meta: { net_equity: eq }, result: [] } });
+      await fetchLiveBalance();
+      const first = JSON.parse(JSON.stringify(syncPayload(state)));
+      // A minute later the figure moved a little: the shared one waits, so no push per poll.
+      eq = '0.02'; state.delta.shared.at -= 60 * 1000; const was = state.delta.shared.value;
+      await fetchLiveBalance();
+      return { p: first, held: state.delta.shared.value === was, local: bookBalance(acct(deltaAccountId())) };
+    });
+    check(sent.p.deltaBalance && sent.p.deltaBalance.value === 0.01 && !JSON.stringify(sent.p).includes('"key"') && !JSON.stringify(sent.p).includes('"secret"') && sent.held && sent.local === 0.02,
+      'PC payload: ' + JSON.stringify({ bal: sent.p.deltaBalance, held: sent.held, local: sent.local }));
+    const got = await phone.page.evaluate(p => {
+      const before = bookBalance(acct(deltaAccountId()));
+      state = mergeState(state, p); adoptSyncedBalance(); save();
+      state.ui.account = deltaAccountId(); renderAll(); applyLiveBalance();
+      const tag = document.getElementById('topBalLive');
+      // An older figure from GitHub never replaces the newer one held here.
+      const stale = mergeState(JSON.parse(JSON.stringify(state)), Object.assign({}, p, { deltaBalance: { value: 33.23, field: 'net equity', at: p.deltaBalance.at - 3600e3 } }));
+      return { before, after: bookBalance(acct(deltaAccountId())), top: document.getElementById('topBalVal').innerText, tag: tag.classList.contains('hidden') ? '' : tag.innerText,
+        title: tag.title, stale: stale.delta.liveBalance.value, key: !!(state.delta && state.delta.key) };
+    }, sent.p);
+    check(got.after === 0.01 && got.before !== 0.01 && got.top.includes('0.01') && /LIVE|LAST KNOWN/.test(got.tag) && /another device/.test(got.title) && got.stale === 0.01 && !got.key,
+      'phone after sync: ' + JSON.stringify(got));
+    // The phone keeps it after a reload.
+    await phone.page.reload({ waitUntil: 'load' }); await phone.page.waitForTimeout(300);
+    const kept = await phone.page.evaluate(() => bookBalance(acct(deltaAccountId())));
+    check(kept === 0.01, 'phone after reload: ' + kept);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await pc.ctx.close(); await phone.ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Delta balance shared to a device without the key');
+  errs.forEach(e => { console.log('     ' + e); failures.push('delta share: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1216,6 +1286,7 @@ await coindcxRun(data);
 await fixesRun(data);
 await reviewRun(data);
 await withdrawRun(data);
+await deltaShareRun(data);
 
 await browser.close();
 server.close();
