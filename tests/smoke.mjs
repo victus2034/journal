@@ -370,7 +370,15 @@ async function backtestRun(seed) {
     check(/report rows?/.test(await page.innerText('#btBody')), 'clicking a trade did not list its report rows');
     // A report trade gets its own review from its row, kept apart from the report and synced.
     const btnId = await page.getAttribute('#btBody [data-repreview]', 'data-repreview');
+    // Its Review button opens the same Trade Inspector a journal trade does; Edit Trade there opens the form.
     await page.click('#btBody [data-repreview]');
+    const insp = await page.evaluate(() => ({ open: !document.getElementById('tradeInspectorDrawer').classList.contains('translate-x-full'), del: document.getElementById('inspDelBtn').innerText,
+      rows: document.querySelectorAll('#inspChecklist button').length, tags: document.querySelectorAll('#inspTagsMistake button').length, id: activeInspectTrade && activeInspectTrade.id }));
+    check(insp.open && insp.del === 'Report rows' && insp.rows === 5 && insp.tags > 5 && insp.id === btnId, 'report trade inspector: ' + JSON.stringify(insp));
+    await page.click('#inspChecklist button:nth-of-type(2)'); // tap: Risk within limit on
+    check(await page.evaluate(id => JSON.stringify(state.repReviews[id].rules), btnId) === '[false,true,false,false,false]', 'tapping a rule on a report trade did not save');
+    await page.click('#inspChecklist button:nth-of-type(2)'); // and off again
+    await page.evaluate(() => editActiveTrade());
     await page.waitForSelector('#modalSheet:not(.hidden)');
     await page.check('#mRule0'); await page.check('#mRule2');
     await page.click('#modalSheetBody [data-tag="FOMO Entry"]'); await page.click('#modalSheetBody [data-tag="Trailed Stop Loss"]');
@@ -388,6 +396,11 @@ async function backtestRun(seed) {
     check((await page.evaluate(() => btShown.length)) === 2, 'pair filter did not narrow to 2 trades');
     await page.evaluate(() => { btPick('btPair', 'all'); });
 
+    // A journal book's Analysis table has a Review button too, opening the inspector.
+    const anRv = await page.evaluate(() => { state.ui.account = 'acc_cry'; state.ui.anPeriod = 'all'; switchTab('analysis'); renderAll(); const b = document.querySelector('#anBody [data-anreview]'); if (!b) return null; b.click();
+      return { label: b.innerText, open: !document.getElementById('tradeInspectorDrawer').classList.contains('translate-x-full'), id: activeInspectTrade.id === b.getAttribute('data-anreview'), del: document.getElementById('inspDelBtn').innerText }; });
+    check(anRv && anRv.open && anRv.id && anRv.del === 'Delete' && /Review|rules/.test(anRv.label), 'Analysis review button for a journal trade: ' + JSON.stringify(anRv));
+    await page.evaluate(() => { closeInspector(); state.ui.account = 'rep-coindcx-inr'; renderAll(); });
     // A journal book from the same switch shows its own analysis; back to the report after.
     await page.evaluate(() => anBrokerPick('acct:acc_nse'));
     v = await view();
@@ -963,12 +976,13 @@ async function coindcxRun(seed) {
     s = await sync();
     v = await sigs();
     check(s.ok && /ORF\/USDT SHORT 2 .*No alert/.test(v.orphans) && !v.orf && v.strip.includes('1 taken by you'), 'a CoinDCX trade with no alert: ' + JSON.stringify(v));
-    // Its row opens the trade in Analysis, under its book. Fills changing alone
+    // Its row opens the trade in the Trade Inspector, like any trade. Fills changing alone
     // (no new rows) are seen too, as the trades are worked out again.
     const orf = await page.evaluate(() => {
       const row = [...document.querySelectorAll('#signalsTableBody tr')].find(tr => tr.innerText.includes('ORF/USDT'));
       row.click();
-      const out = { account: state.ui.account, analysis: !document.getElementById('view-analysis').classList.contains('hidden') };
+      const out = { inspector: !document.getElementById('tradeInspectorDrawer').classList.contains('translate-x-full') && activeInspectTrade.symbol === 'ORF/USDT', side: document.getElementById('inspSide').innerText };
+      closeInspector();
       const f = state.backtest.files.find(x => x.id === 'cdx-api'), all = f.fills, px = () => !!reportTrades().find(t => t.symbol === 'ORF/USDT').px;
       f.fills = all.filter(x => !(x.sym === 'B-ORF_USDT' && x.side === 'buy'));
       out.without = px();
@@ -977,7 +991,7 @@ async function coindcxRun(seed) {
       state.ui.account = 'all'; renderAll();
       return out;
     });
-    check(JSON.stringify(orf) === '{"account":"rep-coindcx-inr","analysis":true,"without":false,"with":true}', 'ORF row and its prices: ' + JSON.stringify(orf));
+    check(JSON.stringify(orf) === '{"inspector":true,"side":"' + orf.side + '","without":false,"with":true}' && /BUY|SHORT/.test(orf.side), 'ORF row and its prices: ' + JSON.stringify(orf));
     s = await sync();
     check(s.ok && s.changed === false, 'sync after the new fill: ' + JSON.stringify(s));
     // Fills CoinDCX won't show: said, nothing written, the ones kept stay.

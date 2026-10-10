@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.101">
+  <meta name="app-version" content="2026-10-11.102">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -904,6 +904,7 @@
                   <th class="py-2.5 px-3 text-right" title="What the stop would have cost, as % of balance (from your stop or the alert's). Without a stop, what the trade actually lost.">Risk %</th>
                   <th class="py-2.5 px-3 text-right">Net P&amp;L</th>
                   <th class="py-2.5 px-3">What went wrong</th>
+                  <th class="py-2.5 px-3">Review</th>
                 </tr>
               </thead>
               <tbody id="anBody" class="divide-y divide-terminal-border text-slate-300"></tbody>
@@ -1249,7 +1250,7 @@
     </div>
 
     <div class="p-3.5 border-t border-terminal-border bg-terminal-surface flex items-center justify-between gap-2">
-      <button onclick="deleteActiveTrade()" class="px-3 py-1.5 text-xs text-rose-400 hover:bg-rose-500/10 rounded-lg border border-rose-500/30">Delete</button>
+      <button id="inspDelBtn" onclick="deleteActiveTrade()" class="px-3 py-1.5 text-xs text-rose-400 hover:bg-rose-500/10 rounded-lg border border-rose-500/30">Delete</button>
       <div class="flex items-center gap-2">
         <button onclick="closeInspector()" class="px-3 py-1.5 text-xs text-slate-400 hover:text-white">Close</button>
         <button onclick="editActiveTrade()" class="px-3.5 py-1.5 text-xs bg-amber-500 hover:bg-amber-400 text-black font-bold rounded-lg">Edit Trade</button>
@@ -2934,7 +2935,7 @@
 
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-terminal-cardHover/80 transition-colors cursor-pointer border-b border-terminal-border/60';
-        tr.onclick = () => trade.rep ? openReportTrade(trade) : openInspector(trade);
+        tr.onclick = () => openInspector(trade);
 
         tr.innerHTML = `
           <td class="py-3 px-4 align-middle text-slate-400 whitespace-nowrap">
@@ -3012,7 +3013,7 @@
             <button data-id="${esc(trade.id)}" class="px-2 py-0.5 rounded bg-terminal-card border border-terminal-border hover:border-amber-500 text-[10px]">${trade.rep ? 'Report' : 'Edit'}</button>
           </td>
         `;
-        tr.querySelector('button[data-id]').onclick = () => trade.rep ? openReportTrade(trade) : openTrade(trade.id);
+        tr.querySelector('button[data-id]').onclick = () => trade.rep ? openInspector(trade) : openTrade(trade.id);
         tbody.appendChild(tr);
       });
     }
@@ -3324,7 +3325,7 @@
           const pnl = pnlIn(t, viewCur());
           const tr = document.createElement('tr');
           tr.className = 'hover:bg-terminal-cardHover/80 transition-colors border-b border-terminal-border/60 cursor-pointer';
-          tr.onclick = () => t.rep ? openReportTrade(t) : openInspector(t);
+          tr.onclick = () => openInspector(t);
           const own = stopOk(t);
           tr.innerHTML = `
             <td class="py-2.5 px-3 text-white">${esc(t.date)}</td>
@@ -3776,7 +3777,7 @@
         }
         if (visible > AN_PAGE) more.appendChild(btn('Show latest 10', () => { anVisible = AN_PAGE; renderAnalysis(); }));
       }
-      if (!shown.length) { body.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-slate-500">No trades match.</td></tr>'; return; }
+      if (!shown.length) { body.innerHTML = '<tr><td colspan="10" class="text-center py-8 text-slate-500">No trades match.</td></tr>'; return; }
       shown.slice(0, visible).forEach(x => {
         const t = x.t, a = x.a;
         const isOver = x.flags.indexOf("oversize") !== -1;
@@ -3793,7 +3794,8 @@
           <td class="py-2.5 px-3 text-right tabular-nums font-bold ${isOver ? 'text-rose-400' : 'text-slate-200'}">${x.xBal != null ? x.xBal.toFixed(1) + '×' : '—'}</td>
           <td class="py-2.5 px-3 text-right tabular-nums ${x.riskPct != null && isOver ? 'text-rose-400' : 'text-slate-300'}" title="${x.riskPct != null ? 'If the ' + esc(x.stopSrc) + ' had been hit' : 'No stop known: what the trade actually lost'}">${x.riskPct != null ? x.riskPct.toFixed(2) + '%' : (x.lossPct > 0 ? '<span class="text-slate-500">lost </span>' + x.lossPct.toFixed(2) + '%' : '—')}</td>
           <td class="py-2.5 px-3 text-right tabular-nums font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(t.pnl, cur)}${pTag(tradePct(t))}</td>
-          <td class="py-2.5 px-3">${chips || '<span class="text-emerald-400">clean</span>'}</td>`;
+          <td class="py-2.5 px-3">${chips || '<span class="text-emerald-400">clean</span>'}</td>
+          <td class="py-2.5 px-3 whitespace-nowrap">${reviewBtnHtml(t, 'data-anreview="' + esc(t.id) + '"')}</td>`;
         body.appendChild(tr);
       });
     }
@@ -4022,27 +4024,39 @@
       const a = acct(trade.accountId);
       document.getElementById('inspId').innerText = `#${trade.id.slice(0, 7)}`;
       document.getElementById('inspSymbol').innerText = trade.symbol;
-      document.getElementById('inspMeta').innerText = `${a.name} • ${trade.date} ${trade.time || ''}`;
-      document.getElementById('inspSide').innerText = trade.direction === 'long' ? 'BUY' : 'SHORT';
-      document.getElementById('inspSide').className = trade.direction === 'long'
+      // A report trade shows its side and prices when the broker's fills give them (CoinDCX's import does).
+      const px = trade.rep ? trade.px : null, dir = trade.rep ? (px ? px.direction : '') : trade.direction;
+      document.getElementById('inspMeta').innerText = trade.rep
+        ? `${a.name} • ${px ? px.openDate + ' ' + px.openTime + ' → ' : 'closed '}${trade.date} ${trade.time || ''}`
+        : `${a.name} • ${trade.date} ${trade.time || ''}`;
+      document.getElementById('inspSide').innerText = dir === 'long' ? 'BUY' : dir === 'short' ? 'SHORT' : 'REPORT';
+      document.getElementById('inspSide').className = dir === 'long'
         ? 'text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-        : 'text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30';
+        : dir === 'short' ? 'text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30'
+        : 'text-[10px] font-bold px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30';
+      const del = document.getElementById('inspDelBtn');
+      if (del) {
+        del.innerText = trade.rep ? 'Report rows' : 'Delete';
+        del.title = trade.rep ? "See this trade's rows in the broker report (Analysis)" : '';
+        del.className = trade.rep ? 'px-3 py-1.5 text-xs text-sky-300 hover:bg-sky-500/10 rounded-lg border border-sky-500/30' : 'px-3 py-1.5 text-xs text-rose-400 hover:bg-rose-500/10 rounded-lg border border-rose-500/30';
+      }
 
       // P&L and fees in the currency on screen; the book's own figure alongside when converted.
       const o = trade.orig || trade, cur = viewCur(), k = fxk(a, cur), pnl0 = derive(o).pnl || 0;
       const isWin = pnl0 >= 0;
       document.getElementById('inspPnl').innerText = signedMoney(pnl0 * k, cur) + (k !== 1 ? ' (' + signedMoney(pnl0, a.currency) + ')' : '');
       document.getElementById('inspPnl').className = isWin ? 'text-base font-bold text-emerald-400 mt-1' : 'text-base font-bold text-rose-400 mt-1';
-      document.getElementById('inspEntry').innerText = fmtPrice(trade.entry, a.currency);
-      document.getElementById('inspExit').innerText = fmtPrice(trade.exit, a.currency);
+      document.getElementById('inspEntry').innerText = trade.rep ? (px ? fmtPrice(px.entry, a.currency) : '—') : fmtPrice(trade.entry, a.currency);
+      document.getElementById('inspExit').innerText = trade.rep ? (px ? fmtPrice(px.exit, a.currency) : '—') : fmtPrice(trade.exit, a.currency);
       document.getElementById('inspSetup').innerText = trade.setup || 'Discretionary';
       document.getElementById('inspDuration').innerText = fmtHeld(heldMins(trade));
       document.getElementById('inspR').innerText = rfmt(trade.r) + (pfmt(tradePct(trade)) ? ' (' + pfmt(tradePct(trade)) + ')' : '');
       document.getElementById('inspFees').innerText = money((o.fees || 0) * k, cur) + (k !== 1 ? ' (' + money(o.fees || 0, a.currency) + ')' : '');
       document.getElementById('inspNotes').innerText = trade.notes ? `"${trade.notes}"` : '"No execution reflection notes entered."';
 
-      // A journal trade's review is marked right here: tap a rule or a tag to flip it.
-      const own = state.trades.find(t => t.id === trade.id);
+      // A trade's review is marked right here: tap a rule or a tag to flip it.
+      // A report trade's review is kept apart from the report (repReviews).
+      const own = trade.rep ? trade : state.trades.find(t => t.id === trade.id);
       const chk = document.getElementById('inspChecklist');
       chk.innerHTML = '';
       const tickRow = (label, kept, flip) => {
@@ -4091,6 +4105,16 @@
     // Change one part of a journal trade's review from the inspector, save it, and redraw.
     function reviewTrade(t, change) {
       if (!t) return;
+      if (t.rep) {
+        state.repReviews = state.repReviews || {};
+        const r = Object.assign({ rules: RULES.map(() => false), tagsPositives: [], tagsMistakes: [], notes: "", setup: "", confidence: null }, state.repReviews[t.id] || {});
+        change(r);
+        state.repReviews[t.id] = stamp(r);
+        save();
+        renderAll();
+        openInspector(reportTrades().find(x => x.id === t.id) || t);
+        return;
+      }
       change(t);
       stamp(t);
       save();
@@ -4104,6 +4128,7 @@
 
     function deleteActiveTrade() {
       if (!activeInspectTrade) return;
+      if (activeInspectTrade.rep) { const t = activeInspectTrade; closeInspector(); openReportTrade(t); return; } // the button reads "Report rows" then
       const tr = activeInspectTrade;
       if (!confirm(`Delete this ${tr.symbol} trade from ${tr.date}? With sync on it is removed from your other devices too.`)) return;
       noteDeleted("trades", activeInspectTrade.id, activeInspectTrade.src);
@@ -4117,6 +4142,7 @@
     function editActiveTrade() {
       if (!activeInspectTrade) return;
       const tid = activeInspectTrade.id;
+      if (activeInspectTrade.rep) { const t = activeInspectTrade; closeInspector(); openRepReview(tid, t.symbol + ' · ' + fmtDay(t.date) + ' ' + (t.time || '')); return; }
       closeInspector();
       openTrade(tid);
     }
@@ -8084,7 +8110,11 @@
           <div class="overflow-x-auto"><table class="w-full text-[11px] font-mono"><thead class="text-slate-500 uppercase text-[10px]"><tr><th class="py-1 pr-3 text-left">Time</th><th class="py-1 pr-3 text-left">Type</th><th class="py-1 pr-3 text-right">Net</th><th class="py-1 pr-3 text-right">Gross</th><th class="py-1 pr-3 text-right">Fee</th><th class="py-1 text-left">ID</th></tr></thead><tbody>${legs}</tbody></table></div></td></tr>`;
       }).join("") : `<tr><td colspan="10" class="py-6 text-center text-slate-500">No trades match these filters.</td></tr>`;
       body.querySelectorAll("[data-bttrade]").forEach(tr => { tr.onclick = () => btToggleTrade(tr.getAttribute("data-bttrade")); });
-      body.querySelectorAll("[data-repreview]").forEach(b => { b.onclick = e => { e.stopPropagation(); openRepReview(b.getAttribute("data-repreview"), b.getAttribute("data-replabel")); }; });
+      body.querySelectorAll("[data-repreview]").forEach(b => { b.onclick = e => {
+        e.stopPropagation();
+        const id = b.getAttribute("data-repreview"), t = reportTrades().find(x => x.id === id);
+        if (t) openInspector(t); else openRepReview(id, b.getAttribute("data-replabel")); // still open: no closed trade to inspect yet
+      }; });
       more.innerHTML = list.length > btVisible
         ? `<span class="text-slate-500 text-[11px]">Showing ${part.length} of ${list.length}</span><button type="button" onclick="btMore()" class="px-3 py-1 bg-terminal-surface border border-terminal-border rounded text-slate-200 hover:border-amber-500 text-[11px]">Show more</button>`
         : (list.length ? `<span class="text-slate-500 text-[11px]">${list.length} trade${list.length === 1 ? "" : "s"}</span>` : "");
@@ -8093,11 +8123,15 @@
     // the report has none, so it is kept apart, keyed by the trade's first row.
     const REP_REVIEW_KEYS = ["rules", "tagsPositives", "tagsMistakes", "notes", "setup", "confidence"];
     function repReviewOf(id) { return (state.repReviews || {})[id] || null; }
-    function repReviewBtn(t) {
-      const id = "rep:" + t.legs[0].id, rv = repReviewOf(id), label = btSym(t.sym) + " · " + btWhen(t.start);
+    // The Review button both trade tables show: how many rules were kept, once reviewed.
+    function reviewBtnHtml(rv, attrs) {
       const kept = rv ? (rv.rules || []).filter(Boolean).length : 0, tags = rv ? (rv.tagsPositives || []).length + (rv.tagsMistakes || []).length : 0;
       const done = rv && (kept || tags || rv.notes || rv.setup || rv.confidence);
-      return `<button type="button" data-repreview="${esc(id)}" data-replabel="${esc(label)}" title="Mark what you did right and wrong on this trade" class="px-2 py-0.5 rounded border text-[10px] ${done ? "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" : "border-terminal-border text-slate-400 hover:text-white hover:border-amber-500/60"}">${done ? "✎ " + kept + "/" + RULES.length + " rules" : "✎ Review"}</button>`;
+      return `<button type="button" ${attrs} title="Mark what you did right and wrong on this trade" class="px-2 py-0.5 rounded border text-[10px] ${done ? "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" : "border-terminal-border text-slate-400 hover:text-white hover:border-amber-500/60"}">${done ? "✎ " + kept + "/" + RULES.length + " rules" : "✎ Review"}</button>`;
+    }
+    function repReviewBtn(t) {
+      const id = "rep:" + t.legs[0].id, label = btSym(t.sym) + " · " + btWhen(t.start);
+      return reviewBtnHtml(repReviewOf(id), `data-repreview="${esc(id)}" data-replabel="${esc(label)}"`);
     }
     function openRepReview(id, label) {
       const v = repReviewOf(id) || {};
@@ -8151,6 +8185,8 @@
         renderAll();
         if (typeof renderBacktestTable === "function") renderBacktestTable();
         toast("Review saved");
+        const t = reportTrades().find(x => x.id === id);
+        if (t && activeInspectTrade && activeInspectTrade.id === id && !document.getElementById('tradeInspectorDrawer').classList.contains('translate-x-full')) openInspector(t);
         return true;
       });
     }
