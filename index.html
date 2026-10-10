@@ -1117,7 +1117,7 @@
           <div class="space-y-2.5">
             <div>
               <label class="text-slate-400 block mb-1" for="cdxKeyInput">API Key</label>
-              <input type="text" id="cdxKeyInput" autocomplete="off" spellcheck="false" placeholder="Paste CoinDCX API Key" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+              <input type="password" id="cdxKeyInput" autocomplete="off" spellcheck="false" placeholder="Paste CoinDCX API Key" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
             </div>
             <div>
               <label class="text-slate-400 block mb-1" for="cdxSecretInput">API Secret</label>
@@ -5382,7 +5382,7 @@
       const m = String((r && r.message) || "");
       if (/Failed to fetch|NetworkError|Load failed/i.test(m)) {
         return navigator.onLine === false ? "You're offline. Try again when you're back online."
-          : "CoinDCX did not answer this page. Most likely CoinDCX doesn't accept calls from a web page (its API is built for servers), so the browser blocked it. Uploading the report still works.";
+          : "Could not reach CoinDCX from this page. Either this window blocks outside connections (an app's file preview does), or CoinDCX doesn't accept calls from web pages. Try the journal in Chrome; uploading the report still works.";
       }
       const said = r && r.body && (r.body.message || r.body.error || r.body.raw);
       const text = said ? String(typeof said === "string" ? said : JSON.stringify(said)).slice(0, 160) : "";

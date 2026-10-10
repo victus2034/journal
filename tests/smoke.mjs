@@ -630,7 +630,7 @@ async function coindcxRun(seed) {
     await page.evaluate(() => switchTab('data'));
     await page.click('button[onclick="coindcxSyncNow()"]');
     msg = await settled();
-    check(/doesn't accept calls from a web page/.test(msg), 'blocked call: ' + msg);
+    check(/^Could not reach CoinDCX from this page\./.test(msg), 'blocked call: ' + msg);
 
     // Forget Key clears it from this device; imported trades stay.
     await page.click('button[onclick="forgetCoindcxKey()"]');
