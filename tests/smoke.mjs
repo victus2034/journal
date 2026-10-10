@@ -1262,6 +1262,17 @@ async function deltaShareRun(seed) {
     }, sent.p);
     check(got.after === 0.01 && got.before !== 0.01 && got.top.includes('0.01') && /LIVE|LAST KNOWN/.test(got.tag) && /another device/.test(got.title) && got.stale === 0.01 && !got.key,
       'phone after sync: ' + JSON.stringify(got));
+    // A PC that held Delta's figure from before this build, with Delta not answering
+    // now, still sends it the moment the journal opens.
+    const old = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+    await old.route(url => !url.href.startsWith(base), r => r.abort());
+    const seeded = Object.assign({}, seed, { delta: { key: 'k', secret: 's', liveBalance: { value: 0.01, field: 'net equity', at: Date.now() - 3 * 3600e3 } } });
+    await old.addInitScript(s => { localStorage.setItem('tapeAndTarget.v2', s); }, JSON.stringify(seeded));
+    const oldPage = await old.newPage();
+    await oldPage.goto(base, { waitUntil: 'load' }); await oldPage.waitForTimeout(2600);
+    const boot = await oldPage.evaluate(() => ({ p: syncPayload(state).deltaBalance, live: liveDeltaBalance && liveDeltaBalance.value }));
+    await old.close();
+    check(boot.p && boot.p.value === 0.01 && boot.live === 0.01, 'held figure not sent on opening: ' + JSON.stringify(boot));
     // The phone keeps it after a reload.
     await phone.page.reload({ waitUntil: 'load' }); await phone.page.waitForTimeout(300);
     const kept = await phone.page.evaluate(() => bookBalance(acct(deltaAccountId())));

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.104">
+  <meta name="app-version" content="2026-10-11.105">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -5403,10 +5403,7 @@
           // its own trade sum. Written only when it moves, and at most every ten
           // minutes (hourly when it holds), so an open position doesn't push a
           // commit on every one-minute poll.
-          const sh = state.delta.shared, age = sh ? liveDeltaBalance.at - sh.at : Infinity;
-          if (!sh || (Math.abs(sh.value - liveDeltaBalance.value) >= 0.005 && age >= 10 * 60 * 1000) || age >= 60 * 60 * 1000) {
-            state.delta.shared = { value: liveDeltaBalance.value, field: liveDeltaBalance.field, at: liveDeltaBalance.at };
-          }
+          shareOwnBalance(false);
           save();
         }
       }).catch(err => {
@@ -5423,6 +5420,18 @@
     // this key was never connected for) falls back to the computed balance.
     // A figure synced from another device counts without a key here.
     function deltaLiveKnown() { return !!(deltaAccountId() && liveDeltaBalance && liveDeltaBalance.value != null && (deltaReady() || liveDeltaBalance.synced)); }
+    // Copies this device's own Delta figure into the synced one. `now` skips the
+    // ten-minute wait: on opening, a figure the other devices never got (Delta
+    // not answering this session, or a build from before this was synced) goes
+    // out at once instead of waiting for a poll that may never succeed.
+    function shareOwnBalance(now) {
+      const b = liveDeltaBalance, d = state.delta;
+      if (!d || !deltaReady() || !b || b.synced || typeof b.value !== "number") return false;
+      const sh = d.shared, age = sh ? b.at - sh.at : Infinity, moved = !sh || Math.abs(sh.value - b.value) >= 0.005;
+      if (age <= 0 || !(moved && (now || age >= 10 * 60 * 1000) || age >= 60 * 60 * 1000)) return false;
+      d.shared = { value: b.value, field: b.field, at: b.at };
+      return true;
+    }
     function adoptSyncedBalance() {
       const b = state.delta && state.delta.liveBalance;
       if (b && typeof b.value === "number" && (!liveDeltaBalance || b.at > liveDeltaBalance.at)) liveDeltaBalance = b;
@@ -8463,6 +8472,7 @@
       // until Delta actually answers again or falls silent for good.
       if (state.delta && state.delta.liveBalance && typeof state.delta.liveBalance.value === "number") {
         liveDeltaBalance = state.delta.liveBalance;
+        if (shareOwnBalance(true)) save();
       }
       renderAll();
       if (loadNotice) {
