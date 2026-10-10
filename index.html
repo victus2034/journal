@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.100">
+  <meta name="app-version" content="2026-10-11.101">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1009,6 +1009,7 @@
                       <th class="py-2.5 px-3 text-right">Fees</th>
                       <th class="py-2.5 px-3 text-right">Funding</th>
                       <th class="py-2.5 px-3">Status</th>
+                      <th class="py-2.5 px-3">Review</th>
                     </tr>
                   </thead>
                   <tbody id="btBody" class="text-slate-300"></tbody>
@@ -1571,6 +1572,7 @@
       s.signals = list(s.signals, cleanSignal);
       s.playbook = list(s.playbook, cleanPlay);
       s.backtest = cleanBacktest(s.backtest);
+      s.repReviews = cleanRepReviews(s.repReviews);
       s.tombstones = cleanTombstones(s.tombstones);
       s.aliases = (s.aliases && typeof s.aliases === "object" && !Array.isArray(s.aliases)) ? s.aliases : {};
       if (s.reviews && typeof s.reviews === "object" && !Array.isArray(s.reviews)) {
@@ -4697,6 +4699,7 @@
         goals: mergeList(local.goals, remote.goals, "goals", tombs),
         playbook: mergeList(local.playbook, remote.playbook, "playbook", tombs),
         backtest: mergeBacktest(local.backtest, remote.backtest, tombs),
+        repReviews: mergeRepReviews(local.repReviews, remote.repReviews),
         aliases: Object.assign({}, remote.aliases || {}, local.aliases || {}),
         tombstones: tombs
       }, mergeReviews(local, remote, tombs));
@@ -4721,6 +4724,7 @@
       // Only once something was uploaded, so the shared file of anyone who never
       // uploads a broker report stays exactly as it was.
       if (st.backtest && st.backtest.files && st.backtest.files.length) p.backtest = st.backtest;
+      if (st.repReviews && Object.keys(st.repReviews).length) p.repReviews = st.repReviews;
       return p;
     }
     let syncBusy = false, syncTimer = null;
@@ -7153,6 +7157,7 @@
           if (p.reviews && typeof p.reviews === "object") state.reviews = p.reviews;
           // Older backups have no backtest; the uploads on this device stay then.
           if (p.backtest && typeof p.backtest === "object") state.backtest = p.backtest;
+          if (p.repReviews && typeof p.repReviews === "object") state.repReviews = cleanRepReviews(p.repReviews);
           sanitizeState(state);
           save();
           renderAll();
@@ -7876,7 +7881,10 @@
         openDate: mine[0].at.slice(0, 10), openTime: mine[0].at.slice(11, 16)
       };
     }
-    function reportTrades() { return reportBooks().closed; }
+    function reportTrades() {
+      const rv = state.repReviews || {};
+      return reportBooks().closed.map(t => { const r = rv[t.id]; if (!r) return t; const o = Object.assign({}, t); REP_REVIEW_KEYS.forEach(k => { o[k] = r[k]; }); return o; });
+    }
     // From the dashboard: the trade's own report rows, in Analysis under its book.
     function openReportTrade(trade) {
       state.ui.account = trade.accountId; state.ui.btSec = "trades"; state.ui.btPair = "all";
@@ -8061,7 +8069,8 @@
           <td class="py-2 px-3 text-right whitespace-nowrap ${pos(t.gross)}">${signedMoney(t.gross, cur)}</td>
           <td class="py-2 px-3 text-right whitespace-nowrap text-slate-400">${money(t.fees, cur)}</td>
           <td class="py-2 px-3 text-right whitespace-nowrap ${pos(t.funding)}">${t.funding || t.legs.some(r => r.kind === "funding") ? signedMoney(t.funding, cur) : "—"}</td>
-          <td class="py-2 px-3 whitespace-nowrap">${status}</td></tr>`;
+          <td class="py-2 px-3 whitespace-nowrap">${status}</td>
+          <td class="py-2 px-3 whitespace-nowrap">${repReviewBtn(t)}</td></tr>`;
         if (btOpenTrade !== t.id) return row;
         const legs = t.legs.map(r => `<tr class="border-t border-terminal-border/60">
             <td class="py-1 pr-3 whitespace-nowrap">${esc(r.at)}</td>
@@ -8070,15 +8079,100 @@
             <td class="py-1 pr-3 text-right whitespace-nowrap ${pos(r.gross)}">${signedMoney(r.gross, cur)}</td>
             <td class="py-1 pr-3 text-right whitespace-nowrap text-slate-400">${money(r.fee, cur)}</td>
             <td class="py-1 text-slate-500 whitespace-nowrap" title="${esc(r.id)}">${esc(r.id.length > 14 ? r.id.slice(0, 13) + "…" : r.id)}</td></tr>`).join("");
-        return row + `<tr class="bg-black/30"><td colspan="9" class="px-3 py-2">
+        return row + `<tr class="bg-black/30"><td colspan="10" class="px-3 py-2">
           <div class="text-[10px] text-slate-400 mb-1">${t.legs.length} report row${t.legs.length === 1 ? "" : "s"}${t.carried ? " · opened before this report starts" : ""}${t.stillOpen && t.closed ? " · funding after the last close, so part may still be open" : ""}</div>
           <div class="overflow-x-auto"><table class="w-full text-[11px] font-mono"><thead class="text-slate-500 uppercase text-[10px]"><tr><th class="py-1 pr-3 text-left">Time</th><th class="py-1 pr-3 text-left">Type</th><th class="py-1 pr-3 text-right">Net</th><th class="py-1 pr-3 text-right">Gross</th><th class="py-1 pr-3 text-right">Fee</th><th class="py-1 text-left">ID</th></tr></thead><tbody>${legs}</tbody></table></div></td></tr>`;
-      }).join("") : `<tr><td colspan="9" class="py-6 text-center text-slate-500">No trades match these filters.</td></tr>`;
+      }).join("") : `<tr><td colspan="10" class="py-6 text-center text-slate-500">No trades match these filters.</td></tr>`;
       body.querySelectorAll("[data-bttrade]").forEach(tr => { tr.onclick = () => btToggleTrade(tr.getAttribute("data-bttrade")); });
+      body.querySelectorAll("[data-repreview]").forEach(b => { b.onclick = e => { e.stopPropagation(); openRepReview(b.getAttribute("data-repreview"), b.getAttribute("data-replabel")); }; });
       more.innerHTML = list.length > btVisible
         ? `<span class="text-slate-500 text-[11px]">Showing ${part.length} of ${list.length}</span><button type="button" onclick="btMore()" class="px-3 py-1 bg-terminal-surface border border-terminal-border rounded text-slate-200 hover:border-amber-500 text-[11px]">Show more</button>`
         : (list.length ? `<span class="text-slate-500 text-[11px]">${list.length} trade${list.length === 1 ? "" : "s"}</span>` : "");
     }
+    // A report trade's own review (rules kept, what went right, mistakes, notes):
+    // the report has none, so it is kept apart, keyed by the trade's first row.
+    const REP_REVIEW_KEYS = ["rules", "tagsPositives", "tagsMistakes", "notes", "setup", "confidence"];
+    function repReviewOf(id) { return (state.repReviews || {})[id] || null; }
+    function repReviewBtn(t) {
+      const id = "rep:" + t.legs[0].id, rv = repReviewOf(id), label = btSym(t.sym) + " · " + btWhen(t.start);
+      const kept = rv ? (rv.rules || []).filter(Boolean).length : 0, tags = rv ? (rv.tagsPositives || []).length + (rv.tagsMistakes || []).length : 0;
+      const done = rv && (kept || tags || rv.notes || rv.setup || rv.confidence);
+      return `<button type="button" data-repreview="${esc(id)}" data-replabel="${esc(label)}" title="Mark what you did right and wrong on this trade" class="px-2 py-0.5 rounded border text-[10px] ${done ? "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" : "border-terminal-border text-slate-400 hover:text-white hover:border-amber-500/60"}">${done ? "✎ " + kept + "/" + RULES.length + " rules" : "✎ Review"}</button>`;
+    }
+    function openRepReview(id, label) {
+      const v = repReviewOf(id) || {};
+      openModalSheet("Review " + (label || "trade"), body => {
+        body.innerHTML = `
+          <div class="text-[11px] text-slate-500">A broker report has no review of its own, so this one is kept with your journal (and synced). The report's numbers are not changed.</div>
+          <div>
+            <label class="text-slate-400 block mb-1">Rules followed</label>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-1">
+              ${RULES.map((r, i) => `<label class="flex items-center gap-2 text-slate-300"><input type="checkbox" id="mRule${i}" ${(v.rules || [])[i] ? 'checked' : ''} class="accent-amber-500"> ${esc(r)}</label>`).join('')}
+            </div>
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Setup / Strategy</label>
+            <input type="text" id="mSetup" value="${esc(v.setup || '')}" list="mSetupList" autocomplete="off" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            <datalist id="mSetupList">${(state.playbook || []).map(p => `<option value="${esc(p.name)}"></option>`).join('')}</datalist>
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Execution Reflection Notes</label>
+            <textarea id="mNotes" rows="2" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">${esc(v.notes || '')}</textarea>
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Confidence Level <span id="mConfLabel" class="text-amber-300 ml-1">${tradeConfidence(v) ? CONFIDENCE_LABELS[tradeConfidence(v)] : 'Not rated'}</span></label>
+            <div class="grid grid-cols-5 gap-1.5" id="mConfRow">
+              ${[1, 2, 3, 4, 5].map(n => `<button type="button" data-conf="${n}" onclick="pickConfidence(${n})" class="conf-btn py-1.5 rounded border text-[11px] ${n === tradeConfidence(v) ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-bold' : 'bg-[#080D15] border-terminal-border text-slate-400 hover:border-amber-500/50'}">${n} ${'★'.repeat(n)}</button>`).join('')}
+            </div>
+            <input type="hidden" id="mConfidence" value="${tradeConfidence(v) || ''}">
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">What Went Right</label>
+            <div class="flex flex-wrap gap-1.5">
+              ${POSITIVE_TAGS.map(tag => `<button type="button" data-tag-group="positives" data-tag="${esc(tag)}" onclick="toggleTagChip(this)" class="tag-chip px-2 py-1 rounded-full border text-[10px] ${(v.tagsPositives || []).includes(tag) ? 'active bg-emerald-500/20 text-emerald-300 border-emerald-500/50' : 'bg-[#080D15] text-slate-400 border-terminal-border hover:border-emerald-500/40'}">${esc(tag)}</button>`).join('')}
+            </div>
+          </div>
+          <div>
+            <label class="text-slate-400 block mb-1">Execution Mistakes</label>
+            <div class="flex flex-wrap gap-1.5">
+              ${MISTAKE_TAGS.map(tag => `<button type="button" data-tag-group="mistakes" data-tag="${esc(tag)}" onclick="toggleTagChip(this)" class="tag-chip px-2 py-1 rounded-full border text-[10px] ${(v.tagsMistakes || []).includes(tag) ? 'active bg-rose-500/20 text-rose-300 border-rose-500/50' : 'bg-[#080D15] text-slate-400 border-terminal-border hover:border-rose-500/40'}">${esc(tag)}</button>`).join('')}
+            </div>
+          </div>`;
+      }, () => {
+        const picked = group => [...document.querySelectorAll(`#modalSheetBody [data-tag-group="${group}"].active`)].map(b => b.dataset.tag);
+        state.repReviews = state.repReviews || {};
+        state.repReviews[id] = stamp({
+          rules: RULES.map((r, i) => !!(document.getElementById('mRule' + i) || {}).checked),
+          tagsPositives: picked('positives'), tagsMistakes: picked('mistakes'),
+          notes: document.getElementById('mNotes').value, setup: document.getElementById('mSetup').value.trim(),
+          confidence: parseInt(document.getElementById('mConfidence').value, 10) || null
+        });
+        save();
+        renderAll();
+        if (typeof renderBacktestTable === "function") renderBacktestTable();
+        toast("Review saved");
+        return true;
+      });
+    }
+    function cleanRepReviews(r) {
+      if (!r || typeof r !== "object" || Array.isArray(r)) return {};
+      const o = {};
+      Object.keys(r).forEach(k => {
+        const v = r[k];
+        if (!/^rep:/.test(k) || k.length > 120 || !v || typeof v !== "object") return;
+        const strs = a => (Array.isArray(a) ? a : []).filter(x => typeof x === "string").map(x => cText(x, 60)).slice(0, 40);
+        o[k] = { rules: RULES.map((x, i) => !!(Array.isArray(v.rules) && v.rules[i])), tagsPositives: strs(v.tagsPositives), tagsMistakes: strs(v.tagsMistakes),
+          notes: cText(v.notes || "", 4000), setup: cText(v.setup || "", 80), confidence: tradeConfidence(v), updatedAt: typeof v.updatedAt === "string" ? v.updatedAt.slice(0, 30) : "" };
+      });
+      return o;
+    }
+    // Per trade, the newer review wins.
+    function mergeRepReviews(a, b) {
+      const o = Object.assign({}, a || {});
+      Object.keys(b || {}).forEach(k => { if (!o[k] || (b[k].updatedAt || "") > (o[k].updatedAt || "")) o[k] = b[k]; });
+      return o;
+    }
+
     function renderBacktestFiles(files, rows) {
       const host = document.getElementById("btFiles");
       if (!host) return;
