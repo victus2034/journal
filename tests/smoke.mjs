@@ -3,9 +3,9 @@
 // charts, tables and stats actually render. Every tab is opened on desktop
 // and phone widths. Outside requests (CDN, GitHub, Delta) are blocked, so the
 // check never depends on the network. One more pass fills storage to 86%
-// and expects the storage warning. The last pass uploads a made-up trade
-// report (.xlsx, then the same as .csv) to the Backtest tab and checks every
-// number it shows against the report.
+// and expects the storage warning. The last pass uploads a made-up CoinDCX
+// trade report (.xlsx, then the same as .csv) in Analysis, checks every number
+// it shows against the report, and switches between brokers.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,7 +13,7 @@ import { chromium } from 'playwright';
 import { EXPECTED, backtestXlsx, backtestCsv } from './backtest-fixture.mjs';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const TABS = ['dashboard', 'signals', 'analysis', 'backtest', 'calculator', 'data'];
+const TABS = ['dashboard', 'signals', 'analysis', 'calculator', 'data'];
 
 function fixture() {
   const day = n => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
@@ -85,8 +85,9 @@ async function run(label, viewport, seed, filler = 0) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
-// Backtest upload: preview, import, grouping into trades, stats, the duplicate
-// checks, sync merge and removal. Live trades must stay exactly as they were.
+// Broker report upload: preview, import, grouping into trades, stats, the
+// broker switch in Analysis, the duplicate checks, sync merge and removal.
+// Live trades must stay exactly as they were.
 async function backtestRun(seed) {
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
   await ctx.route(url => !url.href.startsWith(base), r => r.abort());
@@ -105,8 +106,16 @@ async function backtestRun(seed) {
     return { text: await page.innerText('#modalSheetBody'), button: await page.innerText('#modalSheetSaveBtn'), disabled: await page.isDisabled('#modalSheetSaveBtn') };
   };
   try {
-    await page.evaluate(() => switchTab('backtest'));
-    check(await page.isVisible('#btEmpty'), 'empty Backtest tab did not say so');
+    const view = () => page.evaluate(() => {
+      const on = id => { const el = document.getElementById(id); return !!el && !el.classList.contains('hidden') && el.offsetHeight > 0; };
+      return { analysis: on('view-analysis'), report: on('anReport'), live: on('anLive'), broker: state.ui.anBroker || '', picked: anReportBroker(), account: state.ui.account,
+        bar: [...document.querySelectorAll('#anBrokerBar [data-anbroker]')].map(b => b.innerText), on: (document.querySelector('#anBrokerBar .text-amber-400') || {}).innerText,
+        lines: [...document.querySelectorAll('#anBrokers tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()) };
+    });
+    await page.evaluate(() => switchTab('analysis'));
+    let v = await view();
+    check(v.live && !v.report && v.bar.join(',') === 'All books,Test NSE,Test Crypto', 'Analysis before any upload: ' + JSON.stringify(v));
+    check(v.lines.length === 2 && v.lines[0].startsWith('Test NSE') && v.lines[1].startsWith('Test Crypto'), 'results by broker before upload: ' + v.lines.join(' | '));
 
     const xlsx = backtestXlsx();
     let pv = await upload('report.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xlsx);
@@ -116,23 +125,29 @@ async function backtestRun(seed) {
     check(/Skipped\s+1: row \d+ \(no pair or symbol\)/.test(pv.text), 'Total line under the table was not reported as skipped');
     check(/✓ every row/.test(pv.text), 'net = gross + settlement - fees check did not pass');
     check(pv.button === `Import ${EXPECTED.rows} rows` && !pv.disabled, 'import button wrong: ' + pv.button);
+    check(await page.inputValue('#btBrokerInput') === 'CoinDCX', 'broker not read from the report: ' + await page.inputValue('#btBrokerInput'));
     await page.click('#modalSheetSaveBtn');
     await page.waitForTimeout(300);
+    v = await view();
+    check(v.analysis && v.report && !v.live && v.broker === 'CoinDCX' && v.on === 'CoinDCX', 'after import Analysis did not open on CoinDCX: ' + JSON.stringify(v));
+    check(v.bar.join(',') === 'All books,Test NSE,Test Crypto,CoinDCX', 'broker switch: ' + v.bar.join(','));
+    const dcx = v.lines.find(l => l.startsWith('CoinDCX')) || '';
+    check(dcx.includes('+₹' + EXPECTED.closedNet.toFixed(2)) && dcx.includes(`${EXPECTED.closed.length} +1 open`) && dcx.includes(`${EXPECTED.wins}/${EXPECTED.losses}`) && dcx.includes('Uploaded report'), 'CoinDCX line in results by broker: ' + dcx);
+    check((await page.textContent('#btTitle')).startsWith('CoinDCX'), 'report title does not name the broker');
 
     const got = await page.evaluate(() => {
       const bt = state.backtest, all = btTrades(bt.rows), s = btStats(all);
       return {
-        live: state.trades.length, rows: bt.rows.length, files: bt.files, tab: !document.getElementById('view-backtest').classList.contains('hidden'),
+        live: state.trades.length, rows: bt.rows.length, files: bt.files,
         closed: s.closed.map(t => ({ sym: t.sym, start: t.start, end: t.end, legs: t.legs.length, net: t.net, funding: t.funding, fees: t.fees, held: t.held, carried: t.carried })),
         open: s.open.map(t => ({ sym: t.sym, start: t.start, legs: t.legs.length, net: t.net })),
         wins: s.wins, losses: s.losses, net: s.net, total: s.total, maxDD: s.maxDD, fees: s.fees, funding: s.funding,
         check: document.getElementById('btCheck').innerText,
       };
     });
-    check(got.tab, 'Backtest tab was not shown after the import');
     check(got.live === seed.trades.length, 'live journal changed: ' + got.live + ' trades');
     check(got.rows === EXPECTED.rows, 'stored ' + got.rows + ' rows');
-    check(got.files.length === 1 && got.files[0].checked && got.files[0].cur === 'INR', 'file record wrong: ' + JSON.stringify(got.files));
+    check(got.files.length === 1 && got.files[0].checked && got.files[0].cur === 'INR' && got.files[0].broker === 'CoinDCX', 'file record wrong: ' + JSON.stringify(got.files));
     check(got.closed.length === EXPECTED.closed.length, 'closed trades: ' + got.closed.length);
     EXPECTED.closed.forEach((e, i) => {
       const t = got.closed[i] || {};
@@ -146,7 +161,7 @@ async function backtestRun(seed) {
 
     for (const sec of ['overview', 'trades', 'files']) {
       await page.evaluate(k => setBtSec(k), sec);
-      check(await page.evaluate(k => { const el = document.querySelector('[data-btsec="' + k + '"]'); return !!el && !el.classList.contains('hidden') && el.offsetHeight > 0; }, sec), 'Backtest section "' + sec + '" did not show');
+      check(await page.evaluate(k => { const el = document.querySelector('[data-btsec="' + k + '"]'); return !!el && !el.classList.contains('hidden') && el.offsetHeight > 0; }, sec), 'report section "' + sec + '" did not show');
     }
     await page.evaluate(() => setBtSec('trades'));
     await page.click('#btBody tr[data-bttrade]');
@@ -154,6 +169,21 @@ async function backtestRun(seed) {
     await page.evaluate(() => { btPick('btPair', 'B-AAA_USDT'); });
     check((await page.evaluate(() => btShown.length)) === 2, 'pair filter did not narrow to 2 trades');
     await page.evaluate(() => { btPick('btPair', 'all'); });
+
+    // A journal book from the same switch shows its own analysis; back to the report after.
+    await page.evaluate(() => anBrokerPick('acct:acc_nse'));
+    v = await view();
+    check(v.live && !v.report && v.broker === '' && v.account === 'acc_nse' && v.on === 'Test NSE', 'picking a book: ' + JSON.stringify(v));
+    await page.click('#anBrokers tbody tr[data-anbroker="rep:CoinDCX"]');
+    v = await view();
+    check(v.report && !v.live && v.broker === 'CoinDCX', 'clicking CoinDCX in results by broker: ' + JSON.stringify(v));
+    await page.evaluate(() => anBrokerPick('all'));
+    await page.evaluate(() => anBrokerPick('rep:CoinDCX'));
+    // The Analysis period narrows the report too (the made-up report is from early 2026).
+    await page.evaluate(() => { state.ui.anPeriod = '7d'; renderAnalysis(); });
+    v = await view();
+    check((await page.evaluate(() => btShown.length)) === 0 && (v.lines.find(l => l.startsWith('CoinDCX')) || '').startsWith('CoinDCX — 0'), 'period 7 days did not narrow the report: ' + v.lines.join(' | '));
+    await page.evaluate(() => { state.ui.anPeriod = 'all'; renderAnalysis(); });
 
     pv = await upload('report.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xlsx);
     check(pv.disabled && pv.button === 'Nothing new' && /New rows to add\s+0/.test(pv.text), 'same .xlsx again was not caught as already uploaded');
@@ -173,27 +203,54 @@ async function backtestRun(seed) {
       const fileId = state.backtest.files[0].id;
       removeBacktestFile(fileId);
       const after = mergeState(state, payload);
-      return { sent: (payload.backtest || { rows: [] }).rows.length, merged: fresh.backtest.rows.length, tomb: !!state.tombstones['backtest:' + fileId], afterRemove: after.backtest.rows.length + after.backtest.files.length, emptyPayload: 'backtest' in syncPayload(state) };
+      return { sent: (payload.backtest || { rows: [] }).rows.length, merged: fresh.backtest.rows.length, broker: fresh.backtest.files[0].broker, tomb: !!state.tombstones['backtest:' + fileId], afterRemove: after.backtest.rows.length + after.backtest.files.length, emptyPayload: 'backtest' in syncPayload(state) };
     });
-    check(sync.sent === EXPECTED.rows && sync.merged === EXPECTED.rows, `sync carried ${sync.sent} rows, merged ${sync.merged}`);
+    check(sync.sent === EXPECTED.rows && sync.merged === EXPECTED.rows && sync.broker === 'CoinDCX', `sync carried ${sync.sent} rows, merged ${sync.merged}, broker ${sync.broker}`);
     check(sync.tomb && sync.afterRemove === 0, 'removed file came back from the synced copy');
     check(!sync.emptyPayload, 'empty backtest still written to the synced file');
+    v = await view();
+    check(v.live && !v.report && v.bar.join(',') === 'All books,Test NSE,Test Crypto', 'after removing the only file: ' + JSON.stringify(v));
 
     // The .csv on its own gives the same trades as the .xlsx.
     pv = await upload('report.csv', 'text/csv', backtestCsv());
     check(pv.button === `Import ${EXPECTED.rows} rows`, 'CSV import button: ' + pv.button);
+    check(await page.inputValue('#btBrokerInput') === 'CoinDCX', 'CoinDCX not known from its pair names in a CSV: ' + await page.inputValue('#btBrokerInput'));
+    await page.fill('#btBrokerInput', 'Dhan');
     await page.click('#modalSheetSaveBtn');
     await page.waitForTimeout(300);
     const csv = await page.evaluate(() => { const s = btStats(btTrades(state.backtest.rows)); return { n: s.n, open: s.open.length, net: s.net, total: s.total, checked: state.backtest.files[0].checked, live: state.trades.length }; });
     check(csv.n === EXPECTED.closed.length && csv.open === 1 && near(csv.net, EXPECTED.closedNet) && near(csv.total, EXPECTED.net) && csv.checked, 'CSV import differs from .xlsx: ' + JSON.stringify(csv));
     check(csv.live === seed.trades.length, 'live journal changed after CSV import');
+    v = await view();
+    check(v.report && v.broker === 'Dhan' && v.bar.join(',') === 'All books,Test NSE,Test Crypto,Dhan', 'typed broker not used: ' + JSON.stringify(v));
+
+    // A second broker, named like a journal book: each shows only its own rows,
+    // and "Delete this broker's report data" leaves the other alone.
+    await page.evaluate(() => {
+      const bt = btState(), now = new Date().toISOString();
+      bt.files.push({ id: 'btother', name: 'other.csv', sheet: 'Sheet1', broker: 'Test Crypto', importedAt: now, updatedAt: now, rows: 1, added: 1, net: 5, cur: 'USD', checked: true });
+      bt.rows.push({ id: 'other-1', file: 'btother', sym: 'BTCUSD', at: '2026-01-02 10:00:00', kind: 'order', type: 'Order', gross: 5, settle: 0, fee: 0, net: 5, cur: 'USD' });
+      renderAnalysis();
+    });
+    v = await view();
+    check(v.bar.join(',') === 'All books,Test NSE,Test Crypto,Dhan,Test Crypto report', 'report broker named like a book: ' + v.bar.join(','));
+    check((v.lines.find(l => l.startsWith('Dhan')) || '').includes('+₹' + EXPECTED.closedNet.toFixed(2)) && (v.lines.find(l => l.startsWith('Test Crypto report')) || '').startsWith('Test Crypto report +$5.00 1 '), 'results by broker mixed brokers: ' + v.lines.join(' | '));
+    check((await page.textContent('#btSub')).startsWith(`1 file · ${EXPECTED.rows} rows`), 'Dhan view counts other brokers: ' + await page.textContent('#btSub'));
+    await page.evaluate(() => anBrokerPick('rep:Test Crypto'));
+    check((await page.textContent('#btSub')).startsWith('1 file · 1 row ·'), 'second broker view: ' + await page.textContent('#btSub'));
+    await page.evaluate(() => anBrokerPick('rep:Dhan'));
+    const del = await page.evaluate(() => {
+      deleteAllBacktest();
+      return { files: cleanBacktest(btState()).files.map(f => f.broker), rows: btState().rows.length, broker: state.ui.anBroker };
+    });
+    check(del.files.join(',') === 'Test Crypto' && del.rows === 1 && del.broker === '', 'deleting Dhan touched other brokers: ' + JSON.stringify(del));
     await page.setViewportSize({ width: 390, height: 844 });
     for (const tab of TABS) { await page.evaluate(t => switchTab(t), tab); await page.waitForTimeout(150); }
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 3).join(' | '));
   }
   await ctx.close();
-  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'backtest upload (.xlsx and .csv)');
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'broker report upload in Analysis (.xlsx and .csv)');
   errs.forEach(e => { console.log('     ' + e); failures.push('backtest: ' + e); });
 }
 
