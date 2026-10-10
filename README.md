@@ -7,12 +7,14 @@ An intraday trading journal and workstation in a single file, `index.html`. No b
 - **Dashboard**: P&L, goals, time-of-day, confidence and mistake/positive tags.
 - **Signals**: imported alerts by day, setup, score, outcome, symbol, channel, sector, timeframe and hour, with R and % move.
 - **Analysis**: deeper breakdowns, including Market days (BTC daily calendar, and hour by hour for a clicked day).
+- **Backtest**: upload an Excel (.xlsx) or CSV trade report, such as a CoinDCX futures report. Its rows are grouped into trades with win rate, profit factor, drawdown, fees, funding, an equity curve, and breakdowns by pair and day. Kept apart from the journal, so live stats never change. Uploading the same report twice adds nothing twice.
 - **Calculator**: position size and risk for NSE (INR) and crypto (USD) accounts.
 - **Data**: accounts, Delta Exchange import, GitHub sync, CSV export and backups.
 
 ## Where data lives
 
 - **This browser**: everything is saved in `localStorage` (`tapeAndTarget.v2` for the journal, `tapeAndTarget.signals` for alerts, `tapeAndTarget.mktHourly` for cached BTC candles). Clearing site data clears the journal.
+- **Backtest uploads**: stored with the journal (`backtest` in `tapeAndTarget.v2` and in `journal.json` once something is uploaded): the report's rows only, never the cover sheet's name, email or PAN. The file is read in the browser; nothing is sent anywhere.
 - **GitHub sync (optional)**: on the Data tab, add a fine-grained token with *Contents: Read and write* on your sync repo (e.g. `victus2034/trading-journal`). The journal is saved there as `journal.json`, so other devices can pick it up. The token, Delta API key and webhook never leave the browser.
 - **Export**: the Data tab can download trades as CSV.
 
@@ -23,4 +25,4 @@ Chart.js loads from jsDelivr; without it, charts are skipped and the rest still 
 
 ## Checks
 
-Every push runs `tests/smoke.mjs` on GitHub: it opens the page in a headless browser, with an empty journal and with made-up sample trades, on desktop and phone widths, opens every tab, and fails on any script error. To run it locally: `npm install`, `npx playwright install chromium`, then `npm test`.
+Every push runs `tests/smoke.mjs` on GitHub: it opens the page in a headless browser, with an empty journal and with made-up sample trades, on desktop and phone widths, opens every tab, and fails on any script error. It also uploads a made-up trade report (`tests/backtest-fixture.mjs`, as .xlsx and as .csv) to the Backtest tab and checks every trade and total against the report. To run it locally: `npm install`, `npx playwright install chromium`, then `npm test`.
