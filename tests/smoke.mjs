@@ -761,6 +761,14 @@ async function coindcxRun(seed) {
     const fileRec = fj.backtest.files[1] || {};
     check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` && fj.backtest.rows.length === all + 1 && new Set(fj.backtest.rows.map(x => x.id)).size === all + 1, 'fresh journal, shifting pages: ' + JSON.stringify(r) + ' rows ' + fj.backtest.rows.length);
     check(fileRec.broker === 'CoinDCX' && fileRec.checked === true && JSON.stringify(fj.backtest.files[0]) === JSON.stringify(dhan) && JSON.stringify(Object.assign({}, fj, { backtest: bare.backtest, savedAt: bare.savedAt })) === JSON.stringify(bare), 'journal with a Dhan report: ' + JSON.stringify(fj.backtest.files));
+    // A journal that never had an upload has no backtest part yet: it is added, last, as the journal writes it.
+    const none = Object.assign({}, bare);
+    delete none.backtest;
+    gh.files['victus/none'] = { text: JSON.stringify(none, null, 2), sha: 'n0' };
+    r = await runImport({ GITHUB_REPOSITORY: 'victus/none' });
+    const nj = JSON.parse(gh.files['victus/none'].text);
+    check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` && nj.backtest && nj.backtest.rows.length === all && Object.keys(nj).pop() === 'backtest', 'journal with no uploads: ' + JSON.stringify(r) + ' ' + JSON.stringify(Object.keys(nj)));
+
     // CoinDCX turning GitHub's servers away stops at the first call and says so,
     // without the page's HTML. The reason is long: the journal keeps 300
     // characters of it, and so does the file, so neither keeps rewriting it.
