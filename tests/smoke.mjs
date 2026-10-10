@@ -6,11 +6,14 @@
 // and expects the storage warning. The last pass uploads a made-up CoinDCX
 // trade report (.xlsx, then the same as .csv), checks every number it shows
 // against the report, in Analysis and on the Dashboard, and switches brokers.
+// Then a fake CoinDCX API checks that every call is signed as CoinDCX
+// documents and sends the same trades back, which must count only once.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { EXPECTED, backtestXlsx, backtestCsv } from './backtest-fixture.mjs';
+import crypto from 'node:crypto';
+import { EXPECTED, REPORT_ROWS, backtestXlsx, backtestCsv } from './backtest-fixture.mjs';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const TABS = ['dashboard', 'signals', 'analysis', 'calculator', 'data'];
@@ -439,6 +442,217 @@ async function backtestRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('backtest: ' + e); });
 }
 
+// CoinDCX's API, played by a fake server that checks every request's signature
+// the way CoinDCX documents it (HMAC-SHA256 hex of the exact JSON body). It
+// sends back the made-up report's own transactions (to be counted once), new
+// trades after it, a USDT-margined trade and a broken row, over two pages.
+async function coindcxRun(seed) {
+  const KEY = 'test-key-123', SECRET = 'test-secret-456';
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+  const ist = (at, extra = 0) => Date.parse(at.replace(' ', 'T') + '+05:30') + extra;
+  const tx = (pair, at, stage, amount, fee, extra = 0.8374, mc = 'INR') => ({ pair, stage, amount, fee_amount: fee, price_in_inr: 1, source: 'user', parent_type: 'Derivatives::Futures::Order', parent_id: 'ord-' + pair + at + amount, settlement_amount: 0, margin_currency_short_name: mc, position_id: 'pos-' + pair, created_at: ist(at, extra), updated_at: ist(at, extra) });
+  // The report's rows again: one with the report's own ID, one order split into two fills.
+  const inr = [];
+  REPORT_ROWS.forEach((r, i) => {
+    const stage = r.type === 'By Funding' ? 'funding' : 'default';
+    if (r.pair === 'B-AAA_USDT' && r.gross === 100) { inr.push(tx(r.pair, r.at, stage, 60, 2.4, 200), tx(r.pair, r.at, stage, 40, 1.6, 1100)); return; }
+    const t = tx(r.pair, r.at, stage, r.gross, r.fee, 400 + i);
+    if (r.pair === 'B-BBB_USDT' && r.gross === -80) t.id = r.id;
+    inr.push(t);
+  });
+  const dupStored = REPORT_ROWS.length; // 18 rows: one more fill, one skipped by its ID
+  // After the report: DDD (left open in it) closes, FFF is a whole trade, 55 small wins.
+  inr.push(tx('B-DDD_USDT', '2026-09-05 09:00:00', 'default', 30, 3));
+  inr.push(tx('B-FFF_USDT', '2026-09-06 10:00:00', 'default', 0, 2), tx('B-FFF_USDT', '2026-09-06 11:00:00', 'funding', -1, 0), tx('B-FFF_USDT', '2026-09-06 12:00:00', 'exit', 50, 2));
+  for (let i = 0; i < 55; i++) {
+    const d = '2026-09-' + String(7 + Math.floor(i / 10)).padStart(2, '0') + ' ' + String(10 + i % 10).padStart(2, '0') + ':';
+    inr.push(tx('B-PAG_USDT', d + '00:00', 'default', 0, 0.5), tx('B-PAG_USDT', d + '30:00', 'default', 2, 0.5));
+  }
+  inr.push({ stage: 'default', amount: 5, fee_amount: 0, created_at: ist('2026-09-08 10:00:00'), margin_currency_short_name: 'INR' }); // no pair
+  const usdt = [tx('B-GGG_USDT', '2026-09-06 10:00:00', 'default', 0, 0.1, 0, 'USDT'), tx('B-GGG_USDT', '2026-09-06 14:00:00', 'default', 5, 0.1, 0, 'USDT')];
+  usdt[1].created_at = '2026-09-06T08:30:00.000Z'; // a time written out instead of milliseconds
+  const API_NET = 99.3 + 20 + 45 + 55; // report trades, DDD now closed (-7 + 27), FFF, PAG
+  const API_CLOSED = 6 + 1 + 1 + 55;
+
+  const mock = { mode: 'ok', calls: [], bad: [] };
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.coindcx.com/'), r => r.abort());
+  await ctx.route('https://api.coindcx.com/**', async route => {
+    const req = route.request(), body = req.postData() || '', path = new URL(req.url()).pathname, h = req.headers();
+    const cors = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+    const reply = (status, data) => route.fulfill({ status, headers: cors, body: JSON.stringify(data) });
+    if (mock.mode === 'blocked') return route.abort('failed');
+    let p = {};
+    try { p = JSON.parse(body); } catch (e) {}
+    mock.calls.push({ path, p });
+    const sig = crypto.createHmac('sha256', SECRET).update(body).digest('hex');
+    if (req.method() !== 'POST' || h['content-type'] !== 'application/json' || h['x-auth-apikey'] !== KEY || h['x-auth-signature'] !== sig) {
+      if (h['x-auth-apikey'] === KEY && h['x-auth-signature'] !== sig) return reply(401, { code: 401, message: 'Invalid credentials', status: 'error' });
+      mock.bad.push(req.method() + ' ' + path + ' ' + JSON.stringify(h));
+      return reply(401, { code: 401, message: 'Invalid credentials', status: 'error' });
+    }
+    if (!(Math.abs(p.timestamp - Date.now()) < 60000) || !Array.isArray(p.margin_currency_short_name) || typeof p.page !== 'string' || typeof p.size !== 'string') {
+      mock.bad.push('body ' + path + ' ' + body);
+      return reply(400, { code: 400, message: 'Invalid Request', status: 'error' });
+    }
+    const mc = p.margin_currency_short_name[0], page = +p.page, size = +p.size, slice = list => list.slice((page - 1) * size, page * size);
+    if (path === '/exchange/v1/derivatives/futures/positions' && ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400')) return reply(400, { code: 400, message: 'Invalid margin', status: 'error' });
+    if (path === '/exchange/v1/derivatives/futures/positions') return reply(200, slice(mc === 'INR' ? [...new Set(inr.map(t => t.position_id))].filter(Boolean).map(id => ({ id, pair: id.slice(4), active_pos: 0, margin_currency_short_name: 'INR' })) : [{ id: 'pos-B-GGG_USDT', pair: 'B-GGG_USDT', active_pos: 0, margin_currency_short_name: 'USDT' }]));
+    if (path !== '/exchange/v1/derivatives/futures/positions/transactions') return reply(404, { message: 'Not found' });
+    if (p.stage !== 'all') { mock.bad.push('stage ' + p.stage); return reply(400, { message: 'Invalid Request' }); }
+    if ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400') return reply(400, { code: 400, message: 'Invalid margin', status: 'error' });
+    let list = mc === 'INR' ? inr : mc === 'USDT' ? usdt : [];
+    // The older form: refused without position ids, then only those positions.
+    if (mock.mode === 'needIds') {
+      if (!p.position_ids) return reply(400, { code: 400, message: 'position_ids is required', status: 'error' });
+      const ids = p.position_ids.split(',');
+      list = list.filter(t => ids.includes(t.position_id));
+    }
+    return reply(200, mock.mode === 'noPaging' ? list : slice(list));
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForTimeout(300);
+  const badge = () => page.innerText('#cdxStatusBadge');
+  const settled = async () => { await page.waitForFunction(() => !cdxBusy && !/^(Reading|Checking)/.test(document.getElementById('cdxStatusBadge').innerText), null, { timeout: 15000 }); return badge(); };
+  const books = () => page.evaluate(() => {
+    const s = id => { const st = computeStats(bookTrades(id)); return { n: st.n, net: st.net }; };
+    const usd = state.accounts.find(a => a.id === 'rep-coindcx-usd');
+    return { inr: s('rep-coindcx-inr'), usd: s('rep-coindcx-usd'), usdBook: usd ? [usd.name, usd.currency, usd.reportBroker] : null,
+      api: state.backtest.rows.filter(r => r.file === 'cdx-api').length, rows: state.backtest.rows.length, journal: state.trades.length };
+  });
+  try {
+    // The report first, as lakky has it.
+    await page.setInputFiles('#btFileInput', { name: 'report.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: backtestXlsx() });
+    await page.waitForSelector('#modalSheet:not(.hidden)', { timeout: 5000 });
+    await page.click('#modalSheetSaveBtn');
+    await page.waitForTimeout(300);
+    let b = await books();
+    check(b.inr.n === EXPECTED.closed.length && near(b.inr.net, EXPECTED.closedNet), 'report alone: ' + JSON.stringify(b));
+
+    // A wrong secret is refused and says so; nothing is imported.
+    await page.evaluate(() => switchTab('data'));
+    await page.fill('#cdxKeyInput', KEY);
+    await page.fill('#cdxSecretInput', 'wrong-secret');
+    await page.click('button[onclick="saveCoindcxSettings()"]');
+    let msg = await settled();
+    check(/refused the key \(401\)/.test(msg) && (await books()).api === 0 && mock.calls.length === 1, 'wrong secret: ' + msg + ' after ' + mock.calls.length + ' calls');
+
+    // The right one: checked, then every transaction read, two pages of rupee futures and one of USDT.
+    mock.calls = [];
+    await page.fill('#cdxSecretInput', SECRET);
+    await page.click('button[onclick="saveCoindcxSettings()"]');
+    msg = await settled();
+    const want = `Imported ${inr.length - 2 + usdt.length} new rows from CoinDCX · ${dupStored} already in your uploaded report, counted once · 1 unreadable transaction skipped`;
+    check(msg === want, 'status after import: "' + msg + '", expected "' + want + '"');
+    check(mock.bad.length === 0, 'requests CoinDCX would refuse: ' + mock.bad.join(' | '));
+    const paths = mock.calls.map(c => c.path.split('/').pop() + ':' + c.p.margin_currency_short_name + ':' + c.p.page);
+    check(paths.join(',') === 'positions:INR:1,transactions:INR:1,transactions:INR:2,transactions:USDT:1', 'calls made: ' + paths.join(','));
+    b = await books();
+    check(b.journal === seed.trades.length, 'journal trades changed: ' + b.journal);
+    check(b.api === inr.length - 2 + usdt.length, 'API rows stored: ' + b.api);
+    check(b.inr.n === API_CLOSED && near(b.inr.net, API_NET), 'CoinDCX book after the API: ' + JSON.stringify(b.inr) + ', expected ' + API_CLOSED + ' trades, ' + API_NET);
+    check(b.usd.n === 1 && near(b.usd.net, 4.8) && JSON.stringify(b.usdBook) === '["CoinDCX USD","USD","CoinDCX"]', 'USDT futures book: ' + JSON.stringify(b));
+
+    // The key never travels: not in the synced file, the backup or the settings copy.
+    const leak = await page.evaluate(([k, s]) => {
+      const out = [JSON.stringify(syncPayload(state)), localStorage.getItem(SAFE_KEY) || ''];
+      return { kept: state.coindcx.key === k && state.coindcx.secret === s, leaks: out.filter(x => x.includes(k) || x.includes(s)).length };
+    }, [KEY, SECRET]);
+    check(leak.kept && leak.leaks === 0, 'CoinDCX key: ' + JSON.stringify(leak));
+
+    // Analysis, results by broker and Files say where the rows came from.
+    const an = await page.evaluate(() => {
+      state.ui.account = 'rep-coindcx-inr'; state.ui.anPeriod = 'all'; state.ui.btSec = 'files'; switchTab('analysis'); renderAll();
+      return { check: document.getElementById('btCheck').innerText, title: document.getElementById('btTitle').textContent,
+        line: [...document.querySelectorAll('#anBrokers tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()).find(l => l.startsWith('CoinDCX ')) || '',
+        files: document.getElementById('btFiles').innerText };
+    });
+    check(an.check.startsWith('✓ All ') && an.check.includes(`${dupStored} rows from the API are already in an uploaded report and count once.`), 'Analysis check line: ' + an.check);
+    check(an.title === 'CoinDCX · trades from its report and API', 'Analysis title: ' + an.title);
+    check(an.line.includes('+₹' + API_NET.toFixed(2)) && an.line.endsWith('Report + API'), 'results by broker: ' + an.line);
+    check(an.files.includes('CoinDCX API') && an.files.includes('✓ Every transaction CoinDCX sent is stored once'), 'Files: ' + an.files.slice(0, 300));
+
+    // Importing again adds nothing.
+    await page.evaluate(() => switchTab('data'));
+    await page.click('button[onclick="coindcxSyncNow()"]');
+    msg = await settled();
+    b = await books();
+    check(msg.startsWith('Up to date, nothing new from CoinDCX') && b.api === inr.length - 2 + usdt.length && near(b.inr.net, API_NET), 'second import: ' + msg + ' ' + JSON.stringify(b));
+    // An answer that ignores paging (the whole list on every page) still ends.
+    mock.mode = 'noPaging'; mock.calls = [];
+    await page.click('button[onclick="coindcxSyncNow()"]');
+    msg = await settled();
+    b = await books();
+    check(msg.startsWith('Up to date, nothing new from CoinDCX') && mock.calls.length === 3 && b.api === inr.length - 2 + usdt.length, 'paging ignored: ' + msg + ' after ' + mock.calls.length + ' calls');
+    // A margin type CoinDCX won't list is skipped and named; the other still comes in.
+    mock.mode = 'noUsdt';
+    await page.click('button[onclick="coindcxSyncNow()"]');
+    msg = await settled();
+    check(msg === `Up to date, nothing new from CoinDCX · ${dupStored} already in your uploaded report, counted once · 1 unreadable transaction skipped · USDT futures not read (CoinDCX answered 400: Invalid margin)`, 'USDT refused: ' + msg);
+    // Neither one read is an error, not an empty import.
+    mock.mode = 'all400';
+    await page.click('button[onclick="coindcxSyncNow()"]');
+    msg = await settled();
+    check(msg === 'CoinDCX answered 400: Invalid margin.' && await page.evaluate(() => document.getElementById('cdxStatusBadge').className.includes('rose')), 'both refused: ' + msg);
+    mock.mode = 'ok';
+
+    // Without the report the API alone gives the same book (once the transaction
+    // it held back by ID comes in), read the older way, with position ids.
+    await page.evaluate(() => removeBacktestFile(state.backtest.files.find(f => f.id !== 'cdx-api').id));
+    mock.mode = 'needIds'; mock.calls = [];
+    await page.evaluate(() => coindcxSyncNow());
+    msg = await settled();
+    b = await books();
+    // (The broken row has no position, so this form doesn't send it.)
+    check(msg === 'Imported 1 new row from CoinDCX', 'import after removing the report: ' + msg);
+    check(b.inr.n === API_CLOSED && near(b.inr.net, API_NET) && b.rows === b.api, 'API alone: ' + JSON.stringify(b));
+    check(mock.calls.some(c => c.path.endsWith('/positions') && c.p.margin_currency_short_name[0] === 'INR') && mock.calls.some(c => c.p.position_ids), 'position ids were not tried: ' + mock.calls.map(c => c.path).join(','));
+
+    // Undo takes the API rows out; opening the page brings new ones in on its own.
+    mock.mode = 'ok';
+    await page.evaluate(() => undoCoindcxImport());
+    b = await books();
+    check(b.api === 0 && b.inr.n === 0 && b.usd.n === 0, 'after undo: ' + JSON.stringify(b));
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => state.backtest.rows.some(r => r.file === 'cdx-api'), null, { timeout: 10000 }).catch(() => {});
+    await page.waitForFunction(() => !cdxBusy, null, { timeout: 10000 }).catch(() => {});
+    b = await books();
+    check(b.inr.n === API_CLOSED && near(b.inr.net, API_NET), 'automatic import on opening the page: ' + JSON.stringify(b));
+
+    // CoinDCX not answering the page (no CORS, or offline) is said plainly.
+    mock.mode = 'blocked';
+    await page.evaluate(() => switchTab('data'));
+    await page.click('button[onclick="coindcxSyncNow()"]');
+    msg = await settled();
+    check(/doesn't accept calls from a web page/.test(msg), 'blocked call: ' + msg);
+
+    // Forget Key clears it from this device; imported trades stay.
+    await page.click('button[onclick="forgetCoindcxKey()"]');
+    await page.waitForTimeout(100);
+    const gone = await page.evaluate(() => ({ key: state.coindcx.key, secret: state.coindcx.secret, input: document.getElementById('cdxKeyInput').value, badge: document.getElementById('cdxStatusBadge').innerText }));
+    b = await books();
+    check(!gone.key && !gone.secret && !gone.input && gone.badge.startsWith('Not connected') && b.inr.n === API_CLOSED, 'Forget Key: ' + JSON.stringify(gone) + ' ' + JSON.stringify(b));
+
+    // Every tab still draws with the API rows in.
+    for (const tab of TABS) {
+      const bad = await page.evaluate(t => { switchTab(t); renderAll(); const m = document.getElementById('view-' + t).innerText.match(/.{0,40}(NaN|undefined|Infinity%).{0,40}/); return m ? m[0] : ''; }, tab);
+      check(!bad, `${tab} shows: ${bad}`);
+    }
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'CoinDCX API key: signed calls, import, counted once with the report';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -447,6 +661,7 @@ for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', {
 await run('desktop, storage nearly full', { width: 1366, height: 900 }, data, 4300000);
 await currencyRun(data);
 await backtestRun(data);
+await coindcxRun(data);
 
 await browser.close();
 server.close();
