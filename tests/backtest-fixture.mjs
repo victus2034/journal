@@ -33,6 +33,9 @@ const ROWS = [
   ['B-EEE_USDT', '2026-09-05 13:00:00', 'By Order', -5, 0, 1],
 ].map(([pair, at, type, gross, settle, fee], i) => ({ id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, pair, at, type, gross, settle, fee, net: gross + settle - fee }));
 
+// The rows themselves, for the CoinDCX API test to send the same transactions back.
+export const REPORT_ROWS = ROWS;
+
 export const EXPECTED = {
   rows: ROWS.length, orders: ROWS.filter(r => r.type === 'By Order').length, funding: ROWS.filter(r => r.type === 'By Funding').length,
   net: ROWS.reduce((s, r) => s + r.net, 0),

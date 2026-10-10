@@ -6,11 +6,17 @@
 // and expects the storage warning. The last pass uploads a made-up CoinDCX
 // trade report (.xlsx, then the same as .csv), checks every number it shows
 // against the report, in Analysis and on the Dashboard, and switches brokers.
+// Then the CoinDCX import GitHub runs reads a fake CoinDCX (which checks every
+// call is signed as CoinDCX documents) into a fake GitHub's journal.json; the
+// journal syncs it, and trades the report already has must count only once.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { EXPECTED, backtestXlsx, backtestCsv } from './backtest-fixture.mjs';
+import crypto from 'node:crypto';
+import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { EXPECTED, REPORT_ROWS, backtestXlsx, backtestCsv } from './backtest-fixture.mjs';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const TABS = ['dashboard', 'signals', 'analysis', 'calculator', 'data'];
@@ -81,6 +87,136 @@ async function run(label, viewport, seed, filler = 0) {
     if (kept !== seed.trades.length) errs.push('expected ' + seed.trades.length + ' trades after load, found ' + kept);
   }
   await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
+// Rupees and dollars: one switch shows every book in either currency, each
+// converted at its own rate. The expected figures are worked out here from the
+// fixture, apart from the app's own sums.
+async function currencyRun(seed) {
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+  const inr = v => (v < 0 ? '-' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const usd = v => (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForTimeout(300);
+  // The app's P&L: price move times size, less fees.
+  const pnlOf = t => (t.direction === 'long' ? t.exit - t.entry : t.entry - t.exit) * t.qty - (t.fees || 0);
+  const net = id => seed.trades.filter(t => t.accountId === id).reduce((s, t) => s + pnlOf(t), 0);
+  const nseNet = net('acc_nse'), cryNet = net('acc_cry');
+  const nseBal = 100000 + nseNet, cryBal = 100 + cryNet;
+  try {
+    const look = () => page.evaluate(() => {
+      const s = computeStats(statScoped());
+      return { n: s.n, net: s.net, cur: viewCur(), bal: document.getElementById('topBalVal').innerText,
+        sw: [...document.querySelectorAll('#allCurSwitch button')].map(b => b.innerText + (b.className.includes('amber') ? '*' : '')).join(','),
+        ledger: document.getElementById('tradeLedgerTableBody').innerText, maxLoss: document.getElementById('riskDailyMaxLoss').innerText };
+    });
+    // A dollar book on its own, before the switch is used: its own currency.
+    await page.evaluate(() => { delete state.ui.allCur; state.ui.account = 'acc_cry'; renderAll(); });
+    let v = await look();
+    check(v.cur === 'USD' && v.sw === '₹ INR,$ USD*' && v.n === 8 && near(v.net, cryNet) && v.bal === usd(cryBal), 'Test Crypto in its own dollars: ' + JSON.stringify(v));
+    // The switch on a single book turns it into rupees at ₹85.
+    await page.click('#allCurSwitch button[data-cur="INR"]');
+    v = await look();
+    check(v.cur === 'INR' && v.sw === '₹ INR*,$ USD' && v.n === 8 && near(v.net, cryNet * 85) && v.bal === inr(cryBal * 85), 'Test Crypto in rupees: ' + JSON.stringify(v));
+    check(v.ledger.includes('₹') && !v.ledger.includes('$'), 'ledger not in rupees: ' + v.ledger.slice(0, 200));
+    check(v.maxLoss === inr(2.5 * 85), 'daily loss limit in rupees: ' + v.maxLoss);
+    // All books together, either way.
+    await page.evaluate(() => { state.ui.account = 'all'; renderAll(); });
+    v = await look();
+    check(v.n === 16 && near(v.net, nseNet + cryNet * 85) && v.bal === inr(nseBal + cryBal * 85), 'All in rupees: ' + JSON.stringify(v));
+    check(v.maxLoss === inr(2 + 2.5 * 85), 'All: daily loss limits added up: ' + v.maxLoss);
+    await page.click('#allCurSwitch button[data-cur="USD"]');
+    v = await look();
+    check(v.n === 16 && near(v.net, nseNet / 85 + cryNet) && v.bal === usd(nseBal / 85 + cryBal), 'All in dollars: ' + JSON.stringify(v));
+    // Today's NSE loss breaks that book's own ₹2 limit; the message is in dollars.
+    const today = await page.evaluate(() => iso(new Date()));
+    const todayNse = seed.trades.filter(t => t.accountId === 'acc_nse' && t.date === today).reduce((s, t) => s + pnlOf(t), 0);
+    const lim = await page.evaluate(() => dailyLimitState('USD'));
+    check(todayNse < -2 && lim.hit && lim.msg.includes(usd(todayNse / 85)) && lim.msg.includes('Test NSE'), 'daily limit message: ' + JSON.stringify(lim) + ' today ' + todayNse);
+    // Converting changes money only: sizes, risk % and mistakes are the same.
+    const same = await page.evaluate(() => {
+      const key = rows => rows.map(x => [x.t.id, x.xBal, x.riskPct, x.lossPct, x.r, x.flags.join('+')].join('|')).sort().join('\n');
+      const native = key(analyzeTrades(allTrades()));
+      return ['INR', 'USD'].every(c => { state.ui.allCur = c; return key(analyzeTrades(statScoped())) === native; });
+    });
+    check(same, 'analysis flags or sizes changed with the currency');
+    // A dollar day is held to its own $2.50 limit in either currency: a $1 loss is
+    // not a breach when shown as ₹85, a $3 loss is.
+    const breach = await page.evaluate(() => {
+      const d = iso(new Date()), t0 = state.trades.length;
+      const add = (id, exit) => state.trades.push({ id, accountId: 'acc_cry', date: d, exitDate: d, time: '23:58', exitTime: '23:59', symbol: 'ETHUSD', direction: 'long', entry: 100, exit, stop: 0, qty: 1, fees: 0, rules: [] });
+      const day = () => tradingDays(statScoped()).find(x => x.accountId === 'acc_cry' && x.date === d);
+      const r = {};
+      add('lossA', 99); state.ui.allCur = 'INR'; r.small = day().breached;
+      add('lossB', 97); r.big = day().breached; state.ui.allCur = 'USD'; r.bigUsd = day().breached;
+      state.trades.length = t0;
+      return r;
+    });
+    check(breach.small === false && breach.big === true && breach.bigUsd === true, 'daily limit breach in another currency: ' + JSON.stringify(breach));
+    await page.evaluate(() => { state.ui.allCur = 'INR'; renderAll(); switchTab('analysis'); });
+    const an = await page.evaluate(() => ({ body: document.getElementById('anBody').innerText, brokers: [...document.querySelectorAll('#anBrokers tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()) }));
+    check(an.body.includes('₹') && !an.body.includes('$'), 'Analysis trade list not in rupees: ' + an.body.slice(0, 200));
+    check(an.brokers.some(l => l.startsWith('Test Crypto USD @ ₹85 ' + (cryNet >= 0 ? '+' : '') + inr(cryNet * 85))), 'results by broker in rupees: ' + an.brokers.join(' | '));
+    // The inspector shows the rupee figure and the book's own dollars.
+    const insp = await page.evaluate(() => { const t = statScoped().find(x => x.id === 'tr1'); openInspector(t); return { pnl: document.getElementById('inspPnl').innerText, fees: document.getElementById('inspFees').innerText }; });
+    const p1 = pnlOf(seed.trades.find(t => t.id === 'tr1')), sg = p1 >= 0 ? '+' : '';
+    check(insp.pnl === sg + inr(p1 * 85) + ' (' + sg + usd(p1) + ')' && insp.fees === inr(0.1 * 85) + ' (' + usd(0.1) + ')', 'inspector: ' + JSON.stringify(insp) + ' expected ' + p1);
+    await page.evaluate(() => closeInspector());
+    // A book's rate is changed in its editor and used everywhere.
+    await page.evaluate(() => { switchTab('data'); openBookEditor('acc_cry'); });
+    check(await page.inputValue('#bkFx') === '85', 'rate field: ' + await page.inputValue('#bkFx'));
+    await page.fill('#bkFx', '0');
+    await page.click('#modalSheetSaveBtn');
+    check(await page.evaluate(() => acct('acc_cry').fxRate === undefined && !document.getElementById('modalSheet').classList.contains('hidden')), 'a rate of 0 was accepted');
+    await page.fill('#bkFx', '90');
+    await page.click('#modalSheetSaveBtn');
+    await page.waitForTimeout(100);
+    v = await look();
+    check(await page.evaluate(() => acct('acc_cry').fxRate) === 90 && near(v.net, nseNet + cryNet * 90) && v.bal === inr(nseBal + cryBal * 90), 'after rate 90: ' + JSON.stringify(v));
+    check((await page.innerText('#booksList')).includes('Rate ₹90/$'), 'Books list does not show the rate');
+    // Goals: an older all-books goal reads as rupees; a book's goal is in its currency.
+    const goals = await page.evaluate(() => {
+      state.goals.push({ id: 'g2', title: 'Crypto goal', target: 10, metric: 'net_pnl', targets: { net_pnl: 10, win_rate: 50 }, period: 'month', accountId: 'acc_cry' });
+      const t = cur => { state.ui.allCur = cur; return state.goals.map(g => goalFocused(g).target); };
+      const r = { inr: t('INR'), usd: t('USD'), win: goalTargetIn(state.goals[1], 'win_rate', 'INR') };
+      state.ui.allCur = 'USD'; openGoal('new'); document.getElementById('gTitle').value = 'New dollar goal';
+      return r;
+    });
+    await page.click('#modalSheetSaveBtn');
+    check(near(goals.inr[0], 20) && near(goals.usd[0], 20 / 85) && near(goals.inr[1], 900) && near(goals.usd[1], 10) && goals.win === 50, 'goal targets: ' + JSON.stringify(goals));
+    check(await page.evaluate(() => (state.goals.find(g => g.title === 'New dollar goal') || {}).cur) === 'USD', 'a new all-books goal did not keep its currency');
+    // Editing the older goal while dollars are on screen keeps it in rupees.
+    const label = await page.evaluate(() => { state.ui.allCur = 'USD'; openGoal('g1'); return document.getElementById('gk_net_pnl').parentElement.innerText; });
+    await page.click('#modalSheetSaveBtn');
+    const g1 = await page.evaluate(() => { const g = state.goals.find(x => x.id === 'g1'); return { cur: g.cur, t: g.targets.net_pnl }; });
+    check(label.includes('₹ to earn') && g1.cur === 'INR' && g1.t === 20, 'editing an older goal in dollars: ' + JSON.stringify(g1) + ' ' + label);
+    // Rates and goal currencies survive a sync clean-up; bad ones don't.
+    const kept = await page.evaluate(() => {
+      const s = sanitizeState(JSON.parse(JSON.stringify(state)));
+      const bad = cleanAccount({ id: 'x', name: 'X', currency: 'USD', fxRate: -5 });
+      return { rate: s.accounts.find(a => a.id === 'acc_cry').fxRate, cur: (s.goals.find(g => g.title === 'New dollar goal') || {}).cur, bad: 'fxRate' in bad };
+    });
+    check(kept.rate === 90 && kept.cur === 'USD' && !kept.bad, 'sanitize: ' + JSON.stringify(kept));
+    // Every tab, every book, both currencies: no errors and no NaN on screen.
+    for (const cur of ['INR', 'USD']) for (const acc of ['all', 'acc_nse', 'acc_cry']) for (const tab of TABS) {
+      const bad = await page.evaluate(([c, a, t]) => { state.ui.allCur = c; state.ui.account = a; switchTab(t); renderAll(); const m = document.getElementById('view-' + t).innerText.match(/.{0,40}(NaN|undefined|Infinity%).{0,40}/); return m ? m[0] : ''; }, [cur, acc, tab]);
+      check(!bad, `${cur} ${acc} ${tab} shows: ${bad}`);
+    }
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'rupees and dollars: one switch for every book and tab';
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
@@ -192,8 +328,13 @@ async function backtestRun(seed) {
       const inr = res('INR'), usd = res('USD');
       return { inr, usd, sw: [...document.querySelectorAll('#allCurSwitch button')].map(b => b.innerText) };
     });
-    check(all.inr.n === before.nse.n + EXPECTED.closed.length && near(all.inr.net, before.nse.net + EXPECTED.closedNet), `All accounts in INR: ${JSON.stringify(all.inr)}, Test NSE alone ${before.nse.n} trades ${before.nse.net}`);
-    check(all.usd.n === before.usd.n && near(all.usd.net, before.usd.net), 'All accounts in USD changed: ' + JSON.stringify(all.usd));
+    // Every book counts in either currency: dollar books at ₹85, CoinDCX at ₹99.30.
+    const allN = before.nse.n + before.usd.n + EXPECTED.closed.length;
+    check(all.inr.n === allN && near(all.inr.net, before.nse.net + before.usd.net * 85 + EXPECTED.closedNet), `All accounts in INR: ${JSON.stringify(all.inr)}, NSE ${JSON.stringify(before.nse)}, USD ${JSON.stringify(before.usd)}`);
+    check(all.usd.n === allN && near(all.usd.net, before.nse.net / 85 + before.usd.net + EXPECTED.closedNet / 99.3), 'All accounts in USD: ' + JSON.stringify(all.usd));
+    const dcxUsd = await page.evaluate(id => { state.ui.allCur = 'USD'; state.ui.account = id; renderAll(); switchTab('analysis'); return document.getElementById('btStrip').innerText.replace(/\s+/g, ' '); }, BOOK);
+    check(dcxUsd.includes('+$' + (EXPECTED.closedNet / 99.3).toFixed(2)), 'CoinDCX report in dollars: ' + dcxUsd.slice(0, 200));
+    await page.evaluate(() => { state.ui.account = 'all'; renderAll(); switchTab('dashboard'); });
     check(all.sw.join(',') === '₹ INR,$ USD', 'currency switch: ' + all.sw.join(','));
     check(await page.evaluate(() => computeStats(bookTrades('acc_nse')).n) === before.nse.n, 'Test NSE book changed');
     check(!(await page.evaluate(() => { openTrade(); const o = [...document.querySelectorAll('#mAcc option')].map(x => x.innerText).join(','); closeModalSheet(); return o; })).includes('CoinDCX'), 'trade form offers the report book');
@@ -223,7 +364,7 @@ async function backtestRun(seed) {
     // The Analysis period narrows the report too (the made-up report is from early 2026).
     await page.evaluate(() => { state.ui.anPeriod = '7d'; renderAnalysis(); });
     v = await view();
-    check((await page.evaluate(() => btShown.length)) === 0 && (v.lines.find(l => l.startsWith('CoinDCX')) || '').startsWith('CoinDCX — 0'), 'period 7 days did not narrow the report: ' + v.lines.join(' | '));
+    check((await page.evaluate(() => btShown.length)) === 0 && (v.lines.find(l => l.startsWith('CoinDCX')) || '').startsWith('CoinDCX INR @ ₹99.3 — 0'), 'period 7 days did not narrow the report: ' + v.lines.join(' | '));
     await page.evaluate(() => { state.ui.anPeriod = 'all'; renderAnalysis(); });
 
     pv = await upload('report.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', xlsx);
@@ -280,11 +421,11 @@ async function backtestRun(seed) {
       bt.files.push({ id: 'btother', name: 'other.csv', sheet: 'Sheet1', broker: 'Test Crypto', importedAt: now, updatedAt: now, rows: 1, added: 1, net: 5, cur: 'USD', checked: true });
       bt.rows.push({ id: 'other-1', file: 'btother', sym: 'BTCUSD', at: '2026-01-02 10:00:00', kind: 'order', type: 'Order', gross: 5, settle: 0, fee: 0, net: 5, cur: 'USD' },
         { id: 'other-2', file: 'btother', sym: 'ETHINR', at: '2026-01-03 10:00:00', kind: 'order', type: 'Order', gross: 7, settle: 0, fee: 0, net: 7, cur: 'INR' });
-      ensureReportBooks(state); renderAnalysis();
+      ensureReportBooks(state); state.ui.allCur = 'INR'; renderAnalysis();
     });
     v = await view();
     check(v.bar.join(',') === 'All books,Test NSE,Test Crypto,CoinDCX,Dhan,Test Crypto report,Test Crypto report INR', 'report broker named like a book, in two currencies: ' + v.bar.join(','));
-    check((v.lines.find(l => l.startsWith('Dhan')) || '').includes('+₹' + EXPECTED.closedNet.toFixed(2)) && v.lines.some(l => l.startsWith('Test Crypto report +$5.00 1 ')) && v.lines.some(l => l.startsWith('Test Crypto report INR +₹7.00 1 ')), 'results by broker mixed brokers: ' + v.lines.join(' | '));
+    check((v.lines.find(l => l.startsWith('Dhan')) || '').includes('+₹' + EXPECTED.closedNet.toFixed(2)) && v.lines.some(l => l.startsWith('Test Crypto report USD @ ₹85 +₹425.00 1 ')) && v.lines.some(l => l.startsWith('Test Crypto report INR +₹7.00 1 ')), 'results by broker mixed brokers: ' + v.lines.join(' | '));
     check((await page.textContent('#btSub')).startsWith(`1 file · ${EXPECTED.rows} rows`), 'Dhan view counts other brokers: ' + await page.textContent('#btSub'));
     await page.evaluate(() => anBrokerPick('acct:rep-test-crypto-usd'));
     check((await page.textContent('#btSub')).startsWith('1 file · 1 row ·') && (await page.evaluate(() => btShown.map(t => t.sym).join(','))) === 'BTCUSD', 'second broker, dollar book: ' + await page.textContent('#btSub'));
@@ -304,13 +445,370 @@ async function backtestRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('backtest: ' + e); });
 }
 
+// CoinDCX's API doesn't answer web pages, so GitHub reads it for the journal:
+// tools/coindcx-import.mjs runs here against a fake CoinDCX, which checks every
+// request's signature the way CoinDCX documents it (HMAC-SHA256 hex of the
+// exact JSON body), and a fake GitHub holding journal.json. CoinDCX sends the
+// made-up report's own transactions (to be counted once), new trades after it,
+// a USDT-margined trade and a broken row, over two pages. The journal then
+// syncs that file and must show the same book an uploaded report would.
+async function coindcxRun(seed) {
+  const KEY = 'test-key-123', SECRET = 'test-secret-456', REPO = 'victus/sync';
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+  const ist = (at, extra = 0) => Date.parse(at.replace(' ', 'T') + '+05:30') + extra;
+  const tx = (pair, at, stage, amount, fee, extra = 0.8374, mc = 'INR') => ({ pair, stage, amount, fee_amount: fee, price_in_inr: 1, source: 'user', parent_type: 'Derivatives::Futures::Order', parent_id: 'ord-' + pair + at + amount, settlement_amount: 0, margin_currency_short_name: mc, position_id: 'pos-' + pair, created_at: ist(at, extra), updated_at: ist(at, extra) });
+  // The report's rows again: one with the report's own ID, one order split into two fills.
+  const inr = [];
+  REPORT_ROWS.forEach((r, i) => {
+    const stage = r.type === 'By Funding' ? 'funding' : 'default';
+    if (r.pair === 'B-AAA_USDT' && r.gross === 100) { inr.push(tx(r.pair, r.at, stage, 60, 2.4, 200), tx(r.pair, r.at, stage, 40, 1.6, 1100)); return; }
+    const t = tx(r.pair, r.at, stage, r.gross, r.fee, 400 + i);
+    if (r.pair === 'B-BBB_USDT' && r.gross === -80) t.id = r.id;
+    inr.push(t);
+  });
+  const dupStored = REPORT_ROWS.length; // 18 rows: one more fill, one skipped by its ID
+  // After the report: DDD (left open in it) closes, FFF is a whole trade, 55 small wins.
+  inr.push(tx('B-DDD_USDT', '2026-09-05 09:00:00', 'default', 30, 3));
+  inr.push(tx('B-FFF_USDT', '2026-09-06 10:00:00', 'default', 0, 2), tx('B-FFF_USDT', '2026-09-06 11:00:00', 'funding', -1, 0), tx('B-FFF_USDT', '2026-09-06 12:00:00', 'exit', 50, 2));
+  for (let i = 0; i < 55; i++) {
+    const d = '2026-09-' + String(7 + Math.floor(i / 10)).padStart(2, '0') + ' ' + String(10 + i % 10).padStart(2, '0') + ':';
+    inr.push(tx('B-PAG_USDT', d + '00:00', 'default', 0, 0.5), tx('B-PAG_USDT', d + '30:00', 'default', 2, 0.5));
+  }
+  inr.push({ stage: 'default', amount: 5, fee_amount: 0, created_at: ist('2026-09-08 10:00:00'), margin_currency_short_name: 'INR' }); // no pair
+  const usdt = [tx('B-GGG_USDT', '2026-09-06 10:00:00', 'default', 0, 0.1, 0, 'USDT'), tx('B-GGG_USDT', '2026-09-06 14:00:00', 'default', 5, 0.1, 0, 'USDT')];
+  usdt[1].created_at = '2026-09-06T08:30:00.000Z'; // a time written out instead of milliseconds
+  let API_NET = 99.3 + 20 + 45 + 55; // report trades, DDD now closed (-7 + 27), FFF, PAG
+  let API_CLOSED = 6 + 1 + 1 + 55;
+  const NEW_ROWS = inr.length - 2 + usdt.length;
+
+  // ---- the fake CoinDCX ----
+  const mock = { mode: 'ok', calls: [], bad: [] };
+  function coindcx(req, body) {
+    const p0 = new URL(req.url, 'http://x').pathname.replace(/^\/cdx/, ''), h = req.headers;
+    let p = {};
+    try { p = JSON.parse(body); } catch (e) {}
+    mock.calls.push({ path: p0, p });
+    const sig = crypto.createHmac('sha256', SECRET).update(body).digest('hex');
+    // CoinDCX's firewall turning a server away, before any key is looked at.
+    if (mock.mode === 'forbidden') return [403, '<html><head><title>403 Forbidden</title></head><body><h1>Access denied</h1><p>' + 'Request blocked. '.repeat(12) + '</p></body></html>', 'text/html'];
+    if (req.method !== 'POST' || h['content-type'] !== 'application/json' || h['x-auth-apikey'] !== KEY || h['x-auth-signature'] !== sig) {
+      if (!(h['x-auth-apikey'] === KEY && h['x-auth-signature'] !== sig)) mock.bad.push(req.method + ' ' + p0 + ' ' + JSON.stringify(h));
+      return [401, { code: 401, message: 'Invalid credentials', status: 'error' }];
+    }
+    if (!(Math.abs(p.timestamp - Date.now()) < 60000) || !Array.isArray(p.margin_currency_short_name) || typeof p.page !== 'string' || typeof p.size !== 'string') {
+      mock.bad.push('body ' + p0 + ' ' + body);
+      return [400, { code: 400, message: 'Invalid Request', status: 'error' }];
+    }
+    const mc = p.margin_currency_short_name[0], page = +p.page, size = +p.size, slice = list => list.slice((page - 1) * size, page * size);
+    if (p0 === '/exchange/v1/derivatives/futures/positions') {
+      if ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400') return [400, { code: 400, message: 'Invalid margin', status: 'error' }];
+      return [200, slice(mc === 'INR' ? [...new Set(inr.map(t => t.position_id))].filter(Boolean).map(id => ({ id, pair: id.slice(4), active_pos: 0, margin_currency_short_name: 'INR' })) : [{ id: 'pos-B-GGG_USDT', pair: 'B-GGG_USDT', active_pos: 0, margin_currency_short_name: 'USDT' }])];
+    }
+    if (p0 !== '/exchange/v1/derivatives/futures/positions/transactions') return [404, { message: 'Not found' }];
+    if (p.stage !== 'all') { mock.bad.push('stage ' + p.stage); return [400, { message: 'Invalid Request' }]; }
+    if ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400') return [400, { code: 400, message: 'Invalid margin', status: 'error' }];
+    let list = mc === 'INR' ? inr : mc === 'USDT' ? usdt : [];
+    // The older form: refused without position ids, then only those positions.
+    if (mock.mode === 'needIds') {
+      if (!p.position_ids) return [400, { code: 400, message: 'position_ids is required', status: 'error' }];
+      const ids = p.position_ids.split(',');
+      list = list.filter(t => ids.includes(t.position_id));
+    }
+    // A transaction arriving while it pages pushes the list one row down: page 2 repeats page 1's last row.
+    if (mock.mode === 'shift' && page > 1) return [200, list.slice((page - 1) * size - 1, page * size - 1)];
+    return [200, mock.mode === 'noPaging' ? list : slice(list)];
+  }
+
+  // ---- the fake GitHub: journal.json of each repo, with its sha ----
+  const gh = { files: {}, puts: [], conflicts: 0, rawReads: 0, big: false, beforePut: null, bad: [] };
+  const b64lines = s => Buffer.from(s).toString('base64').replace(/.{60}/g, '$&\n');
+  function github(method, url, headers, body) {
+    const u = new URL(url), m = u.pathname.match(/^(?:\/gh)?\/repos\/([^/]+\/[^/]+)\/contents\/journal\.json$/);
+    if (!m) return [404, { message: 'Not Found' }];
+    if (!/^Bearer (gh-token|app-token)$/.test(headers.authorization || '')) { gh.bad.push(method + ' auth ' + headers.authorization); return [401, { message: 'Bad credentials' }]; }
+    const f = gh.files[m[1]];
+    if (method === 'GET') {
+      if (!f || u.searchParams.get('ref') !== 'main') return [404, { message: 'Not Found' }];
+      if (/raw/.test(headers.accept || '')) { gh.rawReads++; return [200, f.text, 'text/plain']; }
+      return [200, { name: 'journal.json', path: 'journal.json', sha: f.sha, size: Buffer.byteLength(f.text), encoding: gh.big ? 'none' : 'base64', content: gh.big ? '' : b64lines(f.text) }];
+    }
+    if (method === 'PUT') {
+      let p = {};
+      try { p = JSON.parse(body); } catch (e) {}
+      if (gh.beforePut) { const fn = gh.beforePut; gh.beforePut = null; fn(); }
+      const cur = gh.files[m[1]];
+      if (p.branch !== 'main' || (cur ? p.sha !== cur.sha : !!p.sha)) { if (cur && p.sha !== cur.sha) gh.conflicts++; return [409, { message: 'journal.json does not match ' + (p.sha || '') }]; }
+      const text = Buffer.from(String(p.content || ''), 'base64').toString('utf8');
+      try { JSON.parse(text); } catch (e) { gh.bad.push('PUT not JSON'); return [422, { message: 'bad' }]; }
+      const sha = crypto.createHash('sha1').update(text).digest('hex');
+      gh.files[m[1]] = { text, sha };
+      gh.puts.push({ message: p.message, by: headers.authorization.slice(7) });
+      return [cur ? 200 : 201, { content: { sha } }];
+    }
+    return [405, { message: 'no' }];
+  }
+  const stored = () => JSON.parse(gh.files[REPO].text);
+  // A device saving between the import's read and its write.
+  const phoneSaves = () => {
+    const j = stored();
+    j.trades.push(Object.assign({}, j.trades[0], { id: 'tr-phone', notes: 'saved on the phone', updatedAt: new Date().toISOString() }));
+    const text = JSON.stringify(j, null, 2);
+    gh.files[REPO] = { text, sha: crypto.createHash('sha1').update(text).digest('hex') };
+  };
+
+  const fake = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      if (req.url.startsWith('/cdx/') && mock.mode === 'blocked') return req.socket.destroy();
+      const [status, data, type] = req.url.startsWith('/cdx/') ? coindcx(req, body) : github(req.method, 'http://x' + req.url, req.headers, body);
+      res.writeHead(status, { 'Content-Type': type || 'application/json' });
+      res.end(typeof data === 'string' ? data : JSON.stringify(data));
+    });
+  });
+  await new Promise(r => fake.listen(0, '127.0.0.1', r));
+  const fakeBase = 'http://127.0.0.1:' + fake.address().port;
+  const summary = path.join(os.tmpdir(), 'cdx-summary-' + process.pid + '.md');
+  // The script as the workflow runs it, on a server whose clock is UTC.
+  const runImport = (extra = {}) => new Promise(resolve => {
+    const before = gh.puts.length;
+    mock.calls = [];
+    try { fs.writeFileSync(summary, ''); } catch (e) {}
+    execFile(process.execPath, [path.join(ROOT, 'tools', 'coindcx-import.mjs')], {
+      env: Object.assign({ PATH: process.env.PATH, TZ: 'UTC', COINDCX_API_KEY: KEY, COINDCX_API_SECRET: SECRET, GITHUB_TOKEN: 'gh-token', GITHUB_REPOSITORY: REPO,
+        GITHUB_API_URL: fakeBase + '/gh', COINDCX_BASE: fakeBase + '/cdx', GITHUB_STEP_SUMMARY: summary }, extra),
+      timeout: 60000
+    }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, out: (stdout + stderr).trim(), puts: gh.puts.slice(before).map(p => p.message), summary: fs.readFileSync(summary, 'utf8').trim() }));
+  });
+
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
+  await ctx.route('https://api.github.com/**', async route => {
+    const req = route.request();
+    const [status, data, type] = github(req.method(), req.url(), await req.allHeaders(), req.postData() || '');
+    return route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': type || 'application/json' }, body: typeof data === 'string' ? data : JSON.stringify(data) });
+  });
+  // A key the earlier in-page import saved on this device.
+  const seeded = Object.assign({}, seed, { coindcx: { key: KEY, secret: SECRET, lastAt: '' } });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForTimeout(300);
+  const books = () => page.evaluate(() => {
+    const s = id => { const st = computeStats(bookTrades(id)); return { n: st.n, net: st.net }; };
+    const usd = state.accounts.find(a => a.id === 'rep-coindcx-usd');
+    return { inr: s('rep-coindcx-inr'), usd: s('rep-coindcx-usd'), usdBook: usd ? [usd.name, usd.currency, usd.reportBroker] : null,
+      api: state.backtest.rows.filter(r => r.file === 'cdx-api').length, rows: state.backtest.rows.length, journal: state.trades.length };
+  });
+  const sync = () => page.evaluate(() => syncNow({ quiet: true }));
+  const card = () => page.evaluate(() => { switchTab('data'); renderDataView(); return {
+    badge: document.getElementById('cdxStatusBadge').innerText, bad: document.getElementById('cdxStatusBadge').className.includes('rose'),
+    status: document.getElementById('cdxStatus').innerText, links: [...document.querySelectorAll('#cdxSteps a')].map(a => a.href) }; });
+  try {
+    // The key typed into the page before is gone from this device.
+    const wiped = await page.evaluate(([k, s]) => ({ inState: 'coindcx' in state, stored: [localStorage.getItem('tapeAndTarget.v2') || '', localStorage.getItem(SAFE_KEY) || ''].filter(x => x.includes(k) || x.includes(s)).length }), [KEY, SECRET]);
+    check(!wiped.inState && wiped.stored === 0, 'old CoinDCX key on this device: ' + JSON.stringify(wiped));
+    let c = await card();
+    check(c.badge === 'Not set up' && c.status.startsWith('Nothing from CoinDCX yet') && c.links.length === 0, 'card before sync: ' + JSON.stringify(c));
+
+    // The report first, as lakky has it, then synced to (fake) GitHub.
+    await page.setInputFiles('#btFileInput', { name: 'report.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: backtestXlsx() });
+    await page.waitForSelector('#modalSheet:not(.hidden)', { timeout: 5000 });
+    await page.click('#modalSheetSaveBtn');
+    await page.waitForTimeout(300);
+    let b = await books();
+    check(b.inr.n === EXPECTED.closed.length && near(b.inr.net, EXPECTED.closedNet), 'report alone: ' + JSON.stringify(b));
+    await page.evaluate(r => { state.sync = { token: 'app-token', repo: r, branch: 'main', auto: false, lastAt: '', lastSha: '' }; save(); }, REPO);
+    let s = await sync();
+    check(s.ok && gh.puts.length === 1 && stored().backtest.rows.length === EXPECTED.rows, 'first sync: ' + JSON.stringify(s) + ' ' + gh.puts.length);
+    c = await card();
+    check(JSON.stringify(c.links) === JSON.stringify([`https://github.com/${REPO}/settings/secrets/actions`, `https://github.com/${REPO}/actions/workflows/coindcx.yml`]), 'setup links: ' + JSON.stringify(c.links));
+
+    // No secrets yet: says what to add, asks nothing of CoinDCX, changes nothing.
+    let r = await runImport({ COINDCX_API_KEY: '' });
+    check(r.code === 1 && /Add the COINDCX_API_KEY and COINDCX_API_SECRET secrets/.test(r.out) && mock.calls.length === 0 && !r.puts.length, 'no secrets: ' + JSON.stringify(r));
+    // A wrong secret is refused on the first call; with nothing imported yet there is nothing to write.
+    r = await runImport({ COINDCX_API_SECRET: 'wrong-secret' });
+    check(r.code === 1 && /^::error::CoinDCX refused the key \(401\)/.test(r.out) && mock.calls.length === 1 && !r.puts.length, 'wrong secret: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
+    check(!r.out.includes(KEY) && !r.out.includes('wrong-secret'), 'the run printed the key');
+
+    // The right one: two pages of rupee futures and one of USDT, saved in one commit.
+    r = await runImport();
+    const want = `Imported ${NEW_ROWS} new rows from CoinDCX · 1 unreadable transaction skipped`;
+    check(r.code === 0 && r.out === want && r.summary === want, 'import: ' + JSON.stringify(r) + ', expected "' + want + '"');
+    check(JSON.stringify(r.puts) === JSON.stringify([`CoinDCX: ${NEW_ROWS} new rows`]), 'commits: ' + JSON.stringify(r.puts));
+    check(mock.bad.length === 0 && gh.bad.length === 0, 'requests CoinDCX or GitHub would refuse: ' + mock.bad.concat(gh.bad).join(' | '));
+    const paths = mock.calls.map(x => x.path.split('/').pop() + ':' + x.p.margin_currency_short_name + ':' + x.p.page);
+    check(paths.join(',') === 'transactions:INR:1,transactions:INR:2,transactions:USDT:1', 'calls made: ' + paths.join(','));
+    let j = stored();
+    const ddd = j.backtest.rows.find(x => x.file === 'cdx-api' && x.sym === 'B-DDD_USDT' && x.gross === 30);
+    check(ddd && ddd.at === '2026-09-05 09:00:00' && ddd.fee === 3 && ddd.net === 27 && ddd.kind === 'order' && ddd.cur === 'INR', 'stored in Indian time on a UTC server: ' + JSON.stringify(ddd));
+    check(!gh.files[REPO].text.includes(KEY) && !gh.files[REPO].text.includes(SECRET), 'the key went into journal.json');
+    const written = JSON.stringify(j.backtest);
+
+    // The journal syncs it in: same book as before, counted once with the report.
+    s = await sync();
+    b = await books();
+    check(s.ok && b.journal === seed.trades.length && b.api === NEW_ROWS, 'sync in: ' + JSON.stringify(s) + ' ' + JSON.stringify(b));
+    check(b.inr.n === API_CLOSED && near(b.inr.net, API_NET), 'CoinDCX book after the import: ' + JSON.stringify(b.inr) + ', expected ' + API_CLOSED + ' trades, ' + API_NET);
+    check(b.usd.n === 1 && near(b.usd.net, 4.8) && JSON.stringify(b.usdBook) === '["CoinDCX USD","USD","CoinDCX"]', 'USDT futures book: ' + JSON.stringify(b));
+    // It writes them exactly as the journal does: its push back changes no row or file record...
+    check(JSON.stringify(stored().backtest) === written, 'the journal rewrote what the import wrote');
+    // ...and the next sync has nothing to send.
+    s = await sync();
+    check(s.ok && s.changed === false, 'second sync: ' + JSON.stringify(s));
+    c = await card();
+    check(c.badge === 'Importing' && !c.bad && c.status.startsWith(`${NEW_ROWS} CoinDCX rows in the journal, last changed `), 'card after import: ' + JSON.stringify(c));
+
+    // Analysis, results by broker and Files say where the rows came from.
+    const an = await page.evaluate(() => {
+      state.ui.account = 'rep-coindcx-inr'; state.ui.anPeriod = 'all'; state.ui.btSec = 'files'; switchTab('analysis'); renderAll();
+      return { check: document.getElementById('btCheck').innerText, title: document.getElementById('btTitle').textContent,
+        line: [...document.querySelectorAll('#anBrokers tbody tr')].map(x => x.innerText.replace(/\s+/g, ' ').trim()).find(l => l.startsWith('CoinDCX ')) || '',
+        files: document.getElementById('btFiles').innerText };
+    });
+    check(an.check.startsWith('✓ All ') && an.check.includes(`${dupStored} rows from the API are already in an uploaded report and count once.`), 'Analysis check line: ' + an.check);
+    check(an.title === 'CoinDCX · trades from its report and API', 'Analysis title: ' + an.title);
+    check(an.line.includes('+₹' + API_NET.toFixed(2)) && an.line.endsWith('Report + API'), 'results by broker: ' + an.line);
+    check(an.files.includes('CoinDCX API') && an.files.includes('✓ Every transaction CoinDCX sent is stored once') && an.files.includes("Added by GitHub's hourly CoinDCX import"), 'Files: ' + an.files.slice(0, 400));
+
+    // The next hour: nothing new, no commit.
+    r = await runImport();
+    check(r.code === 0 && r.out === 'Up to date, nothing new from CoinDCX · 1 unreadable transaction skipped' && !r.puts.length, 'second run: ' + JSON.stringify(r));
+    // An answer that ignores paging (the whole list on every page) still ends.
+    mock.mode = 'noPaging';
+    r = await runImport();
+    check(r.code === 0 && r.out.startsWith('Up to date') && mock.calls.length === 3 && !r.puts.length, 'paging ignored: ' + r.out + ' after ' + mock.calls.length + ' calls');
+    // A margin type CoinDCX won't list is skipped and named; the other still comes in.
+    mock.mode = 'noUsdt';
+    r = await runImport();
+    check(r.code === 0 && r.out === 'Up to date, nothing new from CoinDCX · 1 unreadable transaction skipped · USDT futures not read (CoinDCX answered 400: Invalid margin)' && !r.puts.length, 'USDT refused: ' + JSON.stringify(r));
+    // Neither one read fails the run and leaves the reason for the journal, once.
+    mock.mode = 'all400';
+    r = await runImport();
+    check(r.code === 1 && r.out === '::error::CoinDCX answered 400: Invalid margin.' && JSON.stringify(r.puts) === '["CoinDCX import failed"]', 'both refused: ' + JSON.stringify(r));
+    check(stored().backtest.files.find(f => f.id === 'cdx-api').note === 'CoinDCX answered 400: Invalid margin.' && stored().backtest.rows.length === EXPECTED.rows + NEW_ROWS, 'note on the file: ' + JSON.stringify(stored().backtest.files));
+    r = await runImport();
+    check(r.code === 1 && !r.puts.length, 'the same failure again: ' + JSON.stringify(r));
+    await sync();
+    c = await card();
+    check(c.badge === 'Last run failed' && c.bad && c.status.startsWith("GitHub's last run failed: CoinDCX answered 400: Invalid margin. " + NEW_ROWS + ' CoinDCX rows'), 'card after a failed run: ' + JSON.stringify(c));
+    b = await books();
+    check(b.inr.n === API_CLOSED && near(b.inr.net, API_NET), 'book after a failed run: ' + JSON.stringify(b));
+    // Working again clears it.
+    mock.mode = 'ok';
+    r = await runImport();
+    check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX import working again"]' && !('note' in stored().backtest.files.find(f => f.id === 'cdx-api')), 'recovered: ' + JSON.stringify(r));
+    await sync();
+    c = await card();
+    check(c.badge === 'Importing' && !c.bad, 'card after recovering: ' + JSON.stringify(c));
+
+    // A device saves between the import's read and write: read again, merge, nothing lost.
+    inr.push(tx('B-HHH_USDT', '2026-09-20 10:00:00', 'default', 0, 1), tx('B-HHH_USDT', '2026-09-20 12:00:00', 'default', 11, 1));
+    API_NET += 9; API_CLOSED += 1;
+    gh.beforePut = phoneSaves;
+    const conflictsBefore = gh.conflicts;
+    r = await runImport();
+    j = stored();
+    check(r.code === 0 && r.out.startsWith('Imported 2 new rows from CoinDCX') && gh.conflicts === conflictsBefore + 1 && JSON.stringify(r.puts) === '["CoinDCX: 2 new rows"]', 'save during the import: ' + JSON.stringify(r));
+    check(j.trades.some(t => t.id === 'tr-phone') && j.backtest.rows.filter(x => x.sym === 'B-HHH_USDT').length === 2, 'after the conflict: phone trade ' + j.trades.some(t => t.id === 'tr-phone') + ', HHH rows ' + j.backtest.rows.filter(x => x.sym === 'B-HHH_USDT').length);
+    // A journal file over 1 MB comes without content; it is read raw.
+    gh.big = true;
+    const raws = gh.rawReads;
+    r = await runImport();
+    gh.big = false;
+    check(r.code === 0 && r.out.startsWith('Up to date') && gh.rawReads === raws + 1 && !r.puts.length, 'large journal file: ' + JSON.stringify(r) + ' raw reads ' + (gh.rawReads - raws));
+    // No journal file in the repo yet: says so.
+    r = await runImport({ GITHUB_REPOSITORY: 'victus/empty' });
+    check(r.code === 1 && /journal\.json isn't in victus\/empty \(branch main\) yet\. Turn on GitHub Sync/.test(r.out) && mock.calls.length === 0, 'no journal file: ' + JSON.stringify(r));
+    // CoinDCX not answering (or refusing GitHub's servers) is said plainly.
+    mock.mode = 'blocked';
+    r = await runImport();
+    check(r.code === 1 && /^::error::Could not reach CoinDCX \(.+\)\. If this keeps happening, CoinDCX may not accept GitHub's servers\.$/.test(r.out), 'blocked: ' + JSON.stringify(r));
+    mock.mode = 'ok';
+    r = await runImport();
+    check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX import working again"]', 'after blocked: ' + JSON.stringify(r));
+
+    // Without the report the API alone gives the same book (once the transaction
+    // it held back by ID comes in), read the older way, with position ids.
+    await sync();
+    await page.evaluate(() => removeBacktestFile(state.backtest.files.find(f => f.id !== 'cdx-api').id));
+    await sync();
+    mock.mode = 'needIds';
+    r = await runImport();
+    // (The broken row has no position, so this form doesn't send it.)
+    check(r.code === 0 && r.out === 'Imported 1 new row from CoinDCX', 'import after removing the report: ' + JSON.stringify(r));
+    check(mock.calls.some(x => x.path.endsWith('/positions') && x.p.margin_currency_short_name[0] === 'INR') && mock.calls.some(x => x.p.position_ids), 'position ids were not tried: ' + mock.calls.map(x => x.path).join(','));
+    mock.mode = 'ok';
+    await sync();
+    b = await books();
+    check(b.inr.n === API_CLOSED && near(b.inr.net, API_NET) && b.rows === b.api && b.journal === seed.trades.length + 1, 'API alone: ' + JSON.stringify(b));
+
+    // A journal with only another broker's report, while the pages shift: each
+    // transaction once, in a CoinDCX book of its own.
+    const dhan = { id: 'dhan1', name: 'dhan.csv', sheet: 'Trades', broker: 'Dhan', importedAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', rows: 1, added: 1, net: 5, cur: 'INR', checked: true };
+    const bare = { version: 1, savedAt: new Date().toISOString(), accounts: [], trades: [], signals: [], goals: [], playbook: [], aliases: {}, tombstones: {}, reviews: {}, reviewsAt: {},
+      backtest: { files: [dhan], rows: [{ id: 'd1', file: 'dhan1', sym: 'RELIANCE', at: '2026-09-01 10:00:00', kind: 'order', type: 'By Order', gross: 5, settle: 0, fee: 0, net: 5, cur: 'INR' }] } };
+    gh.files['victus/fresh'] = { text: JSON.stringify(bare, null, 2), sha: 'f0' };
+    mock.mode = 'shift';
+    r = await runImport({ GITHUB_REPOSITORY: 'victus/fresh' });
+    mock.mode = 'ok';
+    const fj = JSON.parse(gh.files['victus/fresh'].text), all = inr.length - 1 + usdt.length;
+    const fileRec = fj.backtest.files[1] || {};
+    check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` && fj.backtest.rows.length === all + 1 && new Set(fj.backtest.rows.map(x => x.id)).size === all + 1, 'fresh journal, shifting pages: ' + JSON.stringify(r) + ' rows ' + fj.backtest.rows.length);
+    check(fileRec.broker === 'CoinDCX' && fileRec.checked === true && JSON.stringify(fj.backtest.files[0]) === JSON.stringify(dhan) && JSON.stringify(Object.assign({}, fj, { backtest: bare.backtest, savedAt: bare.savedAt })) === JSON.stringify(bare), 'journal with a Dhan report: ' + JSON.stringify(fj.backtest.files));
+    // A journal that never had an upload has no backtest part yet: it is added, last, as the journal writes it.
+    const none = Object.assign({}, bare);
+    delete none.backtest;
+    gh.files['victus/none'] = { text: JSON.stringify(none, null, 2), sha: 'n0' };
+    r = await runImport({ GITHUB_REPOSITORY: 'victus/none' });
+    const nj = JSON.parse(gh.files['victus/none'].text);
+    check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` && nj.backtest && nj.backtest.rows.length === all && Object.keys(nj).pop() === 'backtest', 'journal with no uploads: ' + JSON.stringify(r) + ' ' + JSON.stringify(Object.keys(nj)));
+
+    // CoinDCX turning GitHub's servers away stops at the first call and says so,
+    // without the page's HTML. The reason is long: the journal keeps 300
+    // characters of it, and so does the file, so neither keeps rewriting it.
+    mock.mode = 'forbidden';
+    r = await runImport();
+    const said = ("CoinDCX refused the request (403: 403 Forbidden Access denied " + 'Request blocked. '.repeat(12)).slice(0, 160 + 34) + "). Either the key is bound to an IP address, or CoinDCX doesn't accept GitHub's servers, which are outside India.";
+    check(r.code === 1 && r.out === '::error::' + said && mock.calls.length === 1 && JSON.stringify(r.puts) === '["CoinDCX import failed"]', 'refused by CoinDCX: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
+    check(said.length > 300 && stored().backtest.files.find(f => f.id === 'cdx-api').note === said.slice(0, 300), 'long reason on the file: ' + said.length);
+    s = await sync();
+    r = await runImport();
+    check(s.ok && r.code === 1 && !r.puts.length, 'the long reason again, after a sync: ' + JSON.stringify(s) + ' ' + JSON.stringify(r));
+    mock.mode = 'ok';
+    r = await runImport();
+    check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX import working again"]', 'after refused: ' + JSON.stringify(r));
+
+    // Every tab still draws with the API rows in.
+    for (const tab of TABS) {
+      const bad = await page.evaluate(t => { switchTab(t); renderAll(); const m = document.getElementById('view-' + t).innerText.match(/.{0,40}(NaN|undefined|Infinity%).{0,40}/); return m ? m[0] : ''; }, tab);
+      check(!bad, `${tab} shows: ${bad}`);
+    }
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  fake.close();
+  try { fs.unlinkSync(summary); } catch (e) {}
+  const label = 'CoinDCX import on GitHub: signed calls, journal.json, counted once with the report';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
   await run(name + ', sample journal', vp, data);
 }
 await run('desktop, storage nearly full', { width: 1366, height: 900 }, data, 4300000);
+await currencyRun(data);
 await backtestRun(data);
+await coindcxRun(data);
 
 await browser.close();
 server.close();
