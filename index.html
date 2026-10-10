@@ -1662,7 +1662,7 @@
     function tradePct(t) {
       if (t && t.orig) t = t.orig; // price and size are in the book's own currency
       if (!t || !(t.entry > 0) || !(t.qty > 0)) return null;
-      const v = derive(t).pnl / (t.entry * t.qty) * 100;
+      const v = pricePnl(t) / (t.entry * t.qty) * 100;
       return isFinite(v) ? v : null;
     }
     function iso(d) {
@@ -3225,7 +3225,7 @@
       // alert onwards can be judged: before that there is simply no alert data.
       const matchedIds = new Set(allPairs.filter(p => p.trade).map(p => p.trade.id));
       const firstSigDate = (state.signals || []).filter(g => (g.kind || "zone") === kind).map(g => g.date).sort()[0] || null;
-      let orphans = firstSigDate ? state.trades.filter(t => t.date >= firstSigDate && !matchedIds.has(t.id)) : [];
+      let orphans = firstSigDate ? signalTrades().filter(t => t.date >= firstSigDate && !matchedIds.has(t.id)) : [];
       if (chan) orphans = []; // your own trades carry no channel
       if (range.from) orphans = orphans.filter(t => t.date >= range.from);
       if (range.to) orphans = orphans.filter(t => t.date <= range.to);
@@ -3279,7 +3279,7 @@
           const pnl = pnlIn(t, viewCur());
           const tr = document.createElement('tr');
           tr.className = 'hover:bg-terminal-cardHover/80 transition-colors border-b border-terminal-border/60 cursor-pointer';
-          tr.onclick = () => openInspector(t);
+          tr.onclick = () => t.rep ? openReportTrade(t) : openInspector(t);
           const own = stopOk(t);
           tr.innerHTML = `
             <td class="py-2.5 px-3 text-white">${esc(t.date)}</td>
@@ -5831,9 +5831,18 @@
     // Zone, fib and trendline alerts are matched to your trades separately, so a trade
     // taken off a zone alert is never claimed by a fib alert on the same symbol.
     // No argument means zone alerts, as everywhere before fib and trendline existed.
+    // Your trades to hold against the alerts: the journal's, plus each broker-report
+    // trade whose fills gave its side and prices (CoinDCX), dated when it opened.
+    function signalTrades() {
+      const rep = reportTrades().filter(t => t.px).map(t => Object.assign({}, t, t.px, { date: t.px.openDate, time: t.px.openTime }));
+      return (state.trades || []).concat(rep);
+    }
+    // P&L in the currency the prices are in. A CoinDCX rupee book books rupees
+    // on USDT prices, so its P&L is turned into dollars at the book's rate.
+    function pricePnl(t) { return t.rep ? (derive(t).pnl || 0) * fxk(acct(t.accountId), "USD") : derive(t).pnl; }
     function matchSignals(kind) {
       const want = kind || "zone";
-      const trades = (state.trades || []).slice().sort(byWhen);
+      const trades = signalTrades().sort(byWhen);
       const sigs = (state.signals || []).filter(g => (g.kind || "zone") === want);
       const taken = {}; // signal id -> trade
       // Bucket alerts by day and side once, so each trade only looks at its own
@@ -5884,7 +5893,7 @@
       let r = derive(t).r;
       if ((r == null || !isFinite(r)) && stopOk(Object.assign({}, t, { stop: sig.stop }))) {
         const risk = Math.abs(t.entry - sig.stop) * t.qty;
-        if (risk > 0) r = derive(t).pnl / risk;
+        if (risk > 0) r = pricePnl(t) / risk;
       }
       return (r != null && isFinite(r)) ? { r, source: "traded" } : null;
     }
@@ -6620,7 +6629,7 @@
     function fillStopsFromSignals() {
       // A stop is only taken if it sits on the losing side of the trade's own entry
       // (above a short, below a long); anything else is a mismatched alert.
-      const pairs = matchSignals().filter(x => x.trade && !x.trade.stop && isFinite(x.signal.stop)
+      const pairs = matchSignals().filter(x => x.trade && !x.trade.rep && !x.trade.stop && isFinite(x.signal.stop)
         && stopOk(Object.assign({}, x.trade, { stop: x.signal.stop })));
       if (!pairs.length) { toast("No matched trades are missing a stop"); return; }
       if (!confirm(`Fill in ${pairs.length} stop${pairs.length === 1 ? "" : "s"} from matched signals? Each matched trade takes the stop loss from its signal, so R can be worked out. You can still edit any of them by hand afterwards.`)) return;
@@ -7123,6 +7132,13 @@
           const w = { at: cText(f.wallet.at, 30) };
           ["INR", "USD"].forEach(k => { const v = f.wallet[k]; if (typeof v === "number" && isFinite(v)) w[k] = v; });
           if ("INR" in w || "USD" in w) o.wallet = w;
+        }
+        // Each CoinDCX fill's price, side and size, for matching its trades to alerts.
+        if (Array.isArray(f.fills)) {
+          const fl = f.fills.filter(x => x && typeof x === "object" && x.id && (x.side === "buy" || x.side === "sell")
+            && typeof x.price === "number" && x.price > 0 && isFinite(x.price) && typeof x.qty === "number" && x.qty > 0 && isFinite(x.qty) && BT_AT_RE.test(String(x.at)))
+            .slice(-5000).map(x => ({ id: cText(x.id, 80), at: String(x.at), sym: cText(x.sym, 30), side: x.side, price: x.price, qty: x.qty, cur: x.cur === "INR" ? "INR" : "USD" }));
+          if (fl.length) o.fills = fl;
         }
         files[id] = o; out.files.push(o);
       });
@@ -7720,10 +7736,13 @@
     // Trades rebuilt from every report, worked out once per change to the uploads.
     let repCache = null;
     function reportBooks() {
-      const bt = btState(), brokers = bt.files.map(f => f.id + ":" + f.broker).join("|");
+      const bt = btState(), brokers = bt.files.map(f => f.id + ":" + f.broker + ":" + (f.fills && f.fills.length ? f.fills.length + ":" + f.fills[f.fills.length - 1].id : "")).join("|");
       if (repCache && repCache.rows === bt.rows && repCache.n === bt.rows.length && repCache.brokers === brokers) return repCache;
-      const brokerOf = {}, groups = {}, closed = [], open = [];
-      bt.files.forEach(f => { brokerOf[f.id] = f.broker; });
+      const brokerOf = {}, groups = {}, fillsOf = {}, closed = [], open = [];
+      bt.files.forEach(f => {
+        brokerOf[f.id] = f.broker;
+        (f.fills || []).forEach(x => { const k = f.broker + "|" + x.cur + "|" + x.sym; (fillsOf[k] = fillsOf[k] || []).push(x); });
+      });
       bt.rows.forEach(r => { const b = brokerOf[r.file]; if (b !== undefined) (groups[b] = groups[b] || []).push(r); });
       Object.keys(groups).forEach(b => btTrades(btSkipDupes(groups[b])).forEach(t => {
         const accountId = repBookId(b, t.cur);
@@ -7734,11 +7753,32 @@
           date: t.end.slice(0, 10), time: t.end.slice(11, 16), exitDate: t.end.slice(0, 10), exitTime: t.end.slice(11, 16),
           openTime: t.start.slice(11, 16), held: t.held, symbol: btSym(t.sym), direction: "",
           entry: 0, exit: 0, qty: 0, stop: 0, leverage: 1, fees: t.fees, funding: t.funding, gross: t.gross,
-          pnl: t.net, risk: 0, r: null, setup: "", notes: "", rules: []
+          pnl: t.net, risk: 0, r: null, setup: "", notes: "", rules: [], px: btPrices(t, fillsOf[b + "|" + t.cur + "|" + t.sym])
         });
       }));
       repCache = { rows: bt.rows, n: bt.rows.length, brokers, closed, open };
       return repCache;
+    }
+    // A report trade's side, entry, exit and size, from the broker's fills
+    // between its open and its last close (CoinDCX's import brings them). Kept
+    // apart from the trade's own fields so only alert matching uses them. None
+    // when the fills don't account for the whole position, opened and closed.
+    // A fill and the transaction it booked are a moment apart at most; a
+    // neighbouring trade's fill caught in the margin breaks the size check instead.
+    const BT_FILL_MS = 15000;
+    function btPrices(t, fills) {
+      if (!fills || !fills.length || !t.closed || t.carried) return null;
+      const t0 = btMs(t.start) - BT_FILL_MS, t1 = btMs(t.end) + BT_FILL_MS;
+      const mine = fills.filter(x => { const m = btMs(x.at); return m >= t0 && m <= t1; }).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
+      if (!mine.length) return null;
+      const side = mine[0].side, ins = mine.filter(x => x.side === side), outs = mine.filter(x => x.side !== side);
+      const qIn = sum(ins.map(x => x.qty)), qOut = sum(outs.map(x => x.qty));
+      if (!(qIn > 0) || Math.abs(qIn - qOut) > qIn * 0.005) return null;
+      return {
+        direction: side === "buy" ? "long" : "short", qty: qIn,
+        entry: sum(ins.map(x => x.price * x.qty)) / qIn, exit: sum(outs.map(x => x.price * x.qty)) / qOut,
+        openDate: mine[0].at.slice(0, 10), openTime: mine[0].at.slice(11, 16)
+      };
     }
     function reportTrades() { return reportBooks().closed; }
     // From the dashboard: the trade's own report rows, in Analysis under its book.

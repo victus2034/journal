@@ -479,8 +479,26 @@ async function coindcxRun(seed) {
   inr.push({ stage: 'default', amount: 5, fee_amount: 0, created_at: ist('2026-09-08 10:00:00'), margin_currency_short_name: 'INR' }); // no pair
   const usdt = [tx('B-GGG_USDT', '2026-09-06 10:00:00', 'default', 0, 0.1, 0, 'USDT'), tx('B-GGG_USDT', '2026-09-06 14:00:00', 'default', 5, 0.1, 0, 'USDT')];
   usdt[1].created_at = '2026-09-06T08:30:00.000Z'; // a time written out instead of milliseconds
-  let API_NET = 99.3 + 20 + 45 + 55; // report trades, DDD now closed (-7 + 27), FFF, PAG
-  let API_CLOSED = 6 + 1 + 1 + 55;
+  // Five days ago (whatever today is), two trades whose fills come in too: LNK
+  // bought at 11.99 and 12.015 (12.00 on average) and sold at 12.05 and 12.15
+  // (12.10), and ORF shorted at 2.00, closed at 2.004 (its closing fill comes
+  // in later). One more fill 20 days back, which only the first read reaches.
+  const D = new Date(Date.now() - 5 * 864e5 + 5.5 * 3600e3).toISOString().slice(0, 10);
+  inr.push(tx('B-LNK_USDT', D + ' 10:05:00', 'default', 0, 1, 0), tx('B-LNK_USDT', D + ' 14:00:00', 'exit', 993, 1, 0));
+  inr.push(tx('B-ORF_USDT', D + ' 11:00:00', 'default', 0, 0.5, 0), tx('B-ORF_USDT', D + ' 11:30:00', 'tpsl_exit', -20, 0.5, 0));
+  const fill = (pair, at, side, price, quantity, extra = 0.8374) => ({ price, quantity, is_maker: false, fee_amount: 0.1, pair, side, timestamp: ist(at, extra), order_id: 'ord-' + pair + at + side });
+  const OLD = new Date(Date.now() - 20 * 864e5 + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const fills = [fill('B-LNK_USDT', D + ' 10:05:00', 'buy', '11.99', 60), fill('B-LNK_USDT', D + ' 10:05:00', 'buy', 12.015, '40', 400),
+    fill('B-LNK_USDT', D + ' 14:00:00', 'sell', 12.05, 50), fill('B-LNK_USDT', D + ' 14:00:00', 'sell', 12.15, 50, 900),
+    fill('B-ORF_USDT', D + ' 11:00:00', 'sell', 2, 50), fill('B-OLD_USDT', OLD + ' 09:00:00', 'buy', 1, 10)];
+  const orfClose = fill('B-ORF_USDT', D + ' 11:30:00', 'buy', 2.004, 50);
+  // One without a side: counted as unreadable, its field names shown.
+  const noSide = Object.assign({}, fill('B-LNK_USDT', D + ' 12:00:00', 'buy', 12, 1));
+  delete noSide.side;
+  fills.push(noSide);
+  const F = ' · 5 fills read, 1 unreadable (fields: price, quantity, is_maker, fee_amount, pair, timestamp, order_id)', F1 = F.replace('5 fills', '6 fills');
+  let API_NET = 99.3 + 20 + 45 + 55 + 991 - 21; // report trades, DDD now closed (-7 + 27), FFF, PAG, LNK, ORF
+  let API_CLOSED = 6 + 1 + 1 + 55 + 2;
   const NEW_ROWS = inr.length - 2 + usdt.length;
 
   // ---- the fake CoinDCX ----
@@ -515,6 +533,14 @@ async function coindcxRun(seed) {
     if (p0 === '/exchange/v1/derivatives/futures/positions') {
       if ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400') return [400, { code: 400, message: 'Invalid margin', status: 'error' }];
       return [200, slice(mc === 'INR' ? [...new Set(inr.map(t => t.position_id))].filter(Boolean).map(id => ({ id, pair: id.slice(4), active_pos: 0, margin_currency_short_name: 'INR' })) : [{ id: 'pos-B-GGG_USDT', pair: 'B-GGG_USDT', active_pos: 0, margin_currency_short_name: 'USDT' }])];
+    }
+    // Fills: within the dates asked for (UTC days, both ends included), a page at a time.
+    if (p0 === '/exchange/v1/derivatives/futures/trades') {
+      if (mock.fillsMode === 'none') return [404, { message: 'Not found' }];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(p.from_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(p.to_date || '') || p.to_date < p.from_date) { mock.bad.push('fill dates ' + body); return [400, { message: 'Invalid Request' }]; }
+      if ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400') return [400, { code: 400, message: 'Invalid margin', status: 'error' }];
+      const day = x => new Date(x.timestamp).toISOString().slice(0, 10);
+      return [200, slice(mc === 'INR' ? fills.filter(x => mock.fillsMode === 'allDates' || (day(x) >= p.from_date && day(x) <= p.to_date)) : [])];
     }
     if (p0 !== '/exchange/v1/derivatives/futures/positions/transactions') return [404, { message: 'Not found' }];
     if (p.stage !== 'all') { mock.bad.push('stage ' + p.stage); return [400, { message: 'Invalid Request' }]; }
@@ -646,14 +672,23 @@ async function coindcxRun(seed) {
     check(r.code === 1 && /^::error::CoinDCX refused the key \(401\)/.test(r.out) && mock.calls.length === 1 && !r.puts.length, 'wrong secret: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
     check(!r.out.includes(KEY) && !r.out.includes('wrong-secret'), 'the run printed the key');
 
-    // The right one: two pages of rupee futures and one of USDT, saved in one commit.
+    // The right one: two pages of rupee futures and one of USDT, the wallets and
+    // 90 days of fills a week at a time, saved in one commit.
+    const fromDay = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
     r = await runImport();
-    const want = `Imported ${NEW_ROWS} new rows from CoinDCX · 1 unreadable transaction skipped` + W;
+    const want = `Imported ${NEW_ROWS} new rows from CoinDCX · 1 unreadable transaction skipped` + W + F1;
     check(r.code === 0 && r.out === want && r.summary === want, 'import: ' + JSON.stringify(r) + ', expected "' + want + '"');
     check(JSON.stringify(r.puts) === JSON.stringify([`CoinDCX: ${NEW_ROWS} new rows`]), 'commits: ' + JSON.stringify(r.puts));
     check(mock.bad.length === 0 && gh.bad.length === 0, 'requests CoinDCX or GitHub would refuse: ' + mock.bad.concat(gh.bad).join(' | '));
-    const paths = mock.calls.map(x => [x.path.split('/').pop(), x.p.margin_currency_short_name, x.p.page].filter(v => v != null).join(':'));
+    const isFill = x => x.path.endsWith('/trades');
+    const paths = mock.calls.filter(x => !isFill(x)).map(x => [x.path.split('/').pop(), x.p.margin_currency_short_name, x.p.page].filter(v => v != null).join(':'));
     check(paths.join(',') === 'transactions:INR:1,transactions:INR:2,transactions:USDT:1,wallets', 'calls made: ' + paths.join(','));
+    // Fill windows: from 90 days back to tomorrow, a week each, every day covered, for both margins.
+    const weeks = mc => mock.calls.filter(x => isFill(x) && x.p.margin_currency_short_name[0] === mc).map(x => [x.p.from_date, x.p.to_date, x.p.page]);
+    const wk = weeks('INR'), dayMs = d => Date.parse(d + 'T00:00:00Z');
+    const covered = wk.length && wk[0][0] === fromDay && wk.every((w, i) => w[2] === '1' && dayMs(w[1]) - dayMs(w[0]) === 7 * 864e5 && (!i || w[0] === wk[i - 1][1]))
+      && wk[wk.length - 1][1] >= new Date(Date.now() + 864e5).toISOString().slice(0, 10) && JSON.stringify(weeks('USDT')) === JSON.stringify(wk);
+    check(covered && wk.length === 14, 'fill windows: ' + JSON.stringify(wk));
     let j = stored();
     const ddd = j.backtest.rows.find(x => x.file === 'cdx-api' && x.sym === 'B-DDD_USDT' && x.gross === 30);
     check(ddd && ddd.at === '2026-09-05 09:00:00' && ddd.fee === 3 && ddd.net === 27 && ddd.kind === 'order' && ddd.cur === 'INR', 'stored in Indian time on a UTC server: ' + JSON.stringify(ddd));
@@ -704,6 +739,41 @@ async function coindcxRun(seed) {
     check(dhanBal.id === 'rep-dhan-inr' && dhanBal.bal === dhanBal.computed && dhanBal.bal === 5, 'a Dhan report book: ' + JSON.stringify(dhanBal));
     check((bal.books.match(/· CoinDCX wallet/g) || []).length === 2 && bal.books.includes('₹8,144.78') && bal.books.includes('$82.02'), 'Trading Books: ' + bal.books);
 
+    // The fills sit on the file after the wallet, each in the journal's own shape and on the Indian clock.
+    const cdxRec = stored().backtest.files.find(f => f.id === 'cdx-api'), fl = cdxRec.fills || [];
+    check(Object.keys(cdxRec).slice(-2).join() === 'wallet,fills' && fl.length === 6 && fl.every(x => Object.keys(x).join() === 'id,at,sym,side,price,qty,cur')
+      // Oldest first; two in the same second go by their ID.
+      && fl.every((x, i) => !i || fl[i - 1].at < x.at || (fl[i - 1].at === x.at && fl[i - 1].id < x.id))
+      && JSON.stringify(fl.map(x => [x.at, x.sym, x.side, x.price, x.qty, x.cur]).sort()) === JSON.stringify([[D + ' 10:05:00', 'B-LNK_USDT', 'buy', 11.99, 60, 'INR'], [D + ' 10:05:00', 'B-LNK_USDT', 'buy', 12.015, 40, 'INR'],
+        [D + ' 11:00:00', 'B-ORF_USDT', 'sell', 2, 50, 'INR'], [D + ' 14:00:00', 'B-LNK_USDT', 'sell', 12.05, 50, 'INR'], [D + ' 14:00:00', 'B-LNK_USDT', 'sell', 12.15, 50, 'INR'], [OLD + ' 09:00:00', 'B-OLD_USDT', 'buy', 1, 10, 'INR']].sort()), 'fills on the file: ' + JSON.stringify(cdxRec).slice(-700));
+    // With them, the alert LNK was bought off finds the trade: its side, entry and
+    // exit from the fills, dated when it opened, and R against the alert's stop
+    // (₹991 is $9.98 at ₹99.30; 100 × the 0.10 to the stop is $10 of risk).
+    // ORF (a short, its close not in yet) has no prices, so no alert can claim it.
+    const sigs = () => page.evaluate(([D]) => {
+      const sg = (id, sym, time, side, entry, stop) => ({ id, key: 'tl|' + sym, kind: 'trendline', date: D, time, symbol: sym, side, score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: true, outcome: '+2R', resultR: 1.9, hasReportR: true, price: entry, stop, entry });
+      state.signals = [sg('sg-lnk', 'LNKUSD', '09:50', 'long', 12, 11.9), sg('sg-orf', 'ORFUSD', '10:30', 'long', 2, 1.98),
+        Object.assign(sg('sg-lnk-zone', 'LNKUSD', '09:55', 'long', 12, 11.9), { kind: undefined, key: 'zone|LNKUSD' })];
+      // "Fill stops from signals" only touches journal trades: a CoinDCX trade has no stop of its own to fill.
+      const said = [], realToast = toast;
+      toast = m => said.push(m);
+      fillStopsFromSignals();
+      toast = realToast;
+      const pairs = matchSignals('trendline'), p = pairs.find(x => x.signal.id === 'sg-lnk'), q = pairs.find(x => x.signal.id === 'sg-orf'), t = p.trade;
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'vsme', sigFilter: 'orphans' });
+      switchTab('signals'); renderAll();
+      const text = id => document.getElementById(id).innerText.replace(/\s+/g, ' ');
+      return { t: t && [t.rep, t.symbol, t.direction, +t.entry.toFixed(6), +t.exit.toFixed(6), t.qty, t.date, t.time], r: myOutcome(p) && myOutcome(p).r, orf: !!q.trade, said,
+        strip: text('sigEdgeStrip'), vs: text('sigVsMine'), orphans: text('signalsTableBody'),
+        refused: [btPrices({ closed: true, carried: false, start: D + ' 10:05:00', end: D + ' 14:00:00' }, [{ at: D + ' 10:05:00', side: 'buy', price: 12, qty: 100 }, { at: D + ' 14:00:00', side: 'sell', price: 12.1, qty: 60 }]),
+          btPrices({ closed: true, carried: true, start: D + ' 10:05:00', end: D + ' 14:00:00' }, [{ at: D + ' 10:05:00', side: 'buy', price: 12, qty: 100 }, { at: D + ' 14:00:00', side: 'sell', price: 12.1, qty: 100 }])] };
+    }, [D]);
+    let v = await sigs();
+    check(JSON.stringify(v.t) === JSON.stringify([true, 'LNK/USDT', 'long', 12, 12.1, 100, D, '10:05']) && near(v.r, 991 / 99.3 / 10) && !v.orf, 'alert matched to a CoinDCX trade: ' + JSON.stringify(v));
+    check(v.strip.includes('1 taken by you') && /LNK\/USDT LONG .*\+1\.00R \(\+0\.83%\)/.test(v.vs) && !v.orphans.includes('ORF') && JSON.stringify(v.refused) === '[null,null]', 'Signals tab: ' + JSON.stringify(v));
+    check(JSON.stringify(v.said) === '["No matched trades are missing a stop"]', 'fill stops from signals: ' + JSON.stringify(v.said));
+
     // Analysis, results by broker and Files say where the rows came from.
     const an = await page.evaluate(() => {
       state.ui.account = 'rep-coindcx-inr'; state.ui.anPeriod = 'all'; state.ui.btSec = 'files'; switchTab('analysis'); renderAll();
@@ -713,20 +783,23 @@ async function coindcxRun(seed) {
     });
     check(an.check.startsWith('✓ All ') && an.check.includes(`${dupStored} rows from the API are already in an uploaded report and count once.`), 'Analysis check line: ' + an.check);
     check(an.title === 'CoinDCX · trades from its report and API', 'Analysis title: ' + an.title);
-    check(an.line.includes('+₹' + API_NET.toFixed(2)) && an.line.endsWith('Report + API'), 'results by broker: ' + an.line);
+    check(an.line.includes('+₹' + API_NET.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })) && an.line.endsWith('Report + API'), 'results by broker: ' + an.line);
     check(an.files.includes('CoinDCX API') && an.files.includes('✓ Every transaction CoinDCX sent is stored once') && an.files.includes("Added by GitHub's hourly CoinDCX import"), 'Files: ' + an.files.slice(0, 400));
 
     // The next hour: nothing new, no commit.
     r = await runImport();
-    check(r.code === 0 && r.out === 'Up to date, nothing new from CoinDCX · 1 unreadable transaction skipped' + W && !r.puts.length, 'second run: ' + JSON.stringify(r));
+    check(r.code === 0 && r.out === 'Up to date, nothing new from CoinDCX · 1 unreadable transaction skipped' + W + F && !r.puts.length, 'second run: ' + JSON.stringify(r));
+    // Later runs read the fills from three days before the newest one kept.
+    const later = mock.calls.filter(x => isFill(x) && x.p.margin_currency_short_name[0] === 'INR').map(x => x.p.from_date);
+    check(later[0] === new Date(Date.parse(D + 'T08:30:00Z') - 3 * 864e5).toISOString().slice(0, 10) && later.length <= 2, 'later fill reads: ' + JSON.stringify(later));
     // An answer that ignores paging (the whole list on every page) still ends.
     mock.mode = 'noPaging';
     r = await runImport();
-    check(r.code === 0 && r.out.startsWith('Up to date') && mock.calls.length === 4 && !r.puts.length, 'paging ignored: ' + r.out + ' after ' + mock.calls.length + ' calls');
+    check(r.code === 0 && r.out.startsWith('Up to date') && mock.calls.filter(x => !isFill(x)).length === 4 && !r.puts.length, 'paging ignored: ' + r.out + ' after ' + mock.calls.length + ' calls');
     // A margin type CoinDCX won't list is skipped and named; the other still comes in.
     mock.mode = 'noUsdt';
     r = await runImport();
-    check(r.code === 0 && r.out === 'Up to date, nothing new from CoinDCX · 1 unreadable transaction skipped · USDT futures not read (CoinDCX answered 400: Invalid margin)' + W && !r.puts.length, 'USDT refused: ' + JSON.stringify(r));
+    check(r.code === 0 && r.out === 'Up to date, nothing new from CoinDCX · 1 unreadable transaction skipped · USDT futures not read (CoinDCX answered 400: Invalid margin)' + W + F && !r.puts.length, 'USDT refused: ' + JSON.stringify(r));
     // Neither one read fails the run and leaves the reason for the journal, once.
     mock.mode = 'all400';
     r = await runImport();
@@ -783,7 +856,7 @@ async function coindcxRun(seed) {
     mock.mode = 'needIds';
     r = await runImport();
     // (The broken row has no position, so this form doesn't send it.)
-    check(r.code === 0 && r.out === 'Imported 1 new row from CoinDCX' + W, 'import after removing the report: ' + JSON.stringify(r));
+    check(r.code === 0 && r.out === 'Imported 1 new row from CoinDCX' + W + F, 'import after removing the report: ' + JSON.stringify(r));
     check(mock.calls.some(x => x.path.endsWith('/positions') && x.p.margin_currency_short_name[0] === 'INR') && mock.calls.some(x => x.p.position_ids), 'position ids were not tried: ' + mock.calls.map(x => x.path).join(','));
     mock.mode = 'ok';
     await sync();
@@ -801,7 +874,7 @@ async function coindcxRun(seed) {
     mock.mode = 'ok';
     const fj = JSON.parse(gh.files['victus/fresh'].text), all = inr.length - 1 + usdt.length;
     const fileRec = fj.backtest.files[1] || {};
-    check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` + W && fj.backtest.rows.length === all + 1 && new Set(fj.backtest.rows.map(x => x.id)).size === all + 1, 'fresh journal, shifting pages: ' + JSON.stringify(r) + ' rows ' + fj.backtest.rows.length);
+    check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` + W + F1 && fj.backtest.rows.length === all + 1 && new Set(fj.backtest.rows.map(x => x.id)).size === all + 1, 'fresh journal, shifting pages: ' + JSON.stringify(r) + ' rows ' + fj.backtest.rows.length);
     check(fileRec.broker === 'CoinDCX' && fileRec.checked === true && JSON.stringify(fj.backtest.files[0]) === JSON.stringify(dhan) && JSON.stringify(Object.assign({}, fj, { backtest: bare.backtest, savedAt: bare.savedAt })) === JSON.stringify(bare), 'journal with a Dhan report: ' + JSON.stringify(fj.backtest.files));
     // A journal that never had an upload has no backtest part yet: it is added, last, as the journal writes it.
     const none = Object.assign({}, bare);
@@ -809,7 +882,7 @@ async function coindcxRun(seed) {
     gh.files['victus/none'] = { text: JSON.stringify(none, null, 2), sha: 'n0' };
     r = await runImport({ GITHUB_REPOSITORY: 'victus/none' });
     const nj = JSON.parse(gh.files['victus/none'].text);
-    check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` + W && nj.backtest && nj.backtest.rows.length === all && Object.keys(nj).pop() === 'backtest', 'journal with no uploads: ' + JSON.stringify(r) + ' ' + JSON.stringify(Object.keys(nj)));
+    check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` + W + F1 && nj.backtest && nj.backtest.rows.length === all && Object.keys(nj).pop() === 'backtest', 'journal with no uploads: ' + JSON.stringify(r) + ' ' + JSON.stringify(Object.keys(nj)));
 
     // CoinDCX turning GitHub's servers away stops at the first call and says so,
     // without the page's HTML. The reason is long: the journal keeps 300
@@ -830,16 +903,53 @@ async function coindcxRun(seed) {
     // The same figure again changes nothing; a wallet CoinDCX won't show keeps the last one.
     mock.wallets[0].balance = '9000.5';
     r = await runImport();
-    check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX wallet balance"]' && r.out.endsWith(' · wallet INR 9144.78, USDT 82.02'), 'wallet moved: ' + JSON.stringify(r));
+    check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX wallet balance"]' && r.out.endsWith(' · wallet INR 9144.78, USDT 82.02' + F), 'wallet moved: ' + JSON.stringify(r));
     r = await runImport();
     check(r.code === 0 && !r.puts.length, 'the same wallet again: ' + JSON.stringify(r));
     mock.mode = 'noWallet';
     r = await runImport();
     mock.mode = 'ok';
-    check(r.code === 0 && r.out.endsWith(' · wallet balance not read (CoinDCX answered 404: Not found)') && !r.puts.length && stored().backtest.files.find(f => f.id === 'cdx-api').wallet.INR === 9144.78, 'wallet not shown: ' + JSON.stringify(r));
+    check(r.code === 0 && r.out.endsWith(' · wallet balance not read (CoinDCX answered 404: Not found)' + F) && !r.puts.length && stored().backtest.files.find(f => f.id === 'cdx-api').wallet.INR === 9144.78, 'wallet not shown: ' + JSON.stringify(r));
     s = await sync();
     bal = await balances();
     check(s.ok && bal.inr === 9144.78 && bal.cdx.top === bal.want, 'balance after the wallet moved: ' + JSON.stringify(bal));
+
+    // ORF's closing fill comes in on its own: one commit; synced, ORF has its prices
+    // and shows as a trade no alert explains (a short; the only ORF alert is a long).
+    fills.push(orfClose);
+    const F2 = F.replace('5 fills', '6 fills');
+    r = await runImport();
+    check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX trade prices"]' && r.out.endsWith(F2) && stored().backtest.files.find(f => f.id === 'cdx-api').fills.length === 7, 'a new fill: ' + JSON.stringify(r));
+    s = await sync();
+    v = await sigs();
+    check(s.ok && /ORF\/USDT SHORT 2 .*No alert/.test(v.orphans) && !v.orf && v.strip.includes('1 taken by you'), 'a CoinDCX trade with no alert: ' + JSON.stringify(v));
+    // Its row opens the trade in Analysis, under its book. Fills changing alone
+    // (no new rows) are seen too, as the trades are worked out again.
+    const orf = await page.evaluate(() => {
+      const row = [...document.querySelectorAll('#signalsTableBody tr')].find(tr => tr.innerText.includes('ORF/USDT'));
+      row.click();
+      const out = { account: state.ui.account, analysis: !document.getElementById('view-analysis').classList.contains('hidden') };
+      const f = state.backtest.files.find(x => x.id === 'cdx-api'), all = f.fills, px = () => !!reportTrades().find(t => t.symbol === 'ORF/USDT').px;
+      f.fills = all.filter(x => !(x.sym === 'B-ORF_USDT' && x.side === 'buy'));
+      out.without = px();
+      f.fills = all;
+      out.with = px();
+      state.ui.account = 'all'; renderAll();
+      return out;
+    });
+    check(JSON.stringify(orf) === '{"account":"rep-coindcx-inr","analysis":true,"without":false,"with":true}', 'ORF row and its prices: ' + JSON.stringify(orf));
+    s = await sync();
+    check(s.ok && s.changed === false, 'sync after the new fill: ' + JSON.stringify(s));
+    // Fills CoinDCX won't show: said, nothing written, the ones kept stay.
+    mock.fillsMode = 'none';
+    r = await runImport();
+    mock.fillsMode = '';
+    check(r.code === 0 && r.out.endsWith(' · trade prices not read (CoinDCX answered 404: Not found)') && !r.puts.length && stored().backtest.files.find(f => f.id === 'cdx-api').fills.length === 7, 'fills not shown: ' + JSON.stringify(r));
+    // An answer that ignores the dates (every fill for every week) still keeps each one once.
+    mock.fillsMode = 'allDates';
+    r = await runImport();
+    mock.fillsMode = '';
+    check(r.code === 0 && r.out.endsWith(F2.replace('6 fills', '7 fills')) && !r.puts.length, 'fill dates ignored: ' + JSON.stringify(r));
 
     // Every tab still draws with the API rows in.
     for (const tab of TABS) {
