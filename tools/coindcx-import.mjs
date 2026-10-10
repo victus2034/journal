@@ -6,7 +6,9 @@
 // syncs. Each device gets them with its next sync, in the CoinDCX book an
 // uploaded report fills; a transaction a report already has counts once there.
 // It also reads the futures wallets, so the journal can show CoinDCX's own
-// balance for the CoinDCX book instead of one worked out from the trades.
+// balance for the CoinDCX book instead of one worked out from the trades, and
+// the fills (price, side and size), so it can tell which scanner alert a
+// CoinDCX trade was taken off.
 //
 // Environment (GitHub sets the ones marked *):
 //   COINDCX_API_KEY, COINDCX_API_SECRET   the repo's Actions secrets
@@ -28,7 +30,10 @@ const TZ = env.JOURNAL_TZ || 'Asia/Kolkata';
 const CDX_FILE = 'cdx-api', CDX_BROKER = 'CoinDCX';
 const CDX_PAGE = 100, CDX_MAX_PAGES = 100;
 const TX_PATH = '/exchange/v1/derivatives/futures/positions/transactions', POS_PATH = '/exchange/v1/derivatives/futures/positions';
-const WALLET_PATH = '/exchange/v1/derivatives/futures/wallets';
+const WALLET_PATH = '/exchange/v1/derivatives/futures/wallets', FILLS_PATH = '/exchange/v1/derivatives/futures/trades';
+// Fills: the first read goes back 90 days, later ones from 3 days before the
+// newest fill kept, a week per call; the journal keeps the newest 5000.
+const FILL_FIRST_DAYS = 90, FILL_OVERLAP_DAYS = 3, FILL_STEP_DAYS = 7, FILL_MAX = 5000, DAY_MS = 864e5;
 
 // ---- the journal's own helpers, as index.html has them ----
 function num(v) {
@@ -81,7 +86,7 @@ function cdxList(body) {
   if (Array.isArray(body)) return body;
   if (body == null) return [];
   if (typeof body !== 'object') return null;
-  const inner = body.transactions || body.positions || body.data;
+  const inner = body.transactions || body.positions || body.trades || body.data;
   if (Array.isArray(inner)) return inner;
   if (body.status === 'error' || Number(body.code) >= 400) return null;
   return Object.keys(body).every(k => /^(message|status|code)$/.test(k)) ? [] : null;
@@ -213,6 +218,61 @@ function walletOf(w) {
   return Object.keys(o).length ? o : null;
 }
 
+// Every fill of the INR and USDT futures from `fromMs` to tomorrow: what the
+// transactions leave out, the price, side and size of each. A margin type
+// CoinDCX won't list only skips that one, as with the transactions.
+function cdxDay(ms) { return new Date(ms).toISOString().slice(0, 10); }
+async function readFills(fromMs) {
+  const got = [], skipped = [];
+  for (const mc of ['INR', 'USDT']) {
+    try {
+      for (let t = fromMs; t <= Date.now() + DAY_MS; t += FILL_STEP_DAYS * DAY_MS) {
+        const r = await cdxPages(FILLS_PATH, { from_date: cdxDay(t), to_date: cdxDay(t + FILL_STEP_DAYS * DAY_MS), margin_currency_short_name: [mc] });
+        r.rows.forEach(x => got.push([x, mc]));
+      }
+    } catch (r) {
+      if (cdxFatal(r)) throw r;
+      skipped.push(r);
+    }
+  }
+  if (skipped.length === 2) throw skipped[0];
+  // Weeks share their end day, so a fill can come twice; each counts once.
+  const fills = [], seen = {}, bad = {};
+  let unread = 0, fields = '';
+  got.forEach(([x, mc]) => {
+    const f = cdxFill(x, mc);
+    if (f) { if (!seen[f.id]) { seen[f.id] = 1; fills.push(f); } return; }
+    const k = JSON.stringify(x);
+    if (bad[k]) return;
+    bad[k] = 1; unread++;
+    if (!fields && x && typeof x === 'object') fields = Object.keys(x).slice(0, 12).join(', ');
+  });
+  return { fills, unread, fields };
+}
+// One fill, in the shape and key order the journal keeps: its time on the
+// same Indian clock as the rows, the pair, buy or sell, price and size.
+function cdxFill(x, mc) {
+  if (!x || typeof x !== 'object') return null;
+  const ms = cdxMs(x.timestamp != null ? x.timestamp : x.created_at), price = num(x.price), qty = Math.abs(num(x.quantity));
+  const side = String(x.side || '').toLowerCase(), sym = String(x.pair || '').trim().slice(0, 30);
+  if (!sym || !isFinite(ms) || !(price > 0) || !(qty > 0) || (side !== 'buy' && side !== 'sell')) return null;
+  const cur = String(x.margin_currency_short_name || mc).toUpperCase() === 'INR' ? 'INR' : 'USD';
+  const id = x.id ? String(x.id).slice(0, 80) : 'fill' + btHash([sym, x.order_id, x.timestamp, x.price, x.quantity, side].join('|'));
+  return { id, at: cdxLocalTime(ms), sym, side, price: btRound(price), qty: btRound(qty), cur };
+}
+// The fills kept plus the ones just read, each once, oldest first, the newest FILL_MAX.
+function mergeFills(old, add) {
+  const by = {};
+  (Array.isArray(old) ? old : []).concat(add).forEach(x => { if (x && x.id) by[x.id] = x; });
+  return Object.keys(by).map(k => by[k]).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0).slice(-FILL_MAX);
+}
+// Where the next read starts: a little before the newest fill kept, or 90 days back.
+function fillsFrom(data) {
+  const f = data.backtest && Array.isArray(data.backtest.files) ? data.backtest.files.find(x => x && x.id === CDX_FILE) : null;
+  const last = f && Array.isArray(f.fills) && f.fills.length ? Date.parse(String(f.fills[f.fills.length - 1].at).replace(' ', 'T') + 'Z') : NaN;
+  return isFinite(last) ? last - FILL_OVERLAP_DAYS * DAY_MS : Date.now() - FILL_FIRST_DAYS * DAY_MS;
+}
+
 // ---- journal.json on GitHub ----
 function gh(path, opts = {}) {
   return fetch(`${GH_API}/repos/${REPO}${path}`, Object.assign({}, opts, {
@@ -257,17 +317,19 @@ async function writeJournal(data, sha, message) {
 // shape (and key order) the journal writes its own, so its next sync finds
 // nothing to rewrite. A failed run leaves its reason on that file (`note`)
 // for the journal to show, and the wallets go there too (`wallet`, dated by
-// when they last changed); nothing changes when there is nothing new to say.
-function fileRecord(f, note, wallet) {
+// when they last changed), then the fills (`fills`); nothing changes when
+// there is nothing new to say.
+function fileRecord(f, note, wallet, fills) {
   const rec = {
     id: f.id, name: f.name, sheet: f.sheet, broker: f.broker, importedAt: f.importedAt, updatedAt: f.updatedAt,
     rows: f.rows, added: f.added, net: f.net, cur: f.cur, checked: f.checked
   };
   if (note) rec.note = note;
   if (wallet) rec.wallet = wallet;
+  if (fills && fills.length) rec.fills = fills;
   return rec;
 }
-function apply(data, rows, note, wallet) {
+function apply(data, rows, note, wallet, fills) {
   const old = data.backtest;
   const bt = old && Array.isArray(old.files) && Array.isArray(old.rows) ? old : { files: [], rows: [] };
   const have = {};
@@ -277,12 +339,14 @@ function apply(data, rows, note, wallet) {
   const was = f ? walletOf(f.wallet) : null, now = walletOf(wallet);
   const walletMoved = !!now && JSON.stringify(now) !== JSON.stringify(was);
   const noteMoved = (f && f.note || '') !== (note || '');
-  if (!fresh.length && (!f || (!noteMoved && !walletMoved))) return { changed: false, added: 0, file: f };
+  const hadFills = f && Array.isArray(f.fills) ? f.fills : [], keepFills = fills ? mergeFills(hadFills, fills) : hadFills;
+  const fillsMoved = JSON.stringify(keepFills) !== JSON.stringify(hadFills);
+  if (!fresh.length && (!f || (!noteMoved && !walletMoved && !fillsMoved))) return { changed: false, added: 0, file: f };
   const at = new Date().toISOString();
   const keep = walletMoved ? Object.assign({ at }, now) : f && f.wallet;
   let rec;
   if (!fresh.length) {
-    rec = fileRecord(Object.assign({}, f, { updatedAt: at }), note, keep);
+    rec = fileRecord(Object.assign({}, f, { updatedAt: at }), note, keep, keepFills);
   } else {
     // Under the broker name an uploaded CoinDCX report already uses, so both land in one book.
     const named = bt.files.find(x => x && x.id !== CDX_FILE && /coindcx/i.test(String(x.broker || '')));
@@ -296,11 +360,11 @@ function apply(data, rows, note, wallet) {
     rec = fileRecord({
       id: CDX_FILE, name: 'CoinDCX API', sheet: 'Futures transactions', broker, importedAt: f && f.importedAt ? f.importedAt : at, updatedAt: at,
       rows: rows.length, added: fresh.length, net: sum(mine.filter(r => r.cur === cur).map(r => Number(r.net))), cur, checked
-    }, note, keep);
+    }, note, keep, keepFills);
   }
   if (i >= 0) bt.files[i] = rec; else bt.files.push(rec);
   data.backtest = bt;
-  return { changed: true, added: fresh.length, file: rec, noteMoved, walletMoved };
+  return { changed: true, added: fresh.length, file: rec, noteMoved, walletMoved, fillsMoved };
 }
 
 function report(text, bad) {
@@ -323,15 +387,18 @@ async function main() {
   // The balance is a bonus: a wallet CoinDCX won't show doesn't stop the import.
   let wallet = null, walletWhy = '';
   if (got) { try { wallet = walletOf(await readWallets()); } catch (r) { walletWhy = cdxWhy(r); } }
+  // So are the fills: without them the journal still has every trade, just not its side and price.
+  let fillRead = null, fillsWhy = '';
+  if (got) { try { fillRead = await readFills(fillsFrom(data)); } catch (r) { fillsWhy = cdxWhy(r); } }
   // The journal keeps 300 characters of it; the same here, or each would keep rewriting the other.
   const note = failed ? failed.slice(0, 300) : null;
 
   let res;
   for (let attempt = 1; ; attempt++) {
-    res = apply(data, rows, note, wallet);
+    res = apply(data, rows, note, wallet, fillRead && fillRead.fills);
     if (!res.changed) break;
     data.savedAt = new Date().toISOString();
-    const message = res.added ? `CoinDCX: ${res.added} new row${res.added === 1 ? '' : 's'}` : failed ? 'CoinDCX import failed' : res.noteMoved ? 'CoinDCX import working again' : 'CoinDCX wallet balance';
+    const message = res.added ? `CoinDCX: ${res.added} new row${res.added === 1 ? '' : 's'}` : failed ? 'CoinDCX import failed' : res.noteMoved ? 'CoinDCX import working again' : res.walletMoved ? 'CoinDCX wallet balance' : 'CoinDCX trade prices';
     if (await writeJournal(data, sha, message)) break;
     if (attempt >= 4) throw new Error(`${SYNC_PATH} kept changing while saving; the next run tries again.`);
     ({ data, sha } = await readJournal());
@@ -345,6 +412,9 @@ async function main() {
   if (got.capped) msg += ' · stopped at the read cap, so the oldest part may be missing';
   if (wallet) msg += ' · wallet ' + Object.keys(wallet).map(k => (k === 'USD' ? 'USDT' : k) + ' ' + wallet[k]).join(', ');
   else if (walletWhy) msg += ` · wallet balance not read (${walletWhy.replace(/\.$/, '')})`;
+  if (fillRead) msg += ` · ${fillRead.fills.length} fill${fillRead.fills.length === 1 ? '' : 's'} read`
+    + (fillRead.unread ? `, ${fillRead.unread} unreadable (fields: ${fillRead.fields || 'none'})` : '');
+  else if (fillsWhy) msg += ` · trade prices not read (${fillsWhy.replace(/\.$/, '')})`;
   if (res.added && !res.file.checked) msg += " · ⚠ the stored rows don't add up to what CoinDCX sent";
   report(msg, res.added > 0 && !res.file.checked);
   return res.added > 0 && !res.file.checked ? 1 : 0;
