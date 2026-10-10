@@ -1065,6 +1065,63 @@ async function fixesRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// The header fits on one line on wide screens whatever book is picked, and a
+// trade's review (rules kept, what went right, mistakes) is marked from the
+// inspector, saved, and still there after a reload.
+async function reviewRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  for (const width of [1520, 1920]) {
+    const ctx = await browser.newContext({ viewport: { width, height: 900 } });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    for (const id of ['all', 'acc_nse', 'acc_cry']) {
+      const h = await page.evaluate(id => { state.ui.account = id; renderAll(); const t = document.getElementById('topBalLive'); t.classList.remove('hidden'); t.innerText = 'LAST KNOWN'; document.getElementById('topBalVal').innerText = '₹88,008.57';
+        const ab = document.getElementById('accountsBar'); return { h: document.querySelector('header').offsetHeight, cut: ab.scrollWidth - ab.clientWidth }; }, id);
+      check(h.h < 80 && h.cut === 0, width + 'px, ' + id + ': header not on one line ' + JSON.stringify(h));
+    }
+    await ctx.close();
+  }
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => openInspector(allTrades().find(t => t.id === 'tr1')));
+    const rows = () => page.evaluate(() => [...document.querySelectorAll('#inspChecklist button')].map(b => b.innerText.replace(/\s+/g, ' ')));
+    const before = await rows();
+    await page.click('#inspChecklist button:nth-of-type(2)'); // Risk within limit: missed -> kept
+    await page.click('#inspChecklist button:nth-of-type(1)'); // Traded a planned setup: kept -> missed
+    await page.click('#inspTagsPositive button:has-text("Trailed Stop Loss")');
+    await page.click('#inspTagsMistake button:has-text("FOMO Entry")');
+    await page.click('#inspChecklist button:has-text("Volume spike")');
+    const after = await rows();
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const saved = await page.evaluate(() => { const t = state.trades.find(x => x.id === 'tr1'); return { rules: t.rules, pos: t.tagsPositives, mis: t.tagsMistakes, play: t.playRules, notes: t.notes }; });
+    check(before.length === 7 && after.length === 7 && after[1].startsWith('✓') && after[0].startsWith('✕'), 'inspector rows: ' + JSON.stringify({ before, after }));
+    check(JSON.stringify(saved.rules) === '[false,true,true,false,true]' && JSON.stringify(saved.pos) === '["Trailed Stop Loss"]' && JSON.stringify(saved.mis) === '["FOMO Entry"]'
+      && saved.play['Volume spike'] === false && saved.play['Above VWAP'] === true && saved.notes === 'smoke test', 'review not saved: ' + JSON.stringify(saved));
+    // Tapping a tag again takes it off.
+    await page.evaluate(() => openInspector(allTrades().find(t => t.id === 'tr1')));
+    await page.click('#inspTagsMistake button:has-text("FOMO Entry")');
+    check(JSON.stringify(await page.evaluate(() => state.trades.find(x => x.id === 'tr1').tagsMistakes)) === '[]', 'a mistake tag did not come off');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'one-line header, trade review marked from the inspector';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1075,6 +1132,7 @@ await currencyRun(data);
 await backtestRun(data);
 await coindcxRun(data);
 await fixesRun(data);
+await reviewRun(data);
 
 await browser.close();
 server.close();
