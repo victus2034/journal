@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-04.94">
+  <meta name="app-version" content="2026-10-10.95">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -110,6 +110,7 @@
           <button onclick="switchTab('dashboard')" id="navTab-dashboard" class="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-terminal-card border border-terminal-borderLight text-amber-400 transition-all">Dashboard</button>
           <button onclick="switchTab('signals')" id="navTab-signals" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Signals</button>
           <button onclick="switchTab('analysis')" id="navTab-analysis" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Analysis</button>
+          <button onclick="switchTab('backtest')" id="navTab-backtest" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Backtest</button>
           <button onclick="switchTab('calculator')" id="navTab-calculator" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Calculator</button>
           <button onclick="switchTab('data')" id="navTab-data" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Sync &amp; Settings</button>
         </nav>
@@ -128,6 +129,7 @@
     <button type="button" class="mnav-btn" data-tab="signals" onclick="switchTab('signals')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>Signals</button>
     <button type="button" class="mnav-btn" data-tab="analysis" onclick="switchTab('analysis')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 19V9m6 10V5m6 14v-7m4 7H2"/></svg>Analysis</button>
     <button type="button" class="mnav-add" onclick="openTrade(null)" aria-label="Log trade"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg></button>
+    <button type="button" class="mnav-btn" data-tab="backtest" onclick="switchTab('backtest')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v16h16M8 15l3-4 3 2 5-6"/></svg>Backtest</button>
     <button type="button" class="mnav-btn" data-tab="calculator" onclick="switchTab('calculator')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 3h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2zm1 4h8M8 11h2m4 0h2m-8 4h2m4 0h2"/></svg>Calc</button>
     <button type="button" class="mnav-btn" data-tab="data" onclick="switchTab('data')"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15a3 3 0 100-6 3 3 0 000 6zm7.4-3a7.4 7.4 0 00-.1-1.2l2-1.6-2-3.4-2.4 1a7.6 7.6 0 00-2-1.2L14.5 2h-5l-.4 2.6a7.6 7.6 0 00-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 000 2.4l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 002 1.2l.4 2.6h5l.4-2.6a7.6 7.6 0 002-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg>Settings</button>
   </nav>
@@ -925,6 +927,97 @@
       </section>
     </div>
 
+    <!-- TAB: BACKTEST — trades from an uploaded Excel / CSV report, kept apart from the journal -->
+    <div id="view-backtest" class="hidden space-y-4">
+      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <h3 class="text-sm font-bold text-white uppercase tracking-wider">Backtest</h3>
+            <p class="text-slate-400 text-[11px] mt-0.5">Trades from an Excel or CSV trade report (such as a CoinDCX futures report). They stay here, apart from your journal, so they never change your live stats.</p>
+          </div>
+          <button type="button" onclick="pickBacktestFile()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400 shrink-0">Upload Excel / CSV</button>
+          <input type="file" id="btFileInput" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" class="hidden" onchange="handleBacktestFile(this)">
+        </div>
+        <div id="btFilters" class="flex flex-wrap items-center gap-2"></div>
+        <details class="text-[11px] text-slate-500">
+          <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How trades are built from the report</summary>
+          <p class="leading-relaxed mt-1.5">The report lists events, not trades: orders, and funding paid or received every few hours while a position is open. Rows are grouped by pair in time order. An order with no P&amp;L (only a fee) opens a trade or adds to it; an order with P&amp;L closes part or all of it. The next fee-only order after a close starts a new trade. Funding goes to the trade open on that pair at the time. Net P&amp;L is the report's own net column (gross plus settlement, less fees). A trade with no closing order yet counts as open and stays out of the win rate. Times are as written in the report.</p>
+        </details>
+      </div>
+
+      <div id="btEmpty" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-6 font-mono text-xs text-center space-y-2">
+        <p class="text-slate-200 font-bold">No backtest trades yet</p>
+        <p class="text-slate-400 text-[11px] leading-relaxed">Upload an Excel (.xlsx) or CSV trade report. It needs a header row with a time column, a pair or symbol column and a P&amp;L column; fee, funding type and transaction ID columns are used when present. Uploading the same report twice adds nothing twice.</p>
+      </div>
+
+      <div id="btMain" class="space-y-4">
+        <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="btStrip"></section>
+        <div id="btCheck" class="font-mono text-[11px]"></div>
+        <div id="btSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+
+        <section data-btsec="overview" class="space-y-4">
+          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
+            <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+              <h3 class="font-bold text-white uppercase tracking-wider">Equity curve</h3>
+              <span class="text-slate-500 text-[11px]">Running net P&amp;L after each closed trade.</span>
+            </div>
+            <div class="relative" style="height:260px"><canvas id="btEquityChart"></canvas></div>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
+            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
+              <h3 class="font-bold text-white uppercase tracking-wider mb-1">By pair</h3>
+              <p class="text-slate-500 text-[11px] mb-3">Closed trades per pair. Click one to filter by it.</p>
+              <div id="btPairs" class="space-y-2"></div>
+            </div>
+            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
+              <h3 class="font-bold text-white uppercase tracking-wider mb-1">By day</h3>
+              <p class="text-slate-500 text-[11px] mb-3">Closed trades by the day they closed.</p>
+              <div id="btDays" class="space-y-2"></div>
+            </div>
+          </div>
+        </section>
+
+        <section data-btsec="trades" class="space-y-4 hidden">
+          <div class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs">
+            <div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-terminal-border">
+              <h3 class="font-bold text-white uppercase tracking-wider">Trade by trade</h3>
+              <span class="text-slate-500 text-[11px]">Newest first. Click a trade to see its report rows.</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs font-mono">
+                <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border">
+                  <tr>
+                    <th class="py-2.5 px-3">Opened</th>
+                    <th class="py-2.5 px-3">Pair</th>
+                    <th class="py-2.5 px-3 text-right">Net P&amp;L</th>
+                    <th class="py-2.5 px-3">Closed</th>
+                    <th class="py-2.5 px-3 text-right">Held</th>
+                    <th class="py-2.5 px-3 text-right">Gross</th>
+                    <th class="py-2.5 px-3 text-right">Fees</th>
+                    <th class="py-2.5 px-3 text-right">Funding</th>
+                    <th class="py-2.5 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="btBody" class="text-slate-300"></tbody>
+              </table>
+            </div>
+            <div id="btMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
+          </div>
+        </section>
+
+        <section data-btsec="files" class="space-y-4 hidden">
+          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
+              <h3 class="font-bold text-white uppercase tracking-wider">Uploaded files</h3>
+              <button type="button" onclick="deleteAllBacktest()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded">Delete all backtest data</button>
+            </div>
+            <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
+            <div id="btFiles" class="space-y-2"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
     <!-- TAB: DATA & SYSTEM -->
     <div id="view-data" class="hidden space-y-4 pb-16">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1038,6 +1131,7 @@
         <div class="flex flex-wrap gap-2">
           <button onclick="downloadBackupFile()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Save Backup File (.JSON)</button>
           <button onclick="exportTradesCsv()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Export Trades (.CSV)</button>
+          <button onclick="pickBacktestFile()" title="Upload an Excel or CSV trade report. Its trades go to the Backtest tab, not your journal." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Upload Excel to Backtest (.XLSX / .CSV)</button>
           <button onclick="triggerRestoreFileInput()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Open Backup File</button>
           <input type="file" id="restoreFileInput" accept=".json" class="hidden" onchange="handleRestoreFile(this)">
           <button onclick="copyBackupToClipboard()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Copy Backup to Clipboard</button>
@@ -1291,6 +1385,7 @@
         goals: [],
         aliases: {},
         tombstones: {},
+        backtest: { files: [], rows: [] },
         ui: { account: "all", month: "current" },
         lastBackup: null
       };
@@ -1426,7 +1521,7 @@
       const out = {}, cutoff = new Date(Date.now() - 183 * 864e5).toISOString();
       if (!t || typeof t !== "object") return out;
       Object.keys(t).forEach(k => {
-        if (!/^(trades|goals|accounts|reviews|playbook):/.test(k) || k.length > 80) return;
+        if (!/^(trades|goals|accounts|reviews|playbook|backtest):/.test(k) || k.length > 80) return;
         if (typeof t[k] === "string" && t[k] >= cutoff) out[k] = t[k];
       });
       return out;
@@ -1438,6 +1533,7 @@
       s.goals = list(s.goals, cleanGoal);
       s.signals = list(s.signals, cleanSignal);
       s.playbook = list(s.playbook, cleanPlay);
+      s.backtest = cleanBacktest(s.backtest);
       s.tombstones = cleanTombstones(s.tombstones);
       s.aliases = (s.aliases && typeof s.aliases === "object" && !Array.isArray(s.aliases)) ? s.aliases : {};
       if (s.reviews && typeof s.reviews === "object" && !Array.isArray(s.reviews)) {
@@ -1732,7 +1828,7 @@
     /* =================== VIEWPORT & TAB NAVIGATION =================== */
     function switchTab(tabId) {
       if (tabId === 'journal') tabId = 'analysis'; // the trade list now lives at the end of Analysis
-      const tabs = ['dashboard', 'signals', 'analysis', 'calculator', 'data'];
+      const tabs = ['dashboard', 'signals', 'analysis', 'backtest', 'calculator', 'data'];
       tabs.forEach(t => {
         const elView = document.getElementById('view-' + t);
         const elNav = document.getElementById('navTab-' + t);
@@ -1752,6 +1848,8 @@
         renderSignalsTable();
       } else if (tabId === 'analysis') {
         renderAnalysis();
+      } else if (tabId === 'backtest') {
+        renderBacktest();
       } else if (tabId === 'calculator') {
         renderCalculator();
       } else if (tabId === 'data') {
@@ -3663,9 +3761,10 @@
     // delete or a sync shows up where you are looking instead of on the next visit.
     function renderAll() {
       renderDashboard();
-      const open = ['signals', 'analysis', 'data'].find(t => { const v = document.getElementById('view-' + t); return v && !v.classList.contains('hidden'); });
+      const open = ['signals', 'analysis', 'backtest', 'data'].find(t => { const v = document.getElementById('view-' + t); return v && !v.classList.contains('hidden'); });
       if (open === 'signals') renderSignalsTable();
       else if (open === 'analysis') renderAnalysis();
+      else if (open === 'backtest') renderBacktest();
       else if (open === 'data' && !(document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) renderDataView();
     }
 
@@ -4308,6 +4407,7 @@
         signals: local.signals || [],
         goals: mergeList(local.goals, remote.goals, "goals", tombs),
         playbook: mergeList(local.playbook, remote.playbook, "playbook", tombs),
+        backtest: mergeBacktest(local.backtest, remote.backtest, tombs),
         aliases: Object.assign({}, remote.aliases || {}, local.aliases || {}),
         tombstones: tombs
       }, mergeReviews(local, remote, tombs));
@@ -4316,7 +4416,7 @@
     }
     // What actually travels: never the token, the Delta key, or the webhook.
     function syncPayload(st) {
-      return {
+      const p = {
         version: 1,
         savedAt: new Date().toISOString(),
         accounts: st.accounts, trades: st.trades,
@@ -4328,6 +4428,10 @@
         aliases: st.aliases || {}, tombstones: st.tombstones || {},
         reviews: st.reviews || {}, reviewsAt: st.reviewsAt || {}
       };
+      // Only once something was uploaded, so the shared file of anyone who never
+      // uses the Backtest tab stays exactly as it was.
+      if (st.backtest && st.backtest.files && st.backtest.files.length) p.backtest = st.backtest;
+      return p;
     }
     let syncBusy = false, syncTimer = null;
     // The synced part of the journal, without its save time. A save that changed
@@ -6714,6 +6818,8 @@
           state.aliases = (p.aliases && typeof p.aliases === "object") ? p.aliases : {};
           state.tombstones = (p.tombstones && typeof p.tombstones === "object") ? p.tombstones : {};
           if (p.reviews && typeof p.reviews === "object") state.reviews = p.reviews;
+          // Older backups have no backtest; the uploads on this device stay then.
+          if (p.backtest && typeof p.backtest === "object") state.backtest = p.backtest;
           sanitizeState(state);
           save();
           renderAll();
@@ -6750,6 +6856,734 @@
       t.appendChild(bolt); t.appendChild(document.createTextNode(' ')); t.appendChild(msg);
       cont.appendChild(t);
       setTimeout(() => t.remove(), 2800);
+    }
+
+    /* =================== BACKTEST: EXCEL / CSV TRADE REPORTS =================== */
+    // An uploaded trade report (a CoinDCX futures report, or any sheet with time,
+    // pair and P&L columns) becomes its own set of trades on the Backtest tab.
+    // They never join state.trades: a report has no entry, exit or size, and the
+    // live stats must not move because a report was uploaded.
+    // Stored as the report's own rows ({files, rows}); trades are rebuilt from
+    // the rows on every render, so a fix to the grouping fixes old uploads too.
+    const BT_AT_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+    const BT_KINDS = ["order", "funding", "other"];
+    const BT_PAGE = 50;
+    const BT_SECS = [{ k: "overview", label: "Overview" }, { k: "trades", label: "Trades" }, { k: "files", label: "Files" }];
+    let btVisible = BT_PAGE, btChartInstance = null, btOpenTrade = null;
+
+    function btFinite(v) { const n = cNum(v); return isFinite(n) ? n : 0; }
+    function btRound(v) { return Math.round(v * 1e8) / 1e8; }
+    function cleanBacktest(b) {
+      const out = { files: [], rows: [] };
+      if (!b || typeof b !== "object") return out;
+      const files = {}, seen = {};
+      (Array.isArray(b.files) ? b.files : []).forEach(f => {
+        if (!f || typeof f !== "object" || !f.id) return;
+        const id = cText(f.id, 40);
+        if (files[id]) return;
+        const at = cText(f.importedAt, 30);
+        const o = {
+          id, name: cText(f.name || "report", 120), sheet: cText(f.sheet, 120), importedAt: at, updatedAt: cText(f.updatedAt || at, 30),
+          rows: Math.max(0, Math.round(btFinite(f.rows))), added: Math.max(0, Math.round(btFinite(f.added))),
+          net: btFinite(f.net), cur: f.cur === "INR" ? "INR" : "USD", checked: f.checked === true
+        };
+        files[id] = o; out.files.push(o);
+      });
+      (Array.isArray(b.rows) ? b.rows : []).forEach(r => {
+        if (!r || typeof r !== "object" || !r.id || !files[r.file] || !BT_AT_RE.test(String(r.at))) return;
+        const id = cText(r.id, 80), sym = cText(r.sym, 30).trim(), net = cNum(r.net);
+        if (seen[id] || !sym || !isFinite(net)) return;
+        seen[id] = 1;
+        out.rows.push({
+          id, file: cText(r.file, 40), sym, at: r.at, kind: BT_KINDS.indexOf(r.kind) !== -1 ? r.kind : "other", type: cText(r.type, 40),
+          gross: btFinite(r.gross), settle: btFinite(r.settle), fee: btFinite(r.fee), net, cur: r.cur === "INR" ? "INR" : "USD"
+        });
+        if (r.noid === true) out.rows[out.rows.length - 1].noid = true;
+      });
+      return out;
+    }
+    // Files merge like any synced record (a removed file leaves a tombstone);
+    // rows follow their file, one copy per transaction ID.
+    function mergeBacktest(local, remote, tombs) {
+      const l = cleanBacktest(local), r = cleanBacktest(remote);
+      const files = mergeList(l.files, r.files, "backtest", tombs);
+      const keep = {}, seen = {}, rows = [];
+      files.forEach(f => { keep[f.id] = 1; });
+      r.rows.concat(l.rows).forEach(x => { if (keep[x.file] && !seen[x.id]) { seen[x.id] = 1; rows.push(x); } });
+      return { files, rows };
+    }
+    function btState() {
+      if (!state.backtest || !Array.isArray(state.backtest.files) || !Array.isArray(state.backtest.rows)) state.backtest = { files: [], rows: [] };
+      return state.backtest;
+    }
+
+    // ---- reading the file ----
+    // An .xlsx is a zip of XML parts. The browser unzips it (DecompressionStream)
+    // and reads the XML (DOMParser) itself: nothing is downloaded, so an upload
+    // works offline and no outside script ever sees the report.
+    function zipEntries(buf) {
+      const dv = new DataView(buf), u8 = new Uint8Array(buf), len = buf.byteLength;
+      let end = -1;
+      for (let i = len - 22; i >= 0 && i >= len - 65557; i--) if (dv.getUint32(i, true) === 0x06054b50) { end = i; break; }
+      if (end < 0) throw new Error("not a zip");
+      const count = dv.getUint16(end + 10, true), dec = new TextDecoder(), out = {};
+      let p = dv.getUint32(end + 16, true);
+      for (let n = 0; n < count; n++) {
+        if (p + 46 > len || dv.getUint32(p, true) !== 0x02014b50) throw new Error("damaged zip");
+        const method = dv.getUint16(p + 10, true), size = dv.getUint32(p + 20, true);
+        const nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true);
+        const at = dv.getUint32(p + 42, true);
+        const name = dec.decode(u8.subarray(p + 46, p + 46 + nl)).replace(/\\/g, "/").replace(/^\//, "");
+        if (size === 0xFFFFFFFF || at + 30 > len || dv.getUint32(at, true) !== 0x04034b50) throw new Error("damaged zip");
+        const start = at + 30 + dv.getUint16(at + 26, true) + dv.getUint16(at + 28, true);
+        if (start + size > len) throw new Error("damaged zip");
+        out[name.toLowerCase()] = { method, data: u8.subarray(start, start + size) };
+        p += 46 + nl + el + cl;
+      }
+      return out;
+    }
+    async function zipText(zip, name) {
+      const e = zip[String(name).toLowerCase()];
+      if (!e) return null;
+      let bytes = e.data;
+      if (e.method === 8) {
+        if (typeof DecompressionStream === "undefined") throw new Error("no-inflate");
+        bytes = new Uint8Array(await new Response(new Blob([e.data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
+      } else if (e.method !== 0) throw new Error("unsupported zip");
+      return new TextDecoder().decode(bytes);
+    }
+    function xmlDoc(text) {
+      const d = new DOMParser().parseFromString(text, "application/xml");
+      if (d.getElementsByTagName("parsererror").length) throw new Error("damaged sheet");
+      return d;
+    }
+    function xKids(node, tag) { const o = []; for (let c = node.firstElementChild; c; c = c.nextElementSibling) if (c.localName === tag) o.push(c); return o; }
+    function xAll(node, tag) { return Array.from(node.getElementsByTagNameNS("*", tag)); }
+    // A string cell's text: its <t>, or its rich-text runs, never the phonetic guide.
+    function xText(node) { return xAll(node, "t").filter(t => !t.parentNode || t.parentNode.localName !== "rPh").map(t => t.textContent).join(""); }
+    function xlsxCol(ref) {
+      const s = String(ref).toUpperCase();
+      let n = 0;
+      for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c < 65 || c > 90) break; n = n * 26 + c - 64; }
+      return n - 1;
+    }
+    function xlsxPath(target) {
+      const parts = [];
+      (String(target).charAt(0) === "/" ? String(target).slice(1) : "xl/" + target).split("/").forEach(p => {
+        if (p === "..") parts.pop(); else if (p && p !== ".") parts.push(p);
+      });
+      return parts.join("/");
+    }
+    // Excel stores a date as a day count; only the cell's number format says so.
+    function xlsxDateFormat(id, codes) {
+      if ((id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) || (id >= 50 && id <= 58)) return true;
+      const code = codes[id];
+      if (!code) return false;
+      return /[dmyhs]/i.test(code.replace(/"[^"]*"/g, "").replace(/\[[^\]]*\]/g, "").replace(/\\./g, ""));
+    }
+    // Wall-clock time exactly as written in the sheet; no time zone is applied.
+    function excelSerialText(v, d1904) {
+      const d = new Date(Math.round((v + (d1904 ? 1462 : 0) - 25569) * 86400) * 1000);
+      return isFinite(d.getTime()) ? d.toISOString().slice(0, 19).replace("T", " ") : null;
+    }
+    function xlsxSheetRows(doc, shared, dateStyle, d1904) {
+      const rows = [], data = xAll(doc, "sheetData")[0];
+      if (!data) return rows;
+      let rn = 0;
+      xKids(data, "row").forEach(row => {
+        rn = +row.getAttribute("r") || rn + 1;
+        if (rn > 200000) return;
+        const out = [];
+        let cn = -1;
+        xKids(row, "c").forEach(c => {
+          const ref = c.getAttribute("r");
+          cn = ref ? xlsxCol(ref) : cn + 1;
+          if (cn < 0 || cn > 255) return;
+          const t = c.getAttribute("t") || "n", vEl = xKids(c, "v")[0], raw = vEl ? vEl.textContent : null;
+          let v = null;
+          if (t === "s") v = raw == null ? null : shared[+raw];
+          else if (t === "inlineStr") { const is = xKids(c, "is")[0]; v = is ? xText(is) : null; }
+          else if (t === "str") v = raw;
+          else if (t === "b") v = raw === "1";
+          else if (t === "d") v = raw ? String(raw).replace("T", " ").slice(0, 19) : null;
+          else if (t !== "e" && raw != null && raw !== "") {
+            const n = Number(raw);
+            v = !isFinite(n) ? raw : dateStyle[+c.getAttribute("s") || 0] ? excelSerialText(n, d1904) : n;
+          }
+          out[cn] = (typeof v === "string" && !v.trim()) ? null : v;
+        });
+        for (let i = 0; i < out.length; i++) if (out[i] === undefined) out[i] = null;
+        rows[rn - 1] = out;
+      });
+      for (let i = 0; i < rows.length; i++) if (!rows[i]) rows[i] = [];
+      return rows;
+    }
+    async function readXlsx(buf) {
+      const zip = zipEntries(buf);
+      const wbText = await zipText(zip, "xl/workbook.xml");
+      if (!wbText) throw new Error("not an Excel workbook");
+      const wb = xmlDoc(wbText);
+      const pr = xAll(wb, "workbookPr")[0];
+      const d1904 = !!pr && /^(1|true)$/i.test(pr.getAttribute("date1904") || "");
+      const targets = {}, relsText = await zipText(zip, "xl/_rels/workbook.xml.rels");
+      if (relsText) xAll(xmlDoc(relsText), "Relationship").forEach(r => { targets[r.getAttribute("Id")] = xlsxPath(r.getAttribute("Target") || ""); });
+      const sstText = await zipText(zip, "xl/sharedStrings.xml");
+      const shared = sstText ? xKids(xmlDoc(sstText).documentElement, "si").map(xText) : [];
+      const stText = await zipText(zip, "xl/styles.xml");
+      let dateStyle = [];
+      if (stText) {
+        const st = xmlDoc(stText), codes = {};
+        xAll(st, "numFmt").forEach(f => { codes[+f.getAttribute("numFmtId")] = f.getAttribute("formatCode") || ""; });
+        const xfs = xAll(st, "cellXfs")[0];
+        if (xfs) dateStyle = xKids(xfs, "xf").map(x => xlsxDateFormat(+x.getAttribute("numFmtId") || 0, codes));
+      }
+      const sheets = [];
+      for (const sh of xAll(wb, "sheet")) {
+        const rid = sh.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") || sh.getAttribute("r:id");
+        const text = targets[rid] ? await zipText(zip, targets[rid]) : null;
+        if (text) sheets.push({ name: sh.getAttribute("name") || "Sheet", d1904, rows: xlsxSheetRows(xmlDoc(text), shared, dateStyle, d1904) });
+      }
+      return sheets;
+    }
+    function readCsv(text) {
+      text = String(text).replace(/^﻿/, "");
+      // The delimiter is whichever splits the first lines most (a title line may have none).
+      const first = text.split(/\r\n|\n|\r/, 40);
+      let delim = ",", best = 0;
+      [",", ";", "\t"].forEach(d => { const m = Math.max(0, ...first.map(l => l.split(d).length - 1)); if (m > best) { best = m; delim = d; } });
+      const rows = [];
+      let row = [], cell = "", q = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (q) {
+          if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch;
+        } else if (ch === '"') q = true;
+        else if (ch === delim) { row.push(cell); cell = ""; }
+        else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
+        else cell += ch;
+      }
+      if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+      // A semicolon file comes from a comma-decimal locale: 1.234,56.
+      return [{ name: "CSV", euro: delim === ";", rows: rows.map(r => r.map(v => { v = v.trim(); return v === "" ? null : v; })) }];
+    }
+
+    // ---- turning sheet rows into report rows ----
+    function btColKey(h) {
+      const s = String(h == null ? "" : h).toLowerCase().replace(/\s+/g, " ").trim();
+      if (!s || s.length > 80) return null;
+      if (/^(transaction|trade|order|txn|deal|fill|execution)[ _-]?(id|no\.?|number|#)$|^id$/.test(s)) return "id";
+      if (/settle/.test(s)) return "settle";
+      if (/\bfees?\b|commission|charges|brokerage/.test(s)) return "fee";
+      if (/\bnet\b/.test(s)) return "net";
+      if (/gross|realis|realiz|p ?& ?l|\bpnl\b|profit/.test(s)) return "gross";
+      if (/currency/.test(s)) return "cur";
+      if (/pair|symbol|instrument|contract|ticker|market/.test(s)) return "sym";
+      if (/\btype\b|\bkind\b|category|description/.test(s)) return "kind";
+      if (/time|date/.test(s)) return "at";
+      return null;
+    }
+    // The header is the first row naming a time, a pair and a P&L column.
+    function btFindTable(rows) {
+      for (let i = 0; i < Math.min(rows.length, 60); i++) {
+        const map = {};
+        (rows[i] || []).forEach((h, c) => { if (typeof h !== "string") return; const k = btColKey(h); if (k && map[k] === undefined) map[k] = c; });
+        if (map.at !== undefined && map.sym !== undefined && (map.net !== undefined || map.gross !== undefined)) return { head: i, map };
+      }
+      return null;
+    }
+    function btCurOf(v) { const s = String(v == null ? "" : v).toUpperCase(); return /\bINR\b|₹|RUPEE/.test(s) ? "INR" : /USD|\$/.test(s) ? "USD" : ""; }
+    function btNum(v, euro) {
+      if (typeof v === "number") return isFinite(v) ? v : NaN;
+      if (v == null || typeof v === "boolean") return NaN;
+      let s = String(v).trim().replace(/[−‒–]/g, "-"), neg = false;
+      if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
+      s = s.replace(/INR|USDT|USD|Rs\.?|[₹$€£\s]/gi, "");
+      s = euro ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+      if (!/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(s)) return NaN;
+      return neg ? -Number(s) : Number(s);
+    }
+    const BT_MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+    function btTime(v, d1904) {
+      let s;
+      if (typeof v === "number") { if (!(v > 1 && v < 2958466)) return null; s = excelSerialText(v, d1904); }
+      else s = v == null ? "" : String(v).trim();
+      let m, y, mo, d, rest;
+      if ((m = /^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?:[ T,]+(.*))?$/.exec(s))) { y = +m[1]; mo = +m[2]; d = +m[3]; rest = m[4]; }
+      else if ((m = /^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})(?:[ T,]+(.*))?$/.exec(s))) {
+        // Day first, as in Indian and UK reports, unless that cannot be a date.
+        d = +m[1]; mo = +m[2]; y = +m[3]; rest = m[4];
+        if (mo > 12 && d <= 12) { const x = d; d = mo; mo = x; }
+      } else if ((m = /^(\d{1,2})[-\s]([A-Za-z]{3})[A-Za-z]*[-\s,]+(\d{4})(?:[ T,]+(.*))?$/.exec(s)) && BT_MON[m[2].toLowerCase()]) {
+        d = +m[1]; mo = BT_MON[m[2].toLowerCase()]; y = +m[3]; rest = m[4];
+      } else return null;
+      let hh = 0, mm = 0, ss = 0;
+      if (rest && rest.trim()) {
+        const t = /^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s*(am|pm)?/i.exec(rest.trim());
+        if (!t) return null;
+        hh = +t[1]; mm = +t[2]; ss = +(t[3] || 0);
+        if (t[4]) { const pm = /pm/i.test(t[4]); hh = hh === 12 ? (pm ? 12 : 0) : (pm ? hh + 12 : hh); }
+      }
+      if (y < 1990 || y > 2100 || mo < 1 || mo > 12 || d < 1 || hh > 23 || mm > 59 || ss > 59) return null;
+      if (new Date(Date.UTC(y, mo - 1, d)).getUTCDate() !== d) return null; // 31 Feb
+      const p2 = n => String(n).padStart(2, "0");
+      return y + "-" + p2(mo) + "-" + p2(d) + " " + p2(hh) + ":" + p2(mm) + ":" + p2(ss);
+    }
+    // Two 32-bit FNV-1a hashes: an ID for rows a report gives none, the same on every upload.
+    function btHash(s) {
+      let a = 0x811c9dc5, b = 0x01000193 ^ 0x5bd1e995;
+      for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = Math.imul(b ^ c, 2246822519); }
+      return (a >>> 0).toString(36) + (b >>> 0).toString(36);
+    }
+    function btParseFile(sheets, fileId) {
+      const res = { rows: [], skipped: [], mismatch: [], dupInFile: 0, sheets: [], net: 0 };
+      const seen = {}, occ = {};
+      const tables = sheets.map(sh => ({ sh, found: btFindTable(sh.rows) })).filter(x => x.found);
+      tables.forEach(({ sh, found }) => {
+        const { head, map } = found, hdr = sh.rows[head];
+        // The P&L column's own unit ("Net P&L (in INR)") wins over a currency
+        // column, which can name the margin coin instead of what the P&L is in.
+        const pnlCur = btCurOf(hdr[map.net !== undefined ? map.net : map.gross]), sheetCur = btCurOf(sh.name);
+        res.sheets.push(sh.name);
+        for (let i = head + 1; i < sh.rows.length; i++) {
+          const r = sh.rows[i] || [];
+          if (r.every(v => v == null)) continue;
+          const get = k => map[k] === undefined ? null : r[map[k]];
+          const where = (tables.length > 1 ? sh.name + " " : "") + "row " + (i + 1);
+          const sym = String(get("sym") == null ? "" : get("sym")).trim();
+          const at = btTime(get("at"), sh.d1904);
+          if (!sym) { res.skipped.push({ where, why: "no pair or symbol" }); continue; }
+          if (!at) { res.skipped.push({ where, why: "time not readable" }); continue; }
+          const gross = btNum(get("gross"), sh.euro), settle = btNum(get("settle"), sh.euro), fee = btNum(get("fee"), sh.euro);
+          const g = isFinite(gross) ? gross : 0, u = isFinite(settle) ? settle : 0, f = isFinite(fee) ? Math.abs(fee) : 0;
+          let net = btNum(get("net"), sh.euro);
+          if (!isFinite(net)) {
+            if (!isFinite(gross)) { res.skipped.push({ where, why: "no P&L" }); continue; }
+            net = g + u - f;
+          } else if (isFinite(gross) && Math.abs(g + u - f - net) > 0.01 + Math.abs(net) * 1e-6) res.mismatch.push(where);
+          const type = String(get("kind") == null ? "" : get("kind")).trim();
+          const kind = !type ? "order" : /fund/i.test(type) ? "funding" : /order|trade|fill|buy|sell|close|open|exit|entry|liquidat|deleverag/i.test(type) ? "order" : "other";
+          const cur = pnlCur || btCurOf(get("cur")) || sheetCur || "USD";
+          let id = get("id") == null ? "" : String(get("id")).trim();
+          const noid = !id;
+          if (noid) {
+            const base = [sym, at, type, g, u, f, net].join("|");
+            occ[base] = (occ[base] || 0) + 1;
+            id = "h" + btHash(base + "|" + occ[base]);
+          }
+          id = id.slice(0, 80);
+          if (seen[id]) { res.dupInFile++; continue; }
+          seen[id] = 1;
+          res.net += net;
+          const row = { id, file: fileId, sym: sym.slice(0, 30), at, kind, type: type.slice(0, 40), gross: btRound(g), settle: btRound(u), fee: btRound(f), net: btRound(net), cur };
+          if (noid) row.noid = true;
+          res.rows.push(row);
+        }
+      });
+      return res;
+    }
+
+    // ---- rows into trades ----
+    function btCloses(r) { return r.kind === "order" && (Math.abs(r.gross) > 1e-9 || Math.abs(r.settle) > 1e-9); }
+    function btMins(a, b) {
+      const ms = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10), +s.slice(11, 13), +s.slice(14, 16), +s.slice(17, 19));
+      return Math.max(0, Math.round((ms(b) - ms(a)) / 60000));
+    }
+    // Per pair, in time order: a fee-only order opens a trade (or adds to it), an
+    // order with P&L closes part or all of it, and the next fee-only order after a
+    // close starts the next trade. Funding joins the trade open on that pair.
+    function btTrades(rows) {
+      const groups = {}, trades = [];
+      rows.forEach(r => { const k = r.cur + "|" + r.sym; (groups[k] = groups[k] || []).push(r); });
+      // Same second: funding first, then closes, then opens, so a close and a new
+      // open stamped together land in their own trades.
+      const rank = r => r.kind !== "order" ? 0 : btCloses(r) ? 1 : 2;
+      Object.keys(groups).forEach(k => {
+        const list = groups[k].slice().sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : (rank(a) - rank(b)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        let t = null;
+        list.forEach(r => {
+          const order = r.kind === "order", closes = btCloses(r);
+          if (!t || (order && !closes && t.closes)) {
+            t = { id: k + "|" + trades.length, sym: r.sym, cur: r.cur, start: r.at, end: "", legs: [], closes: 0, carried: !order || closes };
+            trades.push(t);
+          }
+          t.legs.push(r);
+          if (closes) { t.closes++; t.end = r.at; }
+        });
+      });
+      trades.forEach(t => {
+        let gross = 0, fees = 0, funding = 0, other = 0, settle = 0, net = 0;
+        t.legs.forEach(r => {
+          net += r.net; fees += r.fee; settle += r.settle;
+          if (r.kind === "order") gross += r.gross; else if (r.kind === "funding") funding += r.net; else other += r.net;
+        });
+        Object.assign(t, { gross, fees, funding, other, settle, net });
+        t.closed = t.closes > 0;
+        t.stillOpen = !t.closed || t.legs[t.legs.length - 1].at > t.end;
+        t.when = t.closed ? t.end : t.start;
+        t.day = t.when.slice(0, 10);
+        t.held = t.closed ? btMins(t.start, t.end) : null;
+      });
+      return trades.sort((a, b) => a.when < b.when ? -1 : a.when > b.when ? 1 : 0);
+    }
+    function btStats(trades) {
+      const closed = trades.filter(t => t.closed), open = trades.filter(t => !t.closed);
+      const wins = closed.filter(t => t.net > 0), losses = closed.filter(t => t.net < 0);
+      const gw = sum(wins.map(t => t.net)), gl = -sum(losses.map(t => t.net));
+      let eq = 0, peak = 0, dd = 0, best = null, worst = null, run = 0, winRun = 0, lossRun = 0;
+      closed.forEach(t => {
+        eq += t.net;
+        if (eq > peak) peak = eq;
+        if (peak - eq > dd) dd = peak - eq;
+        if (best === null || t.net > best) best = t.net;
+        if (worst === null || t.net < worst) worst = t.net;
+        run = t.net > 0 ? (run > 0 ? run + 1 : 1) : t.net < 0 ? (run < 0 ? run - 1 : -1) : 0;
+        if (run > winRun) winRun = run;
+        if (-run > lossRun) lossRun = -run;
+      });
+      const held = closed.map(t => t.held).filter(v => v != null);
+      return {
+        closed, open, n: closed.length, wins: wins.length, losses: losses.length,
+        net: sum(closed.map(t => t.net)), openNet: sum(open.map(t => t.net)), total: sum(trades.map(t => t.net)),
+        winRate: closed.length ? wins.length / closed.length * 100 : 0,
+        pf: gl > 0 ? gw / gl : (gw > 0 ? Infinity : 0),
+        avgWin: wins.length ? gw / wins.length : 0, avgLoss: losses.length ? -gl / losses.length : 0,
+        avg: closed.length ? sum(closed.map(t => t.net)) / closed.length : 0,
+        best: best || 0, worst: worst || 0, maxDD: dd, winRun, lossRun,
+        fees: sum(trades.map(t => t.fees)), funding: sum(trades.map(t => t.funding)),
+        avgHeld: held.length ? avg(held) : null
+      };
+    }
+
+    // ---- upload ----
+    function pickBacktestFile() {
+      const el = document.getElementById("btFileInput");
+      if (!el) return;
+      el.value = "";
+      el.click();
+    }
+    function btImportError(name, text) {
+      openModalSheet("Upload to Backtest", body => {
+        body.innerHTML = `<p class="text-slate-300 text-[11px] font-bold">${esc(name)}</p><p class="text-rose-400 text-[11px] leading-relaxed">${esc(text)}</p>`;
+        const b = document.getElementById("modalSheetSaveBtn");
+        b.innerText = "Import"; b.disabled = true; b.classList.add("opacity-50");
+      }, () => false);
+    }
+    async function handleBacktestFile(input) {
+      const f = input && input.files && input.files[0];
+      if (!f) return;
+      input.value = ""; // so picking the same file again still counts as a change
+      if (f.size > 25e6) { btImportError(f.name, "That file is over 25 MB. Export a shorter date range and upload that."); return; }
+      let sheets;
+      try {
+        const buf = await f.arrayBuffer();
+        const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+        if (head[0] === 0xD0 && head[1] === 0xCF) { btImportError(f.name, "This is an old-style .xls file. Open it in Excel or Google Sheets, save it as .xlsx (or .csv) and upload that."); return; }
+        sheets = head[0] === 0x50 && head[1] === 0x4B ? await readXlsx(buf) : readCsv(new TextDecoder().decode(buf));
+      } catch (e) {
+        const m = String((e && e.message) || "");
+        btImportError(f.name, m === "no-inflate"
+          ? "This browser is too old to open .xlsx files. Save the report as .csv and upload that."
+          : "The file could not be read as an Excel (.xlsx) or CSV file" + (m ? " (" + m + ")" : "") + ".");
+        return;
+      }
+      btPreviewImport(f.name, sheets);
+    }
+    function btPreviewImport(name, sheets) {
+      const fileId = "bt" + uid();
+      const res = btParseFile(sheets, fileId);
+      if (!res.sheets.length) {
+        btImportError(name, "No trade table found. The sheet needs a header row with a time (or date) column, a pair or symbol column and a P&L column.");
+        return;
+      }
+      if (!res.rows.length) {
+        btImportError(name, "The trade table has no rows that could be read." + (res.skipped.length ? " " + res.skipped.slice(0, 3).map(s => s.where + ": " + s.why).join("; ") + "." : ""));
+        return;
+      }
+      // Already uploaded: same transaction ID. A report without IDs can't be
+      // matched that way, so the same trade from an .xlsx and a .csv export would
+      // count twice; rows without an ID also match on pair, time and net.
+      const have = {}, keyAll = {}, keyNoid = {}, matched = {};
+      const ckey = r => r.sym + "|" + r.at + "|" + r.net.toFixed(4);
+      btState().rows.forEach(r => {
+        have[r.id] = r;
+        const k = ckey(r);
+        (keyAll[k] = keyAll[k] || []).push(r);
+        if (r.noid) (keyNoid[k] = keyNoid[k] || []).push(r);
+      });
+      const fresh = res.rows.filter(r => {
+        if (have[r.id]) { matched[r.id] = have[r.id]; return false; }
+        const pool = (r.noid ? keyAll : keyNoid)[ckey(r)];
+        if (pool && pool.length) { matched[r.id] = pool.shift(); return false; }
+        return true;
+      });
+      const curs = uniq(res.rows.map(r => r.cur)), cur = curs[0];
+      const ats = res.rows.map(r => r.at).sort();
+      const trades = btTrades(res.rows), st = btStats(trades.filter(t => t.cur === cur));
+      const kinds = k => res.rows.filter(r => r.kind === k).length;
+      const pairs = {};
+      res.rows.forEach(r => { pairs[r.sym] = (pairs[r.sym] || 0) + 1; });
+      const line = (k, v, cls) => `<div class="flex justify-between gap-3 py-1 border-t border-terminal-border/60"><span class="text-slate-400">${k}</span><span class="text-right ${cls || 'text-slate-200'}">${v}</span></div>`;
+      openModalSheet("Upload to Backtest", body => {
+        body.innerHTML = `
+          <p class="text-white font-bold text-[11px] break-all">${esc(name)}</p>
+          <p class="text-slate-500 text-[11px]">Sheet: ${esc(res.sheets.join(", "))}</p>
+          <div class="text-[11px]">
+            ${line("Rows read", `${res.rows.length} <span class="text-slate-500">(${kinds("order")} orders, ${kinds("funding")} funding${kinds("other") ? ", " + kinds("other") + " other" : ""})</span>`)}
+            ${line("Dates", esc(fmtDay(ats[0].slice(0, 10)) + " " + ats[0].slice(0, 4) + " to " + fmtDay(ats[ats.length - 1].slice(0, 10)) + " " + ats[ats.length - 1].slice(0, 4)))}
+            ${line("Pairs", esc(Object.keys(pairs).sort((a, b) => pairs[b] - pairs[a]).map(p => btSym(p) + " " + pairs[p]).join(", ")))}
+            ${line("Report net total", signedMoney(res.net, cur) + (curs.length > 1 ? " <span class=\"text-amber-300\">(mixed currencies)</span>" : ""), res.net >= 0 ? "text-emerald-400 font-bold" : "text-rose-400 font-bold")}
+            ${line("Trades in it", `${st.n} closed${st.open.length ? ", " + st.open.length + " still open" : ""} · ${pct(st.winRate)} won`)}
+            ${line("Check", res.mismatch.length ? `${res.mismatch.length} row${res.mismatch.length === 1 ? "" : "s"} where net ≠ gross + settlement − fees; the report's net is used` : "✓ every row: net = gross + settlement − fees", res.mismatch.length ? "text-amber-300" : "text-emerald-400")}
+            ${res.dupInFile ? line("Repeated in the file", `${res.dupInFile} row${res.dupInFile === 1 ? "" : "s"} with the same ID, counted once`, "text-amber-300") : ""}
+            ${res.skipped.length ? line("Skipped", esc(res.skipped.length + ": " + res.skipped.slice(0, 4).map(s => s.where + " (" + s.why + ")").join(", ") + (res.skipped.length > 4 ? ", …" : "")), "text-amber-300") : ""}
+            ${line("Already uploaded", String(res.rows.length - fresh.length), res.rows.length - fresh.length ? "text-slate-300" : "text-slate-500")}
+            ${line("New rows to add", String(fresh.length), fresh.length ? "text-amber-300 font-bold" : "text-slate-500")}
+          </div>
+          <p class="text-slate-500 text-[11px] leading-relaxed">These go to the Backtest tab only. Your journal, dashboard and goals are not changed.</p>`;
+        const b = document.getElementById("modalSheetSaveBtn");
+        if (fresh.length) b.innerText = `Import ${fresh.length} row${fresh.length === 1 ? "" : "s"}`;
+        else { b.innerText = "Nothing new"; b.disabled = true; b.classList.add("opacity-50"); }
+      }, () => {
+        if (!fresh.length) return false;
+        const bt = btState(), now = new Date().toISOString();
+        bt.rows = bt.rows.concat(fresh);
+        // Read back what was stored: every row of the report, new or uploaded
+        // before, has to be there and add up to the report's own total.
+        const byId = {};
+        bt.rows.forEach(r => { byId[r.id] = r; });
+        const stored = res.rows.map(r => byId[r.id] || (matched[r.id] && byId[matched[r.id].id]));
+        const checked = stored.every(Boolean) && Math.abs(sum(stored.map(r => r.net)) - res.net) < 0.005;
+        bt.files = bt.files.concat([{ id: fileId, name: String(name).slice(0, 120), sheet: res.sheets.join(", ").slice(0, 120), importedAt: now, updatedAt: now, rows: res.rows.length, added: fresh.length, net: res.net, cur, checked }]);
+        state.ui.btPair = "all"; state.ui.btMonth = "all"; state.ui.btCur = cur; state.ui.btSec = "overview";
+        btVisible = BT_PAGE; btOpenTrade = null;
+        save();
+        switchTab("backtest");
+        toast(checked ? `Imported ${fresh.length} rows into Backtest; totals match the report` : `Imported ${fresh.length} rows, but the totals differ from the report; see Files`);
+        return true;
+      });
+    }
+    function removeBacktestFile(id) {
+      const bt = btState(), f = bt.files.find(x => x.id === id);
+      if (!f) return;
+      const n = bt.rows.filter(r => r.file === id).length;
+      if (!confirm(`Remove "${f.name}" and its ${n} row${n === 1 ? "" : "s"} from Backtest?` + (syncReady() ? " With sync on, it goes from your other devices too." : ""))) return;
+      bt.rows = bt.rows.filter(r => r.file !== id);
+      bt.files = bt.files.filter(x => x.id !== id);
+      noteDeleted("backtest", id);
+      btOpenTrade = null;
+      save(); renderBacktest();
+      toast("File removed from Backtest");
+    }
+    function deleteAllBacktest() {
+      const bt = btState();
+      if (!bt.files.length) { toast("Backtest is already empty"); return; }
+      if (!confirm(`Delete all backtest data (${bt.files.length} file${bt.files.length === 1 ? "" : "s"}, ${bt.rows.length} rows)? Your journal trades are not touched.` + (syncReady() ? " With sync on, it goes from your other devices too." : ""))) return;
+      bt.files.forEach(f => noteDeleted("backtest", f.id));
+      state.backtest = { files: [], rows: [] };
+      btOpenTrade = null;
+      save(); renderBacktest();
+      toast("Backtest data deleted");
+    }
+
+    // ---- the Backtest tab ----
+    function btSym(s) { return String(s || "").replace(/^B-/, "").replace(/_/g, "/"); }
+    function btWhen(at) { return at ? fmtDay(at.slice(0, 10)) + " " + at.slice(11, 16) : "—"; }
+    function btHeld(m) { return m == null ? "—" : m >= 1440 ? Math.floor(m / 1440) + "d " + Math.floor(m % 1440 / 60) + "h" : fmtHeld(m); }
+    function btPick(k, v) {
+      state.ui[k] = v;
+      btVisible = BT_PAGE; btOpenTrade = null;
+      save(); renderBacktest();
+    }
+    function btToggleTrade(id) { btOpenTrade = btOpenTrade === id ? null : id; renderBacktestTable(); }
+    function btMore() { btVisible += BT_PAGE; renderBacktestTable(); }
+    function setBtSec(k) { state.ui.btSec = k; save(); renderBacktest(); }
+    let btShown = [], btCurShown = "USD";
+    function renderBacktest() {
+      const view = document.getElementById("view-backtest");
+      if (!view) return;
+      const bt = btState();
+      const empty = !bt.rows.length;
+      document.getElementById("btEmpty").classList.toggle("hidden", !empty);
+      document.getElementById("btMain").classList.toggle("hidden", empty && !bt.files.length);
+      const filters = document.getElementById("btFilters");
+      renderSecBar("btSecBar", BT_SECS, "data-btsec", state.ui.btSec, setBtSec);
+      renderBacktestFiles();
+      if (empty) {
+        filters.innerHTML = "";
+        ["btStrip", "btCheck", "btPairs", "btDays", "btBody", "btMoreBar"].forEach(id => { document.getElementById(id).innerHTML = ""; });
+        if (btChartInstance) { btChartInstance.destroy(); btChartInstance = null; }
+        return;
+      }
+      const all = btTrades(bt.rows);
+      const curs = uniq(all.map(t => t.cur));
+      const cur = curs.indexOf(state.ui.btCur) !== -1 ? state.ui.btCur : curs[0];
+      const inCur = all.filter(t => t.cur === cur);
+      const pairs = uniq(inCur.map(t => t.sym)).sort();
+      const months = uniq(inCur.map(t => t.day.slice(0, 7))).sort().reverse();
+      const pair = pairs.indexOf(state.ui.btPair) !== -1 ? state.ui.btPair : "all";
+      const month = months.indexOf(state.ui.btMonth) !== -1 ? state.ui.btMonth : "all";
+      const shown = inCur.filter(t => (pair === "all" || t.sym === pair) && (month === "all" || t.day.slice(0, 7) === month));
+      btShown = shown; btCurShown = cur;
+
+      // ---- filters ----
+      const sel = "bg-[#070A11] border border-terminal-border rounded px-2 py-1 text-slate-200 text-[11px]";
+      const btn = on => "px-2.5 py-1 rounded-md font-semibold transition-all " + (on ? "bg-terminal-card border border-terminal-borderLight text-amber-400" : "text-slate-400 hover:text-white");
+      filters.innerHTML = (curs.length > 1 ? `<span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Currency</span><div class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]">${curs.map(c => `<button type="button" data-btcur="${esc(c)}" class="${btn(c === cur)}">${esc(c)}</button>`).join("")}</div>` : "")
+        + `<span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Pair</span><select id="btPairSel" class="${sel}"><option value="all">All pairs (${inCur.length})</option>${pairs.map(p => `<option value="${esc(p)}"${p === pair ? " selected" : ""}>${esc(btSym(p))} (${inCur.filter(t => t.sym === p).length})</option>`).join("")}</select>`
+        + `<span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Period</span><select id="btMonthSel" class="${sel}"><option value="all">All time</option>${months.map(m => `<option value="${m}"${m === month ? " selected" : ""}>${esc(monthLabel(m))}</option>`).join("")}</select>`
+        + (pair !== "all" || month !== "all" ? `<button type="button" id="btClear" class="text-[11px] text-amber-300 hover:text-amber-200">Clear filters</button>` : "");
+      filters.querySelectorAll("[data-btcur]").forEach(b => { b.onclick = () => btPick("btCur", b.getAttribute("data-btcur")); });
+      document.getElementById("btPairSel").onchange = e => btPick("btPair", e.target.value);
+      document.getElementById("btMonthSel").onchange = e => btPick("btMonth", e.target.value);
+      const clr = document.getElementById("btClear");
+      if (clr) clr.onclick = () => { state.ui.btPair = "all"; btPick("btMonth", "all"); };
+
+      // ---- headline numbers ----
+      const s = btStats(shown);
+      const pos = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
+      const cards = [
+        { label: "NET P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, 0)}`, color: pos(s.net) },
+        { label: "WIN RATE", val: s.n ? pct(s.winRate) : "—", sub: `${s.wins} won · ${s.losses} lost`, color: s.winRate >= 50 ? "text-emerald-400" : "text-amber-400" },
+        { label: "PROFIT FACTOR", val: s.pf === Infinity ? "∞" : s.n ? s.pf.toFixed(2) : "—", sub: "won ÷ lost", color: s.pf >= 1 ? "text-emerald-400" : "text-rose-400" },
+        { label: "AVG WIN / LOSS", val: `${signedMoney(s.avgWin, cur, 0)} / ${signedMoney(s.avgLoss, cur, 0)}`, sub: "per trade", color: "text-slate-200" },
+        { label: "BEST / WORST", val: `${signedMoney(s.best, cur, 0)} / ${signedMoney(s.worst, cur, 0)}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
+        { label: "MAX DRAWDOWN", val: money(-s.maxDD, cur), sub: "from a running peak", color: s.maxDD > 0 ? "text-rose-400" : "text-slate-200" },
+        { label: "FEES / FUNDING", val: `${money(s.fees, cur, 0)} / ${signedMoney(s.funding, cur, 0)}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
+        { label: "OPEN", val: String(s.open.length), sub: s.open.length ? `${signedMoney(s.openNet, cur)} so far` : "none open", color: s.open.length ? "text-sky-300" : "text-slate-200" }
+      ];
+      document.getElementById("btStrip").innerHTML = cards.map(c => `<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors">
+          <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${c.label}</span>
+          <div class="my-0.5"><div class="${c.val.length > 11 ? "text-sm" : "text-base sm:text-lg"} font-bold ${c.color} mono-num whitespace-nowrap">${esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${esc(c.sub)}</div></div></div>`).join("");
+
+      // ---- check: every stored row of this currency is in exactly one trade ----
+      const rowsCur = bt.rows.filter(r => r.cur === cur);
+      const legs = sum(inCur.map(t => t.legs.length)), rowNet = sum(rowsCur.map(r => r.net)), tradeNet = sum(inCur.map(t => t.net));
+      const ok = legs === rowsCur.length && Math.abs(rowNet - tradeNet) < 0.005;
+      const filesBad = bt.files.filter(f => !f.checked).length;
+      document.getElementById("btCheck").innerHTML = `<div class="px-3 py-2 rounded-lg border ${ok && !filesBad ? "border-emerald-500/40 text-emerald-300" : "border-rose-500/40 text-rose-300"}">`
+        + (ok ? `✓ All ${rowsCur.length} report rows are in ${inCur.length} trades, adding up to ${signedMoney(rowNet, cur)}, the same as the rows.` : `⚠ ${rowsCur.length} rows but ${legs} placed in trades (${signedMoney(rowNet, cur)} vs ${signedMoney(tradeNet, cur)}).`)
+        + (filesBad ? ` ⚠ ${filesBad} file${filesBad === 1 ? "" : "s"} did not match the report's total; see Files.` : "")
+        + (shown.length !== inCur.length ? ` <span class="text-slate-400">Showing ${shown.length} of them.</span>` : "") + `</div>`;
+
+      renderBacktestChart(s.closed, cur);
+
+      // ---- by pair ----
+      const byPair = {};
+      s.closed.forEach(t => { (byPair[t.sym] = byPair[t.sym] || []).push(t); });
+      const pairRows = Object.keys(byPair).map(k => ({ k, ts: byPair[k], st: btStats(byPair[k]) })).sort((a, b) => b.st.net - a.st.net);
+      const maxP = Math.max(1e-9, ...pairRows.map(p => Math.abs(p.st.net)));
+      document.getElementById("btPairs").innerHTML = pairRows.length ? pairRows.map(p => `
+        <button type="button" data-btpair="${esc(p.k)}" class="block w-full text-left hover:bg-white/5 rounded px-1 py-0.5">
+          <div class="flex justify-between items-baseline gap-2">
+            <span class="text-slate-200 font-bold">${esc(btSym(p.k))} <span class="text-slate-500 text-[10px] font-normal">${p.st.n} trade${p.st.n === 1 ? "" : "s"} · ${pct(p.st.winRate)} won · fees ${money(p.st.fees, cur, 0)}</span></span>
+            <span class="font-bold ${pos(p.st.net)}">${signedMoney(p.st.net, cur)}</span>
+          </div>
+          <div class="h-1.5 bg-[#131C2D] rounded-full mt-1 overflow-hidden"><div class="h-full ${p.st.net >= 0 ? "bg-emerald-500" : "bg-rose-500"} rounded-full" style="width:${(Math.abs(p.st.net) / maxP * 100).toFixed(0)}%"></div></div>
+        </button>`).join("") : `<div class="text-slate-500 text-center py-4">No closed trades here.</div>`;
+      document.querySelectorAll("#btPairs [data-btpair]").forEach(b => { b.onclick = () => btPick("btPair", b.getAttribute("data-btpair")); });
+
+      // ---- by day ----
+      const byDay = {};
+      s.closed.forEach(t => { (byDay[t.day] = byDay[t.day] || []).push(t); });
+      const days = Object.keys(byDay).sort().reverse();
+      const maxD = Math.max(1e-9, ...days.map(d => Math.abs(sum(byDay[d].map(t => t.net)))));
+      const DAY_MAX = 31;
+      document.getElementById("btDays").innerHTML = days.length ? days.slice(0, DAY_MAX).map(d => {
+        const net = sum(byDay[d].map(t => t.net)), n = byDay[d].length, w = byDay[d].filter(t => t.net > 0).length;
+        return `<div>
+          <div class="flex justify-between items-baseline gap-2">
+            <span class="text-slate-300">${esc(fmtDay(d))} ${d.slice(0, 4)} <span class="text-slate-500 text-[10px]">${n} trade${n === 1 ? "" : "s"} · ${w} won</span></span>
+            <span class="font-bold ${pos(net)}">${signedMoney(net, cur)}</span>
+          </div>
+          <div class="h-1.5 bg-[#131C2D] rounded-full mt-1 overflow-hidden"><div class="h-full ${net >= 0 ? "bg-emerald-500" : "bg-rose-500"} rounded-full" style="width:${(Math.abs(net) / maxD * 100).toFixed(0)}%"></div></div>
+        </div>`;
+      }).join("") + (days.length > DAY_MAX ? `<p class="text-slate-500 text-[11px]">and ${days.length - DAY_MAX} earlier days; pick a month above to see them.</p>` : "") : `<div class="text-slate-500 text-center py-4">No closed trades here.</div>`;
+
+      renderBacktestTable();
+    }
+    function renderBacktestChart(closed, cur) {
+      const canvas = document.getElementById("btEquityChart");
+      if (btChartInstance) { btChartInstance.destroy(); btChartInstance = null; }
+      if (!canvas || typeof Chart === "undefined" || !closed.length) return;
+      // From zero, so a loss on the first trade shows as the drop it was.
+      let run = 0;
+      const data = [0].concat(closed.map(t => (run += t.net)));
+      btChartInstance = new Chart(canvas.getContext("2d"), {
+        type: "line",
+        data: {
+          labels: ["Start"].concat(closed.map(t => btWhen(t.end) + " · " + btSym(t.sym))),
+          datasets: [{ data, borderColor: "#F59E0B", borderWidth: 2, pointRadius: closed.length > 60 ? 0 : 3, pointBackgroundColor: ["#64748B"].concat(closed.map(t => t.net >= 0 ? "#10B981" : "#F43F5E")), tension: 0.15, fill: true, backgroundColor: "rgba(245, 158, 11, 0.12)" }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: "#0D1422", borderColor: "#24344E", borderWidth: 1,
+              titleFont: { family: "JetBrains Mono", size: 11 }, bodyFont: { family: "JetBrains Mono", size: 11 },
+              callbacks: { label: c => c.dataIndex ? `Trade ${signedMoney(closed[c.dataIndex - 1].net, cur)} · total ${signedMoney(c.parsed.y, cur)}` : "Start" }
+            }
+          },
+          scales: {
+            x: { grid: { color: "rgba(24, 36, 56, 0.5)" }, ticks: { color: "#64748B", font: { family: "JetBrains Mono", size: 9 }, maxTicksLimit: 8, callback: function (v) { return String(this.getLabelForValue(v)).split(" · ")[0]; } } },
+            y: { grid: { color: "rgba(24, 36, 56, 0.5)" }, ticks: { color: "#64748B", font: { family: "JetBrains Mono", size: 9 }, callback: v => signedMoney(v, cur, 0) } }
+          }
+        }
+      });
+    }
+    function renderBacktestTable() {
+      const body = document.getElementById("btBody"), more = document.getElementById("btMoreBar");
+      if (!body) return;
+      const cur = btCurShown, list = btShown.slice().reverse(), part = list.slice(0, btVisible);
+      const pos = v => v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-slate-400";
+      body.innerHTML = part.length ? part.map(t => {
+        const status = !t.closed ? `<span class="px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 text-[10px] font-bold">OPEN</span>`
+          : t.stillOpen ? `<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-bold" title="Funding came after the last close, so part of it may still be open">PART CLOSED</span>`
+          : `<span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] font-bold">CLOSED</span>`;
+        const row = `<tr class="border-t border-terminal-border cursor-pointer hover:bg-white/5" data-bttrade="${esc(t.id)}">
+          <td class="py-2 px-3 whitespace-nowrap">${esc(btWhen(t.start))}${t.carried ? ` <span class="text-amber-300" title="Opened before this report starts">*</span>` : ""}</td>
+          <td class="py-2 px-3 font-bold text-white whitespace-nowrap">${esc(btSym(t.sym))}</td>
+          <td class="py-2 px-3 text-right whitespace-nowrap font-bold ${pos(t.net)}">${signedMoney(t.net, cur)}</td>
+          <td class="py-2 px-3 whitespace-nowrap">${t.closed ? esc(btWhen(t.end)) : "—"}</td>
+          <td class="py-2 px-3 text-right whitespace-nowrap">${btHeld(t.held)}</td>
+          <td class="py-2 px-3 text-right whitespace-nowrap ${pos(t.gross)}">${signedMoney(t.gross, cur)}</td>
+          <td class="py-2 px-3 text-right whitespace-nowrap text-slate-400">${money(t.fees, cur)}</td>
+          <td class="py-2 px-3 text-right whitespace-nowrap ${pos(t.funding)}">${t.funding || t.legs.some(r => r.kind === "funding") ? signedMoney(t.funding, cur) : "—"}</td>
+          <td class="py-2 px-3 whitespace-nowrap">${status}</td></tr>`;
+        if (btOpenTrade !== t.id) return row;
+        const legs = t.legs.map(r => `<tr class="border-t border-terminal-border/60">
+            <td class="py-1 pr-3 whitespace-nowrap">${esc(r.at)}</td>
+            <td class="py-1 pr-3 whitespace-nowrap">${esc(r.type || r.kind)}${btCloses(r) ? ' <span class="text-slate-500">(close)</span>' : r.kind === "order" ? ' <span class="text-slate-500">(open/add)</span>' : ""}</td>
+            <td class="py-1 pr-3 text-right whitespace-nowrap font-bold ${pos(r.net)}">${signedMoney(r.net, cur)}</td>
+            <td class="py-1 pr-3 text-right whitespace-nowrap ${pos(r.gross)}">${signedMoney(r.gross, cur)}</td>
+            <td class="py-1 pr-3 text-right whitespace-nowrap text-slate-400">${money(r.fee, cur)}</td>
+            <td class="py-1 text-slate-500 whitespace-nowrap" title="${esc(r.id)}">${esc(r.id.length > 14 ? r.id.slice(0, 13) + "…" : r.id)}</td></tr>`).join("");
+        return row + `<tr class="bg-black/30"><td colspan="9" class="px-3 py-2">
+          <div class="text-[10px] text-slate-400 mb-1">${t.legs.length} report row${t.legs.length === 1 ? "" : "s"}${t.carried ? " · opened before this report starts" : ""}${t.stillOpen && t.closed ? " · funding after the last close, so part may still be open" : ""}</div>
+          <div class="overflow-x-auto"><table class="w-full text-[11px] font-mono"><thead class="text-slate-500 uppercase text-[10px]"><tr><th class="py-1 pr-3 text-left">Time</th><th class="py-1 pr-3 text-left">Type</th><th class="py-1 pr-3 text-right">Net</th><th class="py-1 pr-3 text-right">Gross</th><th class="py-1 pr-3 text-right">Fee</th><th class="py-1 text-left">ID</th></tr></thead><tbody>${legs}</tbody></table></div></td></tr>`;
+      }).join("") : `<tr><td colspan="9" class="py-6 text-center text-slate-500">No trades match these filters.</td></tr>`;
+      body.querySelectorAll("[data-bttrade]").forEach(tr => { tr.onclick = () => btToggleTrade(tr.getAttribute("data-bttrade")); });
+      more.innerHTML = list.length > btVisible
+        ? `<span class="text-slate-500 text-[11px]">Showing ${part.length} of ${list.length}</span><button type="button" onclick="btMore()" class="px-3 py-1 bg-terminal-surface border border-terminal-border rounded text-slate-200 hover:border-amber-500 text-[11px]">Show more</button>`
+        : (list.length ? `<span class="text-slate-500 text-[11px]">${list.length} trade${list.length === 1 ? "" : "s"}</span>` : "");
+    }
+    function renderBacktestFiles() {
+      const host = document.getElementById("btFiles");
+      if (!host) return;
+      const bt = btState();
+      host.innerHTML = bt.files.length ? bt.files.slice().reverse().map(f => {
+        const now = bt.rows.filter(r => r.file === f.id).length;
+        return `<div class="flex flex-wrap items-start justify-between gap-2 border border-terminal-border rounded-lg p-2.5">
+          <div class="min-w-0">
+            <div class="text-slate-200 font-bold break-all">${esc(f.name)}</div>
+            <div class="text-slate-500 text-[11px]">${esc(f.sheet || "")} · uploaded ${esc(f.importedAt.slice(0, 10))} ${esc(f.importedAt.slice(11, 16))} UTC</div>
+            <div class="text-[11px] text-slate-400">${f.rows} rows in the report · ${f.added} added then · ${now} here now · report total ${signedMoney(f.net, f.cur)}</div>
+            <div class="text-[11px] ${f.checked ? "text-emerald-400" : "text-rose-400"}">${f.checked ? "✓ Every row stored; totals match the report" : "⚠ The stored rows did not add up to the report's total. Remove this file and upload it again."}</div>
+          </div>
+          <button type="button" data-btrm="${esc(f.id)}" class="px-2.5 py-1 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded shrink-0">Remove</button>
+        </div>`;
+      }).join("") : `<div class="text-slate-500 text-center py-4">No files uploaded.</div>`;
+      host.querySelectorAll("[data-btrm]").forEach(b => { b.onclick = () => removeBacktestFile(b.getAttribute("data-btrm")); });
     }
 
     /* =================== LOG FROM ALERT, MISSED WINNERS, WEEKLY REVIEW, CSV, THEME =================== */
