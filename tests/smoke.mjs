@@ -1152,6 +1152,58 @@ async function reviewRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Withdrawals: money taken out is logged from the goal card, counts toward a
+// "Money withdrawn" target, lowers the book's worked-out balance, syncs, and
+// can be removed again.
+async function withdrawRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const before = await page.evaluate(() => {
+      state.goals.push({ id: 'gw', title: 'Bank it', target: 1000, metric: 'withdraw', targets: { withdraw: 1000, net_pnl: 50 }, period: 'month', accountId: 'acc_nse' });
+      state.ui.goalIdx = state.goals.length - 1; state.ui.account = 'acc_nse'; save(); switchTab('dashboard'); renderAll();
+      return { bal: bookBalance(acct('acc_nse')), start: balanceAtStart(acct('acc_nse'), iso(new Date())) };
+    });
+    await page.click('button:has-text("Withdraw")');
+    await page.waitForSelector('#modalSheet:not(.hidden)');
+    await page.selectOption('#wdAcc', 'acc_nse');
+    await page.fill('#wdAmt', '400');
+    await page.fill('#wdNote', 'payout');
+    await page.click('#modalSheetSaveBtn');
+    const after = await page.evaluate(() => {
+      const g = state.goals.find(x => x.id === 'gw'); state.ui.goalFocus = { gw: 'withdraw' }; updateGoalDisplays();
+      const sp = syncPayload(state), back = sanitizeState(JSON.parse(JSON.stringify(sp)));
+      return { bal: bookBalance(acct('acc_nse')), start: balanceAtStart(acct('acc_nse'), iso(new Date())), got: goalWithdrawn(g, 'INR'), card: document.getElementById('goalCurrent').innerText,
+        chip: document.getElementById('goalChips').innerText.replace(/\s+/g, ' '), synced: (sp.withdrawals || []).length, back: back.withdrawals.length, note: (state.withdrawals[0] || {}).note };
+    });
+    check(Math.abs(after.bal - (before.bal - 400)) < 1e-6 && Math.abs(after.start - before.start) < 1e-6 && after.got === 400 && after.card.includes('400') && /withdrawn/i.test(after.chip)
+      && after.synced === 1 && after.back === 1 && after.note === 'payout', 'withdrawal: ' + JSON.stringify({ before, after }));
+    // A withdrawal deleted here stays deleted when an older copy comes back from GitHub.
+    await page.click('button:has-text("Withdraw")');
+    await page.waitForSelector('#modalSheet:not(.hidden)');
+    const old = await page.evaluate(() => JSON.parse(JSON.stringify(state.withdrawals)));
+    await page.click('#wdList [data-wdrm]');
+    await page.waitForTimeout(200);
+    const gone = await page.evaluate(old => { closeModalSheet(); const m = mergeState(JSON.parse(JSON.stringify(state)), { accounts: state.accounts, trades: [], withdrawals: old });
+      return { left: state.withdrawals.length, merged: m.withdrawals.length, bal: bookBalance(acct('acc_nse')) }; }, old);
+    check(gone.left === 0 && gone.merged === 0 && Math.abs(gone.bal - before.bal) < 1e-6, 'removing a withdrawal: ' + JSON.stringify(gone));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'withdrawals: logged, counted toward the goal, in the balance, synced, removable';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1163,6 +1215,7 @@ await backtestRun(data);
 await coindcxRun(data);
 await fixesRun(data);
 await reviewRun(data);
+await withdrawRun(data);
 
 await browser.close();
 server.close();
