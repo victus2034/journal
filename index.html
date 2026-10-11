@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.105">
+  <meta name="app-version" content="2026-10-11.106">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -849,6 +849,89 @@
       <!-- One line per broker: journal books and uploaded broker reports -->
       <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
 
+      <div id="anReport" class="hidden space-y-4">
+        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-2">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 id="btTitle" class="text-sm font-bold text-white uppercase tracking-wider">Broker report</h3>
+            <span id="btSub" class="text-slate-500 text-[11px]"></span>
+          </div>
+          <div id="btFilters" class="flex flex-wrap items-center gap-2"></div>
+        </div>
+
+        <div id="btEmpty" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-6 font-mono text-xs text-center space-y-2">
+          <p class="text-slate-200 font-bold">No trades in this report yet</p>
+          <p class="text-slate-400 text-[11px] leading-relaxed">Upload an Excel (.xlsx) or CSV trade report. It needs a header row with a time column, a pair or symbol column and a P&amp;L column; fee, funding type and transaction ID columns are used when present. Uploading the same report twice adds nothing twice.</p>
+        </div>
+
+        <div id="btMain" class="space-y-4">
+          <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="btStrip"></section>
+          <div id="btCheck" class="font-mono text-[11px]"></div>
+          <div id="btSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+
+          <section data-btsec="overview" class="space-y-4">
+            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
+              <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                <h3 class="font-bold text-white uppercase tracking-wider">Equity curve</h3>
+                <span class="text-slate-500 text-[11px]">Running net P&amp;L after each closed trade.</span>
+              </div>
+              <div class="relative" style="height:260px"><canvas id="btEquityChart"></canvas></div>
+            </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
+              <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
+                <h3 class="font-bold text-white uppercase tracking-wider mb-1">By pair</h3>
+                <p class="text-slate-500 text-[11px] mb-3">Closed trades per pair. Click one to filter by it.</p>
+                <div id="btPairs" class="space-y-2"></div>
+              </div>
+              <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
+                <h3 class="font-bold text-white uppercase tracking-wider mb-1">By day</h3>
+                <p class="text-slate-500 text-[11px] mb-3">Closed trades by the day they closed.</p>
+                <div id="btDays" class="space-y-2"></div>
+              </div>
+            </div>
+          </section>
+
+          <section data-btsec="trades" class="space-y-4 hidden">
+            <div class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs">
+              <div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-terminal-border">
+                <h3 class="font-bold text-white uppercase tracking-wider">Trade by trade</h3>
+                <span class="text-slate-500 text-[11px]">Newest first. Click a trade to see its report rows.</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs font-mono">
+                  <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border">
+                    <tr>
+                      <th class="py-2.5 px-3">Opened</th>
+                      <th class="py-2.5 px-3">Pair</th>
+                      <th class="py-2.5 px-3 text-right">Net P&amp;L</th>
+                      <th class="py-2.5 px-3">Closed</th>
+                      <th class="py-2.5 px-3 text-right">Held</th>
+                      <th class="py-2.5 px-3 text-right">Gross</th>
+                      <th class="py-2.5 px-3 text-right">Fees</th>
+                      <th class="py-2.5 px-3 text-right">Funding</th>
+                      <th class="py-2.5 px-3">Status</th>
+                      <th class="py-2.5 px-3">Review</th>
+                    </tr>
+                  </thead>
+                  <tbody id="btBody" class="text-slate-300"></tbody>
+                </table>
+              </div>
+              <div id="btMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
+            </div>
+          </section>
+
+          <section data-btsec="files" class="space-y-4 hidden">
+            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
+                <h3 class="font-bold text-white uppercase tracking-wider">Uploaded files</h3>
+                <button type="button" id="btDeleteAll" onclick="deleteAllBacktest()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded">Delete this broker's report data</button>
+              </div>
+              <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
+              <div id="btFiles" class="space-y-2"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
       <div id="anLive" class="space-y-4">
       <!-- Headline numbers -->
       <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="anStrip"></section>
@@ -947,88 +1030,7 @@
       </div>
 
       <!-- A broker from an uploaded report (CoinDCX ...): trades rebuilt from its rows -->
-      <div id="anReport" class="hidden space-y-4">
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-2">
-          <div class="flex flex-wrap items-baseline justify-between gap-2">
-            <h3 id="btTitle" class="text-sm font-bold text-white uppercase tracking-wider">Broker report</h3>
-            <span id="btSub" class="text-slate-500 text-[11px]"></span>
-          </div>
-          <div id="btFilters" class="flex flex-wrap items-center gap-2"></div>
-        </div>
 
-        <div id="btEmpty" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-6 font-mono text-xs text-center space-y-2">
-          <p class="text-slate-200 font-bold">No trades in this report yet</p>
-          <p class="text-slate-400 text-[11px] leading-relaxed">Upload an Excel (.xlsx) or CSV trade report. It needs a header row with a time column, a pair or symbol column and a P&amp;L column; fee, funding type and transaction ID columns are used when present. Uploading the same report twice adds nothing twice.</p>
-        </div>
-
-        <div id="btMain" class="space-y-4">
-          <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="btStrip"></section>
-          <div id="btCheck" class="font-mono text-[11px]"></div>
-          <div id="btSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
-
-          <section data-btsec="overview" class="space-y-4">
-            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
-              <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
-                <h3 class="font-bold text-white uppercase tracking-wider">Equity curve</h3>
-                <span class="text-slate-500 text-[11px]">Running net P&amp;L after each closed trade.</span>
-              </div>
-              <div class="relative" style="height:260px"><canvas id="btEquityChart"></canvas></div>
-            </div>
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
-              <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-                <h3 class="font-bold text-white uppercase tracking-wider mb-1">By pair</h3>
-                <p class="text-slate-500 text-[11px] mb-3">Closed trades per pair. Click one to filter by it.</p>
-                <div id="btPairs" class="space-y-2"></div>
-              </div>
-              <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-                <h3 class="font-bold text-white uppercase tracking-wider mb-1">By day</h3>
-                <p class="text-slate-500 text-[11px] mb-3">Closed trades by the day they closed.</p>
-                <div id="btDays" class="space-y-2"></div>
-              </div>
-            </div>
-          </section>
-
-          <section data-btsec="trades" class="space-y-4 hidden">
-            <div class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs">
-              <div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-terminal-border">
-                <h3 class="font-bold text-white uppercase tracking-wider">Trade by trade</h3>
-                <span class="text-slate-500 text-[11px]">Newest first. Click a trade to see its report rows.</span>
-              </div>
-              <div class="overflow-x-auto">
-                <table class="w-full text-left text-xs font-mono">
-                  <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border">
-                    <tr>
-                      <th class="py-2.5 px-3">Opened</th>
-                      <th class="py-2.5 px-3">Pair</th>
-                      <th class="py-2.5 px-3 text-right">Net P&amp;L</th>
-                      <th class="py-2.5 px-3">Closed</th>
-                      <th class="py-2.5 px-3 text-right">Held</th>
-                      <th class="py-2.5 px-3 text-right">Gross</th>
-                      <th class="py-2.5 px-3 text-right">Fees</th>
-                      <th class="py-2.5 px-3 text-right">Funding</th>
-                      <th class="py-2.5 px-3">Status</th>
-                      <th class="py-2.5 px-3">Review</th>
-                    </tr>
-                  </thead>
-                  <tbody id="btBody" class="text-slate-300"></tbody>
-                </table>
-              </div>
-              <div id="btMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
-            </div>
-          </section>
-
-          <section data-btsec="files" class="space-y-4 hidden">
-            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
-              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
-                <h3 class="font-bold text-white uppercase tracking-wider">Uploaded files</h3>
-                <button type="button" id="btDeleteAll" onclick="deleteAllBacktest()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded">Delete this broker's report data</button>
-              </div>
-              <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
-              <div id="btFiles" class="space-y-2"></div>
-            </div>
-          </section>
-        </div>
-      </div>
     </div>
 
     <!-- TAB: DATA & SYSTEM -->
@@ -1678,6 +1680,7 @@
     // Your trade's net result (after fees) as a % of the position's value at entry.
     function tradePct(t) {
       if (t && t.orig) t = t.orig; // price and size are in the book's own currency
+      if (t && t.rep) { const v = t.size && t.size.open > 0 ? t.pnl / t.size.open * 100 : null; return v != null && isFinite(v) ? v : null; }
       if (!t || !(t.entry > 0) || !(t.qty > 0)) return null;
       const v = pricePnl(t) / (t.entry * t.qty) * 100;
       return isFinite(v) ? v : null;
@@ -2974,7 +2977,7 @@
 
       const filtered = dayTrades.filter(t => {
         const matchesQuery = t.symbol.toLowerCase().includes(query) || (t.setup || '').toLowerCase().includes(query);
-        const matchesSide = side === 'ALL' || (!t.rep && (t.direction === 'long' ? 'BUY' : 'SHORT') === side);
+        const matchesSide = side === 'ALL' || (!!tradeSide(t) && (tradeSide(t) === 'long' ? 'BUY' : 'SHORT') === side);
         const matchesAcc = acc === 'ALL' || t.accountId === acc;
         return matchesQuery && matchesSide && matchesAcc;
       });
@@ -2999,11 +3002,12 @@
         const isWin = trade.pnl >= 0;
         const pnlFormatted = signedMoney(trade.pnl, viewCur());
         const pnlClass = isWin ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
-        const sidePill = trade.rep
+        const sd = tradeSide(trade), repTip = trade.rep ? ' title="From a broker report; side worked out from its ' + (trade.px ? 'fills' : 'fees') + '"' : '';
+        const sidePill = !sd
           ? '<span class="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 text-[10px] font-bold" title="From an uploaded broker report">REPORT</span>'
-          : trade.direction === 'long'
-          ? '<span class="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">BUY</span>'
-          : '<span class="px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] font-bold">SHORT</span>';
+          : sd === 'long'
+          ? '<span class="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold"' + repTip + '>BUY</span>'
+          : '<span class="px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] font-bold"' + repTip + '>SHORT</span>';
 
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-terminal-cardHover/80 transition-colors cursor-pointer border-b border-terminal-border/60';
@@ -3076,7 +3080,7 @@
           <td class="py-2.5 px-3 text-slate-400">${esc(trade.time || '—')}</td>
           <td class="py-2.5 px-3 text-slate-400">${esc(a.name)}</td>
           <td class="py-2.5 px-3 font-bold text-white">${esc(trade.symbol)}</td>
-          <td class="py-2.5 px-3">${trade.rep ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300">REPORT</span>' : `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${trade.direction === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(trade.direction.toUpperCase())}</span>`}</td>
+          <td class="py-2.5 px-3">${sidePillHtml(trade)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : esc(trade.entry)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : esc(trade.exit)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : fmtQty(trade.qty)}</td>
@@ -3534,23 +3538,28 @@
       return "";
     }
     // Every trade, in order, with the balance you had when you entered it. Past
-    // balances are rebuilt from the trades and, for Delta, anchored to the balance
-    // Delta reports today. Deposits, withdrawals and funding are invisible to this,
-    // so older balances are estimates.
+    // balances are rebuilt from the trades and anchored to the balance the broker
+    // reports today (Delta's live balance, CoinDCX's wallet). Deposits,
+    // withdrawals and funding are invisible to this, so older balances are
+    // estimates. A broker-report trade has no stop or prices of its own: its side
+    // and size come from its fees or fills (btSize), and without them the checks
+    // that need a size are skipped for it.
     function analyzeTrades(ts) {
-      ts = ts.filter(t => !t.rep); // report trades have no price or size to judge
       const byAcc = {};
       ts.forEach(t => { (byAcc[t.accountId] = byAcc[t.accountId] || []).push(t); });
       const sigOf = {}; ["trendline", "fib", "zone"].forEach(k => matchSignals(k).forEach(p => { if (p.trade) sigOf[p.trade.id] = p.signal; }));
       const firstSig = (state.signals || []).map(g => g.date).sort()[0] || null;
-      const entryMs = t => new Date(t.date + "T" + (t.time || "00:00") + ":00").getTime();
+      // A report trade is dated by its close; it opened its hold before that.
+      const entryMs = t => new Date(t.date + "T" + (t.time || "00:00") + ":00").getTime() - (t.rep ? (t.held || 0) * 60000 : 0);
       const rows = [];
       let anchored = false;
       Object.keys(byAcc).forEach(id => {
         const a = acct(id);
         const list = byAcc[id].slice().sort(byWhen);
         let offset = 0;
+        const w = cdxWallet(a);
         if (a.id === deltaAccountId() && deltaLiveKnown()) { offset = liveDeltaBalance.value - bookComputedBalance(a); anchored = true; }
+        else if (w) { offset = w.value - bookComputedBalance(a); anchored = true; }
         const maxRisk = a.maxRiskPct || 1, maxX = a.maxNotionalX || 3;
         let run = a.startBalance || 0, dayKey = null, dayN = 0, dayPnl = 0, prev = null;
         list.forEach(t => {
@@ -3558,16 +3567,25 @@
           // currency; t itself may be a copy converted to the currency on screen.
           const o = t.orig || t, k = t.fxk || 1;
           const before = run + offset;
-          const notional = o.entry * o.qty;
-          const xBal = before > 0 ? notional / before : null;
+          const notional = tradeNotional(o);
+          const xBal = before > 0 && notional != null ? notional / before : null;
           if (t.date !== dayKey) { dayKey = t.date; dayN = 0; dayPnl = 0; }
           dayN++;
           const dayPnlBefore = dayPnl;
           const sig = sigOf[t.id] || null;
-          let stopUsed = null, stopSrc = null;
-          if (stopOk(t)) { stopUsed = t.stop; stopSrc = "your stop"; }
-          else if (sig && typeof sig.stop === "number" && stopOk(Object.assign({}, t, { stop: sig.stop }))) { stopUsed = sig.stop; stopSrc = "alert stop"; }
-          const riskAmt = stopUsed != null ? Math.abs(o.entry - stopUsed) * o.qty : null;
+          let stopUsed = null, stopSrc = null, riskAmt = null;
+          if (o.rep) {
+            // Only an alert's stop, on the fills' prices (in dollars), taken into the book's money.
+            const px = o.px;
+            if (px && sig && typeof sig.stop === "number" && stopOk({ entry: px.entry, direction: px.direction, stop: sig.stop })) {
+              stopSrc = "alert stop";
+              riskAmt = Math.abs(px.entry - sig.stop) * px.qty * (notional != null ? notional / (px.entry * px.qty) : 1 / fxk(a, "USD"));
+            }
+          } else {
+            if (stopOk(t)) { stopUsed = t.stop; stopSrc = "your stop"; }
+            else if (sig && typeof sig.stop === "number" && stopOk(Object.assign({}, t, { stop: sig.stop }))) { stopUsed = sig.stop; stopSrc = "alert stop"; }
+            if (stopUsed != null) riskAmt = Math.abs(o.entry - stopUsed) * o.qty;
+          }
           const riskPct = (riskAmt != null && before > 0) ? riskAmt / before * 100 : null;
           const lossPct = (o.pnl < 0 && before > 0) ? -o.pnl / before * 100 : 0;
           const r = riskAmt > 0 ? o.pnl / riskAmt : null;
@@ -3580,12 +3598,13 @@
           if (prev && prev.t.pnl < 0) {
             const gapMin = (entryMs(t) - prev.exitMs) / 60000;
             if (gapMin >= 0 && gapMin <= 15) flags.push("revenge");
-            if (gapMin >= 0 && gapMin <= 240 && notional > prev.notional * 1.5) flags.push("sizeUp");
+            if (gapMin >= 0 && gapMin <= 240 && notional != null && prev.notional != null && notional > prev.notional * 1.5) flags.push("sizeUp");
           }
           if (a.maxTradesPerDay > 0 && dayN > a.maxTradesPerDay) flags.push("overtrade");
           if (a.dailyLossLimit > 0 && dayPnlBefore <= -a.dailyLossLimit) flags.push("pastLimit");
           if (o.pnl < 0 && o.pnl + (o.fees || 0) > 0) flags.push("feesAte");
-          if (firstSig && t.date >= firstSig && !sig) flags.push("noAlert");
+          // A report trade can only meet an alert once its fills give its side and time.
+          if (firstSig && t.date >= firstSig && !sig && (!o.rep || o.px)) flags.push("noAlert");
           // k takes before and notional into t's currency for display.
           rows.push({ t, a, before, notional, xBal, riskPct, lossPct, r, stopSrc, flags, k });
           run += o.pnl; dayPnl += o.pnl;
@@ -3628,7 +3647,7 @@
                 title: items => { const x = asc[items[0].dataIndex]; return x ? x.t.date + ' ' + (x.t.time || '') + '  ' + x.t.symbol + ' ' + x.t.direction : ''; },
                 label: c => {
                   const x = asc[c.dataIndex];
-                  if (c.datasetIndex === 0) return 'Position ' + (x.xBal != null ? x.xBal.toFixed(1) + '× ' : '— ') + '(' + money(x.notional * x.k, cur) + ')' + (over[c.dataIndex] ? '  OVERSIZED' : '');
+                  if (c.datasetIndex === 0) return 'Position ' + (x.xBal != null ? x.xBal.toFixed(1) + '× ' : '— ') + (x.notional != null ? '(' + money(x.notional * x.k, cur) + ')' : '(size unknown)') + (over[c.dataIndex] ? '  OVERSIZED' : '');
                   if (c.datasetIndex === 1) return 'Limit ' + c.parsed.y + '×';
                   return 'Balance ' + money(c.parsed.y, cur);
                 }
@@ -3720,25 +3739,30 @@
       if (!strip) return;
       renderAnPeriodBar();
       renderAnBrokers();
-      // A broker from an uploaded report replaces the journal analysis below.
+      // A broker from an uploaded report shows its report; its Size & mistakes
+      // section is the journal analysis below, run on the report's trades.
       const rep = anReportBook();
-      ['anLive', 'anMktRow', 'anHowLive'].forEach(id => document.getElementById(id).classList.toggle('hidden', !!rep));
       ['anReport', 'anHowReport'].forEach(id => document.getElementById(id).classList.toggle('hidden', !rep));
-      if (rep) { renderBacktest(); return; }
+      if (rep) renderBacktest();
+      const live = !rep || (state.ui.btSec === "checks" && document.getElementById('btEmpty').classList.contains('hidden'));
+      ['anLive', 'anMktRow', 'anHowLive'].forEach(id => document.getElementById(id).classList.toggle('hidden', !live));
+      if (!live) return;
       const cur = viewCur();
       const from = anRange();
+      // The report's pair filter narrows this too.
+      const pairPick = rep && state.ui.btPair && state.ui.btPair !== "all" ? btSym(state.ui.btPair) : null;
       const all = analyzeTrades(statScoped());
-      const inPeriod = all.filter(x => !from || x.t.date >= from).sort((a, b) => -byWhen(a.t, b.t));
+      const inPeriod = all.filter(x => (!from || x.t.date >= from) && (!pairPick || x.t.symbol === pairPick)).sort((a, b) => -byWhen(a.t, b.t));
       const mfAn = mktFilter();
       const rows = mfAn ? inPeriod.filter(x => mktBiasOn(x.t.date, x.t.time) === mfAn) : inPeriod;
       rows.anchored = all.anchored;
 
       const assume = document.getElementById('anAssumptions');
       const book = isAll() ? (state.accounts.find(a => a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {}) : acct(selected());
-      assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to Delta's balance today. " : "Balances before each trade are your starting balance plus the trades before it; connect Delta to anchor them to its live balance. ")
+      assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's live balance, CoinDCX's wallet). " : "Balances before each trade are your starting balance plus the trades before it; connect Delta to anchor them to its live balance. ")
         + "Deposits, withdrawals and funding can't be seen, so older balances are estimates. "
         + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Sync & Settings → Trading Books.`
-        + (state.accounts.some(a => a.reportBroker) ? " Trades from broker reports have no price or size, so they are left out here; pick their broker above to see them." : "");
+        + (state.accounts.some(a => a.reportBroker) ? " A broker-report trade (CoinDCX) has no stop or prices of its own: its side and position value are worked out from its fees (or fills), its balance from the broker's wallet, and a trade whose fees don't add up shows — for size." : "");
 
       renderJournalArchive();
       renderMarketCalendar('mktCalAnalysis', { pairs: matchSignals().filter(pr => !from || pr.signal.date >= from), trades: inPeriod.map(x => x.t), cur, rerender: renderAnalysis, scope: from ? 'from ' + from : 'all history' });
@@ -3860,9 +3884,9 @@
         tr.innerHTML = `
           <td class="py-2.5 px-3 whitespace-nowrap"><span class="text-white">${esc(t.date)}</span> <span class="text-slate-500">${esc(t.time || '')}</span></td>
           <td class="py-2.5 px-3 font-bold text-white">${esc(t.symbol)}</td>
-          <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${t.direction === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(t.direction.toUpperCase())}</span></td>
+          <td class="py-2.5 px-3">${sidePillHtml(t)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums text-slate-300">${x.before > 0 ? money(x.before * x.k, cur) : '—'}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums text-slate-300">${money(x.notional * x.k, cur)}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums text-slate-300"${t.rep && x.notional != null ? ' title="Worked out from ' + (t.size.from === 'fills' ? "the broker's fills" : "the broker's fees") + '"' : ''}>${x.notional != null ? money(x.notional * x.k, cur) : '—'}</td>
           <td class="py-2.5 px-3 text-right tabular-nums font-bold ${isOver ? 'text-rose-400' : 'text-slate-200'}">${x.xBal != null ? x.xBal.toFixed(1) + '×' : '—'}</td>
           <td class="py-2.5 px-3 text-right tabular-nums ${x.riskPct != null && isOver ? 'text-rose-400' : 'text-slate-300'}" title="${x.riskPct != null ? 'If the ' + esc(x.stopSrc) + ' had been hit' : 'No stop known: what the trade actually lost'}">${x.riskPct != null ? x.riskPct.toFixed(2) + '%' : (x.lossPct > 0 ? '<span class="text-slate-500">lost </span>' + x.lossPct.toFixed(2) + '%' : '—')}</td>
           <td class="py-2.5 px-3 text-right tabular-nums font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${signedMoney(t.pnl, cur)}${pTag(tradePct(t))}</td>
@@ -4097,7 +4121,7 @@
       document.getElementById('inspId').innerText = `#${trade.id.slice(0, 7)}`;
       document.getElementById('inspSymbol').innerText = trade.symbol;
       // A report trade shows its side and prices when the broker's fills give them (CoinDCX's import does).
-      const px = trade.rep ? trade.px : null, dir = trade.rep ? (px ? px.direction : '') : trade.direction;
+      const px = trade.rep ? trade.px : null, dir = tradeSide(trade);
       document.getElementById('inspMeta').innerText = trade.rep
         ? `${a.name} • ${px ? px.openDate + ' ' + px.openTime + ' → ' : 'closed '}${trade.date} ${trade.time || ''}`
         : `${a.name} • ${trade.date} ${trade.time || ''}`;
@@ -7355,7 +7379,7 @@
     const BT_AT_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
     const BT_KINDS = ["order", "funding", "other"];
     const BT_PAGE = 50;
-    const BT_SECS = [{ k: "overview", label: "Overview" }, { k: "trades", label: "Trades" }, { k: "files", label: "Files" }];
+    const BT_SECS = [{ k: "overview", label: "Overview" }, { k: "checks", label: "Size & mistakes" }, { k: "trades", label: "Trades" }, { k: "files", label: "Files" }];
     let btVisible = BT_PAGE, btChartInstance = null, btOpenTrade = null;
 
     function btFinite(v) { const n = cNum(v); return isFinite(n) ? n : 0; }
@@ -8004,6 +8028,8 @@
           entry: 0, exit: 0, qty: 0, stop: 0, leverage: 1, fees: t.fees, funding: t.funding, gross: t.gross,
           pnl: t.net, risk: 0, r: null, setup: "", notes: "", rules: [], px: btPrices(t, fillsOf[b + "|" + t.cur + "|" + t.sym])
         });
+        const c = closed[closed.length - 1];
+        c.size = btSize(t, c.px, accountId);
       }));
       repCache = { rows: bt.rows, n: bt.rows.length, brokers, closed, open };
       return repCache;
@@ -8028,6 +8054,59 @@
         entry: sum(ins.map(x => x.price * x.qty)) / qIn, exit: sum(outs.map(x => x.price * x.qty)) / qOut,
         openDate: mine[0].at.slice(0, 10), openTime: mine[0].at.slice(11, 16)
       };
+    }
+    // A report trade's side and position value (opened and closed), in its book's
+    // money, from the fees alone. CoinDCX charges a fixed share of the position's
+    // value on every order, so each order's fee says its value at one of a few
+    // rates, and a long's close value less its open value is the gross P&L the
+    // report books (a short's is the opposite). The rates and side that make the
+    // sums agree to the paisa are the answer; none, or two that disagree, means
+    // unknown. Rates seen in lakky's reports: 0.02% maker or 0.05% taker plus 18%
+    // GST; 0.02% or 0.1% (tax included) before Feb 2025; 0.01% + GST on gold and
+    // silver. When the fees don't solve, the fills (CoinDCX's import) give it
+    // instead, their dollars taken into the book's money at its rate.
+    const BT_FEE_RATES = [[0.0002 * 1.18, 0.0005 * 1.18], [0.0002, 0.001], [0.0005, 0.001], [0.0001 * 1.18]];
+    const BT_FEE_LEGS = 14;
+    function btSize(t, px, accountId) {
+      const ords = t.legs.filter(r => r.kind === "order"), n = ords.length;
+      const fromFills = () => {
+        if (!px) return null;
+        const k = 1 / fxk(acct(accountId), "USD");
+        return { direction: px.direction, open: px.entry * px.qty * k, close: px.exit * px.qty * k, from: "fills" };
+      };
+      if (!t.closed || t.carried || n < 2 || n > BT_FEE_LEGS || ords.some(r => !(r.fee > 0))) return fromFills();
+      const sols = [];
+      BT_FEE_RATES.forEach(rates => {
+        const walk = (i, o, c) => {
+          if (i === n) {
+            [1, -1].forEach(s => { if (o > 0 && c > 0 && Math.abs(c - o - s * t.gross) <= 0.01 + 1e-6 * (o + c)) sols.push({ s, o, c }); });
+            return;
+          }
+          const r = ords[i];
+          rates.forEach(rt => { const v = r.fee / rt; if (btCloses(r)) walk(i + 1, o, c + v); else walk(i + 1, o + v, c); });
+        };
+        walk(0, 0, 0);
+      });
+      if (!sols.length || sols.some(x => x.s !== sols[0].s || Math.abs(x.o - sols[0].o) > sols[0].o * 0.01)) return fromFills();
+      return { direction: sols[0].s > 0 ? "long" : "short", open: sols[0].o, close: sols[0].c, from: "fees" };
+    }
+    // Long or short for any trade: a report trade's from its fills or fees, if known.
+    function tradeSide(t) {
+      if (t.orig) t = t.orig;
+      if (!t.rep) return t.direction;
+      return t.px ? t.px.direction : t.size ? t.size.direction : "";
+    }
+    // A trade's position value when it opened, in its book's money (null if unknown).
+    function tradeNotional(t) {
+      if (t.orig) t = t.orig;
+      if (t.rep) return t.size ? t.size.open : null;
+      return t.entry * t.qty;
+    }
+    // LONG / SHORT (a report trade's says where its side came from); REPORT when unknown.
+    function sidePillHtml(t) {
+      const d = tradeSide(t), rep = (t.orig || t).rep;
+      if (!d) return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300" title="From a broker report; its side is not known">REPORT</span>';
+      return `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${d === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}"${rep ? ' title="From a broker report; side worked out from its ' + ((t.orig || t).px ? 'fills' : 'fees') + '"' : ''}>${esc(d.toUpperCase())}</span>`;
     }
     function reportTrades() {
       const rv = state.repReviews || {};
@@ -8055,7 +8134,7 @@
     }
     function btToggleTrade(id) { btOpenTrade = btOpenTrade === id ? null : id; renderBacktestTable(); }
     function btMore() { btVisible += BT_PAGE; renderBacktestTable(); }
-    function setBtSec(k) { state.ui.btSec = k; save(); renderBacktest(); }
+    function setBtSec(k) { state.ui.btSec = k; save(); renderAnalysis(); }
     let btShown = [], btCurShown = "USD";
     function renderBacktest() {
       if (!document.getElementById("anReport")) return;
