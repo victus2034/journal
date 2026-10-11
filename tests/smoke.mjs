@@ -349,7 +349,7 @@ async function backtestRun(seed) {
     check(dash.header.includes('CoinDCX report'), 'header has no CoinDCX book: ' + dash.header);
     check(/REPORT/.test(dash.ledger) && !/SHORT|BUY/.test(dash.ledger), 'ledger rows for report trades: ' + dash.ledger.replace(/\n/g, ' | '));
     check(JSON.stringify(dash.dates.slice().sort()) === JSON.stringify(EXPECTED.closed.map(e => e.end.slice(0, 16)).sort()), 'report trades not dated by their close: ' + dash.dates.join(', '));
-    check(!dash.analyzed, 'size and mistake analysis took in report trades');
+    check(dash.analyzed, 'size and mistake analysis left out the report trades');
     check(JSON.stringify(dash.held.slice().sort()) === JSON.stringify(EXPECTED.closed.map(e => (Date.parse(e.end.replace(' ', 'T')) - Date.parse(e.start.replace(' ', 'T'))) / 60000).sort()), 'held time of report trades: ' + dash.held);
     check(/05:30 - 06:00.*1 trade/.test(dash.slots) && /10:00 - 10:30.*3 trades/.test(dash.slots), 'time of day should go by when report trades opened: ' + dash.slots.slice(0, 300));
     const csvOut = await page.evaluate(async () => { let blob = null; const keep = URL.createObjectURL; URL.createObjectURL = b => { blob = b; return 'blob:test'; }; try { exportTradesCsv(); } finally { URL.createObjectURL = keep; } return blob ? (await blob.text()).trim().split('\r\n').length - 1 : -1; });
@@ -1109,6 +1109,104 @@ async function fixesRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// CoinDCX trades in the size and mistake analysis. A report has no prices, but
+// CoinDCX's fee is a fixed share of each order's value, so the fees give each
+// trade's side and size. The fees here are built from sizes picked in this file;
+// the app has to find those sizes again, and the balance before each trade is
+// worked out here from the wallet, apart from the app's own sums.
+async function cdxSizeRun(seed) {
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const near = (a, b, tol = 0.01) => Math.abs(a - b) <= tol;
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.dismiss());
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForTimeout(300);
+  const TAKER = 0.0005 * 1.18, MAKER = 0.0002 * 1.18, WALLET = 20000;
+  // [id, at, gross, fee]: a long (taker in, maker out), a short closed in two
+  // parts, a trade from the old 0.1% rate, one with a fee-less close (size
+  // unknown), and one whose prices come from fills only.
+  const T = [
+    { id: 'L', side: 'long', open: 10000, rows: [['L1', '2026-09-10 10:00:00', 0, 10000 * TAKER], ['L2', '2026-09-10 11:00:00', 150, 10150 * MAKER]] },
+    { id: 'S', side: 'short', open: 20000, rows: [['S1', '2026-09-11 09:00:00', 0, 20000 * MAKER], ['S2', '2026-09-11 09:30:00', 100, 9900 * TAKER], ['S3', '2026-09-11 09:40:00', 100, 9900 * TAKER]] },
+    { id: 'O', side: 'long', open: 5000, rows: [['O1', '2024-12-10 10:00:00', 0, 5000 * 0.001], ['O2', '2024-12-10 12:00:00', -100, 4900 * 0.001]] },
+    { id: 'U', side: '', open: null, rows: [['U1', '2026-09-12 10:00:00', 0, 3], ['U2', '2026-09-12 10:05:00', -40, 0]] },
+  ];
+  const net = t => t.rows.reduce((s, r) => s + r[2] - r[3], 0);
+  // By close: O, L, S, U. Balance before = wallet - every trade's net + the nets before it.
+  const order = ['O', 'L', 'S', 'U'].map(id => T.find(t => t.id === id));
+  const total = order.reduce((s, t) => s + net(t), 0);
+  let prior = 0;
+  const want = order.map(t => { const before = WALLET - total + prior; prior += net(t); return { id: t.id, side: t.side, before, x: t.open != null ? t.open / before : null }; });
+  try {
+    const v = await page.evaluate(({ T, WALLET }) => {
+      const rows = [];
+      T.forEach(t => t.rows.forEach(([id, at, gross, fee]) => rows.push({ id, file: 'cdx-api', sym: 'B-' + t.id + 'X_USDT', at, kind: 'order', type: 'By Order', gross, settle: 0, fee, net: gross - fee, cur: 'INR' })));
+      state.backtest = cleanBacktest({ files: [{ id: 'cdx-api', name: 'CoinDCX API', broker: 'CoinDCX', importedAt: new Date().toISOString(), cur: 'INR', wallet: { at: new Date().toISOString(), INR: WALLET } }], rows });
+      ensureReportBooks(state);
+      const book = state.accounts.find(a => a.id === 'rep-coindcx-inr');
+      Object.assign(book, { maxRiskPct: 1, maxNotionalX: 1, maxTradesPerDay: 0, dailyLossLimit: 0 });
+      const byId = {}; reportTrades().forEach(t => { byId[t.symbol.split('X/')[0]] = t; });
+      const sizes = {}; Object.keys(byId).forEach(k => { const z = byId[k].size; sizes[k] = z && { d: z.direction, open: z.open, from: z.from }; });
+      // Straight from btSize: two parts that agree in every way can't tell a side.
+      const flat = btSize({ closed: true, carried: false, gross: 0, legs: [{ kind: 'order', gross: 0, settle: 0, fee: 1 }, { kind: 'order', gross: 0.0000001, settle: 0, fee: 1 }] }, null, 'rep-coindcx-inr');
+      const fills = btSize({ closed: true, carried: false, gross: 5, legs: [{ kind: 'order', gross: 0, settle: 0, fee: 0 }, { kind: 'order', gross: 5, settle: 0, fee: 0 }] }, { direction: 'short', entry: 2, exit: 1.9, qty: 50 }, 'rep-coindcx-inr');
+      // The CoinDCX book in Analysis: Overview is the report; Size & mistakes is the journal analysis on its trades.
+      Object.assign(state.ui, { account: 'rep-coindcx-inr', allCur: 'INR', anPeriod: 'all', btSec: 'overview', btPair: 'all', anSec: 'trades' });
+      switchTab('analysis'); renderAnalysis();
+      const shown = id => !document.getElementById(id).classList.contains('hidden');
+      const overview = { live: shown('anLive'), report: shown('anReport') };
+      setBtSec('checks');
+      const checks = { live: shown('anLive'), report: shown('anReport'), bar: document.getElementById('btSecBar').innerText };
+      anVisible = 99; renderAnalysis();
+      const table = [...document.querySelectorAll('#anBody tr')].map(tr => [...tr.children].map(td => td.innerText.trim()));
+      const rows2 = analyzeTrades(statScoped()).map(x => ({ id: x.t.symbol.split('X/')[0], side: tradeSide(x.t), before: x.before, x: x.xBal, flags: x.flags }));
+      const strip = document.getElementById('anStrip').innerText.replace(/\s+/g, ' ');
+      // The pair picked in the report narrows the analysis too.
+      state.ui.btPair = 'B-LX_USDT'; renderAnalysis();
+      const onePair = document.querySelectorAll('#anBody tr').length;
+      state.ui.btPair = 'all';
+      // A journal book still shows only the journal analysis.
+      state.ui.account = state.accounts.find(a => !a.reportBroker && a.market === 'crypto').id; renderAnalysis();
+      const journal = { live: shown('anLive'), report: shown('anReport') };
+      return { sizes, flat, fills, overview, checks, table, rows: rows2, strip, onePair, journal, k: fxk(book, 'USD') };
+    }, { T, WALLET });
+    for (const t of T) {
+      const got = v.sizes[t.id];
+      if (t.open == null) check(got == null, t.id + ': size should be unknown, got ' + JSON.stringify(got));
+      else check(got && got.d === t.side && near(got.open, t.open) && got.from === 'fees', t.id + ': size from fees ' + JSON.stringify(got) + ' want ' + t.side + ' ' + t.open);
+    }
+    check(v.flat === null, 'two alike fees should not give a side: ' + JSON.stringify(v.flat));
+    check(v.fills && v.fills.direction === 'short' && v.fills.from === 'fills' && near(v.fills.open, 100 / v.k), 'size from fills when fees are missing: ' + JSON.stringify(v.fills));
+    check(v.overview.report && !v.overview.live, 'CoinDCX overview shows the report alone: ' + JSON.stringify(v.overview));
+    check(v.checks.report && v.checks.live && /Size & mistakes/.test(v.checks.bar), 'Size & mistakes shows the analysis: ' + JSON.stringify(v.checks));
+    check(v.journal.live && !v.journal.report, 'journal book in Analysis: ' + JSON.stringify(v.journal));
+    check(v.rows.length === 4, 'report trades analysed: ' + v.rows.length);
+    for (const w of want) {
+      const r = v.rows.find(x => x.id === w.id);
+      if (!r) { check(false, w.id + ' not analysed'); continue; }
+      check(r.side === w.side && near(r.before, w.before) && (w.x == null ? r.x == null : near(r.x, w.x, 1e-6)), w.id + ': ' + JSON.stringify(r) + ' want ' + JSON.stringify(w));
+      // maxNotionalX 1: every sized trade is bigger than the balance only if x > 1.
+      check((r.flags.indexOf('oversize') !== -1) === (w.x != null && w.x > 1), w.id + ' oversize flag: ' + r.flags.join());
+    }
+    const line = id => v.table.find(r => r[1] === id + 'X/USDT') || [];
+    check(line('L')[2] === 'LONG' && line('S')[2] === 'SHORT' && line('U')[2] === 'REPORT', 'side column: ' + JSON.stringify(v.table.map(r => r.slice(1, 3))));
+    check(line('L')[4] === '₹10,000.00' && line('U')[4] === '—' && line('U')[5] === '—', 'position column: ' + JSON.stringify(v.table.map(r => r.slice(1, 6))));
+    check(/TRADES CHECKED 4 /.test(v.strip), 'headline: ' + v.strip);
+    check(v.onePair === 1, 'pair filter in the analysis: ' + v.onePair + ' rows');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'CoinDCX size and mistakes: side and size from fees, balance from wallet';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 // The header fits on one line on wide screens whatever book is picked, and a
 // trade's review (rules kept, what went right, mistakes) is marked from the
 // inspector, saved, and still there after a reload.
@@ -1295,6 +1393,7 @@ await currencyRun(data);
 await backtestRun(data);
 await coindcxRun(data);
 await fixesRun(data);
+await cdxSizeRun(data);
 await reviewRun(data);
 await withdrawRun(data);
 await deltaShareRun(data);
