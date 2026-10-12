@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-11.106">
+  <meta name="app-version" content="2026-10-12.107">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1159,6 +1159,23 @@
         </button>
       </div>
 
+      <!-- Trading Day -->
+      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+        <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Trading Day</h3>
+        <p class="text-slate-400 text-[11px] leading-relaxed">A new trading day starts at this hour, not at midnight. A trade before it counts for the day before on the dashboard, calendar, daily limits, goals and Analysis. Each trade keeps its real date and time. Saved on this device.</p>
+        <label class="flex flex-wrap items-center gap-2 text-slate-300">New day starts at
+          <select id="dayCutoffSel" onchange="setDayCutoff(this.value)" class="bg-[#080D15] border border-terminal-border p-1.5 rounded text-white">
+              <option value="0">Midnight (00:00)</option>
+              <option value="1">01:00</option>
+              <option value="2">02:00 (default)</option>
+              <option value="3">03:00</option>
+              <option value="4">04:00</option>
+              <option value="5">05:00</option>
+              <option value="6">06:00</option>
+          </select>
+        </label>
+      </div>
+
       <!-- Backup & Restore Panel -->
       <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
         <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Manual Data Backup &amp; Recovery</h3>
@@ -1592,6 +1609,7 @@
       s.ui.account = cText(s.ui.account || "all", 40);
       if (s.ui.account !== "all" && !s.accounts.some(a => a.id === s.ui.account)) s.ui.account = "all";
       s.ui.month = cText(s.ui.month || "current", 10);
+      if (s.ui.dayCutoff !== undefined && !(Number.isInteger(s.ui.dayCutoff) && s.ui.dayCutoff >= 0 && s.ui.dayCutoff <= DAY_CUTOFF_MAX)) delete s.ui.dayCutoff;
       return s;
     }
 
@@ -1692,6 +1710,23 @@
     function fmtDay(s) { return parseDay(s).toLocaleDateString("en-GB",{day:"numeric", month:"short"}); }
     function toMin(t) { if (!t) return null; const p = t.split(":"); return (+p[0]) * 60 + (+p[1]); }
     function hhmm(m) { return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); }
+    // The trading day rolls over at a set hour (2 AM unless changed in Settings),
+    // not at midnight: a trade at 01:30 counts for the day before, so a late
+    // session stays one day. The trade keeps its real date and time; only the day
+    // it counts toward (dashboard, calendar, limits, goals, Analysis) moves.
+    const DAY_CUTOFF_DEFAULT = 2, DAY_CUTOFF_MAX = 6;
+    function dayCutoff() {
+      const h = state && state.ui ? state.ui.dayCutoff : undefined;
+      return Number.isInteger(h) && h >= 0 && h <= DAY_CUTOFF_MAX ? h : DAY_CUTOFF_DEFAULT;
+    }
+    function tradeDay(date, time) {
+      const m = toMin(time), h = dayCutoff();
+      if (!date || !h || m == null || isNaN(m) || m >= h * 60) return date;
+      const d = parseDay(date); d.setDate(d.getDate() - 1);
+      return iso(d);
+    }
+    function dayOf(t) { return tradeDay(t.date, t.time); }
+    function todayDay() { const n = new Date(); return tradeDay(iso(n), hhmm(n.getHours() * 60 + n.getMinutes())); }
     function heldMins(t) {
       if (t.rep) return t.held;
       const a = toMin(t.time), b = toMin(t.exitTime);
@@ -1795,10 +1830,7 @@
     function statScoped() { return scoped(); }
 
     function monthKey(dateStr) { return (dateStr || "").slice(0, 7); }
-    function curMonthKey() {
-      const d = new Date();
-      return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
-    }
+    function curMonthKey() { return todayDay().slice(0, 7); }
     function monthLabel(k) {
       const p = k.split("-");
       return new Date(+p[0], +p[1] - 1, 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
@@ -1809,7 +1841,7 @@
     }
     function monthFilter(ts) {
       const key = selectedMonthKey();
-      return key === "all" ? ts : ts.filter(t => monthKey(t.date) === key);
+      return key === "all" ? ts : ts.filter(t => monthKey(dayOf(t)) === key);
     }
 
     function computeStats(ts) {
@@ -1839,8 +1871,8 @@
     function tradingDays(ts) {
       const map = {};
       ts.forEach(t => {
-        const k = t.accountId + "|" + t.date;
-        if (!map[k]) map[k] = { accountId: t.accountId, date: t.date, trades: [] };
+        const day = dayOf(t), k = t.accountId + "|" + day;
+        if (!map[k]) map[k] = { accountId: t.accountId, date: day, trades: [] };
         map[k].trades.push(t);
       });
       return Object.keys(map).map(k => {
@@ -1861,12 +1893,12 @@
 
     /* =================== STRICT 1-DAY RESOLVER =================== */
     function getActiveSingleSession(ts) {
-      const todayStr = iso(new Date());
-      const todayTrades = ts.filter(t => t.date === todayStr);
+      const todayStr = todayDay();
+      const todayTrades = ts.filter(t => dayOf(t) === todayStr);
       
       // If user deliberately picked a date from calendar/session list
       if (activeLedgerDate) {
-        const chosenTrades = ts.filter(t => t.date === activeLedgerDate);
+        const chosenTrades = ts.filter(t => dayOf(t) === activeLedgerDate);
         return {
           date: activeLedgerDate,
           isToday: activeLedgerDate === todayStr,
@@ -1886,10 +1918,10 @@
       }
       
       // Rule 2: If did not trade today, show ONLY previous active trading session
-      const dates = uniq(ts.map(t => t.date)).sort();
+      const dates = uniq(ts.map(dayOf)).sort();
       if (dates.length > 0) {
         const prevDate = dates[dates.length - 1];
-        const prevTrades = ts.filter(t => t.date === prevDate);
+        const prevTrades = ts.filter(t => dayOf(t) === prevDate);
         return {
           date: prevDate,
           isToday: false,
@@ -1983,7 +2015,7 @@
     // it, so a book whose starting balance was never typed still has an opening.
     function balanceAtStart(a, from) {
       const off = bookBalance(a) - bookComputedBalance(a);
-      const before = from ? sum(bookTrades(a.id).filter(t => t.date < from).map(t => t.pnl || 0)) - bookWithdrawn(a.id, from) : 0;
+      const before = from ? sum(bookTrades(a.id).filter(t => dayOf(t) < from).map(t => t.pnl || 0)) - bookWithdrawn(a.id, from) : 0;
       return (a.startBalance || 0) + off + before;
     }
     // The card next to win rate: how much the account grew or shrank over the period
@@ -2050,11 +2082,11 @@
     }
     // A goal saved for next week or next month waits until its window opens:
     // until then it is measured over that coming window, afterwards like any other.
-    function goalUpcoming(g) { return !!(g && typeof g === "object" && g.startsOn && g.startsOn > iso(new Date())); }
-    function goalRef(p) { return goalUpcoming(p) ? parseDay(p.startsOn) : new Date(); }
+    function goalUpcoming(g) { return !!(g && typeof g === "object" && g.startsOn && g.startsOn > todayDay()); }
+    function goalRef(p) { return goalUpcoming(p) ? parseDay(p.startsOn) : parseDay(todayDay()); }
     // First day of next week (Monday) or next month, for a goal planned ahead.
     function nextWindowStart(period) {
-      const d = new Date();
+      const d = parseDay(todayDay());
       if (period === "week") return new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7) + 7);
       return new Date(d.getFullYear(), d.getMonth() + 1, 1);
     }
@@ -2074,7 +2106,7 @@
     // Weekdays from today (or a later start) through the end date, both included.
     function weekdaysLeft(end, from) {
       let n = 0;
-      const d = from ? new Date(from) : new Date(); d.setHours(0, 0, 0, 0);
+      const d = from ? new Date(from) : parseDay(todayDay()); d.setHours(0, 0, 0, 0);
       while (d <= end) { const w = d.getDay(); if (w !== 0 && w !== 6) n++; d.setDate(d.getDate() + 1); }
       return n;
     }
@@ -2105,15 +2137,15 @@
       const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
       const book = g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId) ? g.accountId : null;
       const cur = viewCur();
-      const ts = allTrades().filter(t => t.date >= start && t.date <= end
+      const ts = allTrades().filter(t => dayOf(t) >= start && dayOf(t) <= end
         && (!book || t.accountId === book)).map(t => toView(t, cur));
       const byDay = {};
-      ts.forEach(t => { byDay[t.date] = (byDay[t.date] || 0) + (t.pnl || 0); });
+      ts.forEach(t => { byDay[dayOf(t)] = (byDay[dayOf(t)] || 0) + (t.pnl || 0); });
       const dayNets = Object.keys(byDay).map(d => byDay[d]);
-      const perDay = {}; ts.forEach(t => { perDay[t.date] = (perDay[t.date] || 0) + 1; });
+      const perDay = {}; ts.forEach(t => { perDay[dayOf(t)] = (perDay[dayOf(t)] || 0) + 1; });
       return { net: sum(ts.map(t => t.pnl)), cur, n: ts.length, winTrades: ts.filter(t => t.pnl > 0).length, winDays: dayNets.filter(v => v > 0).length, tradedDays: dayNets.length,
         gw: sum(ts.filter(t => t.pnl > 0).map(t => t.pnl)), gl: -sum(ts.filter(t => t.pnl < 0).map(t => t.pnl)),
-        overDays: perDay, todayN: perDay[iso(new Date())] || 0 };
+        overDays: perDay, todayN: perDay[todayDay()] || 0 };
     }
     const GOAL_ORDER = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance", "withdraw"];
     // The targets of a goal, whichever way it was saved.
@@ -2142,7 +2174,7 @@
       const cur = gp.cur, T = goalTargetIn(g0, key, cur);
       const clamp01 = v => Math.max(0, Math.min(100, v));
       const start = iso(goalWindowStart(g0)), end = iso(goalPeriodEnd(g0));
-      const inWin = rows => rows.filter(x => x.t.date >= start && x.t.date <= end);
+      const inWin = rows => rows.filter(x => dayOf(x.t) >= start && dayOf(x.t) <= end);
       let label, text, pct, tone;
       if (key === "net_pnl") { label = "Profit"; text = signedMoney(gp.net, cur, 2) + " / " + money(T, cur, 0); pct = clamp01(gp.net / T * 100); tone = gp.net >= T ? "ok" : gp.net < 0 ? "bad" : "mid"; }
       else if (key === "win_days") { label = "Win days"; text = gp.winDays + " / " + T; pct = clamp01(gp.winDays / T * 100); tone = gp.winDays >= T ? "ok" : "mid"; }
@@ -2252,7 +2284,7 @@
       const ids = goalBooksOf(g, cur).map(a => a.id);
       const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
       // Balances and "after a loss" need the trades before the window too, so analyse all and cut afterwards.
-      const rows = analyzeTrades(allTrades().filter(t => ids.indexOf(t.accountId) !== -1)).filter(x => x.t.date >= start && x.t.date <= end);
+      const rows = analyzeTrades(allTrades().filter(t => ids.indexOf(t.accountId) !== -1)).filter(x => dayOf(x.t) >= start && dayOf(x.t) <= end);
       const firstSig = (state.signals || []).map(x => x.date).sort()[0] || null;
       rows.forEach(x => { x.alertKnown = !!firstSig && x.t.date >= firstSig; });
       const brokeAny = x => AN_RULES.some(r => (!r.applies || r.applies(x)) && r.broke(x));
@@ -2383,12 +2415,12 @@
         $('goalPct').innerText = pd + '% of target'; $('goalBar').style.width = Math.max(2, pd) + '%';
         lbl1.innerText = 'To reach it'; lbl2.innerText = 'Last slip';
         $('goalToGo').innerText = st >= t ? 'Reached, keep it going' : (t - st) + ' more clean trade' + (t - st === 1 ? '' : 's');
-        const slip = goalRows(g, gp.cur).filter(x => x.flags.indexOf('revenge') !== -1 || x.flags.indexOf('sizeUp') !== -1).map(x => x.t.date).sort().pop();
+        const slip = goalRows(g, gp.cur).filter(x => x.flags.indexOf('revenge') !== -1 || x.flags.indexOf('sizeUp') !== -1).map(x => dayOf(x.t)).sort().pop();
         $('goalRunRate').innerText = slip || 'none';
         $('goalToGo').title = 'Revenge = a trade within 15 minutes of a loss. Size-up = over 1.5 times the size of the trade before, after a loss.';
       } else if (g.metric === 'avg_risk') {
         const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
-        const all = goalRows(g, gp.cur).filter(x => x.t.date >= start && x.t.date <= end);
+        const all = goalRows(g, gp.cur).filter(x => dayOf(x.t) >= start && dayOf(x.t) <= end);
         const r = all.map(x => x.riskPct).filter(v => v != null), a = r.length ? avg(r) : null;
         $('goalCurrent').innerText = a == null ? '—' : a.toFixed(2) + '%';
         $('goalCurrent').className = 'text-3xl font-bold mono-num ' + (a != null && a <= t ? 'text-emerald-400' : a == null ? 'text-slate-200' : 'text-rose-400');
@@ -2501,8 +2533,8 @@
 
     function updateRiskStatusStrip(cur) {
       const ts = statScoped();
-      const todayStr = iso(new Date());
-      const todayTrades = ts.filter(t => t.date === todayStr);
+      const todayStr = todayDay();
+      const todayTrades = ts.filter(t => dayOf(t) === todayStr);
       // The book whose max risk % is shown: the selected one, or (all books) the
       // first one in the currency being shown. The daily loss limit on All is
       // every book's limit added up, each converted.
@@ -2557,10 +2589,10 @@
     // Each book is held to its own limits in its own currency; the message shows
     // the figures in the currency on screen.
     function dailyLimitState(cur, accountId) {
-      const todayStr = iso(new Date());
+      const todayStr = todayDay();
       const books = accountId ? [acct(accountId)] : viewBooks();
       for (const book of books) {
-        const ts = allTrades().filter(t => t.accountId === book.id && t.date === todayStr);
+        const ts = allTrades().filter(t => t.accountId === book.id && dayOf(t) === todayStr);
         const pnl = sum(ts.map(t => t.pnl)), k = fxk(book, cur);
         const lossHit = book.dailyLossLimit > 0 && pnl <= -book.dailyLossLimit;
         const countHit = book.maxTradesPerDay > 0 && ts.length >= book.maxTradesPerDay;
@@ -2589,10 +2621,10 @@
       ts.forEach((t, i) => {
         runNet += t.pnl;
         runGross += (t.pnl + (t.fees || 0));
-        const lastOfDay = i === ts.length - 1 || ts[i + 1].date !== t.date;
+        const lastOfDay = i === ts.length - 1 || dayOf(ts[i + 1]) !== dayOf(t);
         if (!lastOfDay) return;
         if (runNet > peak) peak = runNet;
-        labels.push(dayLabel(t.date));
+        labels.push(dayLabel(dayOf(t)));
         dataNet.push(runNet);
         dataGross.push(runGross);
         dataDD.push(runNet - peak);
@@ -2864,7 +2896,7 @@
       const [Y, M] = mk.split('-').map(Number);
       const lead = (new Date(Y, M - 1, 1).getDay() + 6) % 7; // Monday first
       const dim = new Date(Y, M, 0).getDate();
-      const todayStr = iso(new Date());
+      const todayStr = todayDay();
 
       // One cell per calendar day: every account's day, already in this view's currency.
       const byDate = {};
@@ -3532,7 +3564,7 @@
     const AN_PAGE = 10;
     let anVisible = AN_PAGE, anFilter = null;
     function anRange() {
-      const m = (state.ui.anPeriod || "all"), d = new Date();
+      const m = (state.ui.anPeriod || "all"), d = parseDay(todayDay());
       if (m === "7d") { d.setDate(d.getDate() - 6); return iso(d); }
       if (m === "1m") { d.setMonth(d.getMonth() - 1); return iso(d); }
       return "";
@@ -3569,7 +3601,7 @@
           const before = run + offset;
           const notional = tradeNotional(o);
           const xBal = before > 0 && notional != null ? notional / before : null;
-          if (t.date !== dayKey) { dayKey = t.date; dayN = 0; dayPnl = 0; }
+          if (dayOf(t) !== dayKey) { dayKey = dayOf(t); dayN = 0; dayPnl = 0; }
           dayN++;
           const dayPnlBefore = dayPnl;
           const sig = sigOf[t.id] || null;
@@ -3700,7 +3732,7 @@
 
       // ---- results by broker, each converted into the currency on screen ----
       const vc = viewCur();
-      const live = allTrades().filter(t => !from || t.date >= from).map(t => toView(t, vc)), open = reportBooks().open;
+      const live = allTrades().filter(t => !from || dayOf(t) >= from).map(t => toView(t, vc)), open = reportBooks().open;
       const lines = state.accounts.map(a => {
         const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
         const files = a.reportBroker ? btState().files.filter(f => f.broker === a.reportBroker) : [];
@@ -3752,7 +3784,7 @@
       // The report's pair filter narrows this too.
       const pairPick = rep && state.ui.btPair && state.ui.btPair !== "all" ? btSym(state.ui.btPair) : null;
       const all = analyzeTrades(statScoped());
-      const inPeriod = all.filter(x => (!from || x.t.date >= from) && (!pairPick || x.t.symbol === pairPick)).sort((a, b) => -byWhen(a.t, b.t));
+      const inPeriod = all.filter(x => (!from || dayOf(x.t) >= from) && (!pairPick || x.t.symbol === pairPick)).sort((a, b) => -byWhen(a.t, b.t));
       const mfAn = mktFilter();
       const rows = mfAn ? inPeriod.filter(x => mktBiasOn(x.t.date, x.t.time) === mfAn) : inPeriod;
       rows.anchored = all.anchored;
@@ -3991,6 +4023,8 @@
 
     function renderDataView() {
       renderBooks();
+      const dcSel = document.getElementById('dayCutoffSel');
+      if (dcSel) dcSel.value = String(dayCutoff());
       renderPlaybook();
       const sync = state.sync || {};
       const delta = state.delta || {};
@@ -4022,7 +4056,7 @@
       const scopedAll = statScoped();
       const fMonthSel = document.getElementById('fMonth');
       if (fMonthSel) {
-        const months = uniq(scopedAll.map(t => monthKey(t.date))).filter(Boolean);
+        const months = uniq(scopedAll.map(t => monthKey(dayOf(t)))).filter(Boolean);
         months.sort().reverse();
         const thisMonth = curMonthKey();
         if (months.indexOf(thisMonth) === -1) months.unshift(thisMonth);
@@ -4103,6 +4137,16 @@
       if (open === 'signals') renderSignalsTable();
       else if (open === 'analysis') renderAnalysis();
       else if (open === 'data' && !(document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) renderDataView();
+    }
+
+    function setDayCutoff(v) {
+      const h = parseInt(v, 10);
+      if (!(h >= 0 && h <= DAY_CUTOFF_MAX)) return;
+      state.ui.dayCutoff = h;
+      activeLedgerDate = null;
+      save();
+      renderAll();
+      toast("New trading day starts at " + hhmm(h * 60));
     }
 
     function onMonthFilterChange() {
@@ -4658,9 +4702,9 @@
     }
 
     function openReview(dateStr) {
-      const dates = uniq(scoped().map(t => t.date)).sort();
-      const curDate = dateStr || (dates.length ? dates[dates.length - 1] : iso(new Date()));
-      const ts = scoped().filter(t => t.date === curDate);
+      const dates = uniq(scoped().map(dayOf)).sort();
+      const curDate = dateStr || (dates.length ? dates[dates.length - 1] : todayDay());
+      const ts = scoped().filter(t => dayOf(t) === curDate);
       const s = computeStats(ts);
       const cur = viewCur();
 
@@ -5710,7 +5754,7 @@
       const wins = ts.filter(t => t.pnl > 0).length;
       const rw = rows.filter(r => r.r != null && r.r > 0).map(r => r.r), rl = rows.filter(r => r.r != null && r.r < 0).map(r => -r.r);
       const avg = a => a.length ? sum(a) / a.length : null;
-      const days = new Set(ts.map(t => t.date)).size;
+      const days = new Set(ts.map(dayOf)).size;
       return {
         n: ts.length,
         x: med(rows.map(r => r.xBal)),
@@ -7787,7 +7831,7 @@
         t.closed = t.closes > 0;
         t.stillOpen = !t.closed || t.legs[t.legs.length - 1].at > t.end;
         t.when = t.closed ? t.end : t.start;
-        t.day = t.when.slice(0, 10);
+        t.day = tradeDay(t.when.slice(0, 10), t.when.slice(11, 16));
         t.held = t.closed ? btMins(t.start, t.end) : null;
       });
       return trades.sort((a, b) => a.when < b.when ? -1 : a.when > b.when ? 1 : 0);
@@ -8116,7 +8160,7 @@
     function openReportTrade(trade) {
       state.ui.account = trade.accountId; state.ui.btSec = "trades"; state.ui.btPair = "all";
       const from = anRange();
-      if (from && trade.date < from) state.ui.anPeriod = "all";
+      if (from && dayOf(trade) < from) state.ui.anPeriod = "all";
       btOpenTrade = null; btVisible = BT_PAGE;
       save(); switchTab("analysis"); renderAccountsBar();
       const list = btShown.slice().reverse(), i = list.findIndex(x => x.legs[0].id === trade.firstLeg);
@@ -8463,10 +8507,10 @@
       const host = document.getElementById('weeklyReview');
       if (!host) return;
       const off = state.ui.weekOffset || 0;
-      const base = new Date(); base.setDate(base.getDate() + off * 7);
+      const base = parseDay(todayDay()); base.setDate(base.getDate() + off * 7);
       const mon = new Date(base.getFullYear(), base.getMonth(), base.getDate() - (base.getDay() + 6) % 7);
       const days = [0, 1, 2, 3, 4, 5, 6].map(i => iso(new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i)));
-      const ts = statScoped().filter(t => t.date >= days[0] && t.date <= days[6]);
+      const ts = statScoped().filter(t => dayOf(t) >= days[0] && dayOf(t) <= days[6]);
       const s = computeStats(ts);
       const fmtD = d => new Date(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
       const cls = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
@@ -8475,7 +8519,7 @@
       const mistakes = groupNet(t => t.tagsMistakes || []).sort((a, b) => a[1].net - b[1].net);
       const rated = ts.filter(t => (t.rules || []).some(Boolean));
       const broke = rated.filter(t => (t.rules || []).length && RULES.some((r, i) => !(t.rules || [])[i]));
-      const byDay = days.map(d => sum(ts.filter(t => t.date === d).map(t => t.pnl)));
+      const byDay = days.map(d => sum(ts.filter(t => dayOf(t) === d).map(t => t.pnl)));
       const maxAbs = Math.max(1e-9, ...byDay.map(Math.abs));
       const rs = ts.map(t => t.r).filter(r => r != null && isFinite(r));
       const card = (label, val, sub) => `<div class="bg-black/40 border border-terminal-border rounded-lg p-3"><div class="text-[10px] text-slate-500 uppercase tracking-wider">${label}</div><div class="text-sm font-bold mt-1">${val}</div>${sub ? `<div class="text-[10px] text-slate-500 mt-0.5">${sub}</div>` : ''}</div>`;

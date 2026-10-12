@@ -22,7 +22,8 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const TABS = ['dashboard', 'signals', 'analysis', 'calculator', 'data'];
 
 function fixture() {
-  const day = n => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+  // Trading days on this machine's clock: the journal's day rolls over at 2 AM.
+  const day = n => { const d = new Date(Date.now() - 2 * 3600e3); d.setDate(d.getDate() - n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const now = new Date().toISOString();
   const accounts = [
     { id: 'acc_nse', name: 'Test NSE', market: 'nse', currency: 'INR', startBalance: 100000, maxRiskPct: 1, dailyLossLimit: 2, maxTradesPerDay: 5, defaultLeverage: 5, updatedAt: now },
@@ -153,7 +154,7 @@ async function currencyRun(seed) {
     v = await look();
     check(v.n === 16 && near(v.net, nseNet / 85 + cryNet) && v.bal === usd(nseBal / 85 + cryBal), 'All in dollars: ' + JSON.stringify(v));
     // Today's NSE loss breaks that book's own ₹2 limit; the message is in dollars.
-    const today = await page.evaluate(() => iso(new Date()));
+    const today = await page.evaluate(() => todayDay());
     const todayNse = seed.trades.filter(t => t.accountId === 'acc_nse' && t.date === today).reduce((s, t) => s + pnlOf(t), 0);
     const lim = await page.evaluate(() => dailyLimitState('USD'));
     check(todayNse < -2 && lim.hit && lim.msg.includes(usd(todayNse / 85)) && lim.msg.includes('Test NSE'), 'daily limit message: ' + JSON.stringify(lim) + ' today ' + todayNse);
@@ -1058,7 +1059,7 @@ async function fixesRun(seed) {
   await page.waitForTimeout(300);
   try {
     const v = await page.evaluate(() => {
-      const d = iso(new Date()), old = '2024-12-02';
+      const d = todayDay(), old = '2024-12-02';
       // An old losing trade (before this month) and this month's winner: opened 10:05, closed 11:40.
       const row = (id, at, kind, gross, fee) => ({ id, file: 'cdx-api', sym: 'B-ETH_USDT', at, kind, type: kind, gross, settle: 0, fee, net: gross - fee, cur: 'INR' });
       state.backtest = cleanBacktest({ files: [{ id: 'cdx-api', name: 'CoinDCX API', broker: 'CoinDCX', importedAt: new Date().toISOString(), cur: 'INR', wallet: { at: new Date().toISOString(), INR: 5000 } }],
@@ -1267,6 +1268,67 @@ async function reviewRun(seed) {
 // Withdrawals: money taken out is logged from the goal card, counts toward a
 // "Money withdrawn" target, lowers the book's worked-out balance, syncs, and
 // can be removed again.
+async function tradingDayRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  const t = (id, date, time, exit) => ({ id, accountId: 'acc_cry', date, exitDate: date, time, exitTime: time, symbol: 'ETHUSD', direction: 'long', entry: 100, exit, stop: 99, qty: 1, fees: 0, rules: [], updatedAt: seed.savedAt });
+  const journal = Object.assign({}, seed, { trades: [
+    t('late1', '2026-10-11', '22:00', 99), t('late2', '2026-10-12', '01:30', 98), t('next', '2026-10-12', '02:00', 101), t('sep', '2026-10-01', '01:00', 102),
+  ], goals: [] });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(journal));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  try {
+    await page.clock.setFixedTime(new Date('2026-10-12T01:45:00+05:30'));
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const look = () => page.evaluate(() => {
+      const day = id => dayOf(state.trades.find(x => x.id === id));
+      const days = tradingDays(statScoped()).filter(d => d.accountId === 'acc_cry').map(d => d.date + ':' + d.count + (d.breached ? '!' : '')).join(',');
+      return { today: todayDay(), month: curMonthKey(), late2: day('late2'), next: day('next'), sep: day('sep'), days, stored: state.trades.find(x => x.id === 'late2').date + ' ' + state.trades.find(x => x.id === 'late2').time,
+        lim: dailyLimitState('USD', 'acc_cry').hit, inMonth: monthFilter(scoped()).filter(x => x.accountId === 'acc_cry').length, goalN: goalProgress({ period: 'day', accountId: 'acc_cry' }).n };
+    });
+    let v = await look();
+    // 01:45: still the 11th. The 01:30 trade joins the 22:00 one; together they break the $2.50 limit.
+    check(v.today === '2026-10-11' && v.month === '2026-10' && v.late2 === '2026-10-11' && v.next === '2026-10-12' && v.sep === '2026-09-30' && v.stored === '2026-10-12 01:30', '2 AM day: ' + JSON.stringify(v));
+    check(v.days === '2026-09-30:1,2026-10-11:2!,2026-10-12:1' && v.lim === true && v.inMonth === 3 && v.goalN === 2, '2 AM day buckets: ' + JSON.stringify(v));
+    // A CoinDCX trade closed at 01:10 counts for the day before too, in its report and on the dashboard.
+    const rep = await page.evaluate(() => {
+      const row = (id, at, gross, fee) => ({ id, file: 'cdx-api', sym: 'B-ETH_USDT', at, kind: 'order', type: 'order', gross, settle: 0, fee, net: gross - fee, cur: 'INR' });
+      state.backtest = cleanBacktest({ files: [{ id: 'cdx-api', name: 'CoinDCX API', broker: 'CoinDCX', importedAt: new Date().toISOString(), cur: 'INR' }],
+        rows: [row('o1', '2026-10-11 23:50:00', 0, 5), row('c1', '2026-10-12 01:10:00', 105, 5)] });
+      ensureReportBooks(state);
+      const r = reportTrades()[0], b = btTrades(btState().rows)[0];
+      return { date: r.date, time: r.time, day: dayOf(r), btDay: b.day };
+    });
+    check(rep.date === '2026-10-12' && rep.time === '01:10' && rep.day === '2026-10-11' && rep.btDay === '2026-10-11', 'report trade day: ' + JSON.stringify(rep));
+    await page.evaluate(() => { state.backtest = { files: [], rows: [] }; ensureReportBooks(state); });
+    // 02:30: the 12th has begun.
+    await page.clock.setFixedTime(new Date('2026-10-12T02:30:00+05:30'));
+    v = await look();
+    check(v.today === '2026-10-12' && v.lim === false && v.goalN === 1, 'after 2 AM: ' + JSON.stringify(v));
+    // The setting: midnight puts every trade back on its calendar day, and survives a reload.
+    await page.evaluate(() => switchTab('data'));
+    check(await page.inputValue('#dayCutoffSel') === '2', 'setting does not show 2 AM: ' + await page.inputValue('#dayCutoffSel'));
+    await page.selectOption('#dayCutoffSel', '0');
+    v = await look();
+    check(v.late2 === '2026-10-12' && v.sep === '2026-10-01' && v.days === '2026-10-01:1,2026-10-11:1,2026-10-12:2', 'midnight cutoff: ' + JSON.stringify(v));
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    check(await page.evaluate(() => dayCutoff()) === 0, 'cutoff not kept after reload');
+    check(await page.evaluate(() => sanitizeState({ accounts: [], trades: [], ui: { dayCutoff: 99 } }).ui.dayCutoff === undefined && dayCutoff() === 0), 'a bad cutoff survived the clean-up');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'trading day rolls over at 2 AM';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 async function withdrawRun(seed) {
   const errs = [];
   const check = (ok, what) => { if (!ok) errs.push(what); };
@@ -1396,6 +1458,7 @@ await fixesRun(data);
 await cdxSizeRun(data);
 await reviewRun(data);
 await withdrawRun(data);
+await tradingDayRun(data);
 await deltaShareRun(data);
 
 await browser.close();
