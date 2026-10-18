@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-18.111">
+  <meta name="app-version" content="2026-10-18.112">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -873,6 +873,7 @@
         <div id="btEmpty" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-6 font-mono text-xs text-center space-y-2">
           <p class="text-slate-200 font-bold">No trades in this report yet</p>
           <p class="text-slate-400 text-[11px] leading-relaxed">Upload an Excel (.xlsx) or CSV trade report. It needs a header row with a time column, a pair or symbol column and a P&amp;L column; fee, funding type and transaction ID columns are used when present. Uploading the same report twice adds nothing twice.</p>
+          <p class="text-slate-500 text-[11px]">Upload or remove report files in <button type="button" onclick="switchTab('data')" class="text-amber-300 hover:text-amber-200 underline">Sync &amp; Settings → Broker Report Files</button>.</p>
         </div>
 
         <div id="btMain" class="space-y-4">
@@ -931,16 +932,6 @@
             </div>
           </section>
 
-          <section data-btsec="files" class="space-y-4 hidden">
-            <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
-              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
-                <h3 class="font-bold text-white uppercase tracking-wider">Uploaded files</h3>
-                <button type="button" id="btDeleteAll" onclick="deleteAllBacktest()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded">Delete this broker's report data</button>
-              </div>
-              <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
-              <div id="btFiles" class="space-y-2"></div>
-            </div>
-          </section>
         </div>
       </div>
 
@@ -1190,13 +1181,22 @@
         </label>
       </div>
 
+      <!-- Broker report files: every upload (and the CoinDCX API import), by broker -->
+      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs" id="repFilesCard">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
+          <h3 class="font-bold text-white uppercase tracking-wider">Broker Report Files</h3>
+          <button onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX. Its trades go into a book for that broker and count on the Dashboard." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Upload Broker Report (.XLSX / .CSV)</button>
+        </div>
+        <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
+        <div id="btFiles" class="space-y-3"></div>
+      </div>
+
       <!-- Backup & Restore Panel -->
       <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
         <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Manual Data Backup &amp; Recovery</h3>
         <div class="flex flex-wrap gap-2">
           <button onclick="downloadBackupFile()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Save Backup File (.JSON)</button>
           <button onclick="exportTradesCsv()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Export Trades (.CSV)</button>
-          <button onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX. Its trades go into a book for that broker and count on the Dashboard." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Upload Broker Report (.XLSX / .CSV)</button>
           <button onclick="triggerRestoreFileInput()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Open Backup File</button>
           <input type="file" id="restoreFileInput" accept=".json" class="hidden" onchange="handleRestoreFile(this)">
           <button onclick="copyBackupToClipboard()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Copy Backup to Clipboard</button>
@@ -4046,6 +4046,7 @@
       renderBooks();
       const dcSel = document.getElementById('dayCutoffSel');
       if (dcSel) dcSel.value = String(dayCutoff());
+      renderBacktestFiles();
       renderPlaybook();
       const sync = state.sync || {};
       const delta = state.delta || {};
@@ -7495,7 +7496,7 @@
     const BT_AT_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
     const BT_KINDS = ["order", "funding", "other"];
     const BT_PAGE = 50;
-    const BT_SECS = [{ k: "overview", label: "Overview" }, { k: "checks", label: "Size & mistakes" }, { k: "trades", label: "Trades" }, { k: "files", label: "Files" }];
+    const BT_SECS = [{ k: "overview", label: "Overview" }, { k: "checks", label: "Size & mistakes" }, { k: "trades", label: "Trades" }];
     let btVisible = BT_PAGE, btChartInstance = null, btOpenTrade = null;
 
     function btFinite(v) { const n = cNum(v); return isFinite(n) ? n : 0; }
@@ -8049,7 +8050,7 @@
         btVisible = BT_PAGE; btOpenTrade = null;
         save();
         switchTab("analysis"); renderAccountsBar();
-        toast(checked ? `Imported ${fresh.length} rows to ${broker}; totals match the report and the dashboard counts them` : `Imported ${fresh.length} rows, but the totals differ from the report; see Files`);
+        toast(checked ? `Imported ${fresh.length} rows to ${broker}; totals match the report and the dashboard counts them` : `Imported ${fresh.length} rows, but the totals differ from the report; see Sync & Settings → Broker Report Files`);
         return true;
       });
     }
@@ -8066,10 +8067,10 @@
       toast("File removed");
     }
     // Every uploaded report of the broker on screen.
-    function deleteAllBacktest() {
-      const book = anReportBook();
-      if (!book) return;
-      const bt = btState(), broker = book.reportBroker;
+    function deleteAllBacktest(brokerName) {
+      const book = brokerName ? null : anReportBook();
+      if (!brokerName && !book) return;
+      const bt = btState(), broker = brokerName || book.reportBroker;
       const gone = {};
       bt.files.forEach(f => { if (f.broker === broker) gone[f.id] = 1; });
       const nf = Object.keys(gone).length, nr = bt.rows.filter(r => gone[r.file]).length;
@@ -8271,9 +8272,9 @@
         + (ats.length ? " · " + fmtDay(ats[0].slice(0, 10)) + " " + ats[0].slice(0, 4) + " to " + fmtDay(ats[ats.length - 1].slice(0, 10)) + " " + ats[ats.length - 1].slice(0, 4) : "");
       document.getElementById("btEmpty").classList.toggle("hidden", !empty);
       const filters = document.getElementById("btFilters");
-      // With no rows left, only Files has anything to show (and its Remove buttons).
-      renderSecBar("btSecBar", BT_SECS, "data-btsec", empty ? "files" : state.ui.btSec, setBtSec);
-      renderBacktestFiles(bt.files, all0.rows);
+      // Files live in Sync & Settings; with no rows left there is nothing to switch between.
+      renderSecBar("btSecBar", BT_SECS, "data-btsec", state.ui.btSec, setBtSec);
+      document.getElementById("btMain").classList.toggle("hidden", empty);
       if (empty) {
         filters.innerHTML = "";
         ["btStrip", "btCheck", "btPairs", "btDays", "btBody", "btMoreBar"].forEach(id => { document.getElementById(id).innerHTML = ""; });
@@ -8325,7 +8326,7 @@
       document.getElementById("btCheck").innerHTML = `<div class="px-3 py-2 rounded-lg border ${ok && !filesBad ? "border-emerald-500/40 text-emerald-300" : "border-rose-500/40 text-rose-300"}">`
         + (ok ? `✓ All ${rowsCur.length} report rows are in ${inCur.length} trades, adding up to ${signedMoney(rowNet, cur)}, the same as the rows.` : `⚠ ${rowsCur.length} rows but ${legs} placed in trades (${signedMoney(rowNet, cur)} vs ${signedMoney(tradeNet, cur)}).`)
         + (twice ? ` ${twice} row${twice === 1 ? "" : "s"} from the API ${twice === 1 ? "is" : "are"} already in an uploaded report and count${twice === 1 ? "s" : ""} once.` : "")
-        + (filesBad ? ` ⚠ ${filesBad} file${filesBad === 1 ? "" : "s"} did not match the report's total; see Files.` : "")
+        + (filesBad ? ` ⚠ ${filesBad} file${filesBad === 1 ? "" : "s"} did not match the report's total; see Sync & Settings → Broker Report Files.` : "")
         + (shown.length !== inCur.length ? ` <span class="text-slate-400">Showing ${shown.length} of them.</span>` : "") + `</div>`;
 
       renderBacktestChart(s.closed, cur);
@@ -8526,10 +8527,12 @@
       return o;
     }
 
-    function renderBacktestFiles(files, rows) {
+    // Sync & Settings: every broker's uploaded files, each broker with its own delete-all.
+    function renderBacktestFiles() {
       const host = document.getElementById("btFiles");
       if (!host) return;
-      host.innerHTML = files.length ? files.slice().reverse().map(f => {
+      const bt = btState(), files = bt.files, rows = bt.rows;
+      const fileHtml = f => {
         const now = rows.filter(r => r.file === f.id).length, api = f.id === CDX_FILE;
         const at = d => esc(d.slice(0, 10)) + " " + esc(d.slice(11, 16)) + " UTC";
         return `<div class="flex flex-wrap items-start justify-between gap-2 border border-terminal-border rounded-lg p-2.5">
@@ -8542,7 +8545,14 @@
           </div>
           <button type="button" data-btrm="${esc(f.id)}" class="px-2.5 py-1 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded shrink-0">Remove</button>
         </div>`;
-      }).join("") : `<div class="text-slate-500 text-center py-4">No files uploaded.</div>`;
+      };
+      const brokers = uniq(files.map(f => f.broker));
+      host.innerHTML = brokers.length ? brokers.map(br => `<div class="space-y-2" data-repbroker="${esc(br)}">
+          <div class="flex flex-wrap items-center justify-between gap-2"><span class="text-amber-300 font-bold">${esc(br)}</span>
+          <button type="button" data-btdelall="${esc(br)}" class="px-3 py-1 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded">Delete ${esc(br)}'s report data</button></div>
+          ${files.filter(f => f.broker === br).slice().reverse().map(fileHtml).join("")}</div>`).join("")
+        : `<div class="text-slate-500 text-center py-4">No files uploaded.</div>`;
+      host.querySelectorAll("[data-btdelall]").forEach(b => { b.onclick = () => deleteAllBacktest(b.getAttribute("data-btdelall")); });
       host.querySelectorAll("[data-btrm]").forEach(b => { b.onclick = () => removeBacktestFile(b.getAttribute("data-btrm")); });
     }
 

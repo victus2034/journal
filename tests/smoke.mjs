@@ -377,7 +377,12 @@ async function backtestRun(seed) {
     const opened = await page.evaluate(() => { const t = reportTrades().slice().sort(byWhen)[0]; openReportTrade(t); return { account: state.ui.account, sec: state.ui.btSec, open: btOpenTrade, rows: document.getElementById('btBody').innerText }; });
     check(opened.account === BOOK && opened.sec === 'trades' && opened.open && /report rows?/.test(opened.rows), 'opening a report trade from the ledger: ' + JSON.stringify(opened).slice(0, 300));
 
-    for (const sec of ['overview', 'trades', 'files']) {
+    // Files moved to Sync & Settings: Analysis has no Files tab, the Data tab lists them.
+    check(!(await page.innerText('#btSecBar')).includes('Files') && !(await page.$('[data-btsec="files"]')), 'Analysis still has a Files tab');
+    const dataFiles = await page.evaluate(() => { switchTab('data'); return document.getElementById('btFiles').innerText; });
+    check(/Delete CoinDCX's report data/.test(dataFiles) && /Remove/.test(dataFiles), 'Sync & Settings does not list the report files: ' + JSON.stringify(dataFiles.slice(0, 400)));
+    await page.evaluate(() => switchTab('analysis'));
+    for (const sec of ['overview', 'trades']) {
       await page.evaluate(k => setBtSec(k), sec);
       check(await page.evaluate(k => { const el = document.querySelector('[data-btsec="' + k + '"]'); return !!el && !el.classList.contains('hidden') && el.offsetHeight > 0; }, sec), 'report section "' + sec + '" did not show');
     }
@@ -845,10 +850,11 @@ async function coindcxRun(seed) {
 
     // Analysis, results by broker and Files say where the rows came from.
     const an = await page.evaluate(() => {
-      state.ui.account = 'rep-coindcx-inr'; state.ui.anPeriod = 'all'; state.ui.btSec = 'files'; switchTab('analysis'); renderAll();
-      return { check: document.getElementById('btCheck').innerText, title: document.getElementById('btTitle').textContent,
-        line: [...document.querySelectorAll('#anBrokers tbody tr')].map(x => x.innerText.replace(/\s+/g, ' ').trim()).find(l => l.startsWith('CoinDCX ')) || '',
-        files: document.getElementById('btFiles').innerText };
+      state.ui.account = 'rep-coindcx-inr'; state.ui.anPeriod = 'all'; switchTab('analysis'); renderAll();
+      const o = { check: document.getElementById('btCheck').innerText, title: document.getElementById('btTitle').textContent,
+        line: [...document.querySelectorAll('#anBrokers tbody tr')].map(x => x.innerText.replace(/\s+/g, ' ').trim()).find(l => l.startsWith('CoinDCX ')) || '' };
+      switchTab('data'); o.files = document.getElementById('btFiles').innerText; switchTab('analysis');
+      return o;
     });
     check(an.check.startsWith('✓ All ') && an.check.includes(`${dupStored} rows from the API are already in an uploaded report and count once.`), 'Analysis check line: ' + an.check);
     check(an.title === 'CoinDCX · trades from its report and API', 'Analysis title: ' + an.title);
