@@ -1343,7 +1343,7 @@ async function goalPlannerRun(seed) {
     try {
       await page.goto(base, { waitUntil: 'load' });
       await page.waitForTimeout(300);
-      await page.evaluate(() => { switchTab('calculator'); calcUpdate({ view: 'planner', currency: 'INR', accountId: 'acc_nse' }); });
+      await page.evaluate(() => { switchTab('calculator'); state.ui.allCur = 'INR'; renderAll(); switchTab('calculator'); calcUpdate({ view: 'planner', accountId: 'acc_nse' }); });
       await page.selectOption('#gpGoal', 'custom');
       await page.fill('#gpTarget', '600'); await page.fill('#gpDays', '2'); await page.fill('#gpTrades', '3');
       const out = await page.innerText('#gpPlan');
@@ -1362,10 +1362,20 @@ async function goalPlannerRun(seed) {
       await page.selectOption('#gpGoal', 'g1');
       const g = await page.evaluate(() => { const gl = gpMoneyGoals().find(x => x.id === 'g1'); return { need: +Math.max(0, gl.target - goalProgress(gl).net).toFixed(2), days: goalDaysLeft(gl), t: document.getElementById('gpTarget').value, d: document.getElementById('gpDays').value }; });
       check(+g.t === g.need && +g.d === g.days, vp.width + 'px goal fill: ' + JSON.stringify(g));
-      // Header in dollars, planner in rupees: the goal is shown in rupees, not empty or in dollars.
-      await page.evaluate(() => { const g1 = state.goals.find(x => x.id === 'g1'); g1.target = g1.targets.net_pnl = 100000; state.ui.allCur = 'USD'; renderAll(); switchTab('calculator'); calcUpdate({ currency: 'INR', accountId: '' }); gpSet('gpGoalId', 'g1'); });
-      const mix = await page.evaluate(() => { const g0 = state.goals.find(x => x.id === 'g1'); return { want: +Math.max(0, goalTargetIn(g0, 'net_pnl', 'INR') - goalProgress(g0, 'INR').net).toFixed(2), t: +document.getElementById('gpTarget').value, sym: document.getElementById('gpCur').innerText, plan: (document.getElementById('gpPlan') || {}).innerText || document.getElementById('gpOut').innerText }; });
-      check(mix.want > 0 && mix.t === mix.want && mix.sym === '₹' && /₹/.test(mix.plan) && !/\$/.test(mix.plan), vp.width + 'px header $ / planner ₹: ' + JSON.stringify(mix));
+      // The planner follows the header's ₹ / $ (the calculator has no switch of its own).
+      check(await page.evaluate(() => !document.getElementById('calcCurrencySeg')), vp.width + 'px calculator still has its own currency switch');
+      for (const c of ['USD', 'INR']) {
+        await page.evaluate(() => { const g1 = state.goals.find(x => x.id === 'g1'); g1.target = g1.targets.net_pnl = 100000; calcUpdate({ accountId: '' }); gpSet('gpGoalId', 'g1'); });
+        // The header's own button, clicked while the calculator is open.
+        await page.click('#accountsBar button[data-cur="' + c + '"]');
+        const mix = await page.evaluate(c => { const g0 = state.goals.find(x => x.id === 'g1'); return { want: +Math.max(0, goalTargetIn(g0, 'net_pnl', c) - goalProgress(g0, c).net).toFixed(2), t: +document.getElementById('gpTarget').value, sym: document.getElementById('gpCur').innerText, calc: calcSettings().currency, plan: document.getElementById('gpOut').innerText }; }, c);
+        const sym = c === 'INR' ? '₹' : '$', other = c === 'INR' ? '$' : '₹';
+        check(mix.want > 0 && mix.t === mix.want && mix.sym === sym && mix.calc === c && mix.plan.includes(sym) && !mix.plan.includes(other), vp.width + 'px header ' + c + ': ' + JSON.stringify(mix));
+      }
+      // A linked book's balance converts too: the ₹1,00,000 book in dollars.
+      const conv = await page.evaluate(() => { state.ui.allCur = 'USD'; renderAll(); switchTab('calculator'); calcApplyAccount('acc_nse'); const s = calcSettings(); return { cur: s.currency, cap: s.capital, want: +(calcAccountBalance(acct('acc_nse')) / fxRate(acct('acc_nse'))).toFixed(2) }; });
+      check(conv.cur === 'USD' && conv.cap === conv.want, vp.width + 'px linked book not converted: ' + JSON.stringify(conv));
+      await page.evaluate(() => { state.ui.allCur = 'INR'; renderAll(); switchTab('calculator'); calcUpdate({ accountId: '' }); });
       await page.fill('#gpTarget', '900');
       check(await page.inputValue('#gpGoal') === 'custom' && await page.inputValue('#gpTarget') === '900', vp.width + 'px typing a target did not switch to own target');
       // Kept after a reload, advanced still open.

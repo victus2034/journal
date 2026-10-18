@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-18.109">
+  <meta name="app-version" content="2026-10-18.110">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -594,10 +594,6 @@
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Account</span>
           <select id="calcAccount" onchange="calcApplyAccount(this.value)" title="Fill the calculator from this account" class="min-w-[220px] bg-[#070A11] border border-terminal-border px-2.5 py-1.5 rounded-lg text-slate-200 text-[11px] focus:outline-none focus:border-amber-500"></select>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Currency</span>
-          <div id="calcCurrencySeg" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border"></div>
         </div>
       </div>
 
@@ -4150,8 +4146,9 @@
       const dash = document.getElementById('view-dashboard');
       if (!dash || !dash.classList.contains('hidden')) renderDashboard();
       else { const cur = viewCur(); renderAccountsBar(); updateTopBalance(cur); updateLimitBanner(cur); }
-      const open = ['signals', 'analysis', 'data'].find(t => { const v = document.getElementById('view-' + t); return v && !v.classList.contains('hidden'); });
+      const open = ['signals', 'analysis', 'calculator', 'data'].find(t => { const v = document.getElementById('view-' + t); return v && !v.classList.contains('hidden'); });
       if (open === 'signals') renderSignalsTable();
+      else if (open === 'calculator') renderCalculator();
       else if (open === 'analysis') renderAnalysis();
       else if (open === 'data' && !(document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) renderDataView();
     }
@@ -5749,8 +5746,8 @@
       save(); renderGoalPlanner(k === 'gpGoalId' || !!patch.gpGoalId);
     }
     // Goals that have a profit target, seen through it.
-    // The planner works in the calculator's currency (its $ / ₹ switch), whatever the header shows.
-    function gpCur() { return calcSettings().currency === "INR" ? "INR" : "USD"; }
+    // The planner works in the header's ₹ / $, like every other tab.
+    function gpCur() { return viewCur(); }
     function gpMoneyGoals() {
       const cur = gpCur();
       return (state.goals || []).filter(x => goalTargets(x).net_pnl != null).map(x => Object.assign({}, x, { metric: "net_pnl", target: goalTargetIn(x, "net_pnl", cur) }));
@@ -5923,8 +5920,8 @@
       const el = id => document.getElementById(id);
       if (!el('quickMargin')) return;
       const linked = state.accounts.find(a => a.id === s.accountId);
-      const cur = linked ? linked.currency : s.currency;
-      const capital = linked ? calcAccountBalance(linked) : (Number(s.capital) || 0);
+      const cur = viewCur();
+      const capital = linked ? calcAccountBalance(linked) * fxk(linked, cur) : (Number(s.capital) || 0);
       const typedRisk = calcPositive(s.quickRisk);
       const riskPct = linked ? (linked.maxRiskPct || 1) : (Number(s.riskPercent) || 1);
       const riskAmount = typedRisk > 0 ? typedRisk : capital * riskPct / 100;
@@ -5952,19 +5949,30 @@
       note.innerHTML = bits.join(' · ') + (r.capitalLimited
         ? `<br><span class="text-amber-300">Your whole balance is the limit here: at a ${slPct}% stop and ${esc(s.leverage)}× you can only risk ${esc(calcMoney(r.totalLoss, cur))}, below the ${esc(calcMoney(riskAmount, cur))} you wanted. Raise the leverage to use more of the risk budget.</span>` : '');
     }
-    function calcApplyAccount(accountId) {
+    function calcFollowCur(v) {
+      const s = calcSettings(), linked = state.accounts.find(a => a.id === s.accountId);
+      if (linked) { state.calculatorSettings = Object.assign(s, { currency: v }); calcApplyAccount(linked.id, true); return; }
+      const k = v === "INR" ? fxRate(null) : 1 / fxRate(null);
+      const conv = x => (x === "" || x == null || !isFinite(Number(x))) ? x : +(Number(x) * k).toFixed(2);
+      const patch = { currency: v, capital: conv(s.capital), riskAmount: conv(s.riskAmount), plannedMargin: conv(s.plannedMargin), ladderAmount: conv(s.ladderAmount), quickRisk: conv(s.quickRisk) };
+      if (v === "USD") Object.assign(patch, { costPercent: DEFAULT_USD_COST_PERCENT, feePreset: "custom" });
+      else Object.assign(patch, { feePreset: DEFAULT_INR_PRESET, costPercent: calcPresetPercent(DEFAULT_INR_PRESET) });
+      state.calculatorSettings = Object.assign(s, patch); save();
+    }
+    function calcApplyAccount(accountId, quiet) {
       if (!accountId) { calcUpdate({ accountId: "" }); return; }
       const a = state.accounts.find(x => x.id === accountId);
       if (!a) return;
-      const capital = +calcAccountBalance(a).toFixed(2);
+      const capital = +(calcAccountBalance(a) * fxk(a, viewCur())).toFixed(2);
       const patch = {
-        accountId, currency: a.currency, capital,
+        accountId, currency: viewCur(), capital,
         riskPercent: a.maxRiskPct || 1, activeRiskUnit: "percent",
         riskAmount: +(capital * (a.maxRiskPct || 1) / 100).toFixed(2),
         plannedMargin: capital
       };
       if (a.currency === "USD") { patch.costPercent = DEFAULT_USD_COST_PERCENT; patch.feePreset = "custom"; }
       else { patch.feePreset = DEFAULT_INR_PRESET; patch.costPercent = calcPresetPercent(DEFAULT_INR_PRESET); }
+      if (quiet) { state.calculatorSettings = Object.assign(calcSettings(), patch); save(); return; }
       calcUpdate(patch);
     }
 
@@ -6051,6 +6059,9 @@
         state.calculatorSettings.leverageDefaultOne = true;
         save();
       }
+      // The calculator follows the header's ₹ / $ switch: when it changes,
+      // the amounts typed here are converted (at the linked book's rate).
+      if (calcSettings().currency !== viewCur()) calcFollowCur(viewCur());
       const s = calcSettings();
       const cur = s.currency;
 
@@ -6060,11 +6071,6 @@
         accSel.value = state.accounts.some(a => a.id === s.accountId) ? s.accountId : "";
       }
 
-      calcSegButtons("calcCurrencySeg", [{ v: "USD", label: "$ USD" }, { v: "INR", label: "₹ INR" }], cur, v => {
-        if (v === cur) return;
-        if (v === "USD") calcUpdate({ currency: v, costPercent: DEFAULT_USD_COST_PERCENT, feePreset: "custom" });
-        else calcUpdate({ currency: v, feePreset: DEFAULT_INR_PRESET, costPercent: calcPresetPercent(DEFAULT_INR_PRESET) });
-      });
       renderSecBar('calcViewSeg', CALC_SECS, 'data-calcsec', s.view, v => calcUpdate({ view: v }));
 
       setCalcValue("calcCapital", s.capital);
