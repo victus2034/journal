@@ -6,6 +6,7 @@
 // and expects the storage warning. The last pass uploads a made-up CoinDCX
 // trade report (.xlsx, then the same as .csv), checks every number it shows
 // against the report, in Analysis and on the Dashboard, and switches brokers.
+// The goal planner turns a target, days and trades a day into per-day and per-trade amounts.
 // Then the CoinDCX import GitHub runs reads a fake CoinDCX (which checks every
 // call is signed as CoinDCX documents) into a fake GitHub's journal.json; the
 // journal syncs it, and trades the report already has must count only once.
@@ -22,8 +23,8 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const TABS = ['dashboard', 'signals', 'analysis', 'calculator', 'data'];
 
 function fixture() {
-  // Trading days on this machine's clock: the journal's day rolls over at 2 AM.
-  const day = n => { const d = new Date(Date.now() - 2 * 3600e3); d.setDate(d.getDate() - n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  // Trading days on this machine's clock: the journal's day rolls over at 05:30.
+  const day = n => { const d = new Date(Date.now() - 5.5 * 3600e3); d.setDate(d.getDate() - n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const now = new Date().toISOString();
   const accounts = [
     { id: 'acc_nse', name: 'Test NSE', market: 'nse', currency: 'INR', startBalance: 100000, maxRiskPct: 1, dailyLossLimit: 2, maxTradesPerDay: 5, defaultLeverage: 5, updatedAt: now },
@@ -376,7 +377,12 @@ async function backtestRun(seed) {
     const opened = await page.evaluate(() => { const t = reportTrades().slice().sort(byWhen)[0]; openReportTrade(t); return { account: state.ui.account, sec: state.ui.btSec, open: btOpenTrade, rows: document.getElementById('btBody').innerText }; });
     check(opened.account === BOOK && opened.sec === 'trades' && opened.open && /report rows?/.test(opened.rows), 'opening a report trade from the ledger: ' + JSON.stringify(opened).slice(0, 300));
 
-    for (const sec of ['overview', 'trades', 'files']) {
+    // Files moved to Sync & Settings: Analysis has no Files tab, the Data tab lists them.
+    check(!(await page.innerText('#btSecBar')).includes('Files') && !(await page.$('[data-btsec="files"]')), 'Analysis still has a Files tab');
+    const dataFiles = await page.evaluate(() => { switchTab('data'); return document.getElementById('btFiles').innerText; });
+    check(/Delete CoinDCX's report data/.test(dataFiles) && /Remove/.test(dataFiles), 'Sync & Settings does not list the report files: ' + JSON.stringify(dataFiles.slice(0, 400)));
+    await page.evaluate(() => switchTab('analysis'));
+    for (const sec of ['overview', 'trades']) {
       await page.evaluate(k => setBtSec(k), sec);
       check(await page.evaluate(k => { const el = document.querySelector('[data-btsec="' + k + '"]'); return !!el && !el.classList.contains('hidden') && el.offsetHeight > 0; }, sec), 'report section "' + sec + '" did not show');
     }
@@ -844,10 +850,11 @@ async function coindcxRun(seed) {
 
     // Analysis, results by broker and Files say where the rows came from.
     const an = await page.evaluate(() => {
-      state.ui.account = 'rep-coindcx-inr'; state.ui.anPeriod = 'all'; state.ui.btSec = 'files'; switchTab('analysis'); renderAll();
-      return { check: document.getElementById('btCheck').innerText, title: document.getElementById('btTitle').textContent,
-        line: [...document.querySelectorAll('#anBrokers tbody tr')].map(x => x.innerText.replace(/\s+/g, ' ').trim()).find(l => l.startsWith('CoinDCX ')) || '',
-        files: document.getElementById('btFiles').innerText };
+      state.ui.account = 'rep-coindcx-inr'; state.ui.anPeriod = 'all'; switchTab('analysis'); renderAll();
+      const o = { check: document.getElementById('btCheck').innerText, title: document.getElementById('btTitle').textContent,
+        line: [...document.querySelectorAll('#anBrokers tbody tr')].map(x => x.innerText.replace(/\s+/g, ' ').trim()).find(l => l.startsWith('CoinDCX ')) || '' };
+      switchTab('data'); o.files = document.getElementById('btFiles').innerText; switchTab('analysis');
+      return o;
     });
     check(an.check.startsWith('✓ All ') && an.check.includes(`${dupStored} rows from the API are already in an uploaded report and count once.`), 'Analysis check line: ' + an.check);
     check(an.title === 'CoinDCX · trades from its report and API', 'Analysis title: ' + an.title);
@@ -1275,14 +1282,14 @@ async function tradingDayRun(seed) {
   await ctx.route(url => !url.href.startsWith(base), r => r.abort());
   const t = (id, date, time, exit) => ({ id, accountId: 'acc_cry', date, exitDate: date, time, exitTime: time, symbol: 'ETHUSD', direction: 'long', entry: 100, exit, stop: 99, qty: 1, fees: 0, rules: [], updatedAt: seed.savedAt });
   const journal = Object.assign({}, seed, { trades: [
-    t('late1', '2026-10-11', '22:00', 99), t('late2', '2026-10-12', '01:30', 98), t('next', '2026-10-12', '02:00', 101), t('sep', '2026-10-01', '01:00', 102),
+    t('late1', '2026-10-11', '22:00', 99), t('late2', '2026-10-12', '01:30', 98), t('next', '2026-10-12', '05:30', 101), t('sep', '2026-10-01', '01:00', 102),
   ], goals: [] });
   await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(journal));
   const page = await ctx.newPage();
   page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
   page.on('dialog', d => d.accept());
   try {
-    await page.clock.setFixedTime(new Date('2026-10-12T01:45:00+05:30'));
+    await page.clock.setFixedTime(new Date('2026-10-12T05:15:00+05:30'));
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForTimeout(300);
     const look = () => page.evaluate(() => {
@@ -1292,9 +1299,9 @@ async function tradingDayRun(seed) {
         lim: dailyLimitState('USD', 'acc_cry').hit, inMonth: monthFilter(scoped()).filter(x => x.accountId === 'acc_cry').length, goalN: goalProgress({ period: 'day', accountId: 'acc_cry' }).n };
     });
     let v = await look();
-    // 01:45: still the 11th. The 01:30 trade joins the 22:00 one; together they break the $2.50 limit.
-    check(v.today === '2026-10-11' && v.month === '2026-10' && v.late2 === '2026-10-11' && v.next === '2026-10-12' && v.sep === '2026-09-30' && v.stored === '2026-10-12 01:30', '2 AM day: ' + JSON.stringify(v));
-    check(v.days === '2026-09-30:1,2026-10-11:2!,2026-10-12:1' && v.lim === true && v.inMonth === 3 && v.goalN === 2, '2 AM day buckets: ' + JSON.stringify(v));
+    // 05:15: still the 11th. The 01:30 trade joins the 22:00 one; together they break the $2.50 limit.
+    check(v.today === '2026-10-11' && v.month === '2026-10' && v.late2 === '2026-10-11' && v.next === '2026-10-12' && v.sep === '2026-09-30' && v.stored === '2026-10-12 01:30', '05:30 day: ' + JSON.stringify(v));
+    check(v.days === '2026-09-30:1,2026-10-11:2!,2026-10-12:1' && v.lim === true && v.inMonth === 3 && v.goalN === 2, '05:30 day buckets: ' + JSON.stringify(v));
     // A CoinDCX trade closed at 01:10 counts for the day before too, in its report and on the dashboard.
     const rep = await page.evaluate(() => {
       const row = (id, at, gross, fee) => ({ id, file: 'cdx-api', sym: 'B-ETH_USDT', at, kind: 'order', type: 'order', gross, settle: 0, fee, net: gross - fee, cur: 'INR' });
@@ -1306,25 +1313,97 @@ async function tradingDayRun(seed) {
     });
     check(rep.date === '2026-10-12' && rep.time === '01:10' && rep.day === '2026-10-11' && rep.btDay === '2026-10-11', 'report trade day: ' + JSON.stringify(rep));
     await page.evaluate(() => { state.backtest = { files: [], rows: [] }; ensureReportBooks(state); });
-    // 02:30: the 12th has begun.
-    await page.clock.setFixedTime(new Date('2026-10-12T02:30:00+05:30'));
+    // 05:45: the 12th has begun.
+    await page.clock.setFixedTime(new Date('2026-10-12T05:45:00+05:30'));
     v = await look();
-    check(v.today === '2026-10-12' && v.lim === false && v.goalN === 1, 'after 2 AM: ' + JSON.stringify(v));
+    check(v.today === '2026-10-12' && v.lim === false && v.goalN === 1, 'after 05:30: ' + JSON.stringify(v));
     // The setting: midnight puts every trade back on its calendar day, and survives a reload.
     await page.evaluate(() => switchTab('data'));
-    check(await page.inputValue('#dayCutoffSel') === '2', 'setting does not show 2 AM: ' + await page.inputValue('#dayCutoffSel'));
+    check(await page.inputValue('#dayCutoffSel') === '330', 'setting does not show 05:30: ' + await page.inputValue('#dayCutoffSel'));
     await page.selectOption('#dayCutoffSel', '0');
     v = await look();
     check(v.late2 === '2026-10-12' && v.sep === '2026-10-01' && v.days === '2026-10-01:1,2026-10-11:1,2026-10-12:2', 'midnight cutoff: ' + JSON.stringify(v));
     await page.reload({ waitUntil: 'load' });
     await page.waitForTimeout(300);
     check(await page.evaluate(() => dayCutoff()) === 0, 'cutoff not kept after reload');
-    check(await page.evaluate(() => sanitizeState({ accounts: [], trades: [], ui: { dayCutoff: 99 } }).ui.dayCutoff === undefined && dayCutoff() === 0), 'a bad cutoff survived the clean-up');
+    check(await page.evaluate(() => sanitizeState({ accounts: [], trades: [], ui: { dayCutoff: 99, dayCutoffMin: 999 } }).ui.dayCutoffMin === undefined && dayCutoff() === 0), 'a bad cutoff survived the clean-up');
+    // An hour saved before minutes were kept: the old 2 AM default moves to 05:30, any other hour stays.
+    const old = await page.evaluate(() => { const keep = Object.assign({}, state.ui); delete state.ui.dayCutoffMin; state.ui.dayCutoff = 2; const a = dayCutoff(); state.ui.dayCutoff = 4; const b = dayCutoff(); state.ui = keep; return [a, b]; });
+    check(old[0] === 330 && old[1] === 240, 'old hour setting: ' + JSON.stringify(old));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
   await ctx.close();
-  const label = 'trading day rolls over at 2 AM';
+  const label = 'trading day rolls over at 05:30 (00:00 UTC)';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
+// Goal planner: target, days and trades a day in; per day, per trade and trades in all out.
+async function goalPlannerRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  for (const vp of [{ width: 1366, height: 900 }, { width: 390, height: 844 }]) {
+    const ctx = await browser.newContext({ viewport: vp });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push(vp.width + 'px page error: ' + (e.stack || e.message)));
+    try {
+      await page.goto(base, { waitUntil: 'load' });
+      await page.waitForTimeout(300);
+      await page.evaluate(() => { switchTab('calculator'); state.ui.allCur = 'INR'; renderAll(); switchTab('calculator'); calcUpdate({ view: 'planner', accountId: 'acc_nse' }); });
+      await page.selectOption('#gpGoal', 'custom');
+      await page.fill('#gpTarget', '600'); await page.fill('#gpDays', '2'); await page.fill('#gpTrades', '3');
+      const out = await page.innerText('#gpPlan');
+      check(/PER DAY[\s\S]*₹300\.00/i.test(out) && /PER TRADE[\s\S]*₹100\.00/i.test(out) && /TRADES IN ALL\s*6\b/i.test(out) && /6 trades × ₹100\.00 = ₹600\.00/.test(out), vp.width + 'px 600 in 2 days at 3 a day: ' + JSON.stringify(out));
+      // Uneven numbers: 1000 over 3 days at 2 a day.
+      await page.fill('#gpTarget', '1000'); await page.fill('#gpDays', '3'); await page.fill('#gpTrades', '2');
+      const out2 = await page.innerText('#gpPlan');
+      check(/₹333\.33/.test(out2) && /₹166\.67/.test(out2) && /TRADES IN ALL\s*6\b/i.test(out2), vp.width + 'px 1000 in 3 days at 2 a day: ' + JSON.stringify(out2));
+      // Advanced stays folded (and empty) until opened, then shows the edge check.
+      check(await page.evaluate(() => !document.getElementById('gpAdvanced').open && document.getElementById('gpAdvOut').innerHTML === ''), vp.width + 'px advanced not folded');
+      await page.click('#gpAdvanced summary');
+      await page.waitForTimeout(100);
+      const adv = await page.innerText('#gpAdvOut');
+      check(/Position needed per trade/i.test(adv) && /₹166\.67/.test(adv), vp.width + 'px advanced plan: ' + adv.slice(0, 200));
+      // Picking a goal fills in what is left and the trading days; typing a target goes back to your own.
+      await page.selectOption('#gpGoal', 'g1');
+      const g = await page.evaluate(() => { const gl = gpMoneyGoals().find(x => x.id === 'g1'); return { need: +Math.max(0, gl.target - goalProgress(gl).net).toFixed(2), days: goalDaysLeft(gl), t: document.getElementById('gpTarget').value, d: document.getElementById('gpDays').value }; });
+      check(+g.t === g.need && +g.d === g.days, vp.width + 'px goal fill: ' + JSON.stringify(g));
+      // The planner follows the header's ₹ / $ (the calculator has no switch of its own).
+      check(await page.evaluate(() => !document.getElementById('calcCurrencySeg')), vp.width + 'px calculator still has its own currency switch');
+      for (const c of ['USD', 'INR']) {
+        await page.evaluate(() => { const g1 = state.goals.find(x => x.id === 'g1'); g1.target = g1.targets.net_pnl = 100000; calcUpdate({ accountId: '' }); gpSet('gpGoalId', 'g1'); });
+        // The header's own button, clicked while the calculator is open.
+        await page.click('#accountsBar button[data-cur="' + c + '"]');
+        const mix = await page.evaluate(c => { const g0 = state.goals.find(x => x.id === 'g1'); return { want: +Math.max(0, goalTargetIn(g0, 'net_pnl', c) - goalProgress(g0, c).net).toFixed(2), t: +document.getElementById('gpTarget').value, sym: document.getElementById('gpCur').innerText, calc: calcSettings().currency, plan: document.getElementById('gpOut').innerText }; }, c);
+        const sym = c === 'INR' ? '₹' : '$', other = c === 'INR' ? '$' : '₹';
+        check(mix.want > 0 && mix.t === mix.want && mix.sym === sym && mix.calc === c && mix.plan.includes(sym) && !mix.plan.includes(other), vp.width + 'px header ' + c + ': ' + JSON.stringify(mix));
+      }
+      // A linked book's balance converts too: the ₹1,00,000 book in dollars.
+      const conv = await page.evaluate(() => { state.ui.allCur = 'USD'; renderAll(); switchTab('calculator'); calcApplyAccount('acc_nse'); const s = calcSettings(); return { cur: s.currency, cap: s.capital, want: +(calcAccountBalance(acct('acc_nse')) / fxRate(acct('acc_nse'))).toFixed(2) }; });
+      check(conv.cur === 'USD' && conv.cap === conv.want, vp.width + 'px linked book not converted: ' + JSON.stringify(conv));
+      await page.evaluate(() => { state.ui.allCur = 'INR'; renderAll(); switchTab('calculator'); calcUpdate({ accountId: '' }); });
+      await page.fill('#gpTarget', '900');
+      check(await page.inputValue('#gpGoal') === 'custom' && await page.inputValue('#gpTarget') === '900', vp.width + 'px typing a target did not switch to own target');
+      // Kept after a reload, advanced still open.
+      await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(300);
+      await page.evaluate(() => switchTab('calculator'));
+      check(await page.inputValue('#gpTarget') === '900' && await page.evaluate(() => document.getElementById('gpAdvanced').open), vp.width + 'px not kept after reload');
+      const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      if (vp.width > 640) for (const w of [1366, 1024]) {
+        await page.setViewportSize({ width: w, height: 900 });
+        const hh = await page.evaluate(() => document.querySelector('header').offsetHeight);
+        check(hh < 80, w + 'px header not on one line: ' + hh);
+      }
+      check(wide <= 1, vp.width + 'px page scrolls sideways by ' + wide);
+    } catch (e) {
+      errs.push(vp.width + 'px threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+    }
+    await ctx.close();
+  }
+  const label = 'goal planner: per day, per trade, trades in all';
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
@@ -1459,6 +1538,7 @@ await cdxSizeRun(data);
 await reviewRun(data);
 await withdrawRun(data);
 await tradingDayRun(data);
+await goalPlannerRun(data);
 await deltaShareRun(data);
 
 await browser.close();
