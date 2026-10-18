@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-18.110">
+  <meta name="app-version" content="2026-10-18.111">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1174,16 +1174,18 @@
       <!-- Trading Day -->
       <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
         <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Trading Day</h3>
-        <p class="text-slate-400 text-[11px] leading-relaxed">A new trading day starts at this hour, not at midnight. A trade before it counts for the day before on the dashboard, calendar, daily limits, goals and Analysis. Each trade keeps its real date and time. Saved on this device.</p>
+        <p class="text-slate-400 text-[11px] leading-relaxed">A new trading day starts at this time, not at midnight. 05:30 IST is 00:00 UTC, when exchanges reset their day. A trade before it counts for the day before on the dashboard, calendar, daily limits, goals and Analysis. Each trade keeps its real date and time. Saved on this device.</p>
         <label class="flex flex-wrap items-center gap-2 text-slate-300">New day starts at
           <select id="dayCutoffSel" onchange="setDayCutoff(this.value)" class="bg-[#080D15] border border-terminal-border p-1.5 rounded text-white">
               <option value="0">Midnight (00:00)</option>
-              <option value="1">01:00</option>
-              <option value="2">02:00 (default)</option>
-              <option value="3">03:00</option>
-              <option value="4">04:00</option>
-              <option value="5">05:00</option>
-              <option value="6">06:00</option>
+              <option value="60">01:00</option>
+              <option value="120">02:00</option>
+              <option value="180">03:00</option>
+              <option value="240">04:00</option>
+              <option value="300">05:00</option>
+              <option value="330">05:30 (default, 00:00 UTC)</option>
+              <option value="360">06:00</option>
+              <option value="420">07:00</option>
           </select>
         </label>
       </div>
@@ -1621,7 +1623,8 @@
       s.ui.account = cText(s.ui.account || "all", 40);
       if (s.ui.account !== "all" && !s.accounts.some(a => a.id === s.ui.account)) s.ui.account = "all";
       s.ui.month = cText(s.ui.month || "current", 10);
-      if (s.ui.dayCutoff !== undefined && !(Number.isInteger(s.ui.dayCutoff) && s.ui.dayCutoff >= 0 && s.ui.dayCutoff <= DAY_CUTOFF_MAX)) delete s.ui.dayCutoff;
+      if (s.ui.dayCutoff !== undefined && !(Number.isInteger(s.ui.dayCutoff) && s.ui.dayCutoff >= 0 && s.ui.dayCutoff <= 6)) delete s.ui.dayCutoff;
+      if (s.ui.dayCutoffMin !== undefined && !(Number.isInteger(s.ui.dayCutoffMin) && s.ui.dayCutoffMin >= 0 && s.ui.dayCutoffMin <= DAY_CUTOFF_MAX)) delete s.ui.dayCutoffMin;
       return s;
     }
 
@@ -1722,18 +1725,23 @@
     function fmtDay(s) { return parseDay(s).toLocaleDateString("en-GB",{day:"numeric", month:"short"}); }
     function toMin(t) { if (!t) return null; const p = t.split(":"); return (+p[0]) * 60 + (+p[1]); }
     function hhmm(m) { return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); }
-    // The trading day rolls over at a set hour (2 AM unless changed in Settings),
+    // The trading day rolls over at a set time (05:30 unless changed in Settings),
     // not at midnight: a trade at 01:30 counts for the day before, so a late
     // session stays one day. The trade keeps its real date and time; only the day
     // it counts toward (dashboard, calendar, limits, goals, Analysis) moves.
-    const DAY_CUTOFF_DEFAULT = 2, DAY_CUTOFF_MAX = 6;
+    // Minutes after midnight. 05:30 IST is 00:00 UTC, when exchanges start their day.
+    const DAY_CUTOFF_DEFAULT = 330, DAY_CUTOFF_MAX = 420;
     function dayCutoff() {
-      const h = state && state.ui ? state.ui.dayCutoff : undefined;
-      return Number.isInteger(h) && h >= 0 && h <= DAY_CUTOFF_MAX ? h : DAY_CUTOFF_DEFAULT;
+      const ui = state && state.ui ? state.ui : {};
+      const m = ui.dayCutoffMin;
+      if (Number.isInteger(m) && m >= 0 && m <= DAY_CUTOFF_MAX) return m;
+      // An hour picked before minutes were kept (the old 2 AM default moves to the new one).
+      const h = ui.dayCutoff;
+      return Number.isInteger(h) && h >= 0 && h <= 6 && h !== 2 ? h * 60 : DAY_CUTOFF_DEFAULT;
     }
     function tradeDay(date, time) {
-      const m = toMin(time), h = dayCutoff();
-      if (!date || !h || m == null || isNaN(m) || m >= h * 60) return date;
+      const m = toMin(time), c = dayCutoff();
+      if (!date || !c || m == null || isNaN(m) || m >= c) return date;
       const d = parseDay(date); d.setDate(d.getDate() - 1);
       return iso(d);
     }
@@ -4154,13 +4162,13 @@
     }
 
     function setDayCutoff(v) {
-      const h = parseInt(v, 10);
-      if (!(h >= 0 && h <= DAY_CUTOFF_MAX)) return;
-      state.ui.dayCutoff = h;
+      const m = parseInt(v, 10);
+      if (!(m >= 0 && m <= DAY_CUTOFF_MAX)) return;
+      state.ui.dayCutoffMin = m; delete state.ui.dayCutoff;
       activeLedgerDate = null;
       save();
       renderAll();
-      toast("New trading day starts at " + hhmm(h * 60));
+      toast("New trading day starts at " + hhmm(m));
     }
 
     function onMonthFilterChange() {
