@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-18.108">
+  <meta name="app-version" content="2026-10-18.109">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -21,13 +21,19 @@
     .h-24{height:6rem}.rounded-t{border-top-left-radius:.25rem;border-top-right-radius:.25rem}.bg-emerald-500\/60{background-color:rgba(16,185,129,.6)}.bg-rose-500\/60{background-color:rgba(244,63,94,.6)}.border-rose-400{border-color:#fb7185}
     .bg-amber-400\/70{background-color:rgba(251,191,36,.7)}.bg-amber-950\/40{background-color:rgba(69,26,3,.4)}.border-amber-800\/60{border-color:rgba(146,64,14,.6)}.min-w-\[160px\]{min-width:160px}.pt-4{padding-top:1rem}
     .mnav{display:none}
-    /* Header stays on one line on wide screens: the subtitle and book count drop
-       out (and the "Balance:" word below 1900px) to make room, and the book
+    /* Header stays on one line from tablet width up: the subtitle and book count
+       drop out (and the "Balance:" word below 1900px) to make room, and the book
        switcher scrolls sideways if it still runs out. */
-    @media (min-width:1500px){
+    @media (min-width:640px){
       .hdr-row,.hdr-left,.hdr-right{flex-wrap:nowrap}
       .hdr-right{flex-shrink:0}
+      .hdr-left{min-width:0;flex-shrink:1}
       .hdr-wide,.hdr-bal{display:none!important}
+    }
+    @media (min-width:640px) and (max-width:1365px){
+      .hdr-row{gap:.5rem}.hdr-left{gap:.5rem}
+      #appVerPill{display:none}
+      .top-nav button{padding-left:.4rem;padding-right:.4rem}
     }
     @media (min-width:1900px){ .hdr-bal{display:inline!important} }
     @media (max-width:639px){
@@ -2143,10 +2149,11 @@
       return gc === cur ? 1 : cur === "INR" ? FX_DEFAULT : 1 / FX_DEFAULT;
     }
     const MONEY_GOALS = ["net_pnl", "max_loss", "balance", "withdraw"];
-    function goalProgress(g) {
+    // In the header's currency, unless another is asked for (the goal planner uses the calculator's).
+    function goalProgress(g, inCur) {
       const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
       const book = g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId) ? g.accountId : null;
-      const cur = viewCur();
+      const cur = inCur === "INR" || inCur === "USD" ? inCur : viewCur();
       const ts = allTrades().filter(t => dayOf(t) >= start && dayOf(t) <= end
         && (!book || t.accountId === book)).map(t => toView(t, cur));
       const byDay = {};
@@ -5742,8 +5749,11 @@
       save(); renderGoalPlanner(k === 'gpGoalId' || !!patch.gpGoalId);
     }
     // Goals that have a profit target, seen through it.
+    // The planner works in the calculator's currency (its $ / ₹ switch), whatever the header shows.
+    function gpCur() { return calcSettings().currency === "INR" ? "INR" : "USD"; }
     function gpMoneyGoals() {
-      return (state.goals || []).filter(x => goalTargets(x).net_pnl != null).map(x => Object.assign({}, x, { metric: "net_pnl", target: goalTargetIn(x, "net_pnl", viewCur()) }));
+      const cur = gpCur();
+      return (state.goals || []).filter(x => goalTargets(x).net_pnl != null).map(x => Object.assign({}, x, { metric: "net_pnl", target: goalTargetIn(x, "net_pnl", cur) }));
     }
     function gpContext() {
       const s = calcSettings();
@@ -5751,16 +5761,15 @@
       const gid = s.gpGoalId;
       const moneyGoals = gpMoneyGoals();
       const g = gid === "custom" ? null : (moneyGoals.find(x => x.id === gid) || (gid === "auto" ? (moneyGoals.find(x => state.goals[Math.min(state.ui.goalIdx || 0, state.goals.length - 1)] && x.id === state.goals[Math.min(state.ui.goalIdx || 0, state.goals.length - 1)].id) || moneyGoals[0]) : null) || null);
-      let books, cur;
-      if (g) {
-        books = goalBooksOf(g);
-        cur = goalProgress(g).cur;
-      } else {
-        // Custom target: the book linked in the calculator, else the one selected on the dashboard.
-        const linked = state.accounts.find(a => a.id === s.accountId) || (!isAll() ? acct(selected()) : null);
-        books = linked ? [linked] : []; cur = linked ? linked.currency : s.currency;
+      const cur = gpCur();
+      let books;
+      if (g) books = goalBooksOf(g);
+      else {
+        // Own target: the book linked in the calculator, else the books in view on the dashboard.
+        const linked = state.accounts.find(a => a.id === s.accountId);
+        books = linked ? [linked] : viewBooks().filter(Boolean);
       }
-      const balance = g || books.length ? sum(books.map(a => balIn(a, cur))) : (Number(s.capital) || 0);
+      const balance = books.length ? sum(books.map(a => balIn(a, cur))) : (Number(s.capital) || 0);
       return { s, g, books, cur, balance: balance > 0 ? balance : (Number(s.capital) || 0) };
     }
     // What the trades so far say about you, from the same analysis as the Analysis tab.
@@ -5813,13 +5822,13 @@
       // goal select + auto-filled fields
       const sel = document.getElementById('gpGoal');
       if (sel && (force || document.activeElement !== sel)) {
-        sel.innerHTML = '<option value="custom">My own target</option>' + gpMoneyGoals().map(x => '<option value="' + esc(x.id) + '">' + esc(x.title) + ' (' + esc(money(x.target, goalProgress(x).cur, 0)) + ' ' + (goalUpcoming(x) ? 'next ' : '') + esc(x.period) + ')</option>').join('');
+        sel.innerHTML = '<option value="custom">My own target</option>' + gpMoneyGoals().map(x => '<option value="' + esc(x.id) + '">' + esc(x.title) + ' (' + esc(money(x.target, cur, 0)) + ' ' + (goalUpcoming(x) ? 'next ' : '') + esc(x.period) + ')</option>').join('');
         sel.value = g ? g.id : "custom";
       }
       let need, days;
       if (g) {
         // Still to earn on the goal, over the trading days left (the day rolls over at the app's cutoff).
-        need = Math.max(0, (g.target || 0) - goalProgress(g).net);
+        need = Math.max(0, (g.target || 0) - goalProgress(g, cur).net);
         days = goalDaysLeft(g);
         if (need > 0) need = +need.toFixed(2);
       } else { need = num(s.gpTarget); days = Math.floor(num(s.gpDays)); }

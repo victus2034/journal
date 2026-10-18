@@ -1362,6 +1362,10 @@ async function goalPlannerRun(seed) {
       await page.selectOption('#gpGoal', 'g1');
       const g = await page.evaluate(() => { const gl = gpMoneyGoals().find(x => x.id === 'g1'); return { need: +Math.max(0, gl.target - goalProgress(gl).net).toFixed(2), days: goalDaysLeft(gl), t: document.getElementById('gpTarget').value, d: document.getElementById('gpDays').value }; });
       check(+g.t === g.need && +g.d === g.days, vp.width + 'px goal fill: ' + JSON.stringify(g));
+      // Header in dollars, planner in rupees: the goal is shown in rupees, not empty or in dollars.
+      await page.evaluate(() => { const g1 = state.goals.find(x => x.id === 'g1'); g1.target = g1.targets.net_pnl = 100000; state.ui.allCur = 'USD'; renderAll(); switchTab('calculator'); calcUpdate({ currency: 'INR', accountId: '' }); gpSet('gpGoalId', 'g1'); });
+      const mix = await page.evaluate(() => { const g0 = state.goals.find(x => x.id === 'g1'); return { want: +Math.max(0, goalTargetIn(g0, 'net_pnl', 'INR') - goalProgress(g0, 'INR').net).toFixed(2), t: +document.getElementById('gpTarget').value, sym: document.getElementById('gpCur').innerText, plan: (document.getElementById('gpPlan') || {}).innerText || document.getElementById('gpOut').innerText }; });
+      check(mix.want > 0 && mix.t === mix.want && mix.sym === '₹' && /₹/.test(mix.plan) && !/\$/.test(mix.plan), vp.width + 'px header $ / planner ₹: ' + JSON.stringify(mix));
       await page.fill('#gpTarget', '900');
       check(await page.inputValue('#gpGoal') === 'custom' && await page.inputValue('#gpTarget') === '900', vp.width + 'px typing a target did not switch to own target');
       // Kept after a reload, advanced still open.
@@ -1369,6 +1373,11 @@ async function goalPlannerRun(seed) {
       await page.evaluate(() => switchTab('calculator'));
       check(await page.inputValue('#gpTarget') === '900' && await page.evaluate(() => document.getElementById('gpAdvanced').open), vp.width + 'px not kept after reload');
       const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      if (vp.width > 640) for (const w of [1366, 1024]) {
+        await page.setViewportSize({ width: w, height: 900 });
+        const hh = await page.evaluate(() => document.querySelector('header').offsetHeight);
+        check(hh < 80, w + 'px header not on one line: ' + hh);
+      }
       check(wide <= 1, vp.width + 'px page scrolls sideways by ' + wide);
     } catch (e) {
       errs.push(vp.width + 'px threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
