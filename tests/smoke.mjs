@@ -6,6 +6,7 @@
 // and expects the storage warning. The last pass uploads a made-up CoinDCX
 // trade report (.xlsx, then the same as .csv), checks every number it shows
 // against the report, in Analysis and on the Dashboard, and switches brokers.
+// The goal planner turns a target, days and trades a day into per-day and per-trade amounts.
 // Then the CoinDCX import GitHub runs reads a fake CoinDCX (which checks every
 // call is signed as CoinDCX documents) into a fake GitHub's journal.json; the
 // journal syncs it, and trades the report already has must count only once.
@@ -1329,6 +1330,56 @@ async function tradingDayRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Goal planner: target, days and trades a day in; per day, per trade and trades in all out.
+async function goalPlannerRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  for (const vp of [{ width: 1366, height: 900 }, { width: 390, height: 844 }]) {
+    const ctx = await browser.newContext({ viewport: vp });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push(vp.width + 'px page error: ' + (e.stack || e.message)));
+    try {
+      await page.goto(base, { waitUntil: 'load' });
+      await page.waitForTimeout(300);
+      await page.evaluate(() => { switchTab('calculator'); calcUpdate({ view: 'planner', currency: 'INR', accountId: 'acc_nse' }); });
+      await page.selectOption('#gpGoal', 'custom');
+      await page.fill('#gpTarget', '600'); await page.fill('#gpDays', '2'); await page.fill('#gpTrades', '3');
+      const out = await page.innerText('#gpPlan');
+      check(/PER DAY[\s\S]*₹300\.00/i.test(out) && /PER TRADE[\s\S]*₹100\.00/i.test(out) && /TRADES IN ALL\s*6\b/i.test(out) && /6 trades × ₹100\.00 = ₹600\.00/.test(out), vp.width + 'px 600 in 2 days at 3 a day: ' + JSON.stringify(out));
+      // Uneven numbers: 1000 over 3 days at 2 a day.
+      await page.fill('#gpTarget', '1000'); await page.fill('#gpDays', '3'); await page.fill('#gpTrades', '2');
+      const out2 = await page.innerText('#gpPlan');
+      check(/₹333\.33/.test(out2) && /₹166\.67/.test(out2) && /TRADES IN ALL\s*6\b/i.test(out2), vp.width + 'px 1000 in 3 days at 2 a day: ' + JSON.stringify(out2));
+      // Advanced stays folded (and empty) until opened, then shows the edge check.
+      check(await page.evaluate(() => !document.getElementById('gpAdvanced').open && document.getElementById('gpAdvOut').innerHTML === ''), vp.width + 'px advanced not folded');
+      await page.click('#gpAdvanced summary');
+      await page.waitForTimeout(100);
+      const adv = await page.innerText('#gpAdvOut');
+      check(/Position needed per trade/i.test(adv) && /₹166\.67/.test(adv), vp.width + 'px advanced plan: ' + adv.slice(0, 200));
+      // Picking a goal fills in what is left and the trading days; typing a target goes back to your own.
+      await page.selectOption('#gpGoal', 'g1');
+      const g = await page.evaluate(() => { const gl = gpMoneyGoals().find(x => x.id === 'g1'); return { need: +Math.max(0, gl.target - goalProgress(gl).net).toFixed(2), days: goalDaysLeft(gl), t: document.getElementById('gpTarget').value, d: document.getElementById('gpDays').value }; });
+      check(+g.t === g.need && +g.d === g.days, vp.width + 'px goal fill: ' + JSON.stringify(g));
+      await page.fill('#gpTarget', '900');
+      check(await page.inputValue('#gpGoal') === 'custom' && await page.inputValue('#gpTarget') === '900', vp.width + 'px typing a target did not switch to own target');
+      // Kept after a reload, advanced still open.
+      await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(300);
+      await page.evaluate(() => switchTab('calculator'));
+      check(await page.inputValue('#gpTarget') === '900' && await page.evaluate(() => document.getElementById('gpAdvanced').open), vp.width + 'px not kept after reload');
+      const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      check(wide <= 1, vp.width + 'px page scrolls sideways by ' + wide);
+    } catch (e) {
+      errs.push(vp.width + 'px threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+    }
+    await ctx.close();
+  }
+  const label = 'goal planner: per day, per trade, trades in all';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 async function withdrawRun(seed) {
   const errs = [];
   const check = (ok, what) => { if (!ok) errs.push(what); };
@@ -1459,6 +1510,7 @@ await cdxSizeRun(data);
 await reviewRun(data);
 await withdrawRun(data);
 await tradingDayRun(data);
+await goalPlannerRun(data);
 await deltaShareRun(data);
 
 await browser.close();
