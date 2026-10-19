@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-19.115">
+  <meta name="app-version" content="2026-10-19.116">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -3527,7 +3527,7 @@
         const sigRv = ownR != null ? ownR : (zr && typeof zr.resultR === "number" ? zr.resultR : null);
         const myRv = (t && o && o.source === "traded") ? o.r : null;
         const rCls = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
-        const outcomeTxt = { "timeout": "timed out", "+2R": "hit +2R", "+1R": "hit +1R", "BE": "breakeven", "SL": "stopped out", "Neither": "neither" };
+        const outcomeTxt = { "Trail": "trailing stop", "timeout": "timed out", "+2R": "hit +2R", "+1R": "hit +1R", "BE": "breakeven", "SL": "stopped out", "Neither": "neither" };
         const gs = gradingState(sig);
         // The scanner can know a trade was entered without having a result yet.
         const entered = sig.filled === true && sigRv == null;
@@ -7198,7 +7198,12 @@
           if (x.outcome === "no fill") { filled = false; rank = 3; }
           else if (x.filled) {
             filled = true; rank = x.resolved ? 3 : 2;
-            if (x.outcome === "2R") { outcome = "+2R"; resultR = 2 - costR; }
+            // A trailed fib (plan "exit": "trail") has one exit, priced by the scanner as exit_r.
+            if (r.plan.exit === "trail" && typeof x.exit_r === "number" && x.resolved) {
+              outcome = x.outcome === "TRAIL" ? "Trail" : x.outcome;
+              resultR = x.exit_r - costR;
+            }
+            else if (x.outcome === "2R") { outcome = "+2R"; resultR = 2 - costR; }
             else if (x.outcome === "1R") { outcome = "+1R"; resultR = 1 - costR; }
             else if (x.outcome === "SL") { outcome = "SL"; resultR = -1 - (riskPct > 0 ? (sl / entry) * SLIP_PCT / riskPct : 0) - costR; }
             else if (x.outcome === "BE") {
