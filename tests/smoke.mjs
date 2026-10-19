@@ -1703,6 +1703,21 @@ async function fibTlRun(seed) {
     check(/1 of 3/.test(lv.l4), 'L4 reached only by the stopped alert: ' + JSON.stringify(lv.l4));
     check(lv.mine.join() === 'L4', 'entry at 4127.4 is nearest L4: ' + lv.mine.join());
     check(lv.noKey === null, 'an alert without a fib key has no levels');
+    // What-ifs at L1 / L2 / L4 from the scanner: priced like the real result, shown on rows no alert entered at.
+    const wi = await page.evaluate(() => {
+      const rec = JSON.stringify({ id: 'fib|XAUTUSD|4h|1|1791374400|4215.9|2@1', kind: 'fib', market: 'crypto', tf: '4h', symbol: 'XAUTUSD', price: 4150, sent_ts: 1791806036, plan: { entry: 4142.134, sl: 4123.6925, side: 'long' } });
+      const lvr = { 'fib|XAUTUSD|4h|1|1791374400|4215.9|2@1': { L1: { entry: 4170.2992, filled: true, resolved: true, outcome: 'SL', sl: true }, L2: { entry: 4155.546, outcome: 'not reached', filled: false, resolved: true }, L4: { entry: 4127.3808, filled: true, resolved: true, outcome: '2R', r1: true, r2: true } } };
+      const g = parseFibTl(rec + '\n', '{}', JSON.stringify(lvr)).records[0];
+      renderFibLevels([{ signal: g, trade: null }]);
+      const row = k => (document.querySelector('[data-fiblevel="' + k + '"]') || {}).innerText || '';
+      return { w: g.fibWhatIf, l4: row('L4'), l2: row('L2'), l1: row('L1') };
+    });
+    // L4: risk 3.6883 on 4127.38 = 0.08936%; 2R less 0.0826% / 0.08936% = 2 - 0.9243
+    check(wi.w && wi.w.L4 && Math.abs(wi.w.L4.resultR - (2 - 0.0826 / (Math.abs(4127.3808 - 4123.6925) / 4127.3808 * 100))) < 1e-3, 'L4 what-if R: ' + JSON.stringify(wi.w && wi.w.L4));
+    check(wi.w && wi.w.L2 && wi.w.L2.outcome === 'not reached' && wi.w.L2.resultR === null, 'L2 not reached: ' + JSON.stringify(wi.w && wi.w.L2));
+    check(/what-if/.test(wi.l4) && /1W \/ 0L/.test(wi.l4), 'L4 row shows the what-if: ' + JSON.stringify(wi.l4));
+    check(/what-if/.test(wi.l1) && /0W \/ 1L/.test(wi.l1), 'L1 row shows the what-if: ' + JSON.stringify(wi.l1));
+    check(!/what-if/.test(wi.l2), 'L2 never reached shows no what-if: ' + JSON.stringify(wi.l2));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
