@@ -1634,6 +1634,65 @@ async function alertRefreshRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('alert refresh: ' + e); });
 }
 
+// Fib / trendline / 1D+ zone results priced as the scanner prices them (its
+// fib_trendline_trades.booked_r at the 1R booking: Delta fee, breakeven offset and
+// stop slippage), 1D+ zones shown as zones, and a 1W result that closes weeks after
+// its alert still reaches the journal.
+async function fibTlRun(seed) {
+  const errs = [];
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const now = Math.floor(Date.now() / 1000), old = now - 20 * 86400;
+  const rec = (id, kind, market, tf, plan, ts, extra) => JSON.stringify(Object.assign({ id, kind, market, tf, symbol: 'X' + id, plan, sent_ts: ts, price: plan.entry }, extra || {}));
+  const recs = [
+    rec('a', 'fib', 'crypto', '4h', { entry: 100, sl: 97, side: 'long' }, now - 3600),
+    rec('b', 'fib', 'crypto', '1d', { entry: 50, sl: 51, side: 'short' }, now - 7200),
+    rec('c', 'trendline', 'nse', '1d', { entry: 200, sl: 196, side: 'long', target_r: 1 }, now - 9000),
+    rec('d', 'zone', 'nse', '1d', { entry: 200, sl: 196, side: 'long' }, now - 9600, { zone_bottom: 197, zone_top: 200 }),
+    rec('w', 'fib', 'crypto', '1w', { entry: 10, sl: 9, side: 'long' }, old),
+  ].join('\n') + '\n';
+  const done = o => ({ filled: true, resolved: true, outcome: o });
+  const res = { a: done('SL'), b: done('BE'), c: done('SL'), d: done('BE'), w: done('2R') };
+  const wOpen = { w: { filled: true, resolved: false, outcome: 'open' } };
+  let served = res;
+  await ctx.route(url => !url.href.startsWith(base), async r => {
+    const u = r.request().url();
+    if (!u.includes('/scanner-runtime-state/')) return r.abort();
+    const f = u.split('/').pop().split('?')[0];
+    return r.fulfill({ status: 200, body: f === 'fib_trendline_alert_records.jsonl' ? recs : f === 'fib_trendline_results.json' ? JSON.stringify(served) : f.endsWith('.json') ? '{}' : '' });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    const got = await page.evaluate(([r, x]) => {
+      const out = {}; parseFibTl(r, JSON.stringify(x)).records.forEach(g => { out[g.key] = { r: g.resultR, kind: g.kind, daily: g.scoredDaily, lo: g.zoneLow }; });
+      return out;
+    }, [recs, res]);
+    // booked_r(plan, market, result)[0] from the scanner, for these plans
+    const want = { a: -1.0437, b: -0.019627, c: -1.07765, d: -0.01818 };
+    Object.keys(want).forEach(k => check(got[k] && Math.abs(got[k].r - want[k]) < 1e-4, `R of ${k}: ${got[k] && got[k].r} want ${want[k]}`));
+    check(got.d && got.d.kind === undefined && got.d.daily === true && got.d.lo === 197, '1D zone not a zone: ' + JSON.stringify(got.d));
+    check(got.a && got.a.kind === 'fib' && got.c.kind === 'trendline', 'fib / trendline kinds: ' + JSON.stringify(got));
+    // A device that took the 1W alert while it was open, and has newer alerts since,
+    // still gets its result: the refresh reaches back to the oldest open alert.
+    served = wOpen;
+    await page.evaluate(() => { state.signals = []; state.ui.sigAutoAt = 0; return autoRefreshAlerts(true); });
+    served = res;
+    const wBefore = await page.evaluate(() => { const g = state.signals.find(s => s.key === 'w'); return g && g.resultR; });
+    check(wBefore === null || wBefore === undefined, '1W should start open: ' + wBefore);
+    await page.evaluate(() => { state.ui.sigAutoAt = 0; return autoRefreshAlerts(true); });
+    const w = await page.evaluate(() => { const g = state.signals.find(s => s.key === 'w'); return g && g.resultR; });
+    check(typeof w === 'number' && w > 1.9, '1W result never arrived: ' + w);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Fib, trendline and 1D+ zone results match the scanner');
+  errs.forEach(e => { console.log('     ' + e); failures.push('fib/tl results: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1652,6 +1711,7 @@ await goalPlannerRun(data);
 await goalPctRun(data);
 await deltaShareRun(data);
 await alertRefreshRun(data);
+await fibTlRun(data);
 
 await browser.close();
 server.close();

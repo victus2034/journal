@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-19.114">
+  <meta name="app-version" content="2026-10-19.115">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -3191,7 +3191,7 @@
     // 01:00-08:00 dark gap), every day of the week, and a trade gets up to 6 hours
     // to resolve. NSE alerts are graded after that day's session.
     function gradingState(sig) {
-      if (sig.kind) return { label: "open", why: "Fib and trendline alerts are scored once a day after 08:00 IST (5 candles to fill, 20 to finish, on the alert's own timeframe). Weekly and monthly ones can stay open for weeks." };
+      if (sig.kind || sig.scoredDaily) return { label: "open", why: "Fib, trendline and 1D+ zone alerts are scored once a day after 08:00 IST (5 candles to fill, 20 to finish, on the alert's own timeframe). Weekly and monthly ones can stay open for weeks." };
       if (SKIPPED_OUTCOMES[sig.outcome]) return { label: sig.outcome === "immature" ? "pending" : "not graded", why: SKIPPED_OUTCOMES[sig.outcome] };
       const p = String(sig.time || "").split(":").map(Number);
       const d = parseDay(sig.date);
@@ -3532,7 +3532,7 @@
         // The scanner can know a trade was entered without having a result yet.
         const entered = sig.filled === true && sigRv == null;
         const enteredLabel = sig.outcome === "timeout" ? { label: "timed out", why: "Entered, but neither the stop nor 1R was reached within 20 candles of the alert's timeframe. The scanner leaves these out of its win rate, and so does this page." }
-          : sig.kind ? { label: "entered · open", why: "Entered; the fib/trendline report scores it once a day after 08:00 IST. Weekly and monthly alerts can stay open for weeks." }
+          : (sig.kind || sig.scoredDaily) ? { label: "entered · open", why: "Entered; the fib/trendline report scores it once a day after 08:00 IST. Weekly and monthly alerts can stay open for weeks." }
           : /pending/i.test(sig.outcome || "")
           ? { label: "entered · open", why: "The scanner saw price reach this entry, but the trade was still inside its 6-hour evaluation window when the report ran. It gets its result in the next report." }
           : { label: "entered · unclear", why: "The scanner saw this entry, but stop and target traded inside the same candle and it could not tell which came first, so it gives no result." };
@@ -7175,10 +7175,13 @@
       const { rows, skipped } = scannerJsonLines(recText || "");
       let res = {};
       try { res = JSON.parse(resText || "{}") || {}; } catch (e) { res = {}; }
-      const COST = { crypto: 0.10, nse: 0.1063 };
+      // Round-trip cost % - the scanner's fib_trendline_trades.COST_PCT (Delta 0.0826%).
+      const COST = { crypto: 0.0826, nse: 0.1063 };
       // Breakeven stop, % past entry once +0.5R trades - the scanner's
       // CRYPTO_BREAK_EVEN_OFFSET_PCT / BREAK_EVEN_OFFSET_PCT.
-      const BE_PCT = { crypto: 0.1129, nse: 0.120 };
+      const BE_PCT = { crypto: 0.0933, nse: 0.120 };
+      // A stop fills this % past its trigger (SL_FILL_SLIPPAGE_PCT), stops and breakeven alike.
+      const SLIP_PCT = 0.05;
       const TF = { "30m": "30M", "4h": "4H", "1d": "1D", "1w": "1W", "1M": "1MO" };
       const n = v => (typeof v === "number" && isFinite(v)) ? v : null;
       const out = [];
@@ -7197,14 +7200,23 @@
             filled = true; rank = x.resolved ? 3 : 2;
             if (x.outcome === "2R") { outcome = "+2R"; resultR = 2 - costR; }
             else if (x.outcome === "1R") { outcome = "+1R"; resultR = 1 - costR; }
-            else if (x.outcome === "SL") { outcome = "SL"; resultR = -1 - costR; }
-            else if (x.outcome === "BE") { outcome = "BE"; resultR = (riskPct > 0 ? (BE_PCT[r.market] || 0.1129) / riskPct : 0) - costR; }
+            else if (x.outcome === "SL") { outcome = "SL"; resultR = -1 - (riskPct > 0 ? (sl / entry) * SLIP_PCT / riskPct : 0) - costR; }
+            else if (x.outcome === "BE") {
+              outcome = "BE";
+              const be = BE_PCT[r.market] != null ? BE_PCT[r.market] : BE_PCT.crypto;
+              const sign = r.plan.side === "short" ? -1 : 1;
+              resultR = (riskPct > 0 ? (be - (1 + sign * be / 100) * SLIP_PCT) / riskPct : 0) - costR;
+            }
             else outcome = x.outcome === "timeout" ? "timeout" : "open";
           }
         }
         const market = r.market === "nse" ? "NSE" : "CRYPTO", tf = TF[r.tf] || String(r.tf || "").toUpperCase();
+        // 1D/1W/1M S/R zones (kind "zone") are zone alerts, scored by the fib/trendline report.
+        const isZone = r.kind === "zone";
         out.push({
-          id: uid(), key: String(r.id), kind: r.kind === "trendline" ? "trendline" : "fib",
+          id: uid(), key: String(r.id), kind: isZone ? undefined : r.kind === "trendline" ? "trendline" : "fib",
+          scoredDaily: true,
+          zoneLow: isZone ? n(r.zone_bottom) : undefined, zoneHigh: isZone ? n(r.zone_top) : undefined,
           date: `${ip.year}-${ip.month}-${ip.day}`, time: `${ip.hour}:${ip.minute}`,
           symbol: String(r.symbol || "").split("/")[0].replace(/\.NS$/i, "").toUpperCase(),
           side: r.plan.side === "short" ? "short" : "long", score: "",
@@ -7372,7 +7384,9 @@
       incoming.forEach(r => {
         const ex = have[r.key];
         if (!ex) fresh.push(r);
-        else if (r.srcRank > signalRank(ex) || (r.zoneResult && !ex.zoneResult)) upgrades.push({ ex, r });
+        else if (r.srcRank > signalRank(ex) || (r.zoneResult && !ex.zoneResult)
+          // the same result, re-priced: the journal's fib/trendline costs changed, or the scanner re-graded it
+          || (r.srcRank >= 3 && typeof r.resultR === "number" && typeof ex.resultR === "number" && Math.abs(r.resultR - ex.resultR) > 1e-4)) upgrades.push({ ex, r });
       });
       return { incoming, fresh, upgrades, staleIds };
     }
@@ -7414,6 +7428,12 @@
         const newest = (state.signals || []).map(g => g.date).filter(Boolean).sort().pop();
         const d = newest ? new Date(newest + "T00:00:00") : new Date();
         d.setDate(d.getDate() - (newest ? 7 : 30));
+        // A 1W / 1M trade can close weeks after its alert: reach back to the oldest one
+        // still open (at most 90 days), or its result never arrives.
+        const floor = new Date(); floor.setDate(floor.getDate() - 90);
+        const openFrom = (state.signals || []).filter(g => (g.kind || g.scoredDaily) && g.filled !== false
+          && typeof g.resultR !== "number" && g.outcome !== "timeout" && g.date >= iso(floor)).map(g => g.date).sort()[0];
+        if (openFrom && openFrom < iso(d)) { d.setTime(new Date(openFrom + "T00:00:00").getTime()); }
         const marketOk = r => { const isNse = /^NSE$/i.test(r.market); return mk === "all" || (mk === "nse" ? isNse : !isNse); };
         const plan = buildScannerPlan(got, iso(d), marketOk);
         const n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
