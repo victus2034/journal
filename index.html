@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-18.112">
+  <meta name="app-version" content="2026-10-19.113">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -644,21 +644,28 @@
           <h3 class="font-bold text-white uppercase tracking-wider">Goal planner</h3>
           <span class="text-slate-500 text-[11px]">How much to make each day and each trade to hit a target</span>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-start">
           <div class="col-span-2 md:col-span-1">
-            <label class="text-slate-400 block mb-1">Goal</label>
+            <label class="text-slate-400 block mb-1 h-6 leading-6">Goal</label>
             <select id="gpGoal" onchange="gpSet('gpGoalId', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500"></select>
           </div>
           <div>
-            <label class="text-slate-400 block mb-1">Target to earn (<span id="gpCur">$</span>)</label>
-            <input type="number" id="gpTarget" step="any" min="0" placeholder="e.g. 600" oninput="gpSet('gpTarget', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
+            <div class="flex items-center justify-between gap-2 mb-1 h-6">
+              <label for="gpTarget" class="text-slate-400">Target to earn</label>
+              <div class="flex gap-0.5 bg-black/40 p-0.5 rounded border border-terminal-border" title="Type the target as an amount or as a % of your balance">
+                <button type="button" id="gpUnitAmt" onclick="gpSetUnit('amt')" class="px-1.5 rounded text-[10px] font-bold"><span id="gpCur">$</span></button>
+                <button type="button" id="gpUnitPct" onclick="gpSetUnit('pct')" class="px-1.5 rounded text-[10px] font-bold">% of capital</button>
+              </div>
+            </div>
+            <input type="number" id="gpTarget" step="any" min="0" placeholder="e.g. 600" oninput="gpSet(calcSettings().gpUnit === 'pct' ? 'gpPct' : 'gpTarget', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
+            <div id="gpTargetHint" class="text-[10px] text-slate-500 mt-1 min-h-[14px]"></div>
           </div>
           <div>
-            <label class="text-slate-400 block mb-1">In how many days</label>
+            <label class="text-slate-400 block mb-1 h-6 leading-6">In how many days</label>
             <input type="number" id="gpDays" step="1" min="0" placeholder="e.g. 2" oninput="gpSet('gpDays', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
           </div>
           <div>
-            <label class="text-slate-400 block mb-1">Trades per day</label>
+            <label class="text-slate-400 block mb-1 h-6 leading-6">Trades per day</label>
             <input type="number" id="gpTrades" step="any" min="0" placeholder="e.g. 3" oninput="gpSet('gpTrades', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
           </div>
         </div>
@@ -5712,7 +5719,7 @@
       plannedMargin: 5000, takeProfitEnabled: true, takeProfitPercent: 4, view: "quick",
       ladderIncludeFees: true, ladderLinked: true, ladderAmount: 5000, ladderLeverage: 1,
       quickEntry: "", quickSlPrice: "", quickRisk: "",
-      gpGoalId: "auto", gpTarget: "", gpDays: "", gpX: "2.5", gpRiskPct: "1", gpStop: "1", gpWin: "50", gpRR: "1.5", gpTrades: "3", gpAdvOpen: false
+      gpGoalId: "auto", gpTarget: "", gpDays: "", gpX: "2.5", gpRiskPct: "1", gpStop: "1", gpWin: "50", gpRR: "1.5", gpTrades: "3", gpAdvOpen: false, gpUnit: "amt", gpPct: ""
     };
     function calcSettings() { return Object.assign({}, CALC_DEFAULTS, state.calculatorSettings || {}); }
     function calcUpdate(patch) {
@@ -5746,13 +5753,31 @@
       if (k === 'gpAdvOpen' && !!cur.gpAdvOpen === !!v) return;
       const patch = { [k]: v };
       // Typing your own target or days means a custom target, not the picked goal.
-      if ((k === 'gpTarget' || k === 'gpDays') && cur.gpGoalId !== 'custom') {
+      if ((k === 'gpTarget' || k === 'gpPct' || k === 'gpDays') && cur.gpGoalId !== 'custom') {
         const ctx = gpContext();
         patch.gpGoalId = 'custom';
-        if (ctx.g) { const other = k === 'gpTarget' ? 'gpDays' : 'gpTarget'; const e = document.getElementById(other); if (e) patch[other] = e.value; }
+        if (ctx.g) {
+          // Keep what the goal had filled in for the field not being typed in.
+          const tEl = document.getElementById('gpTarget'), dEl = document.getElementById('gpDays');
+          if (k === 'gpDays' && tEl) patch[cur.gpUnit === 'pct' ? 'gpPct' : 'gpTarget'] = tEl.value;
+          if (k !== 'gpDays' && dEl) patch.gpDays = dEl.value;
+        }
       }
       state.calculatorSettings = Object.assign(cur, patch);
       save(); renderGoalPlanner(k === 'gpGoalId' || !!patch.gpGoalId);
+    }
+    // The target as an amount or as a % of the balance; switching converts what is typed.
+    function gpSetUnit(u) {
+      const s = calcSettings();
+      if ((s.gpUnit === 'pct' ? 'pct' : 'amt') === u) return;
+      const B = gpContext().balance, patch = { gpUnit: u };
+      const n = parseFloat(u === 'pct' ? s.gpTarget : s.gpPct);
+      if (s.gpGoalId === 'custom' && isFinite(n) && n > 0 && B > 0) {
+        if (u === 'pct') patch.gpPct = String(+(n / B * 100).toFixed(2));
+        else patch.gpTarget = String(+(B * n / 100).toFixed(2));
+      }
+      state.calculatorSettings = Object.assign(s, patch);
+      save(); renderGoalPlanner(true);
     }
     // Goals that have a profit target, seen through it.
     // The planner works in the header's ₹ / $, like every other tab.
@@ -5832,14 +5857,24 @@
         sel.value = g ? g.id : "custom";
       }
       let need, days;
+      const pctMode = s.gpUnit === 'pct';
       if (g) {
         // Still to earn on the goal, over the trading days left (the day rolls over at the app's cutoff).
         need = Math.max(0, (g.target || 0) - goalProgress(g, cur).net);
         days = goalDaysLeft(g);
         if (need > 0) need = +need.toFixed(2);
-      } else { need = num(s.gpTarget); days = Math.floor(num(s.gpDays)); }
+      } else { need = pctMode ? (B > 0 ? +(B * num(s.gpPct) / 100).toFixed(2) : 0) : num(s.gpTarget); days = Math.floor(num(s.gpDays)); }
       const setv = (id, v) => { const e = document.getElementById(id); if (e && (force || document.activeElement !== e)) e.value = v; };
-      setv('gpTarget', g ? need : s.gpTarget); setv('gpDays', g ? days : s.gpDays);
+      const pctOf = v => B > 0 ? +(v / B * 100).toFixed(2) : '';
+      setv('gpTarget', g ? (pctMode ? pctOf(need) : need) : (pctMode ? s.gpPct : s.gpTarget)); setv('gpDays', g ? days : s.gpDays);
+      const tgt = document.getElementById('gpTarget'); if (tgt) tgt.placeholder = pctMode ? 'e.g. 10' : 'e.g. 600';
+      const unitCls = on => 'px-1.5 rounded text-[10px] font-bold ' + (on ? 'bg-amber-500/20 text-amber-300' : 'text-slate-500 hover:text-white');
+      document.getElementById('gpUnitAmt').className = unitCls(!pctMode); document.getElementById('gpUnitPct').className = unitCls(pctMode);
+      const hint = document.getElementById('gpTargetHint');
+      if (hint) hint.innerHTML = !(B > 0) ? (pctMode ? 'No balance yet to take a % of.' : '')
+        : !(need > 0) ? (pctMode ? '% of your ' + m(B) + ' balance' : '')
+        : pctMode ? '= <b class="text-slate-300">' + m(need) + '</b> (' + cleanNum(+(need / B * 100).toFixed(2)) + '% of ' + m(B) + ')'
+        : '= ' + cleanNum(+(need / B * 100).toFixed(2)) + '% of your ' + m(B) + ' balance';
       ['gpX', 'gpRiskPct', 'gpStop', 'gpWin', 'gpRR', 'gpTrades'].forEach(k => setv(k, s[k]));
       document.getElementById('gpCur').innerText = curSym(cur);
       const det = document.getElementById('gpAdvanced');

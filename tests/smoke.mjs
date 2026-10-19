@@ -228,7 +228,7 @@ async function currencyRun(seed) {
       await page.evaluate(p => { openGoal('new'); document.getElementById('gTitle').value = 'Plan ' + p; document.getElementById('gPeriod').value = p; }, pick);
       await page.click('#modalSheetSaveBtn');
       const ahead = await page.evaluate(([p, per]) => {
-        const g = state.goals.find(x => x.title === 'Plan ' + p), d = new Date();
+        const g = state.goals.find(x => x.title === 'Plan ' + p), d = parseDay(todayDay()); // the trading day, which starts at 05:30
         const want = per === 'week' ? iso(new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7) + 7)) : iso(new Date(d.getFullYear(), d.getMonth() + 1, 1));
         state.ui.goalIdx = state.goals.indexOf(g); updateGoalDisplays();
         openGoal(g.id); const sel = document.getElementById('gPeriod').value; closeModalSheet();
@@ -1361,6 +1361,14 @@ async function goalPlannerRun(seed) {
       await page.fill('#gpTarget', '1000'); await page.fill('#gpDays', '3'); await page.fill('#gpTrades', '2');
       const out2 = await page.innerText('#gpPlan');
       check(/₹333\.33/.test(out2) && /₹166\.67/.test(out2) && /TRADES IN ALL\s*6\b/i.test(out2), vp.width + 'px 1000 in 3 days at 2 a day: ' + JSON.stringify(out2));
+      // Target as % of capital: 10% of the balance, and switching back converts it to the amount.
+      await page.click('#gpUnitPct');
+      await page.fill('#gpTarget', '10');
+      const pc = await page.evaluate(() => { const B = gpContext().balance; return { B, want: +(B * 0.1).toFixed(2), plan: document.getElementById('gpPlan').innerText, hint: document.getElementById('gpTargetHint').innerText, money: calcMoney(+(B * 0.1).toFixed(2), viewCur()) }; });
+      check(pc.B > 0 && pc.plan.includes(pc.money) && pc.hint.includes(pc.money) && pc.hint.includes('10% of'), vp.width + 'px 10% of capital: ' + JSON.stringify(pc));
+      await page.click('#gpUnitAmt');
+      check(+(await page.inputValue('#gpTarget')) === pc.want && (await page.innerText('#gpTargetHint')).includes('10% of your'), vp.width + 'px % back to amount: ' + await page.inputValue('#gpTarget'));
+      await page.fill('#gpTarget', '1000');
       // Advanced stays folded (and empty) until opened, then shows the edge check.
       check(await page.evaluate(() => !document.getElementById('gpAdvanced').open && document.getElementById('gpAdvOut').innerHTML === ''), vp.width + 'px advanced not folded');
       await page.click('#gpAdvanced summary');
