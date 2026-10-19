@@ -10,6 +10,7 @@
 // Then the CoinDCX import GitHub runs reads a fake CoinDCX (which checks every
 // call is signed as CoinDCX documents) into a fake GitHub's journal.json; the
 // journal syncs it, and trades the report already has must count only once.
+// Last, the journal loads the scanner's alerts by itself and a fresh trade matches one.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1583,6 +1584,56 @@ async function deltaShareRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('delta share: ' + e); });
 }
 
+// A device whose alerts were never loaded by hand still gets them: the journal
+// reads the scanner's files itself on opening, so a trade taken off a fresh
+// alert matches it. A second look at Signals inside 15 minutes reads nothing.
+async function alertRefreshRun(seed) {
+  const errs = [];
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const at = Date.now() - 2 * 864e5, ist = new Date(at + 5.5 * 3600e3).toISOString();
+  const tradeTime = new Date(at + 5.5 * 3600e3 + 20 * 60e3).toISOString();
+  const line = JSON.stringify({ delivered_at_utc: new Date(at).toISOString(), symbol: 'SOLUSDT', exchange: 'bitunix', timeframe: '30m', side: 'long', zone_type: 'demand',
+    alert_price: 150.2, level: 149, zone_bottom: 149, zone_top: 150, body_entry: 150, planned_entry: 150, stop_price: 148.5, score: 8,
+    message: '**SOL | BUY | 30m**\nPrice 150.20\nEntry 150 · SL 148.5', trade_id: 'smoke-sol-1' });
+  let hits = 0;
+  await ctx.route(url => !url.href.startsWith(base), async r => {
+    const u = r.request().url();
+    if (!u.includes('/scanner-runtime-state/')) return r.abort();
+    hits++;
+    const f = u.split('/').pop().split('?')[0];
+    return r.fulfill({ status: 200, body: f === 'crypto_alert_records_30m.jsonl' ? line + '\n' : f.endsWith('.json') ? '{}' : '' });
+  });
+  const trade = { id: 'trSol', accountId: 'acc_cry', date: tradeTime.slice(0, 10), exitDate: tradeTime.slice(0, 10), time: tradeTime.slice(11, 16), exitTime: tradeTime.slice(11, 16),
+    symbol: 'SOLUSD', direction: 'long', entry: 150, exit: 151.5, stop: 148.5, qty: 1, fees: 0, leverage: 10, setup: '', rules: [], notes: '', updatedAt: new Date().toISOString() };
+  const seeded = Object.assign({}, seed, { trades: seed.trades.concat([trade]) });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => (state.signals || []).length > 0, null, { timeout: 8000 });
+    const got = await page.evaluate(() => { const pr = matchSignals('zone').find(x => x.signal.symbol && /SOL/.test(x.signal.symbol)); return { n: state.signals.length, date: pr && pr.signal.date, time: pr && pr.signal.time, trade: pr && pr.trade && pr.trade.id }; });
+    check(got.n === 1, 'alerts loaded on opening: ' + got.n);
+    check(got.date === ist.slice(0, 10) && got.time === ist.slice(11, 16), 'alert date/time not in IST: ' + JSON.stringify(got) + ' want ' + ist.slice(0, 16));
+    check(got.trade === 'trSol', 'trade did not match the fresh alert: ' + JSON.stringify(got));
+    const before = hits;
+    await page.evaluate(() => switchTab('signals')); await page.waitForTimeout(400);
+    check(hits === before, 'read the scanner again inside 15 minutes: ' + (hits - before) + ' more requests');
+    const fresh = await page.evaluate(() => document.getElementById('sigFresh').innerText);
+    check(/^Newest alert /.test(fresh), 'freshness line: ' + JSON.stringify(fresh));
+    // A reload keeps them, and does not add the same alert twice.
+    await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(300);
+    const after = await page.evaluate(() => { state.ui.sigAutoAt = 0; return autoRefreshAlerts().then(() => state.signals.length); });
+    check(after === 1, 'alerts after reload and a second read: ' + after);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Scanner alerts load by themselves and match a fresh trade');
+  errs.forEach(e => { console.log('     ' + e); failures.push('alert refresh: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1600,6 +1651,7 @@ await tradingDayRun(data);
 await goalPlannerRun(data);
 await goalPctRun(data);
 await deltaShareRun(data);
+await alertRefreshRun(data);
 
 await browser.close();
 server.close();

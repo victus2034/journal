@@ -444,6 +444,7 @@
         <div>
           <h2 class="text-sm font-bold text-white uppercase font-mono tracking-wider">Alert Signals &amp; Scanner Edge</h2>
           <p class="text-xs text-slate-400 font-mono">How the scanner's alerts did, and how you traded them</p>
+          <p id="sigFresh" class="text-[10px] text-slate-500 font-mono"></p>
         </div>
           <div class="flex flex-wrap items-center gap-2">
             <button onclick="fillStopsFromSignals()" class="px-2.5 py-1 text-xs font-mono bg-terminal-surface border border-terminal-border rounded hover:border-amber-500">Fill stops from signals</button>
@@ -1990,6 +1991,7 @@
         renderDashboard();
       } else if (tabId === 'signals') {
         renderSignalsTable();
+        autoRefreshAlerts();
       } else if (tabId === 'analysis') {
         renderAnalysis();
       } else if (tabId === 'calculator') {
@@ -3323,6 +3325,7 @@
       const tbody = document.getElementById('signalsTableBody');
       if (!tbody) return;
       const kind = sigKind();
+      renderSigFresh();
       renderSigKindBar(kind);
 
       // --- period bar ---
@@ -7320,6 +7323,116 @@
       state.signals.sort((a, b) => ((a.date || "") + " " + (a.time || "")) < ((b.date || "") + " " + (b.time || "")) ? -1 : 1);
     }
 
+    // The scanner's files, read into one list of alerts and held against the ones
+    // this device already has: which are new, which gain a result, which are old
+    // copies under a shorter key. Shared by "Load scanner alerts" and the quiet
+    // refresh that keeps a device's alerts current.
+    function buildScannerPlan(got, cutoff, marketOk) {
+      const all = [];
+      if (got.c30) all.push(...parseLiveAlerts(got.c30, "CRYPTO").records);
+      if (got.c4) all.push(...parseLiveAlerts(got.c4, "CRYPTO").records);
+      if (got.n30) all.push(...parseLiveAlerts(got.n30, "NSE").records);
+      if (got.n4) all.push(...parseLiveAlerts(got.n4, "NSE").records);
+      all.push(...parseScannerRecords(got.pen, 2).records);
+      all.push(...parseScannerRecords(got.fin, 3).records);
+      all.push(...parseFibTl(got.ft, got.ftr).records);
+
+      // one record per alert: the most resolved version wins
+      const best = new Map();
+      all.forEach(r => {
+        if (cutoff && r.date < cutoff) return;
+        if (r.market && !marketOk(r)) return;
+        const cur = best.get(r.key);
+        best.set(r.key, cur ? combineAlert(cur, r) : r);
+      });
+      const incoming = [...best.values()];
+
+      // The scanner grades one alert per zone. A later alert on the same zone
+      // is a repeat it does not grade, so it borrows the result of the most
+      // recent earlier alert on that zone that did fill (never a "not touched").
+      const zoneKey = r => (r.zoneLow != null && r.zoneHigh != null) ? [r.symbol, r.side, (+r.zoneLow).toFixed(8), (+r.zoneHigh).toFixed(8)].join("|") : null;
+      const when = r => Date.parse(r.date + "T" + (r.time || "00:00") + ":00");
+      const byZone = {};
+      incoming.forEach(r => { const k = zoneKey(r); if (k && r.filled === true) (byZone[k] = byZone[k] || []).push(r); });
+      incoming.forEach(r => {
+        if (r.filled === true || r.filled === false) return;
+        const k = zoneKey(r); if (!k || !byZone[k]) return;
+        const prior = byZone[k].filter(x => when(x) < when(r) && when(r) - when(x) <= 36 * 3600e3).sort((a, b) => when(b) - when(a))[0];
+        if (prior) r.zoneResult = { from: prior.time, filled: true, outcome: prior.outcome || "", resultR: typeof prior.resultR === "number" ? prior.resultR : null };
+      });
+
+      // Copies saved with the older, shorter key are replaced by the fresh ones
+      // rather than shown twice (their old key is the first two parts of the new one).
+      const oldKey = r => r.key.split("|").slice(0, 2).join("|");
+      const incomingOld = {}; incoming.forEach(r => { incomingOld[oldKey(r)] = 1; });
+      const staleIds = new Set((state.signals || []).filter(g => g.key && g.key.split("|").length < 4 && incomingOld[g.key]).map(g => g.id));
+      const have = {};
+      (state.signals || []).forEach(g => { if (g.key && !staleIds.has(g.id)) have[g.key] = g; });
+      const fresh = [], upgrades = [];
+      incoming.forEach(r => {
+        const ex = have[r.key];
+        if (!ex) fresh.push(r);
+        else if (r.srcRank > signalRank(ex) || (r.zoneResult && !ex.zoneResult)) upgrades.push({ ex, r });
+      });
+      return { incoming, fresh, upgrades, staleIds };
+    }
+    function applyScannerPlan(plan) {
+      plan.upgrades.forEach(({ ex, r }) => {
+        Object.assign(ex, combineAlert(ex, r), { id: ex.id });
+        stamp(ex);
+      });
+      state.signals = (state.signals || []).filter(g => !(plan.staleIds && plan.staleIds.has(g.id))).concat(plan.fresh.map(stamp));
+      sortSignals();
+    }
+    // Alerts live on each device, and used to arrive only when you pressed "Load
+    // scanner alerts". A device that had not pressed it lately had no alerts for its
+    // recent trades, so none of them matched. Now the journal reads the scanner's
+    // files itself when it opens and when Signals opens, at most every 15 minutes,
+    // and adds what is new. A failed read changes nothing and is tried next time.
+    const SIG_AUTO_MS = 15 * 60e3;
+    let sigAutoBusy = false;
+    async function autoRefreshAlerts(force) {
+      if (sigAutoBusy || !state) return;
+      if (!force && Date.now() - (state.ui.sigAutoAt || 0) < SIG_AUTO_MS) return;
+      sigAutoBusy = true;
+      try {
+        const mk = ["crypto", "nse", "all"].indexOf(state.ui.sigMkt) !== -1 ? state.ui.sigMkt : "crypto";
+        // [key, file, what to use if it is missing]: fib and trendline files are optional.
+        const files = [["fin", "finalized"], ["pen", "pending"], ["ft", "fibtl", ""], ["ftr", "fibtlRes", "{}"]];
+        if (mk !== "nse") files.push(["c30", "cryptoLive30"], ["c4", "cryptoLive4h"]);
+        if (mk !== "crypto") files.push(["n30", "nseLive30"], ["n4", "nseLive4h"]);
+        const got = {};
+        await Promise.all(files.map(async ([k, f, dflt]) => {
+          try {
+            const res = await fetch(SCANNER_BASE + SCANNER_FILES[f], { cache: "no-store" });
+            if (!res.ok) throw new Error("http " + res.status);
+            got[k] = await res.text();
+          } catch (e) { if (dflt === undefined) throw e; got[k] = dflt; }
+        }));
+        // From a week before the newest alert this device has (results come in
+        // later), or the last month on a device with none.
+        const newest = (state.signals || []).map(g => g.date).filter(Boolean).sort().pop();
+        const d = newest ? new Date(newest + "T00:00:00") : new Date();
+        d.setDate(d.getDate() - (newest ? 7 : 30));
+        const marketOk = r => { const isNse = /^NSE$/i.test(r.market); return mk === "all" || (mk === "nse" ? isNse : !isNse); };
+        const plan = buildScannerPlan(got, iso(d), marketOk);
+        const n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
+        if (n) applyScannerPlan(plan);
+        state.ui.sigAutoAt = Date.now();
+        save();
+        if (n) renderAll(); else renderSigFresh();
+      } catch (e) {
+        renderSigFresh();
+      } finally { sigAutoBusy = false; }
+    }
+    // Under the Signals title: how current this device's alerts are.
+    function renderSigFresh() {
+      const el = document.getElementById('sigFresh');
+      if (!el) return;
+      const last = (state.signals || []).map(g => (g.date || "") + " " + (g.time || "")).sort().pop();
+      const at = state.ui.sigAutoAt ? new Date(state.ui.sigAutoAt) : null;
+      el.innerText = last ? "Newest alert " + last.trim() + (at ? " · checked " + hhmm(at.getHours() * 60 + at.getMinutes()) : "") : "";
+    }
     function openScannerImport() {
       const cache = {};
       let plan = { fresh: [], upgrades: [] };
@@ -7388,54 +7501,9 @@
             jobs.forEach((j, i) => { got[j[0]] = texts[i]; });
             if (my !== runId) return;
 
-            const all = [];
-            if (got.c30) all.push(...parseLiveAlerts(got.c30, "CRYPTO").records);
-            if (got.c4) all.push(...parseLiveAlerts(got.c4, "CRYPTO").records);
-            if (got.n30) all.push(...parseLiveAlerts(got.n30, "NSE").records);
-            if (got.n4) all.push(...parseLiveAlerts(got.n4, "NSE").records);
-            all.push(...parseScannerRecords(got.pen, 2).records);
-            all.push(...parseScannerRecords(got.fin, 3).records);
-            all.push(...parseFibTl(got.ft, got.ftr).records);
-
-            // one record per alert: the most resolved version wins
-            const cutoff = cutoffOf();
-            const best = new Map();
-            all.forEach(r => {
-              if (cutoff && r.date < cutoff) return;
-              if (r.market && !marketOk(r)) return;
-              const cur = best.get(r.key);
-              best.set(r.key, cur ? combineAlert(cur, r) : r);
-            });
-            const incoming = [...best.values()];
-
-            // The scanner grades one alert per zone. A later alert on the same zone
-            // is a repeat it does not grade, so it borrows the result of the most
-            // recent earlier alert on that zone that did fill (never a "not touched").
-            const zoneKey = r => (r.zoneLow != null && r.zoneHigh != null) ? [r.symbol, r.side, (+r.zoneLow).toFixed(8), (+r.zoneHigh).toFixed(8)].join("|") : null;
-            const when = r => Date.parse(r.date + "T" + (r.time || "00:00") + ":00");
-            const byZone = {};
-            incoming.forEach(r => { const k = zoneKey(r); if (k && r.filled === true) (byZone[k] = byZone[k] || []).push(r); });
-            incoming.forEach(r => {
-              if (r.filled === true || r.filled === false) return;
-              const k = zoneKey(r); if (!k || !byZone[k]) return;
-              const prior = byZone[k].filter(x => when(x) < when(r) && when(r) - when(x) <= 36 * 3600e3).sort((a, b) => when(b) - when(a))[0];
-              if (prior) r.zoneResult = { from: prior.time, filled: true, outcome: prior.outcome || "", resultR: typeof prior.resultR === "number" ? prior.resultR : null };
-            });
-
-            // Copies saved with the older, shorter key are replaced by the fresh ones
-            // rather than shown twice (their old key is the first two parts of the new one).
-            const oldKey = r => r.key.split("|").slice(0, 2).join("|");
-            const incomingOld = {}; incoming.forEach(r => { incomingOld[oldKey(r)] = 1; });
-            const staleIds = new Set((state.signals || []).filter(g => g.key && g.key.split("|").length < 4 && incomingOld[g.key]).map(g => g.id));
-            const have = {};
-            (state.signals || []).forEach(g => { if (g.key && !staleIds.has(g.id)) have[g.key] = g; });
-            const fresh = [], upgrades = [];
-            incoming.forEach(r => {
-              const ex = have[r.key];
-              if (!ex) fresh.push(r);
-              else if (r.srcRank > signalRank(ex) || (r.zoneResult && !ex.zoneResult)) upgrades.push({ ex, r });
-            });
-            plan = { fresh, upgrades, staleIds };
+            const built = buildScannerPlan(got, cutoffOf(), marketOk);
+            const incoming = built.incoming, fresh = built.fresh, upgrades = built.upgrades;
+            plan = built;
             const legacy = (state.signals || []).filter(g => !g.key && g.tradeId).length;
 
             const filled = incoming.filter(r => r.filled === true && typeof r.resultR === "number");
@@ -7460,12 +7528,9 @@
       }, () => {
         const n = plan.fresh.length + plan.upgrades.length;
         if (!n) { toast("Nothing new to import"); return false; }
-        plan.upgrades.forEach(({ ex, r }) => {
-          Object.assign(ex, combineAlert(ex, r), { id: ex.id });
-          stamp(ex);
-        });
-        state.signals = (state.signals || []).filter(g => !(plan.staleIds && plan.staleIds.has(g.id))).concat(plan.fresh.map(stamp));
-        sortSignals();
+        applyScannerPlan(plan);
+        state.ui.sigAutoAt = Date.now();
+        state.ui.sigMkt = document.getElementById('scanMarket') ? document.getElementById('scanMarket').value : state.ui.sigMkt;
         save(); renderAll();
         toast(`Imported ${plan.fresh.length} new, updated ${plan.upgrades.length}`);
         return true;
@@ -8767,6 +8832,7 @@
       applyThemeButton();
       renderStorageUsage();
       setTimeout(syncPull, 1500);
+      setTimeout(() => autoRefreshAlerts(), 2500);
       // A key saved by the earlier in-page CoinDCX import (CoinDCX never answered
       // it) is not kept on this device; the key belongs in GitHub's secrets.
       if (state.coindcx) { delete state.coindcx; save(); }
