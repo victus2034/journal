@@ -1649,9 +1649,10 @@ async function fibTlRun(seed) {
     rec('c', 'trendline', 'nse', '1d', { entry: 200, sl: 196, side: 'long', target_r: 1 }, now - 9000),
     rec('d', 'zone', 'nse', '1d', { entry: 200, sl: 196, side: 'long' }, now - 9600, { zone_bottom: 197, zone_top: 200 }),
     rec('w', 'fib', 'crypto', '1w', { entry: 10, sl: 9, side: 'long' }, old),
+    rec('t', 'fib', 'crypto', '4h', { entry: 100, sl: 98, side: 'long', exit: 'trail' }, now - 5000),
   ].join('\n') + '\n';
   const done = o => ({ filled: true, resolved: true, outcome: o });
-  const res = { a: done('SL'), b: done('BE'), c: done('SL'), d: done('BE'), w: done('2R') };
+  const res = { a: done('SL'), b: done('BE'), c: done('SL'), d: done('BE'), w: done('2R'), t: Object.assign(done('TRAIL'), { exit_r: 1.2 }) };
   const wOpen = { w: { filled: true, resolved: false, outcome: 'open' } };
   let served = res;
   await ctx.route(url => !url.href.startsWith(base), async r => {
@@ -1671,7 +1672,8 @@ async function fibTlRun(seed) {
       return out;
     }, [recs, res]);
     // booked_r(plan, market, result)[0] from the scanner, for these plans
-    const want = { a: -1.0437, b: -0.019627, c: -1.07765, d: -0.01818 };
+    // t: a trailed fib takes the scanner's exit_r (1.2) less the 0.0826% fee on a 2% stop
+    const want = { a: -1.0437, b: -0.019627, c: -1.07765, d: -0.01818, t: 1.1587 };
     Object.keys(want).forEach(k => check(got[k] && Math.abs(got[k].r - want[k]) < 1e-4, `R of ${k}: ${got[k] && got[k].r} want ${want[k]}`));
     check(got.d && got.d.kind === undefined && got.d.daily === true && got.d.lo === 197, '1D zone not a zone: ' + JSON.stringify(got.d));
     check(got.a && got.a.kind === 'fib' && got.c.kind === 'trendline', 'fib / trendline kinds: ' + JSON.stringify(got));
