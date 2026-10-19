@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-19.113">
+  <meta name="app-version" content="2026-10-19.114">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1566,6 +1566,8 @@
       if (!Object.keys(t).length) t.net_pnl = 20;
       ["win_rate", "rule_follow"].forEach(k => { if (t[k] > 100) t[k] = 100; });
       o.targets = t;
+      // Profit typed as a % of the capital at the start of each window.
+      if (cNum(g.pnlPct) > 0 && t.net_pnl != null) o.pnlPct = Math.min(1000, cNum(g.pnlPct)); else delete o.pnlPct;
       o.metric = GK.filter(k => t[k] != null)[0]; o.target = t[o.metric];
       return o;
     }
@@ -2178,8 +2180,16 @@
     const GOAL_ORDER = ["net_pnl", "win_days", "win_rate", "profit_factor", "max_loss", "rule_follow", "trade_cap", "no_revenge", "avg_risk", "balance", "withdraw"];
     // The targets of a goal, whichever way it was saved.
     function goalTargets(g) {
-      if (g && g.targets && typeof g.targets === "object" && Object.keys(g.targets).length) return g.targets;
-      return g && g.target ? { [g.metric || "net_pnl"]: g.target } : {};
+      let t = g && g.targets && typeof g.targets === "object" && Object.keys(g.targets).length ? g.targets
+        : g && g.target ? { [g.metric || "net_pnl"]: g.target } : {};
+      // A profit set as a % of capital: worked out again each window from the balance it opened with.
+      if (g && g.pnlPct > 0 && t.net_pnl != null) { const B = goalStartCapital(g); if (B > 0) t = Object.assign({}, t, { net_pnl: +(B * g.pnlPct / 100).toFixed(2) }); }
+      return t;
+    }
+    // The goal's books' balance when its window opened, in the goal's currency (or the one asked for).
+    function goalStartCapital(g, cur) {
+      const start = iso(goalWindowStart(g)), c = cur || goalCur(g);
+      return sum(goalBooksOf(g).map(a => balanceAtStart(a, start) * fxk(a, c)));
     }
     function goalKeys(g) { const t = goalTargets(g); return GOAL_ORDER.filter(k => t[k] != null); }
     // One target in the given currency (money targets are converted, counts and % are not).
@@ -2486,7 +2496,7 @@
       const curEl = document.getElementById('goalCurrent');
       curEl.innerText = signedMoney(s.net, cur);
       curEl.className = 'text-3xl font-bold mono-num ' + (s.net >= 0 ? 'text-emerald-400' : 'text-rose-400');
-      document.getElementById('goalTarget').innerText = `/ ${money(g.target, cur)} target`;
+      document.getElementById('goalTarget').innerText = `/ ${money(g.target, cur)} target` + (g.metric === 'net_pnl' && g.pnlPct > 0 ? ` · ${g.pnlPct}% of capital` : '');
       const pctDone = Math.max(0, Math.min(100, Math.round((Math.max(0, s.net) / target) * 100)));
       document.getElementById('goalPct').innerText = `${pctDone}% completed`;
       document.getElementById('goalBar').style.width = `${Math.max(2, pctDone)}%`;
@@ -4654,6 +4664,28 @@
       renderAll();
       toast("Goal removed");
     }
+    // Goal editor: the capital a "% of capital" profit is taken from, for the window and books picked.
+    let goalEditCur = "USD";
+    function goalEditBase() {
+      const pick = (document.getElementById('gPeriod') || {}).value || "month", acc = (document.getElementById('gAccount') || {}).value || "all";
+      const ahead = pick === "next_week" || pick === "next_month", period = ahead ? pick.slice(5) : pick;
+      return goalStartCapital({ accountId: acc, period, startsOn: ahead ? iso(nextWindowStart(period)) : null }, goalEditCur);
+    }
+    function goalPctHint() {
+      const h = document.getElementById('gPctHint'), u = document.getElementById('gu_net_pnl'), v = parseFloat((document.getElementById('gv_net_pnl') || {}).value);
+      if (!h || !u) return;
+      if (u.value !== "pct") { h.innerText = ""; return; }
+      const B = goalEditBase();
+      h.innerText = !(B > 0) ? "No balance yet to take a % of"
+        : v > 0 ? "= " + money(B * v / 100, goalEditCur) + " (" + v + "% of " + money(B, goalEditCur) + " capital), set again each window"
+        : "% of your " + money(B, goalEditCur) + " capital when the window opens";
+    }
+    // Switching ₹ ↔ % turns the typed number into the other unit.
+    function goalUnitSwap() {
+      const u = document.getElementById('gu_net_pnl'), inp = document.getElementById('gv_net_pnl'), v = parseFloat(inp.value), B = goalEditBase();
+      if (v > 0 && B > 0) inp.value = u.value === "pct" ? +(v / B * 100).toFixed(2) : +(B * v / 100).toFixed(2);
+      goalPctHint();
+    }
     function openGoal(id) {
       const existing = id === 'new' ? null : (id ? state.goals.find(g => g.id === id) : state.goals[0]);
       // Money targets are typed in the goal's own currency (a new goal: the one on screen).
@@ -4667,24 +4699,26 @@
           <div>
             <label class="text-slate-400 block mb-1">Targets <span class="text-slate-600">(tick the ones you want, leave the rest off)</span></label>
             <div class="space-y-1.5">
-              ${GOAL_ORDER.map(k => { const on = existing ? goalTargets(existing)[k] != null : k === "net_pnl"; const sym = curSym(symCur); const DEF = {"net_pnl":[20,sym + " to earn","any"],"win_days":[12,"winning days","1"],"win_rate":[60,"% of trades win","1"],"profit_factor":[1.5,"× profit ÷ loss","any"],"max_loss":[5,sym + " most you may lose","any"],"rule_follow":[80,"% of trades follow every rule","1"],"trade_cap":[3,"trades a day, at most","1"],"no_revenge":[10,"trades in a row, no revenge","1"],"avg_risk":[1,"% of balance risked per trade, at most","any"],"balance":[100,sym + " account balance to reach","any"],"withdraw":[10,sym + " taken out to your bank","any"]}; return `<label class="flex items-center gap-2 rounded-lg bg-[#080D15] border border-terminal-border px-2.5 py-1.5"><input type="checkbox" id="gk_${k}" ${on ? "checked" : ""} onchange="document.getElementById('gv_${k}').disabled = !this.checked" class="accent-amber-500"><span class="flex-1 text-slate-200">${GOAL_KINDS[k]}<span class="block text-[10px] text-slate-500">${DEF[k][1]}</span></span><input type="number" id="gv_${k}" step="${DEF[k][2]}" min="0" ${on ? "" : "disabled"} value="${esc(existing && goalTargets(existing)[k] != null ? goalTargets(existing)[k] : DEF[k][0])}" class="w-24 bg-[#05080E] border border-terminal-border p-1.5 rounded text-white text-right disabled:opacity-40"></label>`; }).join("")}
+              ${GOAL_ORDER.map(k => { const on = existing ? goalTargets(existing)[k] != null : k === "net_pnl"; const sym = curSym(symCur); const DEF = {"net_pnl":[20,sym + " to earn","any"],"win_days":[12,"winning days","1"],"win_rate":[60,"% of trades win","1"],"profit_factor":[1.5,"× profit ÷ loss","any"],"max_loss":[5,sym + " most you may lose","any"],"rule_follow":[80,"% of trades follow every rule","1"],"trade_cap":[3,"trades a day, at most","1"],"no_revenge":[10,"trades in a row, no revenge","1"],"avg_risk":[1,"% of balance risked per trade, at most","any"],"balance":[100,sym + " account balance to reach","any"],"withdraw":[10,sym + " taken out to your bank","any"]}; const isPct = k === "net_pnl" && existing && existing.pnlPct > 0; const val = isPct ? existing.pnlPct : (existing && goalTargets(existing)[k] != null ? goalTargets(existing)[k] : DEF[k][0]); const unit = k === "net_pnl" ? `<select id="gu_net_pnl" onchange="goalUnitSwap()" ${on ? "" : "disabled"} title="Profit as an amount or as a % of your capital" class="bg-[#05080E] border border-terminal-border p-1.5 rounded text-amber-300 text-xs font-bold disabled:opacity-40"><option value="amt" ${isPct ? "" : "selected"}>${esc(sym)}</option><option value="pct" ${isPct ? "selected" : ""}>% of capital</option></select>` : ""; return `<label class="flex flex-wrap items-center gap-2 rounded-lg bg-[#080D15] border border-terminal-border px-2.5 py-1.5"><input type="checkbox" id="gk_${k}" ${on ? "checked" : ""} onchange="document.getElementById('gv_${k}').disabled = !this.checked; const u = document.getElementById('gu_${k}'); if (u) u.disabled = !this.checked" class="accent-amber-500"><span class="flex-1 text-slate-200">${GOAL_KINDS[k]}<span class="block text-[10px] text-slate-500">${DEF[k][1]}</span></span>${unit}<input type="number" id="gv_${k}" step="${DEF[k][2]}" min="0" ${on ? "" : "disabled"} value="${esc(val)}" ${k === "net_pnl" ? 'oninput="goalPctHint()"' : ""} class="w-24 bg-[#05080E] border border-terminal-border p-1.5 rounded text-white text-right disabled:opacity-40">${k === "net_pnl" ? '<span id="gPctHint" class="basis-full text-[10px] text-amber-300/80 text-right"></span>' : ""}</label>`; }).join("")}
             </div>
           </div>
           <div>
             <label class="text-slate-400 block mb-1">Planning Window</label>
-            <select id="gPeriod" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            <select id="gPeriod" onchange="goalPctHint()" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
               ${[["day", "Today"], ["week", "This Week"], ["next_week", "Next Week"], ["month", "This Month"], ["next_month", "Next Month"], ["quarter", "This Quarter"], ["year", "This Year"]].map(o => `<option value="${o[0]}" ${(existing ? (goalUpcoming(existing) ? "next_" : "") + existing.period : "month") === o[0] ? "selected" : ""}>${o[1]}</option>`).join("")}
             </select>
           </div>
           <div>
             <label class="text-slate-400 block mb-1">Counts results from</label>
-            <select id="gAccount" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+            <select id="gAccount" onchange="goalPctHint()" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
               <option value="all">All books (each converted to ${esc(symCur === "INR" ? "₹" : "$")})</option>
               ${state.accounts.map(a => `<option value="${esc(a.id)}" ${existing && existing.accountId === a.id ? "selected" : ""}>${esc(a.name)} (${esc(a.currency)})</option>`).join("")}
             </select>
           </div>
           ${existing ? `<div class="pt-2 border-t border-terminal-border"><button type="button" onclick="removeGoal('${esc(existing.id)}')" class="px-3 py-1.5 rounded-lg border border-rose-500/40 text-rose-400 hover:bg-rose-500/10 text-xs">Remove this goal</button></div>` : ""}
         `;
+        goalEditCur = symCur;
+        goalPctHint();
       }, () => {
         const title = document.getElementById('gTitle').value.trim() || "Milestone Target";
         const targets = {};
@@ -4697,6 +4731,7 @@
           targets[k] = v;
         });
         if (!Object.keys(targets).length) targets.net_pnl = 20;
+        const pnlPct = targets.net_pnl != null && document.getElementById('gu_net_pnl').value === "pct" ? Math.min(1000, targets.net_pnl) : 0;
         const first = GOAL_ORDER.filter(k => targets[k] != null)[0];
         const metric = first;
         const pick = document.getElementById('gPeriod').value;
@@ -4707,7 +4742,9 @@
         const accountId = document.getElementById('gAccount').value;
         // A book in the other currency: its money targets are turned into that currency at its rate.
         const bk = accountId !== "all" ? state.accounts.find(a => a.id === accountId) : null;
-        if (bk && bk.currency !== symCur) MONEY_GOALS.forEach(k => { if (targets[k] != null) targets[k] = +(targets[k] * (bk.currency === "INR" ? fxRate(bk) : 1 / fxRate(bk))).toFixed(2); });
+        if (bk && bk.currency !== symCur) MONEY_GOALS.forEach(k => { if (targets[k] != null && !(k === "net_pnl" && pnlPct)) targets[k] = +(targets[k] * (bk.currency === "INR" ? fxRate(bk) : 1 / fxRate(bk))).toFixed(2); });
+        // % of capital: keep the %, and store today's amount for anything that reads the plain target.
+        if (pnlPct) { const B = goalStartCapital({ accountId, period, startsOn, cur: bk ? bk.currency : symCur }); targets.net_pnl = B > 0 ? +(B * pnlPct / 100).toFixed(2) : 20; }
         const target = targets[metric], cur = bk ? bk.currency : symCur;
         if (existing) {
           existing.title = title;
@@ -4718,9 +4755,11 @@
           if (startsOn) existing.startsOn = startsOn; else delete existing.startsOn;
           existing.accountId = accountId;
           existing.cur = cur;
+          if (pnlPct) existing.pnlPct = pnlPct; else delete existing.pnlPct;
           stamp(existing);
         } else {
           const ng = { id: uid(), title, target, metric, targets, period, accountId, cur };
+          if (pnlPct) ng.pnlPct = pnlPct;
           if (startsOn) ng.startsOn = startsOn;
           state.goals.push(stamp(ng));
         }

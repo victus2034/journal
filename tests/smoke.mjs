@@ -255,6 +255,57 @@ async function currencyRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Goal profit as a % of capital: typed in the goal editor, worked out from the
+// balance each window opens with, shown on the card, kept through sync.
+async function goalPctRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => { state.ui.allCur = 'INR'; state.ui.account = 'acc_nse'; switchTab('dashboard'); renderAll(); openGoal('new'); document.getElementById('gTitle').value = 'Grow 10%'; });
+    await page.selectOption('#gAccount', 'acc_nse');
+    await page.selectOption('#gPeriod', 'week');
+    await page.selectOption('#gu_net_pnl', 'pct');
+    await page.fill('#gv_net_pnl', '10');
+    const hint = await page.innerText('#gPctHint');
+    const [B, want] = await page.evaluate(() => { const b = balanceAtStart(acct('acc_nse'), iso(goalWindowStart('week'))); return [b, money(b * 0.1, 'INR')]; });
+    check(B > 0 && hint.includes('10% of') && hint.includes('= ' + want), 'editor hint: ' + hint + ' want ' + want);
+    await page.click('#modalSheetSaveBtn');
+    const r = await page.evaluate(() => {
+      const g = state.goals.find(x => x.title === 'Grow 10%');
+      state.ui.goalIdx = state.goals.indexOf(g); updateGoalDisplays();
+      const t1 = goalTargets(g).net_pnl;
+      acct('acc_nse').startBalance = (acct('acc_nse').startBalance || 0) + 1000; // more capital at the window's start
+      const t2 = goalTargets(g).net_pnl;
+      acct('acc_nse').startBalance -= 1000;
+      const back = sanitizeState(JSON.parse(JSON.stringify(state))).goals.find(x => x.id === g.id);
+      return { pct: g.pnlPct, t1, t2, card: document.getElementById('goalTarget').innerText, kept: back.pnlPct, plain: cleanGoal({ id: 'z', pnlPct: 5, targets: { win_rate: 50 } }).pnlPct };
+    });
+    check(r.pct === 10 && Math.abs(r.t1 - B * 0.1) < 0.01 && Math.abs(r.t2 - r.t1 - 100) < 0.01, '% target: ' + JSON.stringify(r) + ' B=' + B);
+    check(r.card.includes('10% of capital') && r.kept === 10 && r.plain === undefined, 'card / sync: ' + JSON.stringify(r));
+    // Reopening shows the %; switching back to ₹ turns it into the amount.
+    const re = await page.evaluate(() => { openGoal(state.goals.find(x => x.title === 'Grow 10%').id); return { u: document.getElementById('gu_net_pnl').value, v: document.getElementById('gv_net_pnl').value }; });
+    await page.selectOption('#gu_net_pnl', 'amt');
+    const amt = parseFloat(await page.inputValue('#gv_net_pnl'));
+    await page.click('#modalSheetSaveBtn');
+    const off = await page.evaluate(() => { const g = state.goals.find(x => x.title === 'Grow 10%'); return { pct: g.pnlPct, t: goalTargets(g).net_pnl }; });
+    check(re.u === 'pct' && re.v === '10' && Math.abs(amt - B * 0.1) < 0.01 && off.pct === undefined && Math.abs(off.t - amt) < 0.01, 'back to amount: ' + JSON.stringify({ re, amt, off }));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'goal profit as a % of capital';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 // Broker report upload: preview, import, grouping into trades, stats, the
 // broker's own book (Analysis and Dashboard), the duplicate checks, sync merge
 // and removal. Journal trades must stay exactly as they were.
@@ -1547,6 +1598,7 @@ await reviewRun(data);
 await withdrawRun(data);
 await tradingDayRun(data);
 await goalPlannerRun(data);
+await goalPctRun(data);
 await deltaShareRun(data);
 
 await browser.close();
