@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-19.115">
+  <meta name="app-version" content="2026-10-19.116">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -572,6 +572,10 @@
           <div id="sigByHour" class="space-y-2 font-mono text-xs max-h-72 overflow-y-auto"></div>
         </div>
       </div>
+      </section>
+
+      <section data-sigsec="levels" class="space-y-4 hidden">
+        <div id="sigFibLevels" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
       </section>
 
       <section data-sigsec="vsme" class="space-y-4 hidden">
@@ -3387,7 +3391,7 @@
       }
       const mfSig = mktFilter();
       renderMktFilterBar('sigMktBar', 'mktCalSignals');
-      renderSecBar('sigSecBar', SIG_SECS, 'data-sigsec', state.ui.sigSec, setSigSec);
+      renderSecBar('sigSecBar', kind === 'fib' ? SIG_SECS_FIB : SIG_SECS, 'data-sigsec', state.ui.sigSec, setSigSec);
       if (mfSig) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig);
 
       // Alerts whose stop is under 0.2% cannot be traded profitably: the 0.10% round-trip
@@ -6567,6 +6571,138 @@
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">' + tbl('Best: take these', best, 'text-emerald-300') + tbl('Worst: skip these', worst, 'text-rose-300') + '</div>';
     }
 
+
+    /* =================== FIB LEVELS =================== */
+    // A fib's four box edges, in the order price reaches them (the scanner's
+    // fib_levels): L1/L2 the weaker box, L3/L4 the stronger. Each sits at a fixed
+    // share of the move from its top (the swing price reaches first in the key):
+    // 0.34, 0.45, 0.55, 0.66. A zone 2 alert enters at L3 and a zone 1 alert at L1,
+    // so the alert's key (top, zone) and entry give back all four levels, for alerts
+    // saved before the scanner started writing them as well.
+    const FIB_RATIOS = { L1: 0.34, L2: 0.45, L3: 0.55, L4: 0.66 };
+    const FIB_LEVEL_KEYS = ["L1", "L2", "L3", "L4"];
+    const FIB_ROLE = { L1: "weak box, near edge", L2: "weak box, far edge", L3: "strong box, near edge", L4: "strong box, far edge (stop just past)" };
+    function fibGeom(sig) {
+      if (!sig || sig.kind !== "fib") return null;
+      const parts = String(sig.key || "").split("|");
+      if (parts[0] !== "fib" || parts.length < 7) return null;
+      const top = parseFloat(parts[5]), zone = parseInt(parts[6], 10), entry = signalEntry(sig);
+      const entryLevel = zone === 1 ? "L1" : zone === 2 ? "L3" : null;
+      if (!entryLevel || !isFinite(top) || !isFinite(entry)) return null;
+      const span = (entry - top) / FIB_RATIOS[entryLevel]; // base - top
+      if (!isFinite(span) || span === 0) return null;
+      const lv = {}; FIB_LEVEL_KEYS.forEach(k => { lv[k] = top + FIB_RATIOS[k] * span; });
+      const at = p => (p != null && isFinite(p)) ? (p - top) / span : null; // 0 at the top, 1 at the base
+      return { top, span, zone, entryLevel, levels: lv, at, stopAt: at(sig.stop) };
+    }
+    // Which level a price sits nearest to: before L1, L1-L4, or past the alert's stop.
+    function fibNearest(g, price) {
+      const a = g.at(price);
+      if (a == null) return null;
+      if (g.stopAt != null && a > g.stopAt) return "Past the stop";
+      if (a < FIB_RATIOS.L1 - (FIB_RATIOS.L2 - FIB_RATIOS.L1) / 2) return "Before L1";
+      let best = "L1";
+      FIB_LEVEL_KEYS.forEach(k => { if (Math.abs(a - FIB_RATIOS[k]) < Math.abs(a - FIB_RATIOS[best])) best = k; });
+      return best;
+    }
+    // How deep price is known to have gone: the price when the alert fired, the
+    // fill at the entry level, and the stop (past the far edge) when it was hit.
+    function fibDeepest(g, sig) {
+      let d = g.at(sig.price);
+      if (sig.filled === true) d = Math.max(d == null ? -Infinity : d, FIB_RATIOS[g.entryLevel]);
+      if (sig.outcome === "SL" && g.stopAt != null) d = Math.max(d == null ? -Infinity : d, g.stopAt);
+      return d;
+    }
+    function fibRStats(rs) {
+      const wins = rs.filter(r => r > 0).length, gw = sum(rs.filter(r => r > 0)), gl = -sum(rs.filter(r => r < 0));
+      return { n: rs.length, wins, win: rs.length ? wins / rs.length * 100 : null, tot: sum(rs), avg: rs.length ? avg(rs) : null,
+        pf: gl > 0 ? gw / gl : (gw > 0 ? Infinity : null), best: rs.length ? Math.max(...rs) : null, worst: rs.length ? Math.min(...rs) : null };
+    }
+    function renderFibLevels(pairs) {
+      const host = document.getElementById('sigFibLevels');
+      if (!host) return;
+      const head = '<div class="flex items-center gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Fib levels</h3></div>';
+      const items = pairs.map(pr => ({ pr, g: fibGeom(pr.signal) })).filter(x => x.g);
+      const noGeo = pairs.length - items.length;
+      if (!items.length) { host.innerHTML = head + '<p class="text-slate-500">No fib alerts with level data in this view. Widen the period or channel.</p>'; return; }
+      const rc = v => v == null || !isFinite(v) ? 'text-slate-500' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+      const pfTxt = v => v == null ? '—' : v === Infinity ? '∞' : v.toFixed(2);
+      const cells = st => st.n
+        ? '<td class="pr-3">' + st.wins + 'W / ' + (st.n - st.wins) + 'L <span class="text-slate-500">' + pct(st.win) + '</span></td>'
+          + '<td class="pr-3 font-bold ' + rc(st.tot) + '">' + rfmt(st.tot) + '</td><td class="pr-3 ' + rc(st.avg) + '">' + rfmt(st.avg) + '</td>'
+          + '<td class="pr-3 ' + (st.pf != null && st.pf >= 1 ? 'text-emerald-400' : 'text-rose-400') + '">' + pfTxt(st.pf) + '</td>'
+          + '<td class="pr-3 ' + rc(st.best) + '">' + rfmt(st.best) + '</td><td class="' + rc(st.worst) + '">' + rfmt(st.worst) + '</td>'
+        : '<td class="pr-3 text-slate-600" colspan="6">—</td>';
+      const statHead = '<th class="pr-3">Won</th><th class="pr-3">Total R</th><th class="pr-3">Avg R</th><th class="pr-3">PF</th><th class="pr-3">Best</th><th>Worst</th>';
+
+      // 1. The alerts, level by level.
+      const byEntry = {}; FIB_LEVEL_KEYS.forEach(k => { byEntry[k] = []; });
+      items.forEach(x => byEntry[x.g.entryLevel].push(x));
+      const reached = {}, deepN = items.map(x => fibDeepest(x.g, x.pr.signal));
+      FIB_LEVEL_KEYS.forEach(k => { reached[k] = deepN.filter(d => d != null && d >= FIB_RATIOS[k] - 1e-9).length; });
+      const stopped = items.filter(x => x.pr.signal.outcome === "SL").length;
+      const levelRows = FIB_LEVEL_KEYS.map(k => {
+        const list = byEntry[k];
+        const filled = list.filter(x => x.pr.signal.filled === true).length;
+        const st = fibRStats(list.map(x => outcomeOf(x.pr)).filter(Boolean).map(o => o.r));
+        const r1 = list.filter(x => x.pr.signal.outcome === "+1R" || x.pr.signal.outcome === "+2R").length;
+        const tip = k === "L4" ? ' title="At least: the scanner reports the stop (just past L4), not a touch of L4 that bounced."' : '';
+        return '<tr class="border-t border-terminal-border/60" data-fiblevel="' + k + '"><td class="py-1.5 pr-3 font-bold text-amber-300">' + k + '</td><td class="pr-3 text-slate-400">' + FIB_ROLE[k] + '</td>'
+          + '<td class="pr-3 text-slate-200"' + tip + '>' + (k === "L4" ? '≥ ' : '') + reached[k] + ' <span class="text-slate-500">of ' + items.length + '</span></td>'
+          + '<td class="pr-3 text-slate-200">' + (list.length || '<span class="text-slate-600">0</span>') + '</td>'
+          + '<td class="pr-3">' + (list.length ? filled + ' <span class="text-slate-500">' + pct(filled / list.length * 100) + '</span>' : '<span class="text-slate-600">—</span>') + '</td>'
+          + '<td class="pr-3">' + (list.length ? r1 : '<span class="text-slate-600">—</span>') + '</td>'
+          + cells(st) + '</tr>';
+      }).join('');
+      const entryLvls = FIB_LEVEL_KEYS.filter(k => byEntry[k].length);
+      const lead = entryLvls.length === 1
+        ? 'Every alert here entered at <b class="text-amber-300">' + entryLvls[0] + '</b>' + (entryLvls[0] === 'L3' ? ' (the scanner only alerts the strong box, with the stop 25% of the box past L4)' : '') + '.'
+        : 'Alerts entered at ' + entryLvls.join(' and ') + '.';
+      let h = head + '<p class="text-slate-500 text-[11px] mb-3">' + items.length + ' fib alerts in this view. ' + lead
+        + ' "Price got here" counts alerts where price is known to have reached that level: from the price when the alert fired, the fill and the stop.'
+        + (noGeo ? ' ' + noGeo + ' alert' + (noGeo === 1 ? '' : 's') + ' had no level data and are left out.' : '') + '</p>'
+        + '<div class="overflow-x-auto mb-5"><table class="w-full text-left whitespace-nowrap"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">Level</th><th class="pr-3">What it is</th><th class="pr-3">Price got here</th><th class="pr-3">Alerts entering</th><th class="pr-3">Filled</th><th class="pr-3">Hit +1R</th>' + statHead + '</tr></thead><tbody>'
+        + levelRows
+        + '<tr class="border-t border-terminal-border/60"><td class="py-1.5 pr-3 font-bold text-rose-300">Stop</td><td class="pr-3 text-slate-400">past the far edge</td><td class="pr-3 text-slate-200">' + stopped + ' <span class="text-slate-500">of ' + items.length + '</span></td><td colspan="9"></td></tr>'
+        + '</tbody></table></div>';
+
+      // 2. Where price was when the alert fired: distance to the entry level.
+      const DIST = [{ label: "At or past the entry", lo: -Infinity, hi: 0 }, { label: "0 - 0.25% away", lo: 0, hi: 0.25 }, { label: "0.25 - 0.5% away", lo: 0.25, hi: 0.5 }, { label: "0.5 - 0.75% away", lo: 0.5, hi: 0.75 }, { label: "over 0.75% away", lo: 0.75, hi: Infinity }];
+      const distOf = sig => { const e = signalEntry(sig); if (!(e > 0) || sig.price == null || !isFinite(sig.price)) return null; return (sig.price - e) * (sig.side === "short" ? -1 : 1) / e * 100; };
+      const distRows = DIST.map(b => {
+        const list = items.filter(x => { const d = distOf(x.pr.signal); return d != null && (b.lo === -Infinity ? d <= 0 : d > b.lo && d <= b.hi); });
+        if (!list.length) return '';
+        const filled = list.filter(x => x.pr.signal.filled === true).length;
+        const st = fibRStats(list.map(x => outcomeOf(x.pr)).filter(Boolean).map(o => o.r));
+        return '<tr class="border-t border-terminal-border/60"><td class="py-1.5 pr-3 text-slate-200">' + b.label + '</td><td class="pr-3">' + list.length + '</td><td class="pr-3">' + filled + ' <span class="text-slate-500">' + pct(filled / list.length * 100) + '</span></td>' + cells(st) + '</tr>';
+      }).join('');
+      h += '<div class="text-[10px] uppercase tracking-wider font-bold mb-1 text-slate-300">Where price was when the alert fired</div>'
+        + '<p class="text-slate-500 text-[11px] mb-2">Distance from the price at the alert to its entry level.</p>'
+        + '<div class="overflow-x-auto mb-5"><table class="w-full text-left whitespace-nowrap"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">Price at alert</th><th class="pr-3">Alerts</th><th class="pr-3">Filled</th>' + statHead + '</tr></thead><tbody>' + distRows + '</tbody></table></div>';
+
+      // 3. Your trades on these alerts, by the level your entry was nearest.
+      const mine = items.filter(x => x.pr.trade).map(x => {
+        const t = x.pr.trade, mo = myOutcome(x.pr), so = outcomeOf(x.pr);
+        return { lvl: fibNearest(x.g, t.entry), mr: mo ? mo.r : null, sr: so ? so.r : null };
+      });
+      const MY_ROWS = ["Before L1"].concat(FIB_LEVEL_KEYS, ["Past the stop"]);
+      h += '<div class="text-[10px] uppercase tracking-wider font-bold mb-1 text-slate-300">Your trades by the level you entered at</div>';
+      if (!mine.length) h += '<p class="text-slate-500">You took none of these alerts in this view.</p>';
+      else {
+        h += '<p class="text-slate-500 text-[11px] mb-2">The ' + mine.length + ' fib alert' + (mine.length === 1 ? '' : 's') + ' you took, grouped by the level nearest your entry price. R is measured against the alert\'s stop. Alert R is what the same alerts did.</p>'
+          + '<div class="overflow-x-auto"><table class="w-full text-left whitespace-nowrap"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">Your entry</th><th class="pr-3">Trades</th>' + statHead + '<th class="pl-3">Alert R</th></tr></thead><tbody>'
+          + MY_ROWS.map(k => {
+            const list = mine.filter(x => x.lvl === k);
+            if (!list.length) return '';
+            const st = fibRStats(list.map(x => x.mr).filter(v => v != null));
+            const srs = list.map(x => x.sr).filter(v => v != null);
+            return '<tr class="border-t border-terminal-border/60" data-mylevel="' + k + '"><td class="py-1.5 pr-3 font-bold ' + (/^L/.test(k) ? 'text-amber-300' : 'text-slate-300') + '">' + k + '</td><td class="pr-3">' + list.length + '</td>' + cells(st)
+              + '<td class="pl-3 ' + rc(srs.length ? sum(srs) : null) + '">' + (srs.length ? rfmt(sum(srs)) : '—') + '</td></tr>';
+          }).join('') + '</tbody></table></div>';
+      }
+      host.innerHTML = h;
+    }
+
     /* =================== RULE SCORECARD =================== */
     const AN_RULES = [
       { k: 'alert', label: 'Traded from an alert', broke: x => x.flags.indexOf('noAlert') !== -1, applies: x => x.alertKnown },
@@ -6661,6 +6797,7 @@
       }
       renderAlertVsMine(pairs);
       renderSetups(pairs);
+      if (sigKind() === "fib") renderFibLevels(pairs);
       const note = pairs.length ? "Only alerts with a result from the scanner (or an exit price you add) can be measured." : "Import some signals first.";
       sigPerfBars('sigByScore', groupPerf(pairs, scoreBand), [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map(v => "Score " + v).concat(["No score"]), note);
       sigPerfBars('sigByChannel', groupPerf(pairs, g => g.channel || "No channel"), null, note);
@@ -6933,6 +7070,7 @@
     }
     /* =================== SECTION TABS (Signals and Analysis) =================== */
     const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
+    const SIG_SECS_FIB = SIG_SECS.slice(0, 2).concat([{ k: "levels", label: "Fib levels" }], SIG_SECS.slice(2));
     const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
     const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "week", label: "Weekly review" }, { k: "ledger", label: "Day's trades" }, { k: "habits", label: "Time & habits" }];
     function setDashSec(k) { state.ui.dashSec = k; save(); renderDashboard(); }
