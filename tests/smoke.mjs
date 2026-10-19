@@ -1685,6 +1685,24 @@ async function fibTlRun(seed) {
     await page.evaluate(() => { state.ui.sigAutoAt = 0; return autoRefreshAlerts(true); });
     const w = await page.evaluate(() => { const g = state.signals.find(s => s.key === 'w'); return g && g.resultR; });
     check(typeof w === 'number' && w > 1.9, '1W result never arrived: ' + w);
+    // Fib levels: L1-L4 come back from the alert's key and entry (the scanner's own
+    // levels for this XAUT alert), and the Fib levels section counts by level.
+    const lv = await page.evaluate(() => {
+      const mk = (id, entry, sl, price, filled, outcome, resultR) => ({ id, kind: 'fib', key: 'fib|XAUTUSD|4h|1|1791374400|4215.9|2@' + id, side: 'long', entry, stop: sl, price, filled, outcome, resultR, date: '2026-10-12', time: '10:00', symbol: 'XAUTUSD' });
+      const a = mk('1', 4142.134, 4123.6925, 4170.83, true, '+2R', 1.9), b = mk('2', 4142.134, 4123.6925, 4150, true, 'SL', -1.05), c = mk('3', 4142.134, 4123.6925, 4160, false, '', null);
+      const g = fibGeom(a);
+      const t = { id: 'tx', entry: 4127.4, direction: 'long', symbol: 'XAUTUSD', date: '2026-10-12', time: '11:00', exit: 4123.6925, qty: 1, stop: 4123.6925 };
+      renderFibLevels([{ signal: a, trade: null }, { signal: b, trade: t }, { signal: c, trade: null }]);
+      const row = k => (document.querySelector('[data-fiblevel="' + k + '"]') || {}).innerText || '';
+      return { lv: g && g.levels, entry: g && g.entryLevel, mine: [...document.querySelectorAll('[data-mylevel]')].map(e => e.dataset.mylevel), l3: row('L3'), l4: row('L4'), noKey: fibGeom({ kind: 'fib', key: 'a', entry: 1, stop: 0.9 }) };
+    });
+    const wantLv = { L1: 4170.2992, L2: 4155.546, L3: 4142.134, L4: 4127.3808 };
+    Object.keys(wantLv).forEach(k => check(lv.lv && Math.abs(lv.lv[k] - wantLv[k]) < 1e-6, `fib ${k}: ${lv.lv && lv.lv[k]} want ${wantLv[k]}`));
+    check(lv.entry === 'L3', 'zone 2 should enter at L3: ' + lv.entry);
+    check(/^L3/.test(lv.l3) && /2 of 3/.test(lv.l3) && /1W \/ 1L/.test(lv.l3) && /\+0\.85R/.test(lv.l3), 'L3 row: ' + JSON.stringify(lv.l3));
+    check(/1 of 3/.test(lv.l4), 'L4 reached only by the stopped alert: ' + JSON.stringify(lv.l4));
+    check(lv.mine.join() === 'L4', 'entry at 4127.4 is nearest L4: ' + lv.mine.join());
+    check(lv.noKey === null, 'an alert without a fib key has no levels');
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
