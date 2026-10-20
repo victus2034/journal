@@ -837,6 +837,10 @@ async function coindcxRun(seed) {
     // CoinDCX's own wallet is the CoinDCX books' balance, not one worked out from the trades.
     const wal = stored().backtest.files.find(f => f.id === 'cdx-api').wallet;
     check(wal && wal.INR === 8144.78 && wal.USD === 82.02 && Object.keys(wal).join() === 'at,INR,USD', 'wallet on the file: ' + JSON.stringify(wal));
+    // The calculator sizes from that same wallet, not "No balance to size from yet".
+    const calcCdx = await page.evaluate(() => { switchTab('calculator'); calcApplyAccount('rep-coindcx-inr'); calcUpdate({ stopLossPercent: 0.75 }); return { cap: calcSettings().capital, note: document.getElementById('quickNote').innerText, margin: document.getElementById('quickMargin').innerText }; });
+    check(calcCdx.cap === 8144.78 && !/No balance/.test(calcCdx.note) && calcCdx.margin !== '—', 'calculator ignores the CoinDCX wallet: ' + JSON.stringify(calcCdx));
+    await page.evaluate(() => calcUpdate({ accountId: '' }));
     const balances = () => page.evaluate(() => {
       switchTab('dashboard');
       const head = id => { state.ui.account = id; renderAll(); const tag = document.getElementById('topBalLive');
