@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-19.117">
+  <meta name="app-version" content="2026-10-20.118">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -5776,9 +5776,8 @@
     // An account's own current balance. For the connected Delta account the
     // exchange's live figure wins over journal-computed P&L.
     function calcAccountBalance(a) {
-      // Same rule as the header: Delta's last figure holds even if Delta has gone quiet.
-      if (a.id === deltaAccountId() && deltaLiveKnown()) return liveDeltaBalance.value;
-      return (a.startBalance || 0) + bookNet(a.id);
+      // Same figure as Trading Books: Delta's last live balance, a CoinDCX book's wallet, else start + trades - withdrawals.
+      return bookBalance(a);
     }
     // Entry price and SL price are just another way to give the stop distance:
     // once both are typed the distance in % is worked out and shared with the
