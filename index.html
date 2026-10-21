@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-21.119">
+  <meta name="app-version" content="2026-10-21.120">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -3487,7 +3487,8 @@
           tbody.appendChild(empty);
           return;
         }
-        const nShown = renderMore(orphans.length);
+        // Your own trades: list them all unless there are a lot, so the count is easy to check.
+        const nShown = orphans.length <= 50 ? orphans.length : renderMore(orphans.length);
         orphans.slice(0, nShown).forEach(t => {
           const pnl = pnlIn(t, viewCur());
           const tr = document.createElement('tr');
@@ -3500,7 +3501,7 @@
             <td class="py-2.5 px-3 text-slate-500">no alert</td>
             <td class="py-2.5 px-3 font-bold text-white">${esc(t.symbol)}</td>
             <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${t.direction === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(t.direction.toUpperCase())}</span></td>
-            <td class="py-2.5 px-3">${esc(cleanNum(t.entry))}</td>
+            <td class="py-2.5 px-3">${t.entry ? esc(cleanNum(t.entry)) : '—'}</td>
             <td class="py-2.5 px-3 text-slate-400">${own ? esc(cleanNum(t.stop)) : '—'}</td>
             <td class="py-2.5 px-3 text-slate-500">${own ? (Math.abs(t.entry - t.stop) / t.entry * 100).toFixed(2) + '%' : '—'}</td>
             <td class="py-2.5 px-3 text-slate-600">—</td>
@@ -6317,9 +6318,15 @@
     // taken off a zone alert is never claimed by a fib alert on the same symbol.
     // No argument means zone alerts, as everywhere before fib and trendline existed.
     // Your trades to hold against the alerts: the journal's, plus each broker-report
-    // trade whose fills gave its side and prices (CoinDCX), dated when it opened.
+    // trade whose side is known (CoinDCX), dated when it opened. The fills give the
+    // side and prices; CoinDCX lists a day's fills only after the day ends, so a
+    // trade from today has none yet and its side comes from its fees instead.
     function signalTrades() {
-      const rep = reportTrades().filter(t => t.px).map(t => Object.assign({}, t, t.px, { date: t.px.openDate, time: t.px.openTime }));
+      const rep = reportTrades().map(t => {
+        if (t.px) return Object.assign({}, t, t.px, { date: t.px.openDate, time: t.px.openTime });
+        if (t.size && t.size.direction && t.openDate) return Object.assign({}, t, { direction: t.size.direction, date: t.openDate, time: t.openTime });
+        return null;
+      }).filter(Boolean);
       return (state.trades || []).concat(rep);
     }
     // P&L in the currency the prices are in. A CoinDCX rupee book books rupees
@@ -8485,7 +8492,7 @@
         closed.push({
           id: "rep:" + t.legs[0].id, rep: true, broker: b, firstLeg: t.legs[0].id, accountId,
           date: t.end.slice(0, 10), time: t.end.slice(11, 16), exitDate: t.end.slice(0, 10), exitTime: t.end.slice(11, 16),
-          openTime: t.start.slice(11, 16), held: t.held, symbol: btSym(t.sym), direction: "",
+          openDate: t.start.slice(0, 10), openTime: t.start.slice(11, 16), held: t.held, symbol: btSym(t.sym), direction: "",
           entry: 0, exit: 0, qty: 0, stop: 0, leverage: 1, fees: t.fees, funding: t.funding, gross: t.gross,
           pnl: t.net, risk: 0, r: null, setup: "", notes: "", rules: [], px: btPrices(t, fillsOf[b + "|" + t.cur + "|" + t.sym])
         });
