@@ -840,7 +840,21 @@ async function coindcxRun(seed) {
     // The calculator sizes from that same wallet, not "No balance to size from yet".
     const calcCdx = await page.evaluate(() => { switchTab('calculator'); calcApplyAccount('rep-coindcx-inr'); calcUpdate({ stopLossPercent: 0.75 }); return { cap: calcSettings().capital, note: document.getElementById('quickNote').innerText, margin: document.getElementById('quickMargin').innerText }; });
     check(calcCdx.cap === 8144.78 && !/No balance/.test(calcCdx.note) && calcCdx.margin !== '—', 'calculator ignores the CoinDCX wallet: ' + JSON.stringify(calcCdx));
-    await page.evaluate(() => calcUpdate({ accountId: '' }));
+    // Quick size: ₹150 risk typed in INR follows the header to $ at the book's rate; capital used × leverage = position.
+    const qs = await page.evaluate(() => {
+      const box = () => ({ risk: calcSettings().quickRisk, label: document.getElementById('quickRiskCur').innerText, margin: document.getElementById('quickMargin').innerText,
+        pos: document.getElementById('quickPos').innerText, lev: document.getElementById('quickPosLev').innerText, m: calcRecommend({ capital: calcSettings().capital, riskAmount: Number(calcSettings().quickRisk), stopLossPercent: 0.75, leverage: 5, costPercent: calcSettings().costPercent, takeProfitPercent: 0 }) });
+      state.ui.allCur = 'INR'; renderAll(); calcUpdate({ quickRisk: 150, leverage: 5, stopLossPercent: 0.75 });
+      const inr = box(), rate = fxRate(acct('rep-coindcx-inr'));
+      state.ui.allCur = 'USD'; renderAll();
+      const usd = box();
+      state.ui.allCur = 'INR'; renderAll();
+      return { inr, usd, back: box(), rate };
+    });
+    const qnear = (a, b) => Math.abs(a - b) < 0.011;
+    check(qs.inr.label === '₹' && qs.usd.label === '$' && qnear(qs.usd.risk, 150 / qs.rate) && qnear(qs.back.risk, 150), 'quick risk does not follow ₹/$: ' + JSON.stringify(qs));
+    check(qnear(qs.inr.m.positionValue, qs.inr.m.margin * 5) && qs.inr.lev.toLowerCase() === 'at 5×' && qs.inr.pos.startsWith('₹') && qs.usd.pos.startsWith('$') && qs.inr.margin !== qs.inr.pos, 'quick size margin vs position: ' + JSON.stringify(qs));
+    await page.evaluate(() => { state.ui.allCur = ''; calcUpdate({ accountId: '', quickRisk: '', leverage: 1 }); });
     const balances = () => page.evaluate(() => {
       switchTab('dashboard');
       const head = id => { state.ui.account = id; renderAll(); const tag = document.getElementById('topBalLive');
