@@ -232,11 +232,17 @@ async function readFills(fromMs) {
   let w = 0;
   for (const mc of ['INR', 'USDT']) {
     try {
-      for (let to = cdxLocalTime(Date.now()).slice(0, 10), first = true; ; first = false) {
-        const from = dayPlus(to, -FILL_STEP_DAYS);
-        let r;
+      // CoinDCX reads to_date as the start of that day, so the first week ends
+      // tomorrow: ending it today left today's fills out until the next day.
+      for (let to = dayPlus(cdxLocalTime(Date.now()).slice(0, 10), 1), first = true; ; first = false) {
+        let from = dayPlus(to, -FILL_STEP_DAYS), r;
         try { r = await cdxPages(FILLS_PATH, { from_date: from, to_date: to, margin_currency_short_name: [mc] }); }
-        catch (e) { if (!first && cdxOutOfRange(e)) break; throw e; }
+        catch (e) {
+          if (!first && cdxOutOfRange(e)) break;
+          // A day still to come refused: read up to today as before.
+          if (first && cdxOutOfRange(e)) { to = dayPlus(to, -1); from = dayPlus(to, -FILL_STEP_DAYS); r = await cdxPages(FILLS_PATH, { from_date: from, to_date: to, margin_currency_short_name: [mc] }); }
+          else throw e;
+        }
         r.rows.forEach(x => got.push([x, mc, w]));
         w++;
         if (from <= stop) break;

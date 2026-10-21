@@ -655,7 +655,8 @@ async function coindcxRun(seed) {
       if ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400') return [400, { code: 400, message: 'Invalid margin', status: 'error' }];
       return [200, slice(mc === 'INR' ? [...new Set(inr.map(t => t.position_id))].filter(Boolean).map(id => ({ id, pair: id.slice(4), active_pos: 0, margin_currency_short_name: 'INR' })) : [{ id: 'pos-B-GGG_USDT', pair: 'B-GGG_USDT', active_pos: 0, margin_currency_short_name: 'USDT' }])];
     }
-    // Fills: within the dates asked for (UTC days, both ends included), a page at a time.
+    // Fills: from the start of from_date up to the start of to_date (UTC days), a page at a time.
+    // The real CoinDCX left out a day's fills while that day was to_date.
     if (p0 === '/exchange/v1/derivatives/futures/trades') {
       if (mock.fillsMode === 'none') return [404, { message: 'Not found' }];
       if (!/^\d{4}-\d{2}-\d{2}$/.test(p.from_date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(p.to_date || '') || p.to_date < p.from_date) { mock.bad.push('fill dates ' + body); return [400, { message: 'Invalid Request' }]; }
@@ -664,7 +665,7 @@ async function coindcxRun(seed) {
       if (span > 6 || p.from_date < oldest || mock.fillsMode === 'range') return [400, { code: 400, message: 'From Date not in range', status: 'error' }];
       if ((mock.mode === 'noUsdt' && mc === 'USDT') || mock.mode === 'all400') return [400, { code: 400, message: 'Invalid margin', status: 'error' }];
       const day = x => new Date(x.timestamp).toISOString().slice(0, 10);
-      return [200, slice(mc === 'INR' ? fills.filter(x => mock.fillsMode === 'allDates' || (day(x) >= p.from_date && day(x) <= p.to_date)) : [])];
+      return [200, slice(mc === 'INR' ? fills.filter(x => mock.fillsMode === 'allDates' || (day(x) >= p.from_date && day(x) < p.to_date)) : [])];
     }
     if (p0 !== '/exchange/v1/derivatives/futures/positions/transactions') return [404, { message: 'Not found' }];
     if (p.stage !== 'all') { mock.bad.push('stage ' + p.stage); return [400, { message: 'Invalid Request' }]; }
@@ -798,7 +799,7 @@ async function coindcxRun(seed) {
 
     // The right one: two pages of rupee futures and one of USDT, the wallets and
     // 90 days of fills a week at a time, saved in one commit.
-    const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+    const tomorrow = new Date(Date.now() + 29.5 * 3600e3).toISOString().slice(0, 10);
     r = await runImport();
     const want = `Imported ${NEW_ROWS} new rows from CoinDCX · 1 unreadable transaction skipped` + W + F1;
     check(r.code === 0 && r.out === want && r.summary === want, 'import: ' + JSON.stringify(r) + ', expected "' + want + '"');
@@ -807,13 +808,14 @@ async function coindcxRun(seed) {
     const isFill = x => x.path.endsWith('/trades');
     const paths = mock.calls.filter(x => !isFill(x)).map(x => [x.path.split('/').pop(), x.p.margin_currency_short_name, x.p.page].filter(v => v != null).join(':'));
     check(paths.join(',') === 'transactions:INR:1,transactions:INR:2,transactions:USDT:1,wallets', 'calls made: ' + paths.join(','));
-    // Fill windows: from today (Indian date) back, 7 days each, every day covered,
+    // Fill windows: from tomorrow (Indian date) back, 7 days each, every day covered,
     // for both margins, until CoinDCX says the dates are out of its range (30 days here).
+    // CoinDCX stops at the start of to_date, so ending at today would miss today's fills.
     const weeks = mc => mock.calls.filter(x => isFill(x) && x.p.margin_currency_short_name[0] === mc).map(x => [x.p.from_date, x.p.to_date, x.p.page]);
     const wk = weeks('INR'), dayMs = d => Date.parse(d + 'T00:00:00Z');
-    const covered = wk.length && wk[0][1] === today && wk.every((w, i) => w[2] === '1' && dayMs(w[1]) - dayMs(w[0]) === 6 * 864e5 && (!i || w[1] === wk[i - 1][0]))
+    const covered = wk.length && wk[0][1] === tomorrow && wk.every((w, i) => w[2] === '1' && dayMs(w[1]) - dayMs(w[0]) === 6 * 864e5 && (!i || w[1] === wk[i - 1][0]))
       && JSON.stringify(weeks('USDT')) === JSON.stringify(wk);
-    check(covered && wk.length === 6 && dayMs(wk[4][0]) === dayMs(today) - 30 * 864e5, 'fill windows: ' + JSON.stringify(wk));
+    check(covered && wk.length === 6 && dayMs(wk[4][0]) === dayMs(tomorrow) - 30 * 864e5, 'fill windows: ' + JSON.stringify(wk));
     let j = stored();
     const ddd = j.backtest.rows.find(x => x.file === 'cdx-api' && x.sym === 'B-DDD_USDT' && x.gross === 30);
     check(ddd && ddd.at === '2026-09-05 09:00:00' && ddd.fee === 3 && ddd.net === 27 && ddd.kind === 'order' && ddd.cur === 'INR', 'stored in Indian time on a UTC server: ' + JSON.stringify(ddd));
@@ -1251,7 +1253,10 @@ async function cdxSizeRun(seed) {
       // A journal book still shows only the journal analysis.
       state.ui.account = state.accounts.find(a => !a.reportBroker && a.market === 'crypto').id; renderAnalysis();
       const journal = { live: shown('anLive'), report: shown('anReport') };
-      return { sizes, flat, fills, overview, checks, table, rows: rows2, strip, onePair, journal, k: fxk(book, 'USD') };
+      // No fills yet (CoinDCX lists them a day late): Signals still holds the trade
+      // against the alerts, on the side its fees give, dated when it opened.
+      const sigT = {}; signalTrades().filter(t => t.rep).forEach(t => { sigT[t.symbol.split('X/')[0]] = [t.direction, t.date, t.time]; });
+      return { sizes, flat, fills, overview, checks, table, rows: rows2, strip, onePair, journal, sigT, k: fxk(book, 'USD') };
     }, { T, WALLET });
     for (const t of T) {
       const got = v.sizes[t.id];
@@ -1276,6 +1281,7 @@ async function cdxSizeRun(seed) {
     check(line('L')[4] === '₹10,000.00' && line('U')[4] === '—' && line('U')[5] === '—', 'position column: ' + JSON.stringify(v.table.map(r => r.slice(1, 6))));
     check(/TRADES CHECKED 4 /.test(v.strip), 'headline: ' + v.strip);
     check(v.onePair === 1, 'pair filter in the analysis: ' + v.onePair + ' rows');
+    check(JSON.stringify(v.sigT) === JSON.stringify({ O: ['long', '2024-12-10', '10:00'], L: ['long', '2026-09-10', '10:00'], S: ['short', '2026-09-11', '09:00'] }), 'report trades on Signals, side from fees: ' + JSON.stringify(v.sigT));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
