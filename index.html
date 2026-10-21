@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-20.118">
+  <meta name="app-version" content="2026-10-21.119">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -610,9 +610,9 @@
         <div class="flex items-center gap-2 mb-3">
           <span class="w-2 h-2 rounded-full bg-amber-400"></span>
           <h3 class="font-bold text-white uppercase tracking-wider">Quick size</h3>
-          <span class="text-slate-500 text-[11px]">Type a stop-loss; get the margin to put on, from your balance</span>
+          <span class="text-slate-500 text-[11px]">Type a stop-loss and the most you will lose; get the capital to use and the position size. Follows the header ₹ / $</span>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-6 gap-3 items-end">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
           <div class="col-span-2 md:col-span-1">
             <label class="text-slate-400 block mb-1">Stop-loss distance %</label>
             <input type="number" id="quickSl" step="0.01" min="0" placeholder="e.g. 0.30" oninput="calcOn('stopLossPercent', this)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500">
@@ -633,9 +633,23 @@
             <label class="text-slate-400 block mb-1">Leverage</label>
             <select id="quickLev" onchange="calcOn('leverage', this)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500"></select>
           </div>
-          <div class="col-span-2 md:col-span-1 rounded-lg bg-black/30 border border-terminal-border p-2.5 text-center">
-            <div class="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Put on the trade</div>
+        </div>
+        <!-- Two sizes: the money it takes from the balance, and the position that money opens at the leverage -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+          <div class="rounded-lg bg-black/30 border border-amber-500/40 p-2.5 text-center">
+            <div class="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Capital used (margin)</div>
             <div class="text-2xl font-bold text-amber-300 mt-0.5" id="quickMargin">&mdash;</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">your own money, no leverage</div>
+          </div>
+          <div class="rounded-lg bg-black/30 border border-terminal-border p-2.5 text-center">
+            <div class="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Position size <span id="quickPosLev">with leverage</span></div>
+            <div class="text-2xl font-bold text-sky-300 mt-0.5" id="quickPos">&mdash;</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">margin × leverage</div>
+          </div>
+          <div class="rounded-lg bg-black/30 border border-terminal-border p-2.5 text-center">
+            <div class="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Loss if the stop hits</div>
+            <div class="text-2xl font-bold text-rose-300 mt-0.5" id="quickLoss">&mdash;</div>
+            <div class="text-[10px] text-slate-500 mt-0.5">fees included</div>
           </div>
         </div>
         <p class="text-[11px] text-slate-400 mt-2.5 leading-relaxed" id="quickNote"></p>
@@ -6023,16 +6037,20 @@
       const lev = el('quickLev');
       if (document.activeElement !== lev) { lev.innerHTML = levHtml; lev.value = s.leverage; }
       const note = el('quickNote');
+      el('quickPosLev').innerText = 'at ' + s.leverage + '×';
+      const blank = () => { el('quickMargin').innerText = "—"; el('quickPos').innerText = "—"; el('quickLoss').innerText = "—"; };
       const r = calcRecommend({ capital, riskAmount, stopLossPercent: slPct, leverage: s.leverage, costPercent: s.costPercent, takeProfitPercent: 0 });
-      if (!(capital > 0)) { el('quickMargin').innerText = "—"; note.innerText = "No balance to size from yet. Pick an account above, or set the capital in the calculator."; return; }
-      if (!(slPct > 0)) { el('quickMargin').innerText = "—"; note.innerHTML = `Balance <b class="text-slate-200">${esc(calcMoney(capital, cur))}</b>. Type a stop-loss distance (or the entry and SL prices) to see how much to put on.`; return; }
-      if (!r.valid) { el('quickMargin').innerText = "—"; note.innerText = "Set a risk amount above zero."; return; }
+      if (!(capital > 0)) { blank(); note.innerText = "No balance to size from yet. Pick an account above, or set the capital in the calculator."; return; }
+      if (!(slPct > 0)) { blank(); note.innerHTML = `Balance <b class="text-slate-200">${esc(calcMoney(capital, cur))}</b>. Type a stop-loss distance (or the entry and SL prices) to see how much to put on.`; return; }
+      if (!r.valid) { blank(); note.innerText = "Set a risk amount above zero."; return; }
       el('quickMargin').innerText = calcMoney(r.margin, cur);
+      el('quickPos').innerText = calcMoney(r.positionValue, cur);
+      el('quickLoss').innerText = calcMoney(r.totalLoss, cur);
       const balPct = capital > 0 ? r.totalLoss / capital * 100 : 0;
       const bits = [
         `Balance <b class="text-slate-200">${esc(calcMoney(capital, cur))}</b>${linked && linked.id === deltaAccountId() && deltaLiveKnown() ? ' (Delta)' : ''}`,
         `risk <b class="text-slate-200">${esc(calcMoney(riskAmount, cur))}</b>${typedRisk > 0 ? '' : ' (' + esc(riskPct) + '% of balance)'}`,
-        `position <b class="text-slate-200">${esc(calcMoney(r.positionValue, cur))}</b> at ${esc(s.leverage)}×`,
+        `capital used <b class="text-slate-200">${esc(calcMoney(r.margin, cur))}</b> × ${esc(s.leverage)} = position <b class="text-slate-200">${esc(calcMoney(r.positionValue, cur))}</b>`,
         `if the stop hits you lose about <b class="text-rose-300">${esc(calcMoney(r.totalLoss, cur))}</b> (${balPct.toFixed(2)}% of balance, fees included)`
       ];
       note.innerHTML = bits.join(' · ') + (r.capitalLimited
@@ -6040,10 +6058,11 @@
     }
     function calcFollowCur(v) {
       const s = calcSettings(), linked = state.accounts.find(a => a.id === s.accountId);
-      if (linked) { state.calculatorSettings = Object.assign(s, { currency: v }); calcApplyAccount(linked.id, true); return; }
-      const k = v === "INR" ? fxRate(null) : 1 / fxRate(null);
-      const conv = x => (x === "" || x == null || !isFinite(Number(x))) ? x : +(Number(x) * k).toFixed(2);
-      const patch = { currency: v, capital: conv(s.capital), riskAmount: conv(s.riskAmount), plannedMargin: conv(s.plannedMargin), ladderAmount: conv(s.ladderAmount), quickRisk: conv(s.quickRisk) };
+      const k = v === "INR" ? fxRate(linked || null) : 1 / fxRate(linked || null);
+      const conv = (x, dp = 2) => (x === "" || x == null || !isFinite(Number(x))) ? x : +(Number(x) * k).toFixed(dp);
+      // A typed "risk to take" is money in the old currency: convert it at the book's rate (₹150 -> $ at 85 = $1.7647; 4 places so switching back gives ₹150 again).
+      if (linked) { state.calculatorSettings = Object.assign(s, { currency: v, quickRisk: conv(s.quickRisk, 4) }); calcApplyAccount(linked.id, true); return; }
+      const patch = { currency: v, capital: conv(s.capital), riskAmount: conv(s.riskAmount), plannedMargin: conv(s.plannedMargin), ladderAmount: conv(s.ladderAmount), quickRisk: conv(s.quickRisk, 4) };
       if (v === "USD") Object.assign(patch, { costPercent: DEFAULT_USD_COST_PERCENT, feePreset: "custom" });
       else Object.assign(patch, { feePreset: DEFAULT_INR_PRESET, costPercent: calcPresetPercent(DEFAULT_INR_PRESET) });
       state.calculatorSettings = Object.assign(s, patch); save();
