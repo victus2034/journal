@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-21.120">
+  <meta name="app-version" content="2026-10-22.121">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -533,6 +533,10 @@
         </div>
         <div id="sigMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
         </div>
+      </section>
+
+      <section data-sigsec="report" class="space-y-4 hidden">
+        <div id="sigBacktest" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
       </section>
 
       <section data-sigsec="edge" class="space-y-4 hidden">
@@ -3339,9 +3343,11 @@
           + item('My P&amp;L', f.taken ? Object.keys(f.pnlBy).map(c => '<span class="' + (f.pnlBy[c] >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + signedMoney(f.pnlBy[c], c) + '</span>').join(' · ') : '&mdash;')
           + '</div>' : '<div class="text-slate-500">No alerts in this ' + (picked ? 'day' : 'period') + '.</div>');
     }
-    function renderSignalsTable() {
+    function renderSignalsTable() { return withOutcomeCache(renderSignalsNow); }
+    function renderSignalsNow() {
       const tbody = document.getElementById('signalsTableBody');
       if (!tbody) return;
+      sigView = { pairs: [], mkt: null, done: {} };
       const kind = sigKind();
       renderSigFresh();
       renderSigKindBar(kind);
@@ -3401,11 +3407,15 @@
       {
         const cur0 = viewCur();
         const tradesInRange = state.trades.filter(t => (!range.from || t.date >= range.from) && (!range.to || t.date <= range.to)).map(hydrate).map(t => toView(t, cur0));
-        renderMarketCalendar('mktCalSignals', { pairs, trades: tradesInRange, cur: cur0, rerender: renderSignalsTable, scope: (range.from || range.to) ? (range.from || 'start') + ' to ' + (range.to || 'now') + (chan ? ', ' + chanLabel(chan) : '') : 'all history' + (chan ? ', ' + chanLabel(chan) : '') });
+        sigView.mkt = { pairs, trades: tradesInRange, cur: cur0, rerender: renderSignalsTable, scope: (range.from || range.to) ? (range.from || 'start') + ' to ' + (range.to || 'now') + (chan ? ', ' + chanLabel(chan) : '') : 'all history' + (chan ? ', ' + chanLabel(chan) : '') };
+        // The card itself is drawn when Market days is open, but the BTC days behind
+        // the BTC-day filter are loaded either way.
+        mktCtx['mktCalSignals'] = sigView.mkt;
+        if (mktNeedsFetch() && !mktLoading) mktFetch().then(renderSignalsTable);
       }
       const mfSig = mktFilter();
       renderMktFilterBar('sigMktBar', 'mktCalSignals');
-      renderSecBar('sigSecBar', kind === 'fib' ? SIG_SECS_FIB : SIG_SECS, 'data-sigsec', state.ui.sigSec, setSigSec);
+      renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
       if (mfSig) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig);
 
       // Alerts whose stop is under 0.2% cannot be traded profitably: the 0.10% round-trip
@@ -3428,7 +3438,9 @@
           tinyBar.appendChild(b);
         }
       }
-      renderSignalEdgeAnalysis(skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs);
+      sigView.pairs = skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs;
+      renderSignalEdgeAnalysis(sigView.pairs);
+      drawSigSec(sigCurSec());
 
       // --- filled/taken/never-filled/everything filter ---
       let mode = state.ui.sigFilter || "all";
@@ -6393,7 +6405,23 @@
     }
     // What the alert itself did. The edge panels are built on this alone, so
     // your own exits never leak into the measurement of the signals.
+    // One render looks up the same alert's result many times (strip, calendar,
+    // breakdowns), so while a render runs each alert's result is worked out once.
+    let sigOutMemo = null;
+    function withOutcomeCache(fn) {
+      const own = !sigOutMemo;
+      if (own) sigOutMemo = new Map();
+      try { return fn(); } finally { if (own) sigOutMemo = null; }
+    }
     function outcomeOf(pair) {
+      if (!sigOutMemo) return outcomeNow(pair);
+      const sig = pair.signal;
+      if (sigOutMemo.has(sig)) return sigOutMemo.get(sig);
+      const v = outcomeNow(pair);
+      sigOutMemo.set(sig, v);
+      return v;
+    }
+    function outcomeNow(pair) {
       const sig = pair.signal;
       if (sig.filled === false) return null;
       if (typeof sig.resultR === "number" && isFinite(sig.resultR)) return { r: sig.resultR, source: "scanner" };
@@ -6596,6 +6624,227 @@
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">' + tbl('Best: take these', best, 'text-emerald-300') + tbl('Worst: skip these', worst, 'text-rose-300') + '</div>';
     }
 
+
+    /* =================== BACKTEST REPORT =================== */
+    // Every alert with a result, in the order they fired, as if each was taken at 1R:
+    // equity curve, drawdown, streaks, the spread of results, and the same numbers per
+    // channel, symbol, side, hour, weekday, week and month. It follows the period,
+    // channel and BTC-day filters, like the rest of the tab.
+    const BT_WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    function btDate(d) { const x = new Date(String(d || "") + "T00:00:00"); return isNaN(x) ? null : x; }
+    function btWeekOf(d) {
+      const x = btDate(d); if (!x) return "?";
+      x.setDate(x.getDate() - (x.getDay() + 6) % 7); // back to Monday
+      return "week of " + iso(x);
+    }
+    function btSession(g) { const m = toMin(g.time); if (m == null) return null; const h = Math.floor(m / 60); return h < 6 ? "Night 00-06" : h < 12 ? "Morning 06-12" : h < 18 ? "Afternoon 12-18" : "Evening 18-24"; }
+    const BT_DIMS = [
+      { k: "channel", label: "Channel", fn: g => chanLabel(chanKey(g)) },
+      { k: "symbol", label: "Symbol", fn: g => g.symbol || "?" },
+      { k: "side", label: "Long / short", fn: g => g.side === "short" ? "Short" : "Long" },
+      { k: "stop", label: "Stop width", fn: slBand, order: SL_BANDS.map(b => b.label).concat(["Not recorded"]) },
+      { k: "score", label: "Score", fn: scoreBand, order: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map(v => "Score " + v).concat(["No score"]) },
+      { k: "hour", label: "Hour (IST)", fn: g => { const m = toMin(g.time); return m == null ? "No time" : String(Math.floor(m / 60)).padStart(2, "0") + ":00"; }, sortKey: true },
+      { k: "weekday", label: "Weekday", fn: g => { const x = btDate(g.date); return x ? BT_WD[x.getDay()] : "?"; }, order: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] },
+      { k: "week", label: "Week", fn: g => btWeekOf(g.date), sortKey: -1 },
+      { k: "month", label: "Month", fn: g => String(g.date || "").slice(0, 7) || "?", sortKey: -1 },
+      { k: "btc", label: "BTC day", fn: g => { const b = mktBiasOn(g.date, g.time); return b ? MKT_LABEL[b] : "No BTC data"; }, order: ["Bullish", "Bearish", "Sideways", "No BTC data"] }
+    ];
+    // The numbers for a run of results, given in the order they happened.
+    function sigRunStats(rs) {
+      const n = rs.length, wins = rs.filter(r => r > 0), losses = rs.filter(r => r < 0);
+      const gw = sum(wins), gl = -sum(losses), tot = sum(rs), mean = n ? tot / n : null;
+      const sd = n > 1 ? Math.sqrt(sum(rs.map(r => (r - mean) * (r - mean))) / (n - 1)) : null;
+      let eq = 0, peak = 0, maxDD = 0, under = 0, longest = 0, ws = 0, ls = 0, maxWs = 0, maxLs = 0;
+      rs.forEach(r => {
+        eq += r;
+        if (eq >= peak) { peak = eq; under = 0; } else { under++; longest = Math.max(longest, under); }
+        maxDD = Math.max(maxDD, peak - eq);
+        if (r > 0) { ws++; ls = 0; } else if (r < 0) { ls++; ws = 0; } else { ws = 0; ls = 0; }
+        maxWs = Math.max(maxWs, ws); maxLs = Math.max(maxLs, ls);
+      });
+      return {
+        n, wins: wins.length, losses: losses.length, win: n ? wins.length / n * 100 : null, tot, avg: mean,
+        avgWin: wins.length ? gw / wins.length : null, avgLoss: losses.length ? -gl / losses.length : null,
+        payoff: wins.length && losses.length ? (gw / wins.length) / (gl / losses.length) : null,
+        pf: gl > 0 ? gw / gl : (gw > 0 ? Infinity : null), sd, sqn: sd ? Math.sqrt(n) * mean / sd : null,
+        maxDD, longestDD: longest, recovery: maxDD > 0 ? tot / maxDD : null, maxWs, maxLs,
+        best: n ? Math.max(...rs) : null, worst: n ? Math.min(...rs) : null
+      };
+    }
+    function pfFmt(v) { return v == null ? "—" : v === Infinity ? "∞" : v.toFixed(2); }
+    const sbtWhen = g => (g.date || "") + " " + (g.time || "");
+    // The view the report was last drawn from, so sorting a table or exporting needs no recount.
+    let btLast = [], btShowAll = false;
+    function setSigBtDim(k) { state.ui.sigBtDim = k; btShowAll = false; save(); renderSigBacktest(btLast); }
+    function setSigBtSort(k) {
+      const s = state.ui.sigBtSort || {};
+      state.ui.sigBtSort = { k, dir: s.k === k ? -(s.dir || -1) : -1 };
+      save(); renderSigBacktest(btLast);
+    }
+    function btShowAllRows() { btShowAll = !btShowAll; renderSigBacktest(btLast); }
+    // A small line chart of the equity curve (cumulative R) with the drawdown under it.
+    function btCurveSvg(rs) {
+      if (rs.length < 2) return '';
+      const W = 800, H = 150, D = 50, eq = [0]; rs.forEach(r => eq.push(eq[eq.length - 1] + r));
+      let peak = 0; const dd = eq.map(v => { peak = Math.max(peak, v); return v - peak; });
+      const lo = Math.min(0, ...eq), hi = Math.max(0, ...eq), span = (hi - lo) || 1, ddMin = Math.min(-0.0001, ...dd);
+      const x = i => (i / (eq.length - 1) * W).toFixed(1);
+      const y = v => (4 + (hi - v) / span * (H - 8)).toFixed(1);
+      const yd = v => (H + 6 + v / ddMin * (D - 6)).toFixed(1);
+      const line = eq.map((v, i) => x(i) + ',' + y(v)).join(' ');
+      const area = 'M0,' + (H + 6) + ' L' + dd.map((v, i) => x(i) + ',' + yd(v)).join(' L') + ' L' + W + ',' + (H + 6) + ' Z';
+      const up = eq[eq.length - 1] >= 0;
+      return '<svg viewBox="0 0 ' + W + ' ' + (H + D + 6) + '" preserveAspectRatio="none" class="w-full block" style="height:190px" role="img" aria-label="Equity curve in R with drawdown">'
+        + '<line x1="0" x2="' + W + '" y1="' + y(0) + '" y2="' + y(0) + '" stroke="#334155" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>'
+        + '<polyline points="' + line + '" fill="none" stroke="' + (up ? '#34d399' : '#fb7185') + '" stroke-width="1.6" vector-effect="non-scaling-stroke"/>'
+        + '<line x1="0" x2="' + W + '" y1="' + (H + 6) + '" y2="' + (H + 6) + '" stroke="#334155" vector-effect="non-scaling-stroke"/>'
+        + '<path d="' + area + '" fill="rgba(244,63,94,0.35)" stroke="none"/></svg>';
+    }
+    const BT_BUCKETS = [
+      { label: "-1.5R or less", lo: -Infinity, hi: -1.5 }, { label: "-1.5 to -1R", lo: -1.5, hi: -1 }, { label: "-1 to -0.5R", lo: -1, hi: -0.5 },
+      { label: "-0.5 to 0R", lo: -0.5, hi: 0 }, { label: "0 to +0.5R", lo: 0, hi: 0.5 }, { label: "+0.5 to +1R", lo: 0.5, hi: 1 },
+      { label: "+1 to +1.5R", lo: 1, hi: 1.5 }, { label: "+1.5 to +2R", lo: 1.5, hi: 2 }, { label: "+2R or more", lo: 2, hi: Infinity }
+    ];
+    function renderSigBacktest(pairs) {
+      const host = document.getElementById('sigBacktest');
+      if (!host) return;
+      btLast = pairs;
+      const head = '<div class="flex flex-wrap items-center justify-between gap-2 mb-1"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Backtest report</h3></div>'
+        + '<button type="button" onclick="exportSigBacktestCsv()" class="px-2.5 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">Export CSV</button></div>';
+      const graded = pairs.map(pr => ({ pr, o: outcomeOf(pr) })).filter(x => x.o).sort((a, b) => sbtWhen(a.pr.signal) < sbtWhen(b.pr.signal) ? -1 : sbtWhen(a.pr.signal) > sbtWhen(b.pr.signal) ? 1 : 0);
+      if (!graded.length) { host.innerHTML = head + '<p class="text-slate-500">No alerts with a result in this view yet. Widen the period or pick another channel.</p>'; return; }
+      const rs = graded.map(x => x.o.r), st = sigRunStats(rs);
+      const filled = pairs.filter(pr => pr.signal.filled === true).length, nofill = pairs.filter(pr => pr.signal.filled === false).length;
+      const timeouts = pairs.filter(pr => pr.signal.outcome === "timeout").length;
+      const first = graded[0].pr.signal.date, last = graded[graded.length - 1].pr.signal.date;
+      const days = Math.max(1, Math.round((btDate(last) - btDate(first)) / 864e5) + 1);
+      const tone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+      const cell = (l, v, sub, c, tip) => '<div class="bg-[#0A0F18] border border-terminal-border rounded-lg p-2"' + (tip ? ' title="' + esc(tip) + '"' : '') + '><div class="text-[10px] uppercase tracking-wider text-slate-500">' + l + '</div><div class="text-sm font-bold mono-num ' + (c || 'text-slate-100') + '">' + v + '</div>' + (sub ? '<div class="text-[10px] text-slate-500 truncate">' + sub + '</div>' : '') + '</div>';
+      const stats = '<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">'
+        + cell('Graded alerts', st.n, filled + ' filled · ' + nofill + ' never filled' + (timeouts ? ' · ' + timeouts + ' timed out' : ''))
+        + cell('Fill rate', (filled + nofill) ? pct(filled / (filled + nofill) * 100) : '—', 'of alerts with a known fill', '', 'Alerts that reached their entry, out of those the scanner has judged (filled or never filled).')
+        + cell('Win rate', pct(st.win), st.wins + 'W / ' + st.losses + 'L' + (st.n - st.wins - st.losses ? ' / ' + (st.n - st.wins - st.losses) + ' flat' : ''), 'text-emerald-400')
+        + cell('Expectancy', rfmt(st.avg), 'average R per alert', tone(st.avg), 'What one alert made on average, after fees. Above zero means taking every alert made money.')
+        + cell('Total R', rfmt(st.tot), (st.tot / days * 7).toFixed(2) + 'R a week', tone(st.tot))
+        + cell('Profit factor', pfFmt(st.pf), 'won R ÷ lost R', st.pf != null && st.pf >= 1 ? 'text-emerald-400' : 'text-rose-400')
+        + cell('Average win', rfmt(st.avgWin), 'per winning alert', 'text-emerald-400')
+        + cell('Average loss', rfmt(st.avgLoss), 'per losing alert', 'text-rose-400')
+        + cell('Payoff ratio', st.payoff != null ? st.payoff.toFixed(2) : '—', 'avg win ÷ avg loss', '', 'Above 1 means a win pays more than a loss costs. Win rate needed to break even: ' + (st.payoff ? pct(100 / (1 + st.payoff)) : '—') + '.')
+        + cell('Max drawdown', st.maxDD ? '-' + st.maxDD.toFixed(2) + 'R' : '0R', 'longest ' + st.longestDD + ' alerts under the peak', 'text-rose-400', 'The deepest fall from a high point of the equity curve, taking every alert in order at 1R.')
+        + cell('Recovery factor', st.recovery != null ? st.recovery.toFixed(2) : '—', 'total R ÷ max drawdown', tone(st.recovery))
+        + cell('Streaks', '<span class="text-emerald-400">' + st.maxWs + 'W</span> / <span class="text-rose-400">' + st.maxLs + 'L</span>', 'longest win / loss run', '', 'Most wins and most losses in a row, in the order the alerts fired.')
+        + cell('Best / worst', '<span class="text-emerald-400">' + rfmt(st.best) + '</span> / <span class="text-rose-400">' + rfmt(st.worst) + '</span>', 'single alert')
+        + cell('Spread (SD)', st.sd != null ? st.sd.toFixed(2) + 'R' : '—', 'how much results swing')
+        + cell('SQN', st.sqn != null ? st.sqn.toFixed(2) : '—', st.sqn == null ? '' : st.sqn >= 2 ? 'good' : st.sqn >= 1 ? 'fair' : 'weak', tone(st.sqn), 'System quality number: √n × expectancy ÷ spread. Under 1 weak, 1-2 fair, 2+ good.')
+        + cell('Alerts a day', (pairs.length / days).toFixed(1), (st.n / days).toFixed(1) + ' graded · ' + days + ' day' + (days === 1 ? '' : 's'), '', first + ' → ' + last) + '</div>';
+
+      // Equity curve
+      const curve = '<div class="mb-3"><div class="flex flex-wrap justify-between gap-2 text-[10px] uppercase tracking-wider mb-1"><span class="text-amber-300 font-bold">Equity curve, every alert at 1R</span><span class="text-slate-500 normal-case">red below: drawdown from the last high (deepest -' + st.maxDD.toFixed(2) + 'R)</span></div>'
+        + btCurveSvg(rs) + '<div class="flex justify-between text-[10px] text-slate-500 mt-1"><span>' + esc(first) + '</span><span class="' + tone(st.tot) + '">' + rfmt(st.tot) + '</span><span>' + esc(last) + '</span></div></div>';
+
+      // How results spread, and the outcome mix
+      const counts = BT_BUCKETS.map(b => rs.filter(r => r >= b.lo && r < b.hi || (b.hi === Infinity && r >= b.lo)).length);
+      const maxC = Math.max(1, ...counts);
+      const hist = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">Spread of results</div>' + BT_BUCKETS.map((b, i) => '<div class="flex items-center gap-2 mb-1"><span class="w-24 shrink-0 text-slate-400 whitespace-nowrap">' + b.label + '</span><div class="flex-1 h-2 bg-[#131C2D] rounded"><div class="h-2 rounded ' + (b.hi <= 0 ? 'bg-rose-500' : 'bg-emerald-500') + '" style="width:' + (counts[i] / maxC * 100).toFixed(1) + '%"></div></div><span class="w-20 text-right text-slate-300">' + counts[i] + ' <span class="text-slate-500">' + pct(counts[i] / rs.length * 100) + '</span></span></div>').join('') + '</div>';
+      const mixBy = {}; graded.forEach(x => { const k = x.pr.signal.outcome || (x.o.r > 0 ? 'Win' : x.o.r < 0 ? 'Loss' : 'Flat'); (mixBy[k] = mixBy[k] || []).push(x.o.r); });
+      const mixOrder = ["+2R", "+1R", "BE", "SL"];
+      const mixKeys = Object.keys(mixBy).sort((a, b) => ((mixOrder.indexOf(a) + 1) || 99) - ((mixOrder.indexOf(b) + 1) || 99));
+      const mixName = { "+2R": "Hit +2R", "+1R": "Hit +1R", "BE": "Breakeven", "SL": "Stopped out" };
+      const mix = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">How they ended</div><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Outcome</th><th class="pr-2 text-right">Alerts</th><th class="pr-2 text-right">Share</th><th class="pr-2 text-right">Avg R</th><th class="text-right">Total R</th></tr></thead><tbody>'
+        + mixKeys.map(k => { const v = mixBy[k]; return '<tr class="border-t border-terminal-border/60"><td class="py-1 pr-2 text-slate-200">' + esc(mixName[k] || k) + '</td><td class="pr-2 text-right">' + v.length + '</td><td class="pr-2 text-right text-slate-400">' + pct(v.length / rs.length * 100) + '</td><td class="pr-2 text-right ' + tone(avg(v)) + '">' + rfmt(avg(v)) + '</td><td class="text-right font-bold ' + tone(sum(v)) + '">' + rfmt(sum(v)) + '</td></tr>'; }).join('')
+        + '</tbody></table>' + (timeouts ? '<p class="text-[10px] text-slate-500 mt-1">' + timeouts + ' timed out (entered, neither stop nor 1R in time) and carry no R, as in the scanner\'s own report.</p>' : '') + '</div>';
+
+      // Minimum stop width: fees are a fixed share of price, so thin stops cost more R.
+      const thr = [0, 0.2, 0.3, 0.4, 0.5, 0.75, 1];
+      const sweep = thr.map(t => { const xs = graded.filter(x => { const p = slPct(x.pr.signal); return t === 0 || (p != null && p >= t); }); return { t, s: sigRunStats(xs.map(x => x.o.r)) }; });
+      const bestT = sweep.filter(x => x.s.n >= Math.max(5, rs.length * 0.2)).reduce((b, x) => (!b || x.s.tot > b.s.tot) ? x : b, null);
+      const sweepHtml = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">If you skip thin stops</div><p class="text-[10px] text-slate-500 mb-1">Fees are a fixed share of price, so on a thin stop they cost more R. Each row keeps only alerts with a stop at least that wide.</p><div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Stop at least</th><th class="pr-2 text-right">Alerts</th><th class="pr-2 text-right">Win</th><th class="pr-2 text-right">Avg R</th><th class="pr-2 text-right">Total R</th><th class="pr-2 text-right">PF</th><th class="text-right">Max DD</th></tr></thead><tbody>'
+        + sweep.map(x => '<tr class="border-t border-terminal-border/60' + (bestT && x.t === bestT.t ? ' bg-amber-500/10' : '') + '"><td class="py-1 pr-2 text-slate-200">' + (x.t ? x.t + '%' : 'any (all)') + (bestT && x.t === bestT.t ? ' <span class="text-amber-300 text-[10px]">best total</span>' : '') + '</td><td class="pr-2 text-right">' + x.s.n + '</td><td class="pr-2 text-right">' + (x.s.n ? pct(x.s.win) : '—') + '</td><td class="pr-2 text-right ' + tone(x.s.avg) + '">' + rfmt(x.s.avg) + '</td><td class="pr-2 text-right font-bold ' + tone(x.s.n ? x.s.tot : null) + '">' + (x.s.n ? rfmt(x.s.tot) : '—') + '</td><td class="pr-2 text-right">' + pfFmt(x.s.pf) + '</td><td class="text-right text-rose-400">' + (x.s.n ? '-' + x.s.maxDD.toFixed(2) + 'R' : '—') + '</td></tr>').join('')
+        + '</tbody></table></div></div>';
+
+      // What to cut: each group that lost R overall, and the result without it.
+      const minN = rs.length >= 100 ? 8 : 5;
+      const cutDims = [BT_DIMS[0], BT_DIMS[2], { k: "stop", label: "Stop width", fn: g => { const v = slPct(g); return v == null ? null : v < 0.3 ? 'stop under 0.3%' : v < 0.6 ? 'stop 0.3-0.6%' : v < 1 ? 'stop 0.6-1%' : 'stop over 1%'; } },
+        { k: "score", label: "Score", fn: g => { const m = String(g.score || '').match(/^(\d+)/); if (!m) return null; const v = +m[1]; return v >= 9 ? 'score 9+' : v === 8 ? 'score 8' : v === 7 ? 'score 7' : 'score 6 or less'; } },
+        { k: "session", label: "Time of day", fn: btSession }, BT_DIMS[6], BT_DIMS[9], BT_DIMS[1]];
+      const cuts = [];
+      cutDims.forEach(d => {
+        const by = {};
+        graded.forEach((x, i) => { const v = d.fn(x.pr.signal); if (v == null || v === "No BTC data") return; (by[v] = by[v] || []).push(i); });
+        const vals = Object.keys(by);
+        if (vals.length < 2) return;
+        vals.forEach(v => {
+          const idx = by[v]; if (idx.length < minN || idx.length >= rs.length) return;
+          const tot = sum(idx.map(i => rs[i])); if (tot >= 0) return;
+          cuts.push({ dim: d.label, val: v, idx, n: idx.length, tot });
+        });
+      });
+      cuts.sort((a, b) => a.tot - b.tot);
+      const topCuts = cuts.slice(0, 6);
+      const restOf = skip => sigRunStats(rs.filter((r, i) => !skip.has(i)));
+      const cutRow = (label, skip, n, tot) => { const s2 = restOf(skip); return '<tr class="border-t border-terminal-border/60"><td class="py-1 pr-2 text-slate-200">' + label + '</td><td class="pr-2 text-right text-slate-400">' + n + ' · <span class="text-rose-400">' + rfmt(tot) + '</span></td><td class="pr-2 text-right">' + s2.n + '</td><td class="pr-2 text-right">' + pct(s2.win) + '</td><td class="pr-2 text-right ' + tone(s2.avg) + '">' + rfmt(s2.avg) + '</td><td class="pr-2 text-right font-bold ' + tone(s2.tot) + '">' + rfmt(s2.tot) + '</td><td class="pr-2 text-right">' + pfFmt(s2.pf) + '</td><td class="text-right text-rose-400">-' + s2.maxDD.toFixed(2) + 'R</td></tr>'; };
+      let cutHtml = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">What to cut</div><p class="text-[10px] text-slate-500 mb-1">Groups of ' + minN + '+ alerts that lost R overall, biggest drag first, and what the rest would have done without them. Past results: a lead to check, not a rule.</p>';
+      if (!topCuts.length) cutHtml += '<p class="text-slate-500">No group of ' + minN + '+ alerts lost R overall in this view.</p></div>';
+      else {
+        const all = new Set(); topCuts.slice(0, 3).forEach(c => c.idx.forEach(i => all.add(i)));
+        cutHtml += '<div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Skip</th><th class="pr-2 text-right">Alerts · their R</th><th class="pr-2 text-right">Left</th><th class="pr-2 text-right">Win</th><th class="pr-2 text-right">Avg R</th><th class="pr-2 text-right">Total R</th><th class="pr-2 text-right">PF</th><th class="text-right">Max DD</th></tr></thead><tbody>'
+          + '<tr class="border-t border-terminal-border/60 text-slate-400"><td class="py-1 pr-2">Nothing (now)</td><td class="pr-2 text-right">—</td><td class="pr-2 text-right">' + st.n + '</td><td class="pr-2 text-right">' + pct(st.win) + '</td><td class="pr-2 text-right ' + tone(st.avg) + '">' + rfmt(st.avg) + '</td><td class="pr-2 text-right font-bold ' + tone(st.tot) + '">' + rfmt(st.tot) + '</td><td class="pr-2 text-right">' + pfFmt(st.pf) + '</td><td class="text-right text-rose-400">-' + st.maxDD.toFixed(2) + 'R</td></tr>'
+          + topCuts.map(c => cutRow('<span class="text-slate-500">' + esc(c.dim) + ':</span> ' + esc(c.val), new Set(c.idx), c.n, c.tot)).join('')
+          + (topCuts.length > 1 ? cutRow('<span class="text-amber-300 font-bold">Top ' + Math.min(3, topCuts.length) + ' together</span>', all, all.size, sum([...all].map(i => rs[i]))) : '')
+          + '</tbody></table></div></div>';
+      }
+
+      // Breakdown table: pick a dimension, sort by any column.
+      const dim = BT_DIMS.find(d => d.k === state.ui.sigBtDim) || BT_DIMS[0];
+      const groups = {};
+      pairs.forEach(pr => { const k = dim.fn(pr.signal); const g = (groups[k] = groups[k] || { key: k, alerts: 0, filled: 0, nofill: 0, taken: 0, rs: [] }); g.alerts++; if (pr.signal.filled === true) g.filled++; if (pr.signal.filled === false) g.nofill++; if (pr.trade) g.taken++; });
+      graded.forEach(x => groups[dim.fn(x.pr.signal)].rs.push(x.o.r));
+      let rows = Object.keys(groups).map(k => { const g = groups[k], s = sigRunStats(g.rs); return { key: k, alerts: g.alerts, taken: g.taken, fill: (g.filled + g.nofill) ? g.filled / (g.filled + g.nofill) * 100 : null, n: s.n, win: s.win, avg: s.avg, tot: g.rs.length ? s.tot : null, pf: s.pf, dd: g.rs.length ? s.maxDD : null, best: s.best, worst: s.worst }; });
+      const COLS = [["key", dim.label], ["alerts", "Alerts"], ["fill", "Fill %"], ["n", "Graded"], ["win", "Win %"], ["avg", "Avg R"], ["tot", "Total R"], ["pf", "PF"], ["dd", "Max DD"], ["best", "Best"], ["worst", "Worst"], ["taken", "Taken"]];
+      const so = state.ui.sigBtSort && COLS.some(c => c[0] === state.ui.sigBtSort.k) ? state.ui.sigBtSort : null;
+      const val = (r, k) => { const v = r[k]; return v === Infinity ? 1e9 : v; };
+      if (so) rows.sort((a, b) => { const x = val(a, so.k), y = val(b, so.k); if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; return (typeof x === 'string' ? x.localeCompare(y) : x - y) * (so.dir || -1); });
+      else if (dim.order) { const pos = {}; dim.order.forEach((k, i) => { pos[k] = i; }); rows.sort((a, b) => (pos[a.key] ?? 999) - (pos[b.key] ?? 999)); }
+      else if (dim.sortKey) rows.sort((a, b) => a.key.localeCompare(b.key) * dim.sortKey);
+      else rows.sort((a, b) => (b.tot ?? -1e9) - (a.tot ?? -1e9));
+      const LIMIT = 25, shownRows = btShowAll ? rows : rows.slice(0, LIMIT);
+      const dimBar = '<div class="flex flex-wrap items-center gap-1.5 mb-2"><span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold mr-1">Break down by</span>' + BT_DIMS.map(d => '<button type="button" onclick="setSigBtDim(\'' + d.k + '\')" class="px-2 py-0.5 rounded text-[11px] ' + (d.k === dim.k ? 'bg-amber-500 text-black font-bold' : 'bg-terminal-surface border border-terminal-border text-slate-300 hover:border-amber-500') + '">' + esc(d.label) + '</button>').join('') + '</div>';
+      const th = c => '<th class="py-1.5 pr-3 cursor-pointer hover:text-amber-300 whitespace-nowrap' + (c[0] === 'key' ? '' : ' text-right') + '" onclick="setSigBtSort(\'' + c[0] + '\')" title="Sort by ' + esc(c[1]) + '">' + esc(c[1]) + (so && so.k === c[0] ? (so.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>';
+      const td = (v, c) => '<td class="pr-3 text-right whitespace-nowrap ' + (c || '') + '">' + v + '</td>';
+      const table = '<div>' + dimBar + '<div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr>' + COLS.map(th).join('') + '</tr></thead><tbody>'
+        + shownRows.map(r => '<tr class="border-t border-terminal-border/60 hover:bg-white/5"><td class="py-1.5 pr-3 text-slate-200 whitespace-nowrap">' + esc(r.key) + '</td>'
+          + td(r.alerts) + td(r.fill == null ? '—' : pct(r.fill), 'text-slate-400') + td(r.n) + td(r.n ? pct(r.win) : '—')
+          + td(rfmt(r.avg), tone(r.avg)) + td(r.tot == null ? '—' : rfmt(r.tot), 'font-bold ' + tone(r.tot)) + td(r.n ? pfFmt(r.pf) : '—')
+          + td(r.dd == null ? '—' : '-' + r.dd.toFixed(2) + 'R', 'text-rose-400') + td(rfmt(r.best), 'text-emerald-400') + td(rfmt(r.worst), 'text-rose-400') + td(r.taken || '—', 'text-amber-300') + '</tr>').join('')
+        + '</tbody></table></div>'
+        + (rows.length > LIMIT ? '<div class="text-center mt-2"><button type="button" onclick="btShowAllRows()" class="px-3 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">' + (btShowAll ? 'Show top ' + LIMIT : 'Show all ' + rows.length) + '</button></div>' : '')
+        + '<p class="text-[10px] text-slate-500 mt-1">Click a column to sort. Max DD is the deepest fall inside that group, its alerts in order at 1R. Taken = alerts you traded.</p></div>';
+
+      host.innerHTML = head + '<p class="text-slate-500 text-[11px] mb-3">Every alert with a result in this view, in the order they fired, as if each was taken at 1R. Results are after fees, as the scanner prices them.</p>'
+        + stats + curve
+        + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + hist + mix + '</div>'
+        + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + cutHtml + sweepHtml + '</div>'
+        + table;
+    }
+    // The alerts in the current view as a spreadsheet, results included.
+    function exportSigBacktestCsv() {
+      const q = v => { const x = v == null ? "" : String(v); return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
+      const cols = ["date", "time", "kind", "channel", "symbol", "side", "entry", "stop", "stop_pct", "score", "filled", "outcome", "signal_r", "signal_pct", "taken", "my_r"];
+      const rows = withOutcomeCache(() => btLast.slice().sort((a, b) => sbtWhen(a.signal) < sbtWhen(b.signal) ? -1 : 1).map(pr => {
+        const g = pr.signal, o = outcomeOf(pr), sp = slPct(g), mo = myOutcome(pr);
+        return [g.date, g.time, g.kind || "zone", chanLabel(chanKey(g)), g.symbol, g.side, signalEntry(g), g.stop, sp != null ? sp.toFixed(3) : "", g.score || "",
+          g.filled === true ? "yes" : g.filled === false ? "no" : "", g.outcome || "", o ? o.r.toFixed(3) : "", o && sp != null ? (o.r * sp).toFixed(3) : "", pr.trade ? "yes" : "", mo ? mo.r.toFixed(3) : ""];
+      }));
+      if (!rows.length) { toast("No alerts in this view to export"); return; }
+      const csv = "﻿" + [cols].concat(rows).map(r => r.map(q).join(",")).join("\r\n");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      a.download = "signals-" + sigKind() + "-backtest-" + iso(new Date()) + ".csv";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      toast(`Exported ${rows.length} alerts`);
+    }
 
     /* =================== FIB LEVELS =================== */
     // A fib's four box edges, in the order price reaches them (the scanner's
@@ -6829,8 +7078,10 @@
         }
       }
       renderAlertVsMine(pairs);
+    }
+    // "Edge & breakdowns": best and worst setups, and R by score, channel, hour and more.
+    function renderSigEdge(pairs) {
       renderSetups(pairs);
-      if (sigKind() === "fib") renderFibLevels(pairs);
       const note = pairs.length ? "Only alerts with a result from the scanner (or an exit price you add) can be measured." : "Import some signals first.";
       sigPerfBars('sigByScore', groupPerf(pairs, scoreBand), [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map(v => "Score " + v).concat(["No score"]), note);
       sigPerfBars('sigByChannel', groupPerf(pairs, g => g.channel || "No channel"), null, note);
@@ -7102,8 +7353,8 @@
       return h;
     }
     /* =================== SECTION TABS (Signals and Analysis) =================== */
-    const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
-    const SIG_SECS_FIB = SIG_SECS.slice(0, 2).concat([{ k: "levels", label: "Fib levels" }], SIG_SECS.slice(2));
+    const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
+    const SIG_SECS_FIB = SIG_SECS.slice(0, 3).concat([{ k: "levels", label: "Fib levels" }], SIG_SECS.slice(3));
     const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
     const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "week", label: "Weekly review" }, { k: "ledger", label: "Day's trades" }, { k: "habits", label: "Time & habits" }];
     function setDashSec(k) { state.ui.dashSec = k; save(); renderDashboard(); }
@@ -7124,7 +7375,28 @@
       });
       document.querySelectorAll('[' + attr + ']').forEach(el => el.classList.toggle('hidden', el.getAttribute(attr) !== cur));
     }
-    function setSigSec(k) { state.ui.sigSec = k; save(); renderSignalsTable(); }
+    // Sections that take real work are drawn only when open, from the alerts the
+    // filters last picked, so a filter click redraws one section instead of five.
+    let sigView = null; // { pairs, mkt, done }
+    const SIG_LAZY = {
+      report: pairs => renderSigBacktest(pairs),
+      edge: pairs => renderSigEdge(pairs),
+      levels: pairs => renderFibLevels(pairs),
+      market: () => renderMarketCalendar('mktCalSignals', sigView.mkt || undefined)
+    };
+    function sigSecList() { return sigKind() === 'fib' ? SIG_SECS_FIB : SIG_SECS; }
+    function sigCurSec() { const l = sigSecList(); return l.some(x => x.k === state.ui.sigSec) ? state.ui.sigSec : l[0].k; }
+    function drawSigSec(k) {
+      if (!sigView || sigView.done[k] || !SIG_LAZY[k]) return;
+      sigView.done[k] = true;
+      withOutcomeCache(() => SIG_LAZY[k](sigView.pairs));
+    }
+    function setSigSec(k) {
+      state.ui.sigSec = k; save();
+      if (!sigView) { renderSignalsTable(); return; }
+      renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
+      drawSigSec(sigCurSec());
+    }
     function setAnSec(k) { state.ui.anSec = k; save(); renderAnalysis(); }
     // BTC-day filter as a row of buttons, shared by both tabs.
     function renderMktFilterBar(barId, hostId) {
@@ -7641,7 +7913,8 @@
     function renderSigFresh() {
       const el = document.getElementById('sigFresh');
       if (!el) return;
-      const last = (state.signals || []).map(g => (g.date || "") + " " + (g.time || "")).sort().pop();
+      let last = "";
+      (state.signals || []).forEach(g => { const k = (g.date || "") + " " + (g.time || ""); if (k > last) last = k; });
       const at = state.ui.sigAutoAt ? new Date(state.ui.sigAutoAt) : null;
       el.innerText = last ? "Newest alert " + last.trim() + (at ? " · checked " + hhmm(at.getHours() * 60 + at.getMinutes()) : "") : "";
     }
