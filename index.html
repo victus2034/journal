@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-22.122">
+  <meta name="app-version" content="2026-10-22.123">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -2272,7 +2272,7 @@
     function goalCalmStreak(g, cur) {
       const rows = goalRows(g, cur).slice().sort((a, b) => -byWhen(a.t, b.t));
       let n = 0;
-      for (const x of rows) { if (x.flags.indexOf("revenge") !== -1 || x.flags.indexOf("sizeUp") !== -1) break; n++; }
+      for (const x of rows) { if (calmBroken(x)) break; n++; }
       return n;
     }
     function renderGoalChips(g0, gp) {
@@ -2494,9 +2494,9 @@
         $('goalPct').innerText = pd + '% of target'; $('goalBar').style.width = Math.max(2, pd) + '%';
         lbl1.innerText = 'To reach it'; lbl2.innerText = 'Last slip';
         $('goalToGo').innerText = st >= t ? 'Reached, keep it going' : (t - st) + ' more clean trade' + (t - st === 1 ? '' : 's');
-        const slip = goalRows(g, gp.cur).filter(x => x.flags.indexOf('revenge') !== -1 || x.flags.indexOf('sizeUp') !== -1).map(x => dayOf(x.t)).sort().pop();
+        const slip = goalRows(g, gp.cur).filter(calmBroken).map(x => dayOf(x.t)).sort().pop();
         $('goalRunRate').innerText = slip || 'none';
-        $('goalToGo').title = 'Revenge = a trade within 15 minutes of a loss. Size-up = over 1.5 times the size of the trade before, after a loss.';
+        $('goalToGo').title = 'Revenge = a trade within 15 minutes of a loss. Size-up = over 1.5 times the size of the trade before, after a loss. Revenge sizing = over 1.25 times the size of 2+ losses in a row that day.';
       } else if (g.metric === 'avg_risk') {
         const start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
         const all = goalRows(g, gp.cur).filter(x => dayOf(x.t) >= start && dayOf(x.t) <= end);
@@ -3644,11 +3644,15 @@
       pastStop:  { label: "Held past the stop", note: false, why: "Against the stop (yours, or the alert's) the trade lost 1.3R or more: it was held beyond the stop." },
       revenge:   { label: "Re-entered within 15 min of a loss", note: false, why: "Opened less than 15 minutes after the previous trade closed at a loss." },
       sizeUp:    { label: "Sized up after a loss", note: false, why: "Right after a losing trade, the position was more than 1.5× the size of that trade." },
+      revengeSize: { label: "Revenge sizing (bigger after 2+ losses)", note: false, why: "Opened after 2 or more losses in a row that day, with a position over 1.25× the average size of those losing trades." },
       overtrade: { label: "Over the daily trade limit", note: false, why: "More trades that day than your 'max trades a day' setting." },
       pastLimit: { label: "Traded past the daily loss limit", note: false, why: "Opened after the day had already lost your daily loss limit." },
       feesAte:   { label: "Fees turned a win into a loss", note: false, why: "The price move was in your favour, but fees were bigger than the gain." },
       noAlert:   { label: "No alert behind it", note: true, why: "No alert on the same symbol, direction and day (only checked once alerts are loaded). Not a mistake by itself." }
     };
+    const REVENGE_SIZE_X = 1.25;
+    // Size-ups and quick re-entries after a loss: the "calm" rule, the no-revenge goal.
+    function calmBroken(x) { return x.flags.indexOf("revenge") !== -1 || x.flags.indexOf("sizeUp") !== -1 || x.flags.indexOf("revengeSize") !== -1; }
     const AN_PERIODS = [{ k: "7d", label: "7 Days" }, { k: "1m", label: "1 Month" }, { k: "all", label: "All" }];
     const AN_PAGE = 10;
     let anVisible = AN_PAGE, anFilter = null;
@@ -3682,7 +3686,7 @@
         if (a.id === deltaAccountId() && deltaLiveKnown()) { offset = liveDeltaBalance.value - bookComputedBalance(a); anchored = true; }
         else if (w) { offset = w.value - bookComputedBalance(a); anchored = true; }
         const maxRisk = a.maxRiskPct || 1, maxX = a.maxNotionalX || 3;
-        let run = a.startBalance || 0, dayKey = null, dayN = 0, dayPnl = 0, prev = null;
+        let run = a.startBalance || 0, dayKey = null, dayN = 0, dayPnl = 0, prev = null, dayDone = [];
         list.forEach(t => {
           // Balance, size and risk come from the stored trade, in its book's own
           // currency; t itself may be a copy converted to the currency on screen.
@@ -3690,7 +3694,7 @@
           const before = run + offset;
           const notional = tradeNotional(o);
           const xBal = before > 0 && notional != null ? notional / before : null;
-          if (dayOf(t) !== dayKey) { dayKey = dayOf(t); dayN = 0; dayPnl = 0; }
+          if (dayOf(t) !== dayKey) { dayKey = dayOf(t); dayN = 0; dayPnl = 0; dayDone = []; }
           dayN++;
           const dayPnlBefore = dayPnl;
           const sig = sigOf[t.id] || null;
@@ -3721,13 +3725,29 @@
             if (gapMin >= 0 && gapMin <= 15) flags.push("revenge");
             if (gapMin >= 0 && gapMin <= 240 && notional != null && prev.notional != null && notional > prev.notional * 1.5) flags.push("sizeUp");
           }
+          // Revenge sizing: the losses in a row that had closed (that day) before this
+          // trade opened, and whether this one is bigger than they were.
+          const myEntry = entryMs(t);
+          const shut = dayDone.filter(d => d.exitMs <= myEntry).sort((x, y) => x.exitMs - y.exitMs);
+          let lossRun = 0; const runSizes = [];
+          for (let i = shut.length - 1; i >= 0 && shut[i].pnl < 0; i--) { lossRun++; if (shut[i].notional > 0) runSizes.push(shut[i].notional); }
+          let revenge = null;
+          if (lossRun >= 2 && notional > 0 && runSizes.length) {
+            const baseSize = avg(runSizes);
+            if (notional > baseSize * REVENGE_SIZE_X) {
+              flags.push("revengeSize");
+              // The part of a loss that came from the extra size, in the currency on screen.
+              revenge = { lossRun, baseSize, x: notional / baseSize, extraLoss: t.pnl < 0 ? t.pnl * (1 - baseSize / notional) : 0 };
+            }
+          }
           if (a.maxTradesPerDay > 0 && dayN > a.maxTradesPerDay) flags.push("overtrade");
           if (a.dailyLossLimit > 0 && dayPnlBefore <= -a.dailyLossLimit) flags.push("pastLimit");
           if (o.pnl < 0 && o.pnl + (o.fees || 0) > 0) flags.push("feesAte");
           // A report trade can only meet an alert once its fills give its side and time.
           if (firstSig && t.date >= firstSig && !sig && (!o.rep || o.px)) flags.push("noAlert");
           // k takes before and notional into t's currency for display.
-          rows.push({ t, a, before, notional, xBal, riskPct, lossPct, r, stopSrc, flags, k });
+          rows.push({ t, a, before, notional, xBal, riskPct, lossPct, r, stopSrc, flags, k, revenge });
+          dayDone.push({ exitMs: myEntry + (heldMins(t) || 0) * 60000, pnl: o.pnl, notional });
           run += o.pnl; dayPnl += o.pnl;
           prev = { t, notional, exitMs: entryMs(t) + (heldMins(t) || 0) * 60000 };
         });
@@ -7151,7 +7171,7 @@
       { k: 'alert', label: 'Traded from an alert', broke: x => x.flags.indexOf('noAlert') !== -1, applies: x => x.alertKnown },
       { k: 'size', label: 'Size within your limit', broke: x => x.flags.indexOf('oversize') !== -1 },
       { k: 'stop', label: 'Kept the loss inside the plan', broke: x => x.flags.indexOf('pastStop') !== -1 || x.flags.indexOf('lossOver') !== -1 },
-      { k: 'calm', label: 'No revenge or size-up after a loss', broke: x => x.flags.indexOf('revenge') !== -1 || x.flags.indexOf('sizeUp') !== -1 },
+      { k: 'calm', label: 'No revenge or size-up after a loss', broke: calmBroken },
       { k: 'limits', label: 'Inside the daily trade and loss limits', broke: x => x.flags.indexOf('overtrade') !== -1 || x.flags.indexOf('pastLimit') !== -1 }
     ];
     function renderRuleScorecard(rows, cur) {
@@ -9362,6 +9382,118 @@
       });
     }
 
+    /* =================== BEHAVIOUR SCORE & WEEKLY GRADE =================== */
+    // Three scores from 0 to 100, worked out from the trades (no AI, nothing to fill in).
+    // Each is the average of the checks that have data; a check with no data is left
+    // out, so a week without stops or reviews is not marked down for the gap.
+    function behaviourScore(rows) {
+      const share = (list, ok) => list.length ? list.filter(ok).length / list.length : null;
+      const mean = vs => { const v = vs.filter(x => x != null); return v.length ? Math.round(avg(v) * 100) : null; };
+      const has = (x, f) => x.flags.indexOf(f) !== -1;
+      // Discipline: calm after losses and inside the day's limits, clean reviews, rules ticked.
+      const reviewed = rows.filter(x => isReviewed(x.t));
+      const ruled = rows.filter(x => (x.t.rules || []).some(Boolean));
+      const disc = {
+        calm: share(rows, x => !calmBroken(x) && !has(x, "overtrade") && !has(x, "pastLimit")),
+        clean: share(reviewed, x => !(x.t.tagsMistakes || []).length),
+        rules: ruled.length ? avg(ruled.map(x => RULES.filter((r, i) => (x.t.rules || [])[i]).length / RULES.length)) : null
+      };
+      // Risk management: a stop known (yours or the alert's), and the loss kept to plan.
+      const risk = {
+        stops: share(rows, x => !!x.stopSrc),
+        inPlan: share(rows, x => !has(x, "oversize") && !has(x, "lossOver") && !has(x, "pastStop"))
+      };
+      // Consistency: size (position ÷ balance) and risk % near each book's usual.
+      const steady = key => {
+        const ok = [];
+        const byBook = {};
+        rows.forEach(x => { if (x[key] != null && x[key] > 0) (byBook[x.a.id] = byBook[x.a.id] || []).push(x[key]); });
+        Object.values(byBook).forEach(vs => {
+          if (vs.length < 3) return;
+          const s = vs.slice().sort((a, b) => a - b), med = s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
+          vs.forEach(v => ok.push(v >= med * 0.5 && v <= med * 1.5));
+        });
+        return ok.length >= 3 ? ok.filter(Boolean).length / ok.length : null;
+      };
+      const cons = { size: steady("xBal"), risk: steady("riskPct") };
+      const out = { n: rows.length, disc: mean(Object.values(disc)), risk: mean(Object.values(risk)), cons: mean(Object.values(cons)), parts: { disc, risk, cons } };
+      const all = [out.disc, out.risk, out.cons].filter(v => v != null);
+      out.overall = all.length ? Math.round(avg(all)) : null;
+      out.grade = out.overall == null ? null : out.overall >= 85 ? "A" : out.overall >= 70 ? "B" : out.overall >= 55 ? "C" : out.overall >= 40 ? "D" : "F";
+      out.stops = rows.filter(x => x.stopSrc).length;
+      out.revenge = rows.filter(x => x.revenge);
+      out.reviewed = reviewed.length;
+      out.mistakes = reviewed.filter(x => (x.t.tagsMistakes || []).length).length;
+      return out;
+    }
+    function behaviourHtml(rowsAll, days, cur) {
+      const inWeek = (from, to) => rowsAll.filter(x => { const d = dayOf(x.t); return d >= from && d <= to; });
+      const b = behaviourScore(inWeek(days[0], days[6]));
+      const cls = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
+      const tone = v => v == null ? "bg-slate-700" : v >= 70 ? "bg-emerald-500" : v >= 50 ? "bg-amber-500" : "bg-rose-500";
+      const toneTxt = v => v == null ? "text-slate-500" : v >= 70 ? "text-emerald-300" : v >= 50 ? "text-amber-300" : "text-rose-300";
+      const pc = v => v == null ? "—" : Math.round(v * 100) + "%";
+      // The 8 weeks up to the one shown, oldest first.
+      const weeks = [];
+      for (let i = 7; i >= 0; i--) {
+        const m = parseDay(days[0]); m.setDate(m.getDate() - i * 7);
+        const e = new Date(m.getFullYear(), m.getMonth(), m.getDate() + 6);
+        weeks.push({ from: iso(m), sc: behaviourScore(inWeek(iso(m), iso(e))) });
+      }
+      const prev = weeks[6].sc;
+      const delta = (v, p) => v == null || p == null || v === p ? "" : `<span class="text-[10px] ${v > p ? "text-emerald-400" : "text-rose-400"}">${v > p ? "▲" : "▼"} ${Math.abs(v - p)} vs last week</span>`;
+      const bar = (label, key, why) => {
+        const v = b[key];
+        return `<div data-bscore="${key}">
+          <div class="flex items-center justify-between gap-2"><span class="text-slate-300" title="${esc(why)}">${label}</span><span class="font-bold ${toneTxt(v)}">${v == null ? "—" : v + "%"} ${delta(v, prev[key])}</span></div>
+          <div class="h-2 bg-[#131C2D] rounded-full overflow-hidden mt-1"><div class="h-full ${tone(v)}" style="width:${v == null ? 0 : Math.max(2, v)}%"></div></div>
+          <div class="flex items-end h-6 mt-1" style="gap:2px" title="Last 8 weeks">${weeks.map(w => { const x = w.sc[key]; return `<div class="flex-1 rounded ${x == null ? "bg-slate-800" : tone(x)}" style="height:${x == null ? 8 : Math.max(8, x)}%;opacity:${x == null ? 1 : 0.75}" title="${esc(fmtDay(w.from))}: ${x == null ? "no data" : x + "%"}"></div>`; }).join("")}</div>
+        </div>`;
+      };
+      const P = b.parts;
+      const gradeCls = { A: "text-emerald-300 border-emerald-500/50", B: "text-emerald-300 border-emerald-500/40", C: "text-amber-300 border-amber-500/40", D: "text-rose-300 border-rose-500/40", F: "text-rose-300 border-rose-500/50" }[b.grade] || "text-slate-500 border-terminal-border";
+      const revCost = sum(b.revenge.map(x => x.t.pnl || 0)), revExtra = sum(b.revenge.map(x => x.revenge.extraLoss));
+      const line = (ok, txt) => `<li class="flex gap-2"><span class="${ok == null ? "text-slate-500" : ok ? "text-emerald-400" : "text-rose-400"}">${ok == null ? "•" : ok ? "✓" : "✕"}</span><span>${txt}</span></li>`;
+      // Revenge sizing over the last 30 days, for the running cost.
+      const from30 = iso(new Date(parseDay(todayDay()).getTime() - 30 * 864e5));
+      const rev30 = rowsAll.filter(x => x.revenge && dayOf(x.t) >= from30);
+      return `<div class="border-t border-terminal-border pt-3 mt-3" id="processGrade">
+        <div class="flex items-center gap-2 mb-2"><span class="w-2.5 h-2.5 rounded" style="background:#a78bfa"></span><h2 class="text-sm font-bold text-white uppercase tracking-wider">Process grade</h2>
+          <span class="text-slate-500 text-[11px]">How you traded, not what you made</span></div>
+        ${!b.n ? '<div class="text-center py-4 text-slate-500">No trades this week to grade.</div>' : `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+          <div class="flex items-center gap-3 rounded-lg bg-black/40 border p-3 mb-2 ${gradeCls}" data-grade="${b.grade || ""}">
+            <div class="text-3xl font-bold">${b.grade || "—"}</div>
+            <div class="text-[11px]"><div class="text-slate-400">Process score this week</div>${b.overall == null ? "" : b.overall + "%"} ${delta(b.overall, prev.overall)}</div>
+          </div>
+          <ul class="space-y-1 text-[12px] text-slate-300">
+            ${line(b.stops === b.n, `Stop on <b>${b.stops} of ${b.n}</b> trades` + (b.stops < b.n ? ` <span class="text-slate-500">(${b.n - b.stops} with no stop known)</span>` : ""))}
+            ${line(P.risk.inPlan == null ? null : P.risk.inPlan === 1, `Size and loss inside your limits on <b>${pc(P.risk.inPlan)}</b> of trades`)}
+            ${line(b.reviewed ? !b.mistakes : null, b.reviewed ? `<b>${b.mistakes}</b> of ${b.reviewed} reviewed trades had a mistake tagged` : "No trades reviewed yet")}
+            ${line(P.disc.rules == null ? null : P.disc.rules >= 0.8, P.disc.rules == null ? "No rules ticked this week" : `Rules followed: <b>${pc(P.disc.rules)}</b> of ticks`)}
+            ${line(!b.revenge.length, b.revenge.length ? `<b>${b.revenge.length}</b> revenge-sized trade${b.revenge.length === 1 ? "" : "s"}: <span class="${cls(revCost)}">${signedMoney(revCost, cur)}</span>` + (revExtra < 0 ? ` <span class="text-slate-500">(${signedMoney(revExtra, cur)} from the extra size)</span>` : "") : "No revenge sizing")}
+          </ul>
+          </div>
+          <div class="space-y-3 text-[12px]">
+            ${bar("Discipline", "disc", "Calm after losses (no revenge, size-ups or trading past your limits), reviews without mistakes, and rules ticked")}
+            ${bar("Risk management", "risk", "Trades with a stop (yours or the alert's) and losses kept inside the plan and your max risk")}
+            ${bar("Consistency", "cons", "Trades whose position size and risk % stay within half to 1.5× your usual for that book")}
+          </div>
+        </div>`}
+        <div class="mt-3" id="revengeSizing">
+          <div class="flex flex-wrap items-center gap-2 mb-1"><span class="text-[10px] text-slate-500 uppercase tracking-wider">Revenge sizing</span>
+            <span class="text-[11px] text-slate-400">bigger position after 2+ losses in a row the same day · last 30 days: ${rev30.length ? `<b class="text-rose-300">${rev30.length}</b> trade${rev30.length === 1 ? "" : "s"}, <span class="${cls(sum(rev30.map(x => x.t.pnl || 0)))}">${signedMoney(sum(rev30.map(x => x.t.pnl || 0)), cur)}</span>` + (sum(rev30.map(x => x.revenge.extraLoss)) < 0 ? `, ${signedMoney(sum(rev30.map(x => x.revenge.extraLoss)), cur)} of it from the extra size` : "") : '<span class="text-emerald-400">none</span>'}</span></div>
+          ${b.revenge.length ? `<div class="divide-y divide-terminal-border">${b.revenge.map(x => `<button type="button" onclick="openQueued('${esc(x.t.id)}')" class="w-full py-1.5 flex flex-wrap items-center gap-2 text-left hover:text-white">
+            <span class="text-slate-500">${esc(fmtDay(dayOf(x.t)))} ${esc(x.t.rep ? (x.t.openTime || x.t.time || "") : (x.t.time || ""))}</span>
+            <span class="font-bold text-slate-200">${esc(x.t.symbol || "")}</span>
+            <span class="text-rose-300 text-[11px]">${x.revenge.x.toFixed(1)}× size after ${x.revenge.lossRun} losses</span>
+            <span class="${cls(x.t.pnl || 0)}">${signedMoney(x.t.pnl || 0, cur)}</span>
+          </button>`).join("")}</div>` : (b.n ? '<div class="text-[11px] text-emerald-400">None this week.</div>' : "")}
+        </div>
+      </div>`;
+    }
+
     function shiftReviewWeek(d) { state.ui.weekOffset = d ? Math.min(0, (state.ui.weekOffset || 0) + d) : 0; save(); renderWeeklyReview(viewCur()); }
     function renderWeeklyReview(cur) {
       const host = document.getElementById('weeklyReview');
@@ -9413,7 +9545,8 @@
           <div class="grid grid-cols-7 gap-1 text-center mt-1">
             ${byDay.map((v, i) => `<div><div class="text-[10px] text-slate-400">${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i]}</div><div class="text-[10px] ${v ? cls(v) : 'text-slate-600'}">${v ? signedMoney(v, cur, 0) : '—'}</div></div>`).join('')}
           </div>
-        </div>`}`;
+        </div>`}
+        ${behaviourHtml(analyzeTrades(statScoped()), days, cur)}`;
     }
 
     // Every trade as a spreadsheet row, for Excel, Sheets or tax work.
