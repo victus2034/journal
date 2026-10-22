@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-22.126">
+  <meta name="app-version" content="2026-10-22.127">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -3952,13 +3952,116 @@
     }
     const aiNum = (v, n) => v == null || !isFinite(v) ? "" : String(+(+v).toFixed(n == null ? 2 : n));
     const aiTxt = (v, n) => String(v == null ? "" : v).replace(/[\r\n|]+/g, " ").trim().slice(0, n || 160);
+    // ---- The price around each trade, read from Delta's public candles (no key) ----
+    // For every trade with prices: the best and worst move while it was open, how
+    // much of the best move was kept, and what price did in the 1 h and 4 h after
+    // the exit. That is what lets the AI judge holding and early exits itself.
+    const AI_PX_KEY = "tapeAndTarget.aiPx", AI_AFTER_MS = 4 * 3600e3;
+    const AI_RES = [[1, "1m"], [5, "5m"], [15, "15m"], [60, "1h"], [240, "4h"], [1440, "1d"]];
+    function aiDeltaSym(s) {
+      s = String(s || "").toUpperCase().replace(/^B-/, "").replace(/[\/_\-\s]/g, "");
+      return /USDT$/.test(s) ? s.slice(0, -1) : s;
+    }
+    // Side, prices, stop, and entry / exit times (ms) of a trade, or null when unknown.
+    function aiTradePx(t) {
+      const ms = (d, tm) => d && /^\d{1,2}:\d{2}/.test(tm || "") ? new Date(d + "T" + String(tm).slice(0, 5).padStart(5, "0") + ":00").getTime() : NaN;
+      let side, entry, exit, qty, stop = 0, inMs, outMs;
+      if (t.rep) {
+        const p = t.px;
+        if (!p || !(p.entry > 0) || !(p.exit > 0)) return null;
+        side = p.direction; entry = p.entry; exit = p.exit; qty = p.qty;
+        inMs = ms(p.openDate || t.openDate, p.openTime || t.openTime); outMs = ms(t.date, t.time);
+      } else {
+        side = t.direction; entry = t.entry; exit = t.exit; qty = t.qty; stop = stopOk(t) ? t.stop : 0;
+        inMs = ms(t.date, t.time);
+        outMs = t.exitTime ? ms(t.exitDate || t.date, t.exitTime) : (heldMins(t) != null ? inMs + heldMins(t) * 60000 : NaN);
+      }
+      if (!(side === "long" || side === "short") || !isFinite(inMs) || !isFinite(outMs) || outMs < inMs) return null;
+      return { side, entry, exit, qty, stop, inMs, outMs, sym: aiDeltaSym(t.symbol) };
+    }
+    // Pure: the measures from a trade and its candles ({time (s), high, low}).
+    function aiPxMeasure(p, candles, resMin) {
+      const s = p.side === "long" ? 1 : -1, resMs = resMin * 60000;
+      const bars = candles.map(k => ({ t: k.time * 1000, h: +k.high, l: +k.low })).filter(k => k.h > 0 && k.l > 0).sort((a, b) => a.t - b.t);
+      const hold = bars.filter(k => k.t + resMs > p.inMs && k.t <= p.outMs);
+      if (!hold.length) return null;
+      const fav = k => s > 0 ? k.h : k.l, adv = k => s > 0 ? k.l : k.h;
+      let best = hold[0], worst = hold[0];
+      hold.forEach(k => { if (s * (fav(k) - fav(best)) > 0) best = k; if (s * (adv(k) - adv(worst)) < 0) worst = k; });
+      const mfe = Math.max(0, s * (fav(best) - p.entry)), mae = Math.max(0, s * (p.entry - adv(worst)));
+      const gain = s * (p.exit - p.entry);
+      const unit = p.stop > 0 ? Math.abs(p.entry - p.stop) : p.entry * 0.005;
+      const after = h => {
+        const a = bars.filter(k => k.t >= p.outMs && k.t < p.outMs + h * 3600e3);
+        if (!a.length) return null;
+        return { best: Math.max(0, Math.max(...a.map(k => s * (fav(k) - p.exit)))), worst: Math.max(0, Math.max(...a.map(k => s * (p.exit - adv(k))))) };
+      };
+      const a1 = after(1), a4 = after(4);
+      const pc = v => v == null ? null : +(v / p.entry * 100).toFixed(2), inU = v => v == null ? null : +(v / unit).toFixed(2);
+      const out = {
+        res: resMin, mfePct: pc(mfe), maePct: pc(mae), mfeU: inU(mfe), maeU: inU(mae),
+        kept: mfe > 0 ? Math.round(gain / mfe * 100) : null,
+        peakToExit: Math.max(0, Math.round((p.outMs - Math.max(best.t, p.inMs)) / 60000)),
+        a1Best: a1 && pc(a1.best), a1Worst: a1 && pc(a1.worst), a4Best: a4 && pc(a4.best), a4Worst: a4 && pc(a4.worst), a4BestU: a4 && inU(a4.best),
+        unit: p.stop > 0 ? "R" : "0.5%", labels: []
+      };
+      if (a4 && gain > 0 && a4.best >= Math.max(gain, unit)) out.labels.push("early_exit");
+      if (a4 && gain <= 0 && a4.best >= -gain + unit) out.labels.push("cut_then_recovered");
+      if (mfe >= unit && gain < 0.4 * mfe) out.labels.push("gave_back");
+      if (gain < 0 && mae >= 1.5 * unit) out.labels.push("held_loser");
+      if (a4 && gain > 0 && a4.best < 0.5 * unit) out.labels.push("good_exit");
+      // Price move the trader missed by leaving (for an early exit), per unit of price.
+      out.missed = out.labels.indexOf("early_exit") !== -1 || out.labels.indexOf("cut_then_recovered") !== -1 ? (a4.best - Math.max(0, -gain)) * p.qty : 0;
+      return out;
+    }
+    function aiPxCache() { try { const v = JSON.parse(localStorage.getItem(AI_PX_KEY) || "null"); return v && typeof v === "object" ? v : {}; } catch (e) { return {}; } }
+    async function aiPxOne(p) {
+      const from = p.inMs - 15 * 60000, to = Math.min(Date.now(), p.outMs + AI_AFTER_MS), win = to - from;
+      const r = AI_RES.find(x => win / (x[0] * 60000) <= 1900) || AI_RES[AI_RES.length - 1];
+      const url = DELTA_BASE + "/v2/history/candles?resolution=" + r[1] + "&symbol=" + encodeURIComponent(p.sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
+      const res = await fetch(url);
+      const j = await res.json().catch(() => null);
+      if (!j || j.success !== true || !Array.isArray(j.result) || !j.result.length) return { none: "no " + p.sym + " candles on Delta" };
+      return aiPxMeasure(p, j.result, r[0]) || { none: "no candles while open" };
+    }
+    // Every trade's measures by id. Finished ones (4 h after the exit passed) are kept
+    // on this device, so a second review reads no candles again.
+    async function aiPriceCheck(rows, progress) {
+      const cache = aiPxCache(), out = {}, todo = [];
+      rows.forEach(x => {
+        if (x.a && x.a.market === "nse") { out[x.t.id] = { none: "NSE: no candles" }; return; }
+        const p = aiTradePx(x.t);
+        if (!p) { out[x.t.id] = { none: "no prices" }; return; }
+        const key = x.t.id + "|" + p.inMs + "|" + p.outMs + "|" + p.entry + "|" + p.exit;
+        if (cache[key]) out[x.t.id] = cache[key]; else todo.push({ x, p, key });
+      });
+      let done = 0;
+      const worker = async () => {
+        while (todo.length) {
+          const it = todo.shift();
+          try { out[it.x.t.id] = await aiPxOne(it.p); } catch (e) { out[it.x.t.id] = { none: "could not reach Delta" }; }
+          if (it.p.outMs + AI_AFTER_MS < Date.now() && !(out[it.x.t.id].none && /reach/.test(out[it.x.t.id].none))) cache[it.key] = out[it.x.t.id];
+          done++; if (progress) progress(done);
+        }
+      };
+      const total = todo.length;
+      if (progress && total) progress(0, total);
+      await Promise.all([1, 2, 3, 4].map(worker));
+      try { localStorage.setItem(AI_PX_KEY, JSON.stringify(cache)); } catch (e) {}
+      return out;
+    }
     // Everything the AI is given, as plain text: the books and their limits, the
     // playbook, totals worked out here (so it never has to add up), then one line per trade.
-    function aiReviewPrompt(k) {
+    function aiPeriodRows(k) {
+      const { from, to } = aiRange(k);
+      return analyzeTrades(allTrades()).filter(x => { const d = dayOf(x.t); return d >= from && d <= to; }).sort((a, b) => byWhen(a.t, b.t));
+    }
+    function aiReviewPrompt(k, pxm, rowsIn) {
+      pxm = pxm || {};
       k = k || state.ui.aiPeriod || "tm";
       const { from, to } = aiRange(k);
       const label = (AI_PERIODS.find(p => p.k === k) || AI_PERIODS[0]).label;
-      const rows = analyzeTrades(allTrades()).filter(x => { const d = dayOf(x.t); return d >= from && d <= to; }).sort((a, b) => byWhen(a.t, b.t));
+      const rows = rowsIn || aiPeriodRows(k);
       const cut = rows.length > AI_MAX_TRADES ? rows.length - AI_MAX_TRADES : 0;
       const use = cut ? rows.slice(cut) : rows;
       const inr = x => pnlIn(x.t, "INR");
@@ -3990,7 +4093,26 @@
       group("BY RULE FLAG", x => x.flags.length ? x.flags.map(f => (AN_FLAGS[f] || { label: f }).label) : ["no flag"]);
       L.push("", "FLAG MEANINGS:");
       Object.keys(AN_FLAGS).forEach(f => L.push(`- ${f}: ${AN_FLAGS[f].why}`));
-      L.push("", "TRADES (in order of closing; a trade can open in an earlier period). Columns: entry_date|entry_time|book|symbol|side|entry|exit|qty|position_x_balance|balance_before|pnl|pnl_inr|fees|R|risk_pct|stop|held_min|setup|levels|confidence|good_tags|mistake_tags|rules_kept|flags|notes");
+      // ---- holding and exits, from the price itself ----
+      const pxOf = x => pxm[x.t.id] && !pxm[x.t.id].none ? pxm[x.t.id] : null;
+      const seen = rows.filter(pxOf);
+      L.push("", `PRICE CHECK (from Delta's candles around each trade): price data for ${seen.length} of ${rows.length} trades.`);
+      if (seen.length) {
+        const lab = l => seen.filter(x => pxOf(x).labels.indexOf(l) !== -1);
+        const missedInr = xs => sum(xs.map(x => { const m = pxOf(x).missed || 0, o = aiTradePx(x.t); return o && x.notional != null && o.entry * o.qty > 0 ? m * x.notional / (o.entry * o.qty) * fxk(x.a, "INR") : m * fxk(x.a, "INR"); }));
+        const ee = lab("early_exit"), cr = lab("cut_then_recovered"), gb = lab("gave_back"), hl = lab("held_loser"), ge = lab("good_exit");
+        const wins = seen.filter(x => x.t.pnl > 0 && pxOf(x).kept != null);
+        L.push(`- early_exit (a winner closed, then price went on at least as far again, and at least 1 unit, within 4 h): ${ee.length}, about ${aiNum(missedInr(ee), 0)} INR more was there`);
+        L.push(`- cut_then_recovered (a loser closed, then price came back past the entry by 1 unit within 4 h): ${cr.length}, about ${aiNum(missedInr(cr), 0)} INR`);
+        L.push(`- gave_back (was up 1 unit or more, kept under 40% of the best move): ${gb.length}`);
+        L.push(`- held_loser (a loser that went 1.5 units or more against before the exit): ${hl.length}`);
+        L.push(`- good_exit (a winner where price did not go on by half a unit after the exit): ${ge.length}`);
+        if (wins.length) L.push(`- winners kept on average ${Math.round(avg(wins.map(x => pxOf(x).kept)))}% of their best move while open`);
+        L.push("A unit is 1R when the trade had a stop, else a 0.5% price move. mfe / mae = best / worst move while open; kept_pct = exit gain as % of the best move; peak_to_exit_min = minutes from the best price to the exit; after_1h / after_4h = best move on in the trade's direction, and worst against it, after the exit (all in % of price).");
+      }
+      L.push("", "TRADES (in order of closing; a trade can open in an earlier period). Columns: entry_date|entry_time|book|symbol|side|entry|exit|qty|position_x_balance|balance_before|pnl|pnl_inr|fees|R|risk_pct|stop|held_min|setup|levels|confidence|good_tags|mistake_tags|rules_kept|flags|prev_trade|mfe_pct|mae_pct|mfe_units|kept_pct|peak_to_exit_min|after_1h_best|after_1h_worst|after_4h_best|after_4h_worst|price_labels|notes");
+      const prevOf = {}, lastIn = {};
+      rows.forEach(x => { const b = x.t.accountId, d = dayOf(x.t), l = lastIn[b]; prevOf[x.t.id] = l && l.d === d ? (l.p > 0 ? "after win" : "after loss") : "first of day"; lastIn[b] = { d, p: x.t.pnl }; });
       use.forEach(x => {
         const t = x.t, a = x.a, px = t.rep ? (t.px || {}) : t;
         const rk = (t.rules || []).filter(Boolean).length;
@@ -3999,10 +4121,13 @@
           aiNum(px.entry, 6), aiNum(px.exit, 6), aiNum(px.qty, 6), aiNum(x.xBal), aiNum(x.before), aiNum(t.pnl), aiNum(inr(x)), aiNum(t.fees),
           aiNum(x.r), aiNum(x.riskPct), x.stopSrc || "none", aiNum(heldMins(t), 0), aiTxt(t.setup, 40) + (t.setupAuto ? " (auto)" : ""),
           aiLevels(t).join("+") + (t.playAuto && aiLevels(t).length ? " (auto)" : ""), t.confidence || "", (t.tagsPositives || []).join("+"), (t.tagsMistakes || []).join("+"),
-          rk || t.reviewed ? rk + "/" + RULES.length : "", x.flags.join("+"), aiTxt(t.notes, 160)
+          rk || t.reviewed ? rk + "/" + RULES.length : "", x.flags.join("+"), prevOf[t.id] || "",
+          ...(m => m ? [aiNum(m.mfePct), aiNum(m.maePct), aiNum(m.mfeU) + m.unit, m.kept == null ? "" : m.kept, m.peakToExit, aiNum(m.a1Best), aiNum(m.a1Worst), aiNum(m.a4Best), aiNum(m.a4Worst), m.labels.join("+")]
+            : ["", "", "", "", "", "", "", "", "", (pxm[t.id] && pxm[t.id].none) || ""])(pxOf(x)),
+          aiTxt(t.notes, 160)
         ].join("|"));
       });
-      return { text: L.join("\n"), n: rows.length, sent: use.length, from, to, label, k };
+      return { text: L.join("\n"), n: rows.length, sent: use.length, from, to, label, k, priced: seen.length };
     }
     // The playbook boxes ticked on a trade (lakky ticks the fib level here), plus
     // a level field if the trade has one.
@@ -4012,19 +4137,24 @@
       return out;
     }
     const AI_SYSTEM = "You are a strict but kind trading coach. You review one trader's journal: crypto futures (Delta, CoinDCX) and Indian markets. "
-      + "Use only the data given and never invent trades or numbers. Back every point with evidence from the data: counts, P&L, setups, fib levels, symbols, hours, flags. "
+      + "Go through EVERY trade line yourself, one by one: the entry, how it was held, the exit, and what price did while it was open and after it was closed (the price columns). Do not just repeat the totals. "
+      + "Use only the data given and never invent trades or numbers. Back every point with evidence: trade dates and symbols, counts, P&L, setups, fib levels, hours, flags, tags, notes. "
+      + "verdict: a straight answer to 'what am I doing wrong?' in 2 to 4 sentences. "
+      + "exits: holding and exits. Am I cutting winners early, giving back profit, or holding losers too long? How many trades, how much was left, and THE PATTERN behind the early exits: when do they happen (hour, after a loss or a win, setup, fib level, symbol, size, how long held, how far in profit) and what reasons do the tags and notes give. Name the trades. "
       + "pros: what is working and should be kept. cons: what is costing money or breaking the trader's own limits, biggest cost first. "
-      + "improve: concrete rules for the next period, each one a clear action the trader can follow, tied to the evidence. "
-      + "Write in short, simple English (one or two sentences per item). Give 3 to 6 items in each list. If there are too few trades to judge something, say so in the summary.";
+      + "improve: concrete rules for the next period, each one a clear action the trader can follow, tied to the evidence (for example an exit rule). "
+      + "Write in short, simple English (one or two sentences per item). Give 3 to 6 items in each list. If there are too few trades, or too little price data, to judge something, say so.";
     const AI_SCHEMA = {
       type: "OBJECT",
       properties: {
         summary: { type: "STRING" },
+        verdict: { type: "STRING" },
+        exits: { type: "ARRAY", items: { type: "OBJECT", properties: { point: { type: "STRING" }, evidence: { type: "STRING" } }, required: ["point", "evidence"] } },
         pros: { type: "ARRAY", items: { type: "OBJECT", properties: { point: { type: "STRING" }, evidence: { type: "STRING" } }, required: ["point", "evidence"] } },
         cons: { type: "ARRAY", items: { type: "OBJECT", properties: { point: { type: "STRING" }, evidence: { type: "STRING" } }, required: ["point", "evidence"] } },
         improve: { type: "ARRAY", items: { type: "OBJECT", properties: { action: { type: "STRING" }, why: { type: "STRING" } }, required: ["action", "why"] } }
       },
-      required: ["summary", "pros", "cons", "improve"]
+      required: ["verdict", "summary", "exits", "pros", "cons", "improve"]
     };
     async function aiCall(model, key, body) {
       const r = await fetch(AI_BASE + encodeURIComponent(model) + ":generateContent", {
@@ -4048,19 +4178,26 @@
       try { o = JSON.parse(text); } catch (e) { const m = text.match(/\{[\s\S]*\}/); if (m) try { o = JSON.parse(m[0]); } catch (e2) {} }
       if (!o || typeof o !== "object") return null;
       const list = (v, a, b) => (Array.isArray(v) ? v : []).filter(x => x && typeof x === "object").slice(0, 10).map(x => ({ [a]: aiTxt(x[a], 400), [b]: aiTxt(x[b], 600) })).filter(x => x[a]);
-      return { summary: aiTxt(o.summary, 800), pros: list(o.pros, "point", "evidence"), cons: list(o.cons, "point", "evidence"), improve: list(o.improve, "action", "why") };
+      return { verdict: aiTxt(o.verdict, 800), exits: list(o.exits, "point", "evidence"), summary: aiTxt(o.summary, 800), pros: list(o.pros, "point", "evidence"), cons: list(o.cons, "point", "evidence"), improve: list(o.improve, "action", "why") };
     }
     async function runAiReview() {
       if (aiBusy) return;
       const cfg = aiCfg();
       if (!cfg.key) { aiStatus("Add your Gemini API key first: Settings → AI Review (Gemini).", true); return; }
-      const p = aiReviewPrompt();
-      if (!p.n) { aiStatus("No closed trades in " + p.label.toLowerCase() + ".", true); return; }
-      aiBusy = true; aiStatus("Gemini is reading " + p.sent + " trades… this can take up to a minute.");
+      const k = state.ui.aiPeriod || "tm", rows = aiPeriodRows(k);
+      if (!rows.length) { aiStatus("No closed trades in " + (AI_PERIODS.find(x => x.k === k) || AI_PERIODS[0]).label.toLowerCase() + ".", true); return; }
+      aiBusy = true;
       const btn = document.getElementById("aiRunBtn"); if (btn) btn.disabled = true;
+      let p;
+      try {
+        let total = 0;
+        const pxm = await aiPriceCheck(rows, (d, t) => { if (t) total = t; aiStatus("Reading the price around each trade… " + d + " of " + total); });
+        p = aiReviewPrompt(k, pxm, rows);
+      } catch (e) { aiBusy = false; if (btn) btn.disabled = false; aiStatus("Could not build the review: " + String((e && e.message) || e).slice(0, 160), true); return; }
+      aiStatus("Gemini is reading " + p.sent + " trades (price data for " + p.priced + ")… this can take up to a minute.");
       const body = {
         systemInstruction: { parts: [{ text: AI_SYSTEM }] },
-        contents: [{ role: "user", parts: [{ text: "Review my trading for this period. Tell me the pros, the cons, and how to improve.\n\n" + p.text }] }],
+        contents: [{ role: "user", parts: [{ text: "Review my trading for this period. Look at every trade yourself and tell me what I am doing wrong: holding, early exits and the pattern behind them, the pros, the cons, and how to improve.\n\n" + p.text }] }],
         generationConfig: { temperature: 0.4, responseMimeType: "application/json", responseSchema: AI_SCHEMA }
       };
       try {
@@ -4070,7 +4207,7 @@
         if (!res.ok) { aiStatus(aiErrText(res), true); return; }
         const out = aiParse(res.j);
         if (!out) { aiStatus("Gemini's answer could not be read. Try again.", true); return; }
-        const saved = Object.assign(out, { at: new Date().toISOString(), k: p.k, label: p.label, from: p.from, to: p.to, n: p.n, model });
+        const saved = Object.assign(out, { at: new Date().toISOString(), k: p.k, label: p.label, from: p.from, to: p.to, n: p.n, priced: p.priced, model });
         try { localStorage.setItem(AI_LAST, JSON.stringify(saved)); } catch (e) {}
         aiStatus("");
         renderAiResult(saved);
@@ -4086,23 +4223,31 @@
       el.className = "text-[11px] " + (bad ? "text-rose-400" : "text-slate-400");
       el.innerText = msg || "";
     }
-    function copyAiPrompt() {
-      const p = aiReviewPrompt();
-      if (!p.n) { aiStatus("No closed trades in " + p.label.toLowerCase() + ".", true); return; }
-      const text = AI_SYSTEM + "\nAnswer with three lists: Pros, Cons, How to improve.\n\nReview my trading for this period.\n\n" + p.text;
+    async function copyAiPrompt() {
+      if (aiBusy) return;
+      const k = state.ui.aiPeriod || "tm", rows = aiPeriodRows(k);
+      if (!rows.length) { aiStatus("No closed trades in " + (AI_PERIODS.find(x => x.k === k) || AI_PERIODS[0]).label.toLowerCase() + ".", true); return; }
+      aiBusy = true;
+      let pxm = {};
+      try { let total = 0; pxm = await aiPriceCheck(rows, (d, t) => { if (t) total = t; aiStatus("Reading the price around each trade… " + d + " of " + total); }); } catch (e) {}
+      aiBusy = false; aiStatus("");
+      const p = aiReviewPrompt(k, pxm, rows);
+      const text = AI_SYSTEM + "\nAnswer with: Verdict, Holding & exits, Pros, Cons, How to improve.\n\nReview my trading for this period. Look at every trade yourself.\n\n" + p.text;
       (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast("Copied " + p.sent + " trades. Paste into the Gemini app.")).catch(() => toast("Could not copy"));
     }
     function renderAiResult(r) {
       const host = document.getElementById("aiResult");
       if (!host) return;
       if (!r) { host.innerHTML = ""; return; }
-      const sec = (title, color, items, a, b) => items.length ? `<div class="space-y-1.5" data-ai-sec="${title}">
+      const sec = (title, color, items, a, b) => items.length ? `<div class="space-y-1.5" data-ai-sec="${esc(title)}">
           <div class="text-[10px] uppercase tracking-wider font-bold ${color}">${esc(title)}</div>
           ${items.map(x => `<div class="border border-terminal-border rounded-lg p-2.5"><div class="text-slate-200 font-semibold">${esc(x[a])}</div>${x[b] ? `<div class="text-slate-400 text-[11px] mt-0.5">${esc(x[b])}</div>` : ""}</div>`).join("")}
         </div>` : "";
       host.innerHTML = `<div class="space-y-3 border-t border-terminal-border pt-3">
-          <div class="text-slate-500 text-[11px]">${esc(r.label)} · ${esc(fmtDay(r.from))} to ${esc(fmtDay(r.to))} · ${r.n} trades · ${esc(r.model || "")} · ${esc(new Date(r.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}</div>
-          ${r.summary ? `<p class="text-slate-200 leading-relaxed">${esc(r.summary)}</p>` : ""}
+          <div class="text-slate-500 text-[11px]">${esc(r.label)} · ${esc(fmtDay(r.from))} to ${esc(fmtDay(r.to))} · ${r.n} trades${r.priced != null ? " · price data for " + r.priced : ""} · ${esc(r.model || "")} · ${esc(new Date(r.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}</div>
+          ${r.verdict ? `<div class="border border-amber-500/40 rounded-lg p-2.5" data-ai-verdict><div class="text-[10px] uppercase tracking-wider font-bold text-amber-400">Verdict</div><p class="text-white font-semibold leading-relaxed mt-0.5">${esc(r.verdict)}</p></div>` : ""}
+          ${r.summary ? `<p class="text-slate-300 leading-relaxed">${esc(r.summary)}</p>` : ""}
+          ${sec("Holding & exits", "text-sky-300", r.exits || [], "point", "evidence")}
           <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
             ${sec("Pros", "text-emerald-400", r.pros, "point", "evidence")}
             ${sec("Cons", "text-rose-400", r.cons, "point", "evidence")}
