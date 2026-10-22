@@ -2114,6 +2114,7 @@ async function aiReviewRun(seed) {
     const cors = { 'access-control-allow-origin': '*', 'content-type': 'application/json' };
     if (mode === 'quota') return route.fulfill({ status: 429, headers: cors, body: JSON.stringify({ error: { code: 429, message: 'Resource exhausted' } }) });
     if (mode === 'busy' && req.url().includes('gemini-2.5-flash:')) return route.fulfill({ status: 503, headers: cors, body: JSON.stringify({ error: { code: 503, message: 'This model is currently experiencing high demand.' } }) });
+    if (mode === 'busy404') return route.fulfill({ status: req.url().includes('lite') ? 404 : 503, headers: cors, body: JSON.stringify({ error: { message: 'x' } }) });
     if (mode === 'allbusy') return route.fulfill({ status: 503, headers: cors, body: JSON.stringify({ error: { code: 503, message: 'high demand' } }) });
     if (mode === 'nomodel' && req.url().includes('gemini-2.5-flash')) return route.fulfill({ status: 404, headers: cors, body: JSON.stringify({ error: { code: 404, message: 'not found' } }) });
     const answer = { verdict: 'You cut winners early.', wrong: [{ point: 'Pullback shorts lose', proof: '-3R total' }, { point: '<b>x</b>', proof: '' }], right: [{ point: 'Breakout longs win', proof: '6 of 8 won' }], trailing: [{ point: 'Trail starts too tight', proof: 'XAIUSD went 3% on' }], vas: [{ point: 'Fib 1h shorts lose', proof: 'avg -1R' }], setup: [{ point: 'Enter at L3 only', proof: 'L3 won 4 of 5' }], rules: [{ point: 'Skip pullback shorts', proof: 'They lost most' }] };
@@ -2208,7 +2209,12 @@ async function aiReviewRun(seed) {
     mode = 'allbusy'; calls.length = 0;
     await page.click('#aiRunBtn');
     await page.waitForFunction(() => !aiBusy, null, { timeout: 8000 });
-    check(calls.length === 9 && /overloaded/.test(await page.innerText('#aiStatus')), 'all busy: ' + calls.length + ' ' + await page.innerText('#aiStatus'));
+    check(calls.length === 12 && /overloaded/.test(await page.innerText('#aiStatus')), 'all busy: ' + calls.length + ' ' + await page.innerText('#aiStatus'));
+    // Busy everywhere and the lite models missing: still "overloaded", not "model not found".
+    mode = 'busy404'; calls.length = 0;
+    await page.click('#aiRunBtn');
+    await page.waitForFunction(() => !aiBusy, null, { timeout: 8000 });
+    check(calls.length === 8 && /overloaded/.test(await page.innerText('#aiStatus')), 'busy + missing lite: ' + calls.length + ' ' + await page.innerText('#aiStatus'));
     // Remove.
     await page.evaluate(() => { switchTab('data'); removeAiKey(); });
     check(await page.evaluate(() => !aiCfg().key && !localStorage.getItem('tapeAndTarget.gemini')), 'key should be removed');
