@@ -1612,7 +1612,8 @@ async function deltaShareRun(seed) {
 async function alertRefreshRun(seed) {
   const errs = [];
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
-  const at = Date.now() - 2 * 864e5, ist = new Date(at + 5.5 * 3600e3).toISOString();
+  // Noon IST two days ago, so the trade 20 min later never crosses midnight (a run near midnight IST failed).
+  const at = Math.floor((Date.now() + 5.5 * 3600e3) / 864e5) * 864e5 - 5.5 * 3600e3 + 12 * 3600e3 - 2 * 864e5, ist = new Date(at + 5.5 * 3600e3).toISOString();
   const tradeTime = new Date(at + 5.5 * 3600e3 + 20 * 60e3).toISOString();
   const line = JSON.stringify({ delivered_at_utc: new Date(at).toISOString(), symbol: 'SOLUSDT', exchange: 'bitunix', timeframe: '30m', side: 'long', zone_type: 'demand',
     alert_price: 150.2, level: 149, zone_bottom: 149, zone_top: 150, body_entry: 150, planned_entry: 150, stop_price: 148.5, score: 8,
