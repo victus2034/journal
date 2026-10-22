@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-22.121">
+  <meta name="app-version" content="2026-10-22.122">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -447,7 +447,6 @@
           <p id="sigFresh" class="text-[10px] text-slate-500 font-mono"></p>
         </div>
           <div class="flex flex-wrap items-center gap-2">
-            <button onclick="fillStopsFromSignals()" class="px-2.5 py-1 text-xs font-mono bg-terminal-surface border border-terminal-border rounded hover:border-amber-500">Fill stops from signals</button>
             <button onclick="openSignalImport()" class="px-2.5 py-1 text-xs font-mono bg-terminal-surface border border-terminal-border rounded hover:border-amber-500">Paste signals</button>
             <button onclick="openScannerImport()" class="px-2.5 py-1 text-xs font-mono bg-amber-500 text-black font-bold rounded">Load scanner alerts</button>
             <button onclick="deleteAllSignals()" class="px-2.5 py-1 text-xs font-mono text-rose-400 border border-rose-500/30 rounded hover:bg-rose-500/10">Delete all signals</button>
@@ -1164,7 +1163,11 @@
 
       <!-- Trading books: balance and limits -->
       <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-        <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Trading Books</h3>
+        <div class="flex items-center justify-between border-b border-terminal-border pb-2">
+          <h3 class="font-bold text-white uppercase tracking-wider">Trading Books</h3>
+          <!-- Trades come in from Delta and CoinDCX; this is for one their APIs don't cover. -->
+          <button type="button" id="manualLogBtn" onclick="openTrade(null)" title="Log a trade by hand (one Delta or CoinDCX doesn't bring in)" class="text-[11px] text-slate-400 hover:text-amber-300">+ Log trade by hand</button>
+        </div>
         <p class="text-slate-400 text-[11px] leading-relaxed">Each book's balance and daily loss limit. The limit drives the breach counter and the red day markers.</p>
         <div id="booksList" class="space-y-2"></div>
       </div>
@@ -1182,15 +1185,6 @@
         <div id="playbookList" class="space-y-2"></div>
       </div>
 
-      <!-- Manual Trade Entry -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-        <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Manual Trade Entry</h3>
-        <p class="text-slate-400 text-[11px] leading-relaxed">Trades from Delta come in automatically. Use this only for a trade the API doesn't cover, such as a Dhan trade.</p>
-        <button onclick="openTrade(null)" class="px-3.5 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold rounded-lg flex items-center gap-1.5 transition-all active:scale-95">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
-          <span>Log trade</span>
-        </button>
-      </div>
 
       <!-- Trading Day -->
       <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
@@ -1551,6 +1545,10 @@
       if (t.tagsMistakes !== undefined) o.tagsMistakes = tags(t.tagsMistakes, MISTAKE_TAGS);
       if (t.confidence !== undefined && t.confidence !== null) { const c = parseInt(t.confidence, 10); if (c >= 1 && c <= 5) o.confidence = c; else delete o.confidence; }
       if (o.stop && !stopOk(o)) o.stop = 0; // a stop on the wrong side of the entry is a bad match
+      // Filled in from the matched alert, not typed: the inspector says so.
+      if (t.stopSrc === "alert" && o.stop) o.stopSrc = "alert"; else delete o.stopSrc;
+      if (t.setupAuto === true) o.setupAuto = true; else delete o.setupAuto;
+      if (t.reviewed === true) o.reviewed = true; else delete o.reviewed;
       return o;
     }
     function cleanAccount(a) {
@@ -1622,12 +1620,16 @@
     }
     // Deleted-record markers older than half a year are dropped (every device has
     // long since synced), and signals never sync so they need none.
+    const TOMB_DAYS = 30;
     function cleanTombstones(t) {
-      const out = {}, cutoff = new Date(Date.now() - 183 * 864e5).toISOString();
+      // A deleted record's marker only has to outlive the copies other devices
+      // still hold, so 30 days. A deleted Delta trade's order tag is kept 183 days:
+      // it stops the next Delta import from bringing the trade back.
+      const out = {}, cutoff = new Date(Date.now() - 183 * 864e5).toISOString(), short = new Date(Date.now() - TOMB_DAYS * 864e5).toISOString();
       if (!t || typeof t !== "object") return out;
       Object.keys(t).forEach(k => {
         if (!/^(trades|goals|accounts|reviews|playbook|backtest|withdrawals):/.test(k) || k.length > 80) return;
-        if (typeof t[k] === "string" && t[k] >= cutoff) out[k] = t[k];
+        if (typeof t[k] === "string" && t[k] >= (k.indexOf("trades:src:") === 0 ? cutoff : short)) out[k] = t[k];
       });
       return out;
     }
@@ -2024,6 +2026,14 @@
     }
 
     /* =================== DASHBOARD RENDERERS =================== */
+    // Books with nothing in them yet: no trades, no starting balance, no withdrawals.
+    function emptyBooks() {
+      const used = {}, out = {};
+      allTrades().forEach(t => { used[t.accountId] = 1; });
+      (state.withdrawals || []).forEach(w => { used[w.accountId] = 1; });
+      state.accounts.forEach(a => { if (!used[a.id] && !((a.startBalance || 0) > 0)) out[a.id] = 1; });
+      return out;
+    }
     function renderAccountsBar() {
       const bar = document.getElementById('accountsBar');
       if (!bar) return;
@@ -2056,8 +2066,15 @@
         sw.appendChild(b);
       });
       bar.appendChild(sw);
-      bar.appendChild(createBtn('all', `All accounts <span class="text-amber-400 font-bold ml-1 hdr-wide">${state.accounts.length} BOOKS</span>`, selected() === 'all'));
-      state.accounts.forEach(a => {
+      // A book with nothing in it (no trades, balance or withdrawals) stays off the
+      // bar; Sync & Settings → Trading Books still lists it, and picking it there shows it.
+      const empty = emptyBooks();
+      const shown = state.accounts.filter(a => !empty[a.id] || a.id === selected());
+      const hidden = state.accounts.length - shown.length;
+      bar.appendChild(createBtn('all', `All accounts <span class="text-amber-400 font-bold ml-1 hdr-wide">${shown.length} BOOKS</span>`, selected() === 'all'));
+      if (hidden) bar.title = hidden + ' empty book' + (hidden === 1 ? '' : 's') + ' hidden (no trades yet): ' + state.accounts.filter(a => shown.indexOf(a) === -1).map(a => a.name).join(', ');
+      else bar.removeAttribute('title');
+      shown.forEach(a => {
         bar.appendChild(createBtn(a.id, `${esc(a.name)} <span class="text-slate-500">${a.reportBroker ? 'report' : esc(a.defaultLeverage || 1) + 'x'}</span>`, selected() === a.id));
       });
     }
@@ -4027,6 +4044,7 @@
       const host = document.getElementById('booksList');
       if (!host) return;
       host.innerHTML = '';
+      const empty = emptyBooks();
       state.accounts.forEach(a => {
         const live = a.id === deltaAccountId() && deltaLiveKnown();
         const fresh = live && deltaLiveFresh();
@@ -4040,7 +4058,7 @@
           : wallet ? esc(cdxWalletTitle(wallet)) + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
         row.innerHTML = `
           <div>
-            <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Live from Delta' : 'Last known balance from Delta — not currently reachable'}"></span>` : ''}</div>
+            <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${empty[a.id] ? ' <span class="text-[10px] font-normal text-slate-500" title="Not on the book bar until it has a trade or a starting balance">· hidden from the bar (empty)</span>' : ''}${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Live from Delta' : 'Last known balance from Delta — not currently reachable'}"></span>` : ''}</div>
             <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'live' : 'last known'}</span>` : wallet ? ` <span class="text-emerald-400">· CoinDCX wallet</span>` : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
           </div>
           <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
@@ -4125,7 +4143,7 @@
 
     function renderDashboard() {
       renderAccountsBar();
-      renderSecBar('dashSecBar', DASH_SECS, 'data-dashsec', state.ui.dashSec, setDashSec);
+      renderSecBar('dashSecBar', dashSecList(), 'data-dashsec', state.ui.dashSec, setDashSec);
       const scopedAll = statScoped();
       const fMonthSel = document.getElementById('fMonth');
       if (fMonthSel) {
@@ -4201,6 +4219,7 @@
     // Refresh the dashboard and whichever other tab is open, so an import, a
     // delete or a sync shows up where you are looking instead of on the next visit.
     function renderAll() {
+      fillFromAlerts();
       // The dashboard is drawn in full only while it is on screen (switching to it
       // draws it); elsewhere just the header it shares with every tab is refreshed.
       const dash = document.getElementById('view-dashboard');
@@ -4262,9 +4281,9 @@
       document.getElementById('inspPnl').className = isWin ? 'text-base font-bold text-emerald-400 mt-1' : 'text-base font-bold text-rose-400 mt-1';
       document.getElementById('inspEntry').innerText = trade.rep ? (px ? fmtPrice(px.entry, a.currency) : '—') : fmtPrice(trade.entry, a.currency);
       document.getElementById('inspExit').innerText = trade.rep ? (px ? fmtPrice(px.exit, a.currency) : '—') : fmtPrice(trade.exit, a.currency);
-      document.getElementById('inspSetup').innerText = trade.setup || 'Discretionary';
+      document.getElementById('inspSetup').innerText = (trade.setup || 'Discretionary') + (trade.setupAuto ? ' (from alert)' : '');
       document.getElementById('inspDuration').innerText = fmtHeld(heldMins(trade));
-      document.getElementById('inspR').innerText = rfmt(trade.r) + (pfmt(tradePct(trade)) ? ' (' + pfmt(tradePct(trade)) + ')' : '');
+      document.getElementById('inspR').innerText = rfmt(trade.r) + (pfmt(tradePct(trade)) ? ' (' + pfmt(tradePct(trade)) + ')' : '') + ((trade.orig || trade).stopSrc === 'alert' ? ' · stop from alert' : '');
       document.getElementById('inspFees').innerText = money((o.fees || 0) * k, cur) + (k !== 1 ? ' (' + money(o.fees || 0, a.currency) + ')' : '');
       document.getElementById('inspNotes').innerText = trade.notes ? `"${trade.notes}"` : '"No execution reflection notes entered."';
 
@@ -4282,13 +4301,34 @@
       };
       if (own) { const hint = document.createElement('div'); hint.className = 'text-[10px] text-slate-500'; hint.textContent = 'Rules followed · tap to change'; chk.appendChild(hint); }
       RULES.forEach((r, i) => tickRow(r, (trade.rules || [])[i], () => reviewTrade(own, t => { t.rules = RULES.map((x, j) => j === i ? !(t.rules || [])[j] : !!(t.rules || [])[j]); })));
-      const pr = trade.playRules || {};
-      if (Object.keys(pr).length) {
+      // The setup, one tap from the playbook's names, and its checklist even
+      // before anything on it was ticked.
+      const plays = state.playbook || [];
+      if (own && plays.length) {
         const head = document.createElement('div');
         head.className = 'text-slate-400 pt-1.5 mt-1 border-t border-terminal-border';
-        head.textContent = 'Setup checklist';
+        head.textContent = 'Setup · tap to change';
         chk.appendChild(head);
-        Object.keys(pr).forEach(r => tickRow(r, pr[r], () => reviewTrade(own, t => { t.playRules = Object.assign({}, t.playRules, { [r]: !(t.playRules || {})[r] }); })));
+        const row = document.createElement('div'); row.className = 'flex flex-wrap gap-1';
+        const curSetup = String(trade.setup || '').trim().toLowerCase();
+        plays.map(p => p.name).concat(['None']).forEach(name => {
+          const on = name === 'None' ? !curSetup : curSetup === name.toLowerCase();
+          const b = document.createElement('button'); b.type = 'button'; b.dataset.setup = name;
+          b.className = 'px-2 py-0.5 rounded-full border text-[10px] ' + (on ? 'bg-amber-500/20 text-amber-300 border-amber-500/50' : 'bg-[#080D15] text-slate-500 border-terminal-border hover:text-slate-300');
+          b.textContent = name;
+          b.onclick = () => reviewTrade(own, t => { if (name === 'None') t.setup = ''; else t.setup = name; delete t.setupAuto; if (!on) delete t.playRules; });
+          row.appendChild(b);
+        });
+        chk.appendChild(row);
+      }
+      const pr = trade.playRules || {}, play = findPlay(trade.setup);
+      const prKeys = uniq((play ? play.rules : []).concat(Object.keys(pr)));
+      if (prKeys.length) {
+        const head = document.createElement('div');
+        head.className = 'text-slate-400 pt-1.5 mt-1 border-t border-terminal-border';
+        head.textContent = (play ? play.name + ' checklist' : 'Setup checklist') + (own ? ' · tap to change' : '');
+        chk.appendChild(head);
+        prKeys.forEach(r => tickRow(r, !!pr[r], () => reviewTrade(own, t => { t.playRules = Object.assign({}, t.playRules, { [r]: !(t.playRules || {})[r] }); })));
       }
 
       const conf = tradeConfidence(trade);
@@ -4336,6 +4376,123 @@
       openInspector(hydrate(t));
     }
 
+    /* =================== FILL IN FROM THE MATCHED ALERT =================== */
+    // A trade taken off an alert gets the alert's stop (when it has no stop of its
+    // own), its setup (FIB, TRENDLINE or ZONE, or the playbook setup of that name)
+    // and, for a fib, the level its entry was nearest ticked in the setup's checklist.
+    // Only empty fields are filled; anything typed stays. Runs when the trades,
+    // alerts or playbook change.
+    // Fib and trendline first: a trade that also sits in a zone alert keeps the more specific setup.
+    const KIND_SETUP = { fib: "FIB", trendline: "TRENDLINE", zone: "ZONE" };
+    let alertFillKey = "";
+    function alertSetupName(kind) { const base = KIND_SETUP[kind] || "ZONE", p = findPlay(base); return p ? p.name : base; }
+    function autoPlayRules(setup, have, sig, entry) {
+      if (have && Object.keys(have).some(k => have[k])) return null; // already ticked by hand
+      const play = findPlay(setup);
+      if (!play || !play.rules.length || !sig || sig.kind !== "fib") return null;
+      const g = fibGeom(sig), lv = g && isFinite(entry) ? fibNearest(g, entry) : null;
+      if (!lv || play.rules.indexOf(lv) === -1) return null;
+      const o = {}; play.rules.forEach(r => { o[r] = r === lv; });
+      return o;
+    }
+    function fillTradeFromAlert(t, sig, kind) {
+      if (t.rep) {
+        state.repReviews = state.repReviews || {};
+        const r = Object.assign({ rules: RULES.map(() => false), tagsPositives: [], tagsMistakes: [], notes: "", setup: "", confidence: null }, state.repReviews[t.id] || {});
+        let ch = false;
+        if (!String(r.setup || "").trim()) { r.setup = alertSetupName(kind); r.setupAuto = true; ch = true; }
+        const pr = autoPlayRules(r.setup, r.playRules, sig, Number(t.entry));
+        if (pr) { r.playRules = pr; ch = true; }
+        if (ch) state.repReviews[t.id] = stamp(r);
+        return ch;
+      }
+      const own = state.trades.find(x => x.id === t.id);
+      if (!own) return false;
+      let ch = false;
+      if (!stopOk(own) && isFinite(sig.stop) && sig.stop > 0 && stopOk(Object.assign({}, own, { stop: sig.stop }))) { own.stop = +sig.stop; own.stopSrc = "alert"; ch = true; }
+      if (!String(own.setup || "").trim()) { own.setup = alertSetupName(kind); own.setupAuto = true; ch = true; }
+      const pr = autoPlayRules(own.setup, own.playRules, sig, Number(own.entry));
+      if (pr) { own.playRules = pr; ch = true; }
+      if (ch) { stamp(own); hydrate(own); }
+      return ch;
+    }
+    function fillFromAlerts() {
+      const sigs = state.signals || [];
+      if (!sigs.length) return 0;
+      const bt = state.backtest || {};
+      const key = [sigs.length, (state.trades || []).length, (bt.rows || []).length, JSON.stringify(bt.files || []), JSON.stringify((state.playbook || []).map(p => [p.name, p.rules]))].join("|");
+      if (key === alertFillKey) return 0;
+      alertFillKey = key;
+      let n = 0;
+      try {
+        Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind).forEach(pr => { if (pr.trade && fillTradeFromAlert(pr.trade, pr.signal, kind)) n++; }));
+      } catch (e) { console.warn("alert fill", e); }
+      if (n) save();
+      return n;
+    }
+
+    /* =================== REVIEW QUEUE =================== */
+    // A trade counts as reviewed once anything about it was marked: a tag, a rule,
+    // notes, a confidence, or "Clean" (nothing to note).
+    function isReviewed(t) {
+      return !!(t && (t.reviewed || (t.tagsPositives || []).length || (t.tagsMistakes || []).length || String(t.notes || "").trim() || tradeConfidence(t) || (t.rules || []).some(Boolean)));
+    }
+    const REVIEW_DAYS = 30, QUICK_MISTAKES = ["FOMO Entry", "Early Exit / Cut Winner", "Moved Stop Loss", "Revenge Trade"];
+    function reviewQueue() {
+      const from = iso(new Date(parseDay(todayDay()).getTime() - REVIEW_DAYS * 864e5));
+      return statScoped().filter(t => dayOf(t) >= from && !isReviewed(t)).sort((a, b) => byWhen(b, a));
+    }
+    // One tap from the queue: mark it clean, or tag one mistake. Either reviews it.
+    function quickReview(id, what) {
+      const t = id.indexOf("rep:") === 0 ? reportTrades().find(x => x.id === id) : state.trades.find(x => x.id === id);
+      if (!t) return;
+      const change = r => {
+        r.reviewed = true;
+        if (what !== "clean") { const l = r.tagsMistakes || []; if (l.indexOf(what) === -1) r.tagsMistakes = l.concat(what); }
+      };
+      if (t.rep) {
+        state.repReviews = state.repReviews || {};
+        const r = Object.assign({ rules: RULES.map(() => false), tagsPositives: [], tagsMistakes: [], notes: "", setup: "", confidence: null }, state.repReviews[t.id] || {});
+        change(r); state.repReviews[t.id] = stamp(r);
+      } else { change(t); stamp(t); }
+      save(); renderAll();
+      toast(what === "clean" ? "Marked clean" : "Tagged: " + what);
+    }
+    function openQueued(id) {
+      const t = id.indexOf("rep:") === 0 ? reportTrades().find(x => x.id === id) : state.trades.find(x => x.id === id);
+      if (t) openInspector(t.rep ? t : hydrate(t));
+    }
+    function reviewQueueHtml(cur) {
+      const q = reviewQueue(), shown = q.slice(0, state.ui.rqAll ? 200 : 8);
+      const cls = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
+      const btn = 'px-2 py-0.5 rounded border text-[10px] whitespace-nowrap';
+      return `<div class="border-b border-terminal-border pb-3 mb-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded bg-sky-400"></span><h2 class="text-sm font-bold text-white uppercase tracking-wider">To review</h2>
+            <span class="text-slate-400">${q.length ? q.length + ' trade' + (q.length === 1 ? '' : 's') + ' in the last ' + REVIEW_DAYS + ' days' : 'all caught up'}</span></div>
+          <span class="text-[10px] text-slate-500">Tap Clean if there's nothing to note, a mistake to tag it, or Review for everything</span>
+        </div>
+        ${!q.length ? '<div class="text-center py-4 text-emerald-400">✓ Every trade from the last ' + REVIEW_DAYS + ' days is reviewed.</div>' : `
+        <div class="divide-y divide-terminal-border">
+          ${shown.map(t => `<div class="py-2 flex flex-wrap items-center gap-2">
+            <button type="button" onclick="openQueued('${esc(t.id)}')" class="flex items-center gap-2 text-left min-w-[200px] flex-1 hover:text-white">
+              <span class="text-slate-500">${esc(fmtDay(dayOf(t)))} ${esc(t.time || '')}</span>
+              <span class="font-bold text-slate-200">${esc(t.symbol || '')}</span>
+              <span class="text-[10px] ${tradeSide(t) === 'long' ? 'text-emerald-400' : tradeSide(t) === 'short' ? 'text-rose-400' : 'text-slate-500'}">${tradeSide(t) === 'long' ? 'LONG' : tradeSide(t) === 'short' ? 'SHORT' : ''}</span>
+              <span class="${cls(t.pnl || 0)}">${signedMoney(t.pnl || 0, cur)}</span>
+              ${t.setup ? `<span class="text-[10px] text-slate-500">${esc(t.setup)}</span>` : ''}
+            </button>
+            <div class="flex flex-wrap gap-1">
+              <button type="button" onclick="quickReview('${esc(t.id)}','clean')" class="${btn} border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10">✓ Clean</button>
+              ${QUICK_MISTAKES.map(m => `<button type="button" onclick="quickReview('${esc(t.id)}','${esc(m)}')" class="${btn} border-rose-500/30 text-rose-300 hover:bg-rose-500/10">${esc(m)}</button>`).join('')}
+              <button type="button" onclick="openQueued('${esc(t.id)}')" class="${btn} border-terminal-border text-slate-300 hover:border-amber-500/60">✎ Review</button>
+            </div>
+          </div>`).join('')}
+        </div>
+        ${q.length > 8 ? `<div class="text-center pt-2"><button type="button" onclick="state.ui.rqAll=!state.ui.rqAll;save();renderAll()" class="text-[11px] text-amber-300 hover:text-amber-200">${state.ui.rqAll ? 'Show fewer' : 'Show all ' + q.length}</button></div>` : ''}`}
+      </div>`;
+    }
+
     function closeInspector() {
       document.getElementById('tradeInspectorDrawer').classList.add('translate-x-full');
     }
@@ -4365,7 +4522,7 @@
       activeLedgerFocus = null;
       activeLedgerDate = dateStr;
       state.ui.dashSec = "ledger";
-      renderSecBar('dashSecBar', DASH_SECS, 'data-dashsec', state.ui.dashSec, setDashSec);
+      renderSecBar('dashSecBar', dashSecList(), 'data-dashsec', state.ui.dashSec, setDashSec);
       renderLedgerView();
       toast(`Displaying 1-day session: ${dateStr}`);
     }
@@ -4574,6 +4731,9 @@
         });
         const pr = readPlayRules();
         if (pr) rec.playRules = pr; else delete rec.playRules;
+        if (existing && existing.stopSrc && rec.stop !== existing.stop) delete rec.stopSrc;
+        if (existing && existing.setupAuto && rec.setup !== existing.setup) delete rec.setupAuto;
+        if (existing) rec.reviewed = true;
         // A same-day trade moved to another date takes its exit day along; an
         // overnight one keeps the exit day it was imported with.
         if (existing && existing.exitDate && existing.exitDate === existing.date) rec.exitDate = rec.date;
@@ -5104,6 +5264,7 @@
           }
         }
         if (got.remote) state = mergeState(state, got.remote);
+        fillFromAlerts(); // trades the merge brought in get their alert's stop and setup before this copy is sent
         adoptSyncedBalance();
         const after = syncPayload(state);
         const body = JSON.stringify(after); // compact: a third smaller than indented, on every sync
@@ -7356,7 +7517,9 @@
     const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
     const SIG_SECS_FIB = SIG_SECS.slice(0, 3).concat([{ k: "levels", label: "Fib levels" }], SIG_SECS.slice(3));
     const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
-    const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "week", label: "Weekly review" }, { k: "ledger", label: "Day's trades" }, { k: "habits", label: "Time & habits" }];
+    const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "week", label: "Review" }, { k: "ledger", label: "Day's trades" }, { k: "habits", label: "Time & habits" }];
+    // The Review tab shows how many trades are waiting.
+    function dashSecList() { const n = reviewQueue().length; return DASH_SECS.map(x => x.k === 'week' && n ? Object.assign({}, x, { label: x.label + ' (' + n + ')' }) : x); }
     function setDashSec(k) { state.ui.dashSec = k; save(); renderDashboard(); }
     const AN_SECS = [{ k: "overview", label: "Overview" }, { k: "size", label: "Position size" }, { k: "trades", label: "Trades" }, { k: "market", label: "Market days" }];
     // One row of big tabs; only the chosen section is shown. Everything still renders,
@@ -7532,20 +7695,6 @@
       });
       flush();
       return sigs;
-    }
-
-    function fillStopsFromSignals() {
-      // A stop is only taken if it sits on the losing side of the trade's own entry
-      // (above a short, below a long); anything else is a mismatched alert.
-      const pairs = matchSignals().filter(x => x.trade && !x.trade.rep && !x.trade.stop && isFinite(x.signal.stop)
-        && stopOk(Object.assign({}, x.trade, { stop: x.signal.stop })));
-      if (!pairs.length) { toast("No matched trades are missing a stop"); return; }
-      if (!confirm(`Fill in ${pairs.length} stop${pairs.length === 1 ? "" : "s"} from matched signals? Each matched trade takes the stop loss from its signal, so R can be worked out. You can still edit any of them by hand afterwards.`)) return;
-      pairs.forEach(x => {
-        state.trades.forEach(t => { if (t.id === x.trade.id) { t.stop = x.signal.stop; stamp(t); } });
-      });
-      save(); renderAll();
-      toast(`Filled ${pairs.length} stop${pairs.length === 1 ? "" : "s"} from signals`);
     }
 
     function openSignalImport() {
@@ -9063,12 +9212,12 @@
     }
     // A report trade's own review (rules kept, what went right, mistakes, notes):
     // the report has none, so it is kept apart, keyed by the trade's first row.
-    const REP_REVIEW_KEYS = ["rules", "tagsPositives", "tagsMistakes", "notes", "setup", "confidence"];
+    const REP_REVIEW_KEYS = ["rules", "tagsPositives", "tagsMistakes", "notes", "setup", "confidence", "playRules", "reviewed", "setupAuto"];
     function repReviewOf(id) { return (state.repReviews || {})[id] || null; }
     // The Review button both trade tables show: how many rules were kept, once reviewed.
     function reviewBtnHtml(rv, attrs) {
       const kept = rv ? (rv.rules || []).filter(Boolean).length : 0, tags = rv ? (rv.tagsPositives || []).length + (rv.tagsMistakes || []).length : 0;
-      const done = rv && (kept || tags || rv.notes || rv.setup || rv.confidence);
+      const done = rv && isReviewed(rv);
       return `<button type="button" ${attrs} title="Mark what you did right and wrong on this trade" class="px-2 py-0.5 rounded border text-[10px] ${done ? "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10" : "border-terminal-border text-slate-400 hover:text-white hover:border-amber-500/60"}">${done ? "✎ " + kept + "/" + RULES.length + " rules" : "✎ Review"}</button>`;
     }
     function repReviewBtn(t) {
@@ -9141,6 +9290,11 @@
         const strs = a => (Array.isArray(a) ? a : []).filter(x => typeof x === "string").map(x => cText(x, 60)).slice(0, 40);
         o[k] = { rules: RULES.map((x, i) => !!(Array.isArray(v.rules) && v.rules[i])), tagsPositives: strs(v.tagsPositives), tagsMistakes: strs(v.tagsMistakes),
           notes: cText(v.notes || "", 4000), setup: cText(v.setup || "", 80), confidence: tradeConfidence(v), updatedAt: typeof v.updatedAt === "string" ? v.updatedAt.slice(0, 30) : "" };
+        if (v.playRules && typeof v.playRules === "object" && !Array.isArray(v.playRules)) {
+          const pr = {}; Object.keys(v.playRules).slice(0, 20).forEach(x => { pr[cText(x, 120)] = !!v.playRules[x]; }); o[k].playRules = pr;
+        }
+        if (v.reviewed === true) o[k].reviewed = true;
+        if (v.setupAuto === true) o[k].setupAuto = true;
       });
       return o;
     }
@@ -9230,9 +9384,9 @@
       const rs = ts.map(t => t.r).filter(r => r != null && isFinite(r));
       const card = (label, val, sub) => `<div class="bg-black/40 border border-terminal-border rounded-lg p-3"><div class="text-[10px] text-slate-500 uppercase tracking-wider">${label}</div><div class="text-sm font-bold mt-1">${val}</div>${sub ? `<div class="text-[10px] text-slate-500 mt-0.5">${sub}</div>` : ''}</div>`;
       const best = setups[0], worstSetup = setups.length > 1 ? setups[setups.length - 1] : null, mk = mistakes[0];
-      host.innerHTML = `
+      host.innerHTML = reviewQueueHtml(cur) + `
         <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-3 mb-3">
-          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded bg-amber-400"></span><h2 class="text-sm font-bold text-white uppercase tracking-wider">Weekly review</h2>
+          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded bg-amber-400"></span><h2 class="text-sm font-bold text-white uppercase tracking-wider">Week summary</h2>
             <span class="text-slate-400">${fmtD(days[0])} – ${fmtD(days[6])}${off === 0 ? ' (this week)' : ''}</span></div>
           <div class="flex gap-1">
             <button type="button" onclick="shiftReviewWeek(-1)" class="px-2.5 py-1 rounded bg-terminal-surface border border-terminal-border hover:border-amber-500 text-slate-200">‹ Prev</button>

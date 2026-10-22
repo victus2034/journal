@@ -446,11 +446,11 @@ async function backtestRun(seed) {
     // Its Review button opens the same Trade Inspector a journal trade does; Edit Trade there opens the form.
     await page.click('#btBody [data-repreview]');
     const insp = await page.evaluate(() => ({ open: !document.getElementById('tradeInspectorDrawer').classList.contains('translate-x-full'), del: document.getElementById('inspDelBtn').innerText,
-      rows: document.querySelectorAll('#inspChecklist button').length, tags: document.querySelectorAll('#inspTagsMistake button').length, id: activeInspectTrade && activeInspectTrade.id }));
+      rows: document.querySelectorAll('#inspChecklist button:not([data-setup])').length, tags: document.querySelectorAll('#inspTagsMistake button').length, id: activeInspectTrade && activeInspectTrade.id }));
     check(insp.open && insp.del === 'Report rows' && insp.rows === 5 && insp.tags > 5 && insp.id === btnId, 'report trade inspector: ' + JSON.stringify(insp));
-    await page.click('#inspChecklist button:nth-of-type(2)'); // tap: Risk within limit on
+    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // tap: Risk within limit on
     check(await page.evaluate(id => JSON.stringify(state.repReviews[id].rules), btnId) === '[false,true,false,false,false]', 'tapping a rule on a report trade did not save');
-    await page.click('#inspChecklist button:nth-of-type(2)'); // and off again
+    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // and off again
     await page.evaluate(() => editActiveTrade());
     await page.waitForSelector('#modalSheet:not(.hidden)');
     await page.check('#mRule0'); await page.check('#mRule2');
@@ -902,15 +902,11 @@ async function coindcxRun(seed) {
       state.signals = [sg('sg-lnk', 'LNKUSD', '09:50', 'long', 12.11, 12.01), sg('sg-orf', 'ORFUSD', '10:30', 'long', 2, 1.98),
         Object.assign(sg('sg-lnk-zone', 'LNKUSD', '09:55', 'long', 12, 11.9), { kind: undefined, key: 'zone|LNKUSD' })];
       // "Fill stops from signals" only touches journal trades: a CoinDCX trade has no stop of its own to fill.
-      const said = [], realToast = toast;
-      toast = m => said.push(m);
-      fillStopsFromSignals();
-      toast = realToast;
       const pairs = matchSignals('trendline'), p = pairs.find(x => x.signal.id === 'sg-lnk'), q = pairs.find(x => x.signal.id === 'sg-orf'), t = p.trade;
       Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'vsme', sigFilter: 'orphans' });
       switchTab('signals'); renderAll();
       const text = id => document.getElementById(id).innerText.replace(/\s+/g, ' ');
-      return { t: t && [t.rep, t.symbol, t.direction, +t.entry.toFixed(6), +t.exit.toFixed(6), t.qty, t.date, t.time], r: myOutcome(p) && myOutcome(p).r, orf: !!q.trade, said,
+      return { t: t && [t.rep, t.symbol, t.direction, +t.entry.toFixed(6), +t.exit.toFixed(6), t.qty, t.date, t.time], r: myOutcome(p) && myOutcome(p).r, orf: !!q.trade,
         strip: text('sigEdgeStrip'), vs: text('sigVsMine'), orphans: text('signalsTableBody'),
         refused: [btPrices({ closed: true, carried: false, start: D + ' 10:05:00', end: D + ' 14:00:00' }, [{ at: D + ' 10:05:00', side: 'buy', price: 12, qty: 100 }, { at: D + ' 14:00:00', side: 'sell', price: 12.1, qty: 60 }]),
           btPrices({ closed: true, carried: true, start: D + ' 10:05:00', end: D + ' 14:00:00' }, [{ at: D + ' 10:05:00', side: 'buy', price: 12, qty: 100 }, { at: D + ' 14:00:00', side: 'sell', price: 12.1, qty: 100 }])] };
@@ -918,7 +914,9 @@ async function coindcxRun(seed) {
     let v = await sigs();
     check(JSON.stringify(v.t) === JSON.stringify([true, 'LNK/USDT', 'long', 12, 12.1, 100, D, '10:05']) && near(v.r, 991 / 99.3 / 10) && !v.orf, 'alert matched to a CoinDCX trade: ' + JSON.stringify(v));
     check(v.strip.includes('1 taken by you') && /LNK\/USDT LONG .*\+1\.00R \(\+0\.83%\)/.test(v.vs) && !v.orphans.includes('ORF') && JSON.stringify(v.refused) === '[null,null]', 'Signals tab: ' + JSON.stringify(v));
-    check(JSON.stringify(v.said) === '["No matched trades are missing a stop"]', 'fill stops from signals: ' + JSON.stringify(v.said));
+    // Matched trades took their alert's setup on their own (stops too, for journal trades): send that, so the run below starts level.
+    check((await page.evaluate(() => reportTrades().find(t => t.symbol === 'LNK/USDT' || /LNK/.test(t.symbol)) || {})).setup === 'TRENDLINE', 'setup from the alert on a CoinDCX trade');
+    await sync();
 
     // Analysis, results by broker and Files say where the rows came from.
     const an = await page.evaluate(() => {
@@ -1321,10 +1319,10 @@ async function reviewRun(seed) {
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForTimeout(300);
     await page.evaluate(() => openInspector(allTrades().find(t => t.id === 'tr1')));
-    const rows = () => page.evaluate(() => [...document.querySelectorAll('#inspChecklist button')].map(b => b.innerText.replace(/\s+/g, ' ')));
+    const rows = () => page.evaluate(() => [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' ')));
     const before = await rows();
-    await page.click('#inspChecklist button:nth-of-type(2)'); // Risk within limit: missed -> kept
-    await page.click('#inspChecklist button:nth-of-type(1)'); // Traded a planned setup: kept -> missed
+    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // Risk within limit: missed -> kept
+    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(1)'); // Traded a planned setup: kept -> missed
     await page.click('#inspTagsPositive button:has-text("Trailed Stop Loss")');
     await page.click('#inspTagsMistake button:has-text("FOMO Entry")');
     await page.click('#inspChecklist button:has-text("Volume spike")');
@@ -1807,6 +1805,79 @@ async function sigBacktestRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('signals backtest: ' + e); });
 }
 
+// Trades take their alert's stop, setup and fib level; the review queue; empty
+// books off the bar; old deletion markers dropped; setup picked in the inspector.
+async function cleanupRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const v = await page.evaluate(() => {
+      const d = iso(new Date()), out = {};
+      state.playbook = [{ id: 'pbf', name: 'FIB', rules: ['L1', 'L2', 'L3', 'L4'] }];
+      // Fib from 110 (top) entering at L3 = 100: L1 103.8, L2 101.8, L3 100, L4 98.
+      const fib = { id: 'sgf', kind: 'fib', key: 'fib|XFIB|4h|1|2|110|2', date: d, time: '09:50', symbol: 'XFIB', side: 'long', entry: 100, stop: 97, filled: true, scoredDaily: true };
+      const zone = { id: 'sgz', date: d, time: '09:55', symbol: 'YZON', side: 'short', zoneLow: 50, zoneHigh: 51, stop: 52, filled: true };
+      const tr = (id, sym, dir, entry, exit, extra) => Object.assign({ id, accountId: 'acc_cry', date: d, time: '10:00', symbol: sym, direction: dir, entry, exit, qty: 1, fees: 0, stop: 0, setup: '', rules: [], notes: '' }, extra || {});
+      state.signals = [fib, zone];
+      state.trades = state.trades.concat([tr('tf1', 'XFIBUSD', 'long', 98.1, 99), tr('tz1', 'YZONUSD', 'short', 50.5, 50, { setup: 'Breakout', stop: 51.5 }), tr('tq2', 'QQQUSD', 'long', 10, 9)]);
+      save(); renderAll();
+      const f = state.trades.find(t => t.id === 'tf1'), z = state.trades.find(t => t.id === 'tz1');
+      out.fib = { stop: f.stop, src: f.stopSrc, setup: f.setup, auto: f.setupAuto, pr: f.playRules, r: +derive(f).r.toFixed(4) };
+      out.zone = { stop: z.stop, src: z.stopSrc || null, setup: z.setup };
+      // Review queue: today's three are waiting; Clean and a mistake each take one off.
+      const ids = () => reviewQueue().map(t => t.id);
+      out.q0 = ['tf1', 'tz1', 'tq2'].filter(id => ids().includes(id));
+      out.label = dashSecList().find(x => x.k === 'week').label;
+      quickReview('tf1', 'clean'); quickReview('tq2', 'FOMO Entry');
+      out.q1 = ['tf1', 'tz1', 'tq2'].filter(id => ids().includes(id));
+      out.tags = state.trades.find(t => t.id === 'tq2').tagsMistakes;
+      state.ui.dashSec = 'week'; switchTab('dashboard'); renderAll();
+      out.panel = document.getElementById('weeklyReview').innerText.replace(/\s+/g, ' ');
+      // Inspector: setup chips and the FIB checklist with L4 ticked.
+      openInspector(allTrades().find(t => t.id === 'tf1'));
+      out.chips = [...document.querySelectorAll('#inspChecklist [data-setup]')].map(b => b.textContent);
+      out.rows = [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' '));
+      out.rTxt = document.getElementById('inspR').innerText;
+      document.querySelector('#inspChecklist [data-setup="None"]').click();
+      out.afterNone = { setup: state.trades.find(t => t.id === 'tf1').setup, pr: state.trades.find(t => t.id === 'tf1').playRules || null };
+      // An empty book stays off the bar until it is picked.
+      state.accounts.push({ id: 'acc_empty', name: 'EmptyBook', currency: 'INR', market: 'nse', startBalance: 0 });
+      state.ui.account = 'all'; renderAccountsBar();
+      out.bar = document.getElementById('accountsBar').innerText;
+      state.ui.account = 'acc_empty'; renderAccountsBar();
+      out.barPicked = document.getElementById('accountsBar').innerText;
+      state.ui.account = 'all';
+      // Deletion markers: 30 days, a deleted Delta order 183.
+      const ago = n => new Date(Date.now() - n * 864e5).toISOString();
+      out.tomb = Object.keys(cleanTombstones({ 'trades:old': ago(40), 'trades:new': ago(5), 'trades:src:delta:1': ago(40), 'goals:old': ago(31) })).sort();
+      return out;
+    });
+    check(v.fib.stop === 97 && v.fib.src === 'alert' && v.fib.setup === 'FIB' && v.fib.auto === true && JSON.stringify(v.fib.pr) === '{"L1":false,"L2":false,"L3":false,"L4":true}', 'fib trade from its alert: ' + JSON.stringify(v.fib));
+    check(Math.abs(v.fib.r - (99 - 98.1) / (98.1 - 97)) < 1e-4, 'R from the alert stop: ' + v.fib.r);
+    check(v.zone.stop === 51.5 && v.zone.src === null && v.zone.setup === 'Breakout', 'typed stop and setup left alone: ' + JSON.stringify(v.zone));
+    check(v.q0.length === 3 && /^Review \(\d+\)$/.test(v.label), 'queue before: ' + JSON.stringify([v.q0, v.label]));
+    check(JSON.stringify(v.q1) === '["tz1"]' && JSON.stringify(v.tags) === '["FOMO Entry"]', 'queue after Clean and a tag: ' + JSON.stringify([v.q1, v.tags]));
+    check(v.panel.includes('TO REVIEW') && v.panel.includes('YZONUSD') && !v.panel.includes('XFIBUSD') && v.panel.includes('WEEK SUMMARY'), 'review panel: ' + v.panel.slice(0, 400));
+    check(JSON.stringify(v.chips) === '["FIB","None"]', 'setup chips: ' + JSON.stringify(v.chips));
+    check(v.rows.includes('✓ L4') && v.rows.includes('✕ L1') && v.rTxt.includes('stop from alert'), 'inspector checklist: ' + JSON.stringify([v.rows, v.rTxt]));
+    check(v.afterNone.setup === '' && v.afterNone.pr === null, 'setup cleared from the inspector: ' + JSON.stringify(v.afterNone));
+    check(!v.bar.includes('EmptyBook') && v.barPicked.includes('EmptyBook'), 'empty book on the bar: ' + JSON.stringify([v.bar, v.barPicked]));
+    check(JSON.stringify(v.tomb) === '["trades:new","trades:src:delta:1"]', 'deletion markers kept: ' + JSON.stringify(v.tomb));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'alert fills stop and setup, review queue, empty books hidden, old markers dropped');
+  errs.forEach(e => { console.log('     ' + e); failures.push('cleanup: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1827,6 +1898,7 @@ await deltaShareRun(data);
 await alertRefreshRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
+await cleanupRun(data);
 
 await browser.close();
 server.close();
