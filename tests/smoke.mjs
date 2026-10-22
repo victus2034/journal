@@ -1612,7 +1612,8 @@ async function deltaShareRun(seed) {
 async function alertRefreshRun(seed) {
   const errs = [];
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
-  const at = Date.now() - 2 * 864e5, ist = new Date(at + 5.5 * 3600e3).toISOString();
+  // Noon IST two days ago, so the trade 20 min later never crosses midnight (a run near midnight IST failed).
+  const at = Math.floor((Date.now() + 5.5 * 3600e3) / 864e5) * 864e5 - 5.5 * 3600e3 + 12 * 3600e3 - 2 * 864e5, ist = new Date(at + 5.5 * 3600e3).toISOString();
   const tradeTime = new Date(at + 5.5 * 3600e3 + 20 * 60e3).toISOString();
   const line = JSON.stringify({ delivered_at_utc: new Date(at).toISOString(), symbol: 'SOLUSDT', exchange: 'bitunix', timeframe: '30m', side: 'long', zone_type: 'demand',
     alert_price: 150.2, level: 149, zone_bottom: 149, zone_top: 150, body_entry: 150, planned_entry: 150, stop_price: 148.5, score: 8,
@@ -2071,6 +2072,134 @@ async function setupLevelRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('setup level: ' + e); });
 }
 
+// AI review: the key stays out of the synced file and backups, the period's trades
+// go to (a fake) Gemini with the key, and its pros / cons / improve show in Analysis.
+async function aiReviewRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const GEM = 'https://generativelanguage.googleapis.com/';
+  const DELTA = 'https://api.india.delta.exchange/';
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith(GEM) && !url.href.startsWith(DELTA), r => r.abort());
+  // A made-up XAIUSD long: in at 100 (stop 99) 3 days ago at 10:00 IST, out at 101 at 10:30.
+  // While open: low 99.8 at 10:05, high 101.5 at 10:10. After: 104 at 11:00, low 100.5 at 12:30.
+  const d3 = new Date(Date.now() + 5.5 * 3600e3 - 3 * 864e5).toISOString().slice(0, 10);
+  const inMs = Date.parse(d3 + 'T10:00:00+05:30'), outMs = inMs + 30 * 60e3;
+  const deltaCalls = [];
+  await ctx.route(DELTA + '**', route => {
+    const u = new URL(route.request().url());
+    deltaCalls.push(u.searchParams.get('symbol') + ' ' + u.searchParams.get('resolution'));
+    const cors = { 'access-control-allow-origin': '*', 'content-type': 'application/json' };
+    if (u.searchParams.get('symbol') !== 'XAIUSD') return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ success: true, result: [] }) });
+    const out = [];
+    for (let t = +u.searchParams.get('start'); t < +u.searchParams.get('end'); t += 60) {
+      const ms = t * 1000, m = (ms - inMs) / 60e3;
+      let h = 100.1, l = 100;
+      if (m > 0 && m < 30) { h = 100.5; l = 100.2; }
+      if (m === 5) l = 99.8;
+      if (m === 10) h = 101.5;
+      if (m >= 30) { h = 101.2; l = 100.9; }
+      if (m === 60) h = 104;
+      if (m === 150) l = 100.5;
+      out.push({ time: t, open: l, high: h, low: l, close: h, volume: 1 });
+    }
+    route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ success: true, result: out.reverse() }) });
+  });
+  const calls = [];
+  let mode = 'ok';
+  await ctx.route(GEM + '**', async route => {
+    const req = route.request();
+    if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, POST' } });
+    calls.push({ url: req.url(), key: req.headers()['x-goog-api-key'], body: req.postData() });
+    const cors = { 'access-control-allow-origin': '*', 'content-type': 'application/json' };
+    if (mode === 'quota') return route.fulfill({ status: 429, headers: cors, body: JSON.stringify({ error: { code: 429, message: 'Resource exhausted' } }) });
+    if (mode === 'nomodel' && req.url().includes('gemini-2.5-flash')) return route.fulfill({ status: 404, headers: cors, body: JSON.stringify({ error: { code: 404, message: 'not found' } }) });
+    const answer = { verdict: 'You cut winners early.', exits: [{ point: 'Early exits after a loss', evidence: 'XAIUSD went 3% on' }], summary: 'Breakouts carry the month.', pros: [{ point: 'Breakout longs win', evidence: '6 of 8 won' }], cons: [{ point: 'Pullback shorts lose', evidence: '-3R total' }, { point: '<b>x</b>', evidence: '' }], improve: [{ action: 'Skip pullback shorts', why: 'They lost most' }] };
+    route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'thinking', thought: true }, { text: JSON.stringify(answer) }] } }] }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    // No key yet: a clear message and no call.
+    await page.evaluate(() => { state.ui.aiPeriod = '30d'; switchTab('analysis'); renderAll(); });
+    await page.click('#aiRunBtn');
+    check(/Gemini API key/.test(await page.innerText('#aiStatus')) && !calls.length, 'no key should ask for one');
+    // Save the key in Settings.
+    await page.evaluate(() => switchTab('data'));
+    await page.fill('#aiKeyInput', 'AIzaTESTKEY');
+    await page.evaluate(() => saveAiKey());
+    await page.waitForTimeout(300);
+    const v = await page.evaluate(() => {
+      const t = todayDay(), tm = aiRange('tm'), lm = aiRange('lm'), d30 = aiRange('30d');
+      const back = new Date(parseDay(tm.from)); back.setDate(back.getDate() - 1);
+      return {
+        badge: document.getElementById('aiKeyBadge').innerText,
+        inSync: JSON.stringify(syncPayload(state)).includes('AIzaTESTKEY') || JSON.stringify(state).includes('AIzaTESTKEY'),
+        tmOk: tm.from.slice(8) === '01' && tm.to === t && tm.from.slice(0, 7) === t.slice(0, 7),
+        lmOk: lm.from.slice(8) === '01' && lm.to === iso(back),
+        d30: d30, n30: allTrades().filter(x => dayOf(x) >= d30.from && dayOf(x) <= d30.to).length
+      };
+    });
+    check(v.badge === 'Key saved', 'badge after saving: ' + v.badge);
+    check(!v.inSync, 'the Gemini key must never be in the synced file or journal state');
+    check(v.tmOk && v.lmOk, 'this / last month ranges: ' + JSON.stringify(v));
+    check(calls.length === 1 && calls[0].key === 'AIzaTESTKEY' && /models\/gemini-2\.5-flash$/.test(calls[0].url), 'Save & Test should check the key once: ' + JSON.stringify(calls.map(c => c.url)));
+    // The price measures, by hand from the candles above.
+    const m = await page.evaluate(([d]) => {
+      state.trades.push({ id: 'aiE1', accountId: 'acc_cry', date: d, exitDate: d, time: '10:00', exitTime: '10:30', symbol: 'XAIUSD', direction: 'long', entry: 100, exit: 101, stop: 99, qty: 2, fees: 0, leverage: 10, setup: 'Breakout', rules: [], notes: 'scared after a loss', tagsMistakes: [] , updatedAt: new Date().toISOString() });
+      save();
+      return aiPriceCheck(aiPeriodRows('30d')).then(r => r.aiE1);
+    }, [d3]);
+    check(m && m.mfePct === 1.5 && m.maePct === 0.2 && m.mfeU === 1.5 && m.kept === 67 && m.peakToExit === 20 && m.a1Best === 3 && m.a1Worst === 0.1 && m.a4Best === 3 && m.a4Worst === 0.5 && m.a4BestU === 3 && m.unit === 'R'
+      && JSON.stringify(m.labels) === '["early_exit"]' && m.missed === 6 && m.res === 1, 'price measures: ' + JSON.stringify(m));
+    check(deltaCalls.some(c => c === 'XAIUSD 1m') && deltaCalls.includes('BTCUSD 1m'), 'candles asked: ' + JSON.stringify(deltaCalls.slice(0, 5)));
+    // Review.
+    calls.length = 0; deltaCalls.length = 0;
+    await page.evaluate(() => switchTab('analysis'));
+    await page.click('#aiRunBtn');
+    await page.waitForFunction(() => document.querySelector('#aiResult [data-ai-sec]'), null, { timeout: 5000 });
+    const body = calls[0] ? JSON.parse(calls[0].body) : {};
+    const prompt = ((((body.contents || [])[0] || {}).parts || [])[0] || {}).text || '';
+    const lines = prompt.split('\n').filter(l => /^\d{4}-\d\d-\d\d\|/.test(l));
+    check(calls.length === 1 && calls[0].key === 'AIzaTESTKEY' && /gemini-2\.5-flash:generateContent$/.test(calls[0].url), 'review call: ' + JSON.stringify(calls.map(c => c.url)));
+    check(lines.length === 17 && v.n30 === 16, 'trades sent: ' + lines.length + ' of 16 + 1');
+    check(!deltaCalls.some(c => c.startsWith('XAIUSD')), 'a second read of finished trades should use the saved candles: ' + JSON.stringify(deltaCalls));
+    const xai = lines.find(l => l.includes('|XAIUSD|')) || '';
+    check(prompt.includes('price data for 1 of 17 trades') && prompt.includes('early_exit (a winner closed') && /: 1, about 510 INR/.test(prompt) && xai.includes('|1.5|0.2|1.5R|67|20|3|0.1|3|0.5|early_exit|scared after a loss') && prompt.includes('no BTCUSD candles on Delta'), 'price check in prompt: ' + xai + ' / ' + (prompt.match(/PRICE CHECK[^\n]*\n[^\n]*/) || [''])[0]);
+    check(prompt.includes('Test Crypto (USD') && prompt.includes('BY SETUP') && prompt.includes('Breakout') && prompt.includes('Volume spike') && prompt.includes('FLAG MEANINGS') && !prompt.includes('AIzaTESTKEY'), 'prompt content: ' + prompt.slice(0, 400));
+    check(body.generationConfig && body.generationConfig.responseMimeType === 'application/json' && body.generationConfig.responseSchema, 'asks for JSON');
+    const shown = await page.innerText('#aiResult');
+    check(shown.includes('You cut winners early.') && /HOLDING & EXITS/i.test(shown) && shown.includes('XAIUSD went 3% on') && /price data for 1/.test(shown), 'verdict and exits shown: ' + shown.slice(0, 300));
+    check(shown.includes('Breakouts carry the month.') && shown.includes('Breakout longs win') && shown.includes('6 of 8 won') && shown.includes('Skip pullback shorts') && /PROS/i.test(shown) && /HOW TO IMPROVE/i.test(shown), 'review shown: ' + shown.slice(0, 300));
+    check(shown.includes('<b>x</b>') && !(await page.$('#aiResult b')), 'AI text must be escaped');
+    check(!thinkingShown(shown), 'thought parts must be dropped');
+    // Survives a reload.
+    await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(300);
+    await page.evaluate(() => switchTab('analysis'));
+    check((await page.innerText('#aiResult')).includes('Breakout longs win'), 'last review should stay after reload');
+    // Quota error, and the fallback model when the default is gone.
+    mode = 'quota'; calls.length = 0;
+    await page.click('#aiRunBtn'); await page.waitForTimeout(400);
+    check(/free limit/.test(await page.innerText('#aiStatus')), 'quota message: ' + await page.innerText('#aiStatus'));
+    mode = 'nomodel'; calls.length = 0;
+    await page.click('#aiRunBtn');
+    await page.waitForFunction(() => !aiBusy, null, { timeout: 5000 });
+    check(calls.length === 2 && /gemini-flash-latest:generateContent$/.test(calls[1].url) && (await page.innerText('#aiResult')).includes('gemini-flash-latest'), 'fallback model: ' + JSON.stringify(calls.map(c => c.url)));
+    // Remove.
+    await page.evaluate(() => { switchTab('data'); removeAiKey(); });
+    check(await page.evaluate(() => !aiCfg().key && !localStorage.getItem('tapeAndTarget.gemini')), 'key should be removed');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'AI trade review (Gemini key, prompt, pros / cons / improve)');
+  errs.forEach(e => { console.log('     ' + e); failures.push('ai review: ' + e); });
+}
+function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -2095,6 +2224,7 @@ await sigBacktestRun(data);
 await cleanupRun(data);
 await behaviourRun(data);
 await setupLevelRun(data);
+await aiReviewRun(data);
 
 await browser.close();
 server.close();
