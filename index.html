@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-22.128">
+  <meta name="app-version" content="2026-10-22.129">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -4212,6 +4212,31 @@
       properties: Object.assign({ verdict: { type: "STRING" } }, Object.fromEntries(AI_SECS.map(x => [x[0], AI_ITEM]))),
       required: ["verdict"].concat(AI_SECS.map(x => x[0]))
     };
+    // Gemini answers 503 when a model is overloaded (often for a minute or two). Each
+    // model is tried again after a short wait, then the next model takes over.
+    let aiRetryMs = [3000, 8000];
+    const AI_MODEL_LITE = "gemini-2.5-flash-lite";
+    async function aiCallRetry(cfg, body) {
+      const models = [cfg.model || AI_MODEL_DEFAULT, AI_MODEL_FALLBACK, AI_MODEL_LITE].filter((m, i, a) => a.indexOf(m) === i);
+      let res = null, model = models[0];
+      for (const m of models) {
+        model = m;
+        for (let i = 0; i <= aiRetryMs.length; i++) {
+          res = await aiCall(m, cfg.key, body);
+          if (res.ok) return { res, model };
+          const busy = [500, 502, 503, 504].indexOf(res.status) !== -1;
+          if (busy && i < aiRetryMs.length) {
+            aiStatus("Gemini (" + m + ") is busy, trying again in " + Math.round(aiRetryMs[i] / 1000) + " s…");
+            await new Promise(r => setTimeout(r, aiRetryMs[i]));
+            continue;
+          }
+          if (!(busy || res.status === 404 || res.status === 429)) return { res, model };
+          break;
+        }
+        if (models.indexOf(m) < models.length - 1) aiStatus("Trying another Gemini model…");
+      }
+      return { res, model };
+    }
     async function aiCall(model, key, body) {
       const r = await fetch(AI_BASE + encodeURIComponent(model) + ":generateContent", {
         method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body)
@@ -4223,6 +4248,7 @@
       const m = res.j && res.j.error && res.j.error.message ? String(res.j.error.message).slice(0, 200) : "";
       if (res.status === 400 && /api key/i.test(m)) return "Gemini refused the key. Check it in Settings → AI Review.";
       if (res.status === 403) return "This key can't use Gemini (" + (m || "forbidden") + "). Make a new key at aistudio.google.com.";
+      if ([500, 502, 503, 504].indexOf(res.status) !== -1) return "Gemini is overloaded right now (all models tried). Wait a few minutes and press Review again.";
       if (res.status === 429) return "Gemini's free limit was reached. Wait a minute and try again.";
       if (res.status === 404) return "Model \"" + aiModel() + "\" was not found. Clear the Model box in Settings to use the default.";
       return "Gemini answered " + res.status + (m ? ": " + m : ".");
@@ -4259,9 +4285,7 @@
         generationConfig: { temperature: 0.4, responseMimeType: "application/json", responseSchema: AI_SCHEMA }
       };
       try {
-        let model = cfg.model || AI_MODEL_DEFAULT;
-        let res = await aiCall(model, cfg.key, body);
-        if (res.status === 404 && !cfg.model) { model = AI_MODEL_FALLBACK; res = await aiCall(model, cfg.key, body); }
+        const { res, model } = await aiCallRetry(cfg, body);
         if (!res.ok) { aiStatus(aiErrText(res), true); return; }
         const out = aiParse(res.j);
         if (!out) { aiStatus("Gemini's answer could not be read. Try again.", true); return; }
