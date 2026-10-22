@@ -1952,6 +1952,56 @@ async function cleanupRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('cleanup: ' + e); });
 }
 
+// Revenge sizing, behaviour score and the weekly process grade. Two losses in a
+// row, then a trade three times their size: flagged, with the extra size's share
+// of its loss (-6 x (1 - 100/300) = -4). A smaller one after that is not.
+async function behaviourRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const v = await page.evaluate(() => {
+      const d = todayDay();
+      const tr = (id, time, exitTime, exit, qty, stop) => ({ id, accountId: 'acc_cry', date: d, exitDate: d, time, exitTime, symbol: 'XREVUSD', direction: 'long', entry: 100, exit, qty, fees: 0, stop: stop || 0, setup: '', rules: [], notes: '' });
+      state.trades = state.trades.concat([tr('rv1', '10:00', '10:10', 99, 1, 99.5), tr('rv2', '10:20', '10:30', 99, 1), tr('rv3', '10:40', '10:50', 98, 3), tr('rv4', '11:30', '11:40', 99, 1.1)]);
+      state.ui.account = 'all'; state.ui.weekOffset = 0; state.ui.dashSec = 'week';
+      save(); switchTab('dashboard'); renderAll();
+      const rows = analyzeTrades(statScoped()), mine = rows.filter(x => /^rv/.test(x.t.id));
+      const out = { flagged: mine.filter(x => x.revenge).map(x => x.t.id) };
+      const r3 = mine.find(x => x.t.id === 'rv3');
+      out.r3 = r3 && r3.revenge ? { run: r3.revenge.lossRun, x: +r3.revenge.x.toFixed(4), extra: +r3.revenge.extraLoss.toFixed(4), flag: r3.flags.includes('revengeSize') } : null;
+      const b = behaviourScore(mine);
+      out.score = { n: b.n, calm: b.parts.disc.calm, clean: b.parts.disc.clean, rules: b.parts.disc.rules, disc: b.disc, stops: b.parts.risk.stops, rev: b.revenge.length };
+      out.empty = behaviourScore([]);
+      out.calm = AN_RULES.find(r => r.k === 'calm').broke(r3);
+      const host = document.getElementById('processGrade');
+      out.panel = host ? host.innerText.replace(/\s+/g, ' ') : '';
+      out.grade = host && host.querySelector('[data-grade]') ? host.querySelector('[data-grade]').getAttribute('data-grade') : null;
+      out.bars = host ? host.querySelectorAll('[data-bscore]').length : 0;
+      return out;
+    });
+    check(JSON.stringify(v.flagged) === '["rv3"]', 'revenge-sized trades: ' + JSON.stringify(v.flagged));
+    check(v.r3 && v.r3.run === 2 && v.r3.x === 3 && v.r3.extra === -4 && v.r3.flag, 'revenge sizing on rv3: ' + JSON.stringify(v.r3));
+    check(v.calm === true, 'calm rule should count revenge sizing');
+    // rv2 and rv3 re-entered within 15 min of a loss, rv4 traded past the 2.5 daily loss limit: 1 of 4 calm.
+    // Nothing reviewed or ticked, so those checks stay out; one stop in four.
+    check(v.score.n === 4 && v.score.calm === 0.25 && v.score.clean === null && v.score.rules === null && v.score.disc === 25 && v.score.stops === 0.25 && v.score.rev === 1, 'behaviour score: ' + JSON.stringify(v.score));
+    check(v.empty.overall === null && v.empty.grade === null, 'empty week should have no grade: ' + JSON.stringify(v.empty));
+    check(/^[A-F]$/.test(v.grade || '') && v.bars === 3 && v.panel.includes('PROCESS GRADE') && v.panel.includes('XREVUSD') && v.panel.includes('3.0× size after 2 losses') && v.panel.includes('revenge-sized trade'), 'process grade panel: ' + JSON.stringify([v.grade, v.bars, v.panel.slice(0, 600)]));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'revenge sizing, behaviour score, weekly process grade');
+  errs.forEach(e => { console.log('     ' + e); failures.push('behaviour: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1974,6 +2024,7 @@ await autoKeepRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
 await cleanupRun(data);
+await behaviourRun(data);
 
 await browser.close();
 server.close();
