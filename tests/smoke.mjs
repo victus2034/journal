@@ -1750,6 +1750,63 @@ async function fibTlRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('fib/tl results: ' + e); });
 }
 
+// The Signals backtest report: drawn only once its section is open, and its
+// numbers checked against a hand-worked run of seven results.
+async function sigBacktestRun(seed) {
+  const errs = [];
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    const v = await page.evaluate(() => {
+      // In time order: +2 -1 -1 +1 | -1 +2 -1, then one never filled and one still open.
+      // Equity 2 1 0 1 0 2 1: total +1R, peak 2, deepest fall 2R, 4 alerts under the peak.
+      const rs = [2, -1, -1, 1, -1, 2, -1];
+      const sg = (i, r, extra) => Object.assign({ id: 'bt' + i, key: 'k' + i, kind: 'trendline', date: '2026-10-0' + (i + 1), time: '10:00', symbol: 'S' + i + 'USD', side: i % 2 ? 'short' : 'long', score: '',
+        market: 'CRYPTO', timeframe: i < 4 ? '4H' : '1D', channel: i < 4 ? 'CRYPTO 4H' : 'CRYPTO 1D', filled: true, outcome: r > 0 ? (r === 2 ? '+2R' : '+1R') : 'SL', resultR: r, hasReportR: true, price: 100, stop: 99, entry: 100 }, extra || {});
+      state.signals = rs.map((r, i) => sg(i, r)).concat([sg(7, null, { filled: false, outcome: '', resultR: null, date: '2026-10-08' }), sg(8, null, { outcome: 'open', resultR: null, date: '2026-10-09' })]);
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigBtDim: 'channel', sigBtSort: null });
+      switchTab('signals'); renderAll();
+      const text = id => document.getElementById(id).innerText.replace(/\s+/g, ' ');
+      const out = { lazy: [text('sigBacktest'), text('sigSetups')] };
+      setSigSec('report');
+      out.rep = text('sigBacktest');
+      out.edgeStill = text('sigSetups');
+      setSigSec('edge');
+      out.edge = text('sigSetups');
+      out.st = sigRunStats(rs);
+      setSigSec('report');
+      setSigBtSort('tot');
+      const tbls = document.querySelectorAll('#sigBacktest table'); out.firstRow = (tbls[tbls.length - 1].querySelector('tbody tr') || {}).innerText || '';
+      const said = [], realToast = toast, realUrl = URL.createObjectURL;
+      toast = m => said.push(m); URL.createObjectURL = () => 'blob:x';
+      exportSigBacktestCsv();
+      toast = realToast; URL.createObjectURL = realUrl;
+      out.said = said;
+      return out;
+    });
+    check(v.lazy[0] === '' && v.lazy[1] === '', 'hidden sections should wait until opened: ' + JSON.stringify(v.lazy));
+    check(v.edgeStill === '' && v.edge.length > 0, 'edge drawn only when opened: ' + JSON.stringify([v.edgeStill, v.edge.slice(0, 80)]));
+    const st = v.st;
+    check(st.n === 7 && st.tot === 1 && st.maxDD === 2 && st.longestDD === 4 && st.maxLs === 2 && st.maxWs === 1 && Math.abs(st.pf - 1.25) < 1e-9 && Math.abs(st.payoff - 5 / 3) < 1e-9 && st.wins === 3 && st.losses === 4, 'run stats: ' + JSON.stringify(st));
+    const has = t => v.rep.includes(t);
+    ['GRADED ALERTS 7', 'WIN RATE 43%', 'EXPECTANCY +0.14R', 'TOTAL R +1.00R', 'PROFIT FACTOR 1.25', 'AVERAGE WIN +1.67R', 'AVERAGE LOSS -1.00R', 'PAYOFF RATIO 1.67', 'MAX DRAWDOWN -2.00R longest 4 alerts', 'STREAKS 1W / 2L', 'FILL RATE 89%']
+      .forEach(t => check(has(t), 'report should show "' + t + '": ' + v.rep.slice(0, 900)));
+    check(/CRYPTO 4h 4 100% 4 50% \+0\.25R \+1\.00R 1\.50 -2\.00R/.test(v.rep) && /CRYPTO 1D 5 80% 3 33% \+0\.00R \+0\.00R 1\.00 -1\.00R/.test(v.rep), 'channel rows: ' + v.rep.slice(-700));
+    check(/^CRYPTO 4h/.test(v.firstRow.trim()), 'sorted by total R: ' + v.firstRow);
+    check(JSON.stringify(v.said) === '["Exported 9 alerts"]', 'CSV export: ' + JSON.stringify(v.said));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals backtest report: drawn when opened, numbers by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('signals backtest: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -1769,6 +1826,7 @@ await goalPctRun(data);
 await deltaShareRun(data);
 await alertRefreshRun(data);
 await fibTlRun(data);
+await sigBacktestRun(data);
 
 await browser.close();
 server.close();
