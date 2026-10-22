@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-22.121">
+  <meta name="app-version" content="2026-10-22.122">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -5673,6 +5673,35 @@
     // the CoinDCX book an uploaded report fills. A failed run leaves its reason
     // on that file (`note`), and this card shows it.
     const CDX_FILE = "cdx-api";
+    // GitHub is meant to run that import every hour, but it skips many scheduled
+    // runs (3 to 6 hours apart on 2026-10-22). So while the journal is open and the
+    // import is set up, it starts the run itself once the last one is an hour old,
+    // then syncs to pick up the new balance. The token needs Actions: Read and write
+    // for that; without it the card says so and GitHub's own schedule still runs.
+    const CDX_KICK_MS = 60 * 60e3, CDX_WORKFLOW = "/actions/workflows/coindcx.yml";
+    let cdxKickBusy = false;
+    async function cdxKick() {
+      if (cdxKickBusy || !state || document.hidden || !syncReady()) return;
+      if (!btState().files.some(x => x.id === CDX_FILE)) return;
+      if (Date.now() - (state.ui.cdxKickAt || 0) < CDX_KICK_MS) return;
+      cdxKickBusy = true;
+      try {
+        // The newest run, whoever started it (GitHub's schedule, another device, you).
+        let last = 0;
+        try {
+          const r = await syncApi(CDX_WORKFLOW + "/runs?per_page=1");
+          if (r.ok) { const run = ((await r.json()).workflow_runs || [])[0]; if (run) last = Date.parse(run.created_at) || 0; }
+        } catch (e) {}
+        if (Date.now() - last < CDX_KICK_MS) { state.ui.cdxKickAt = last; state.ui.cdxKickErr = ""; save(); return; }
+        const r = await syncApi(CDX_WORKFLOW + "/dispatches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: syncCfg().branch || "main" }) });
+        state.ui.cdxKickAt = Date.now();
+        state.ui.cdxKickErr = r.ok ? "" : String(r.status);
+        save();
+        // A run takes about 20 seconds once GitHub starts it.
+        if (r.ok) { setTimeout(syncPull, 60e3); setTimeout(syncPull, 150e3); }
+      } catch (e) { /* offline: tried again on the next check */ }
+      finally { cdxKickBusy = false; renderCdxCard(); }
+    }
     function cdxWalletTitle(w) { return "CoinDCX futures wallet, read by GitHub's hourly import" + (w.at ? "; last changed " + new Date(w.at).toLocaleString() : ""); }
     function renderCdxCard() {
       const badge = document.getElementById("cdxStatusBadge"), status = document.getElementById("cdxStatus"), steps = document.getElementById("cdxSteps");
@@ -5684,7 +5713,8 @@
       status.className = "text-[11px] leading-relaxed " + (f && f.note ? "text-rose-300" : "text-slate-300");
       status.innerText = !f ? "Nothing from CoinDCX yet. After the steps below, its trades show up here once GitHub has run and this device has synced."
         : (f.note ? "GitHub's last run failed: " + f.note + " " : "") + `${n} CoinDCX row${n === 1 ? "" : "s"} in the journal, last changed ${new Date(f.updatedAt).toLocaleString()}.`
-          + (f.wallet ? " Wallet: " + [["INR", "INR futures"], ["USD", "USDT futures"]].filter(([k]) => k in f.wallet).map(([k, label]) => money(f.wallet[k], k) + " " + label).join(" · ") + "." : "");
+          + (f.wallet ? " Wallet: " + [["INR", "INR futures"], ["USD", "USDT futures"]].filter(([k]) => k in f.wallet).map(([k, label]) => money(f.wallet[k], k) + " " + label).join(" · ") + "." : "")
+          + (f && state.ui.cdxKickErr ? " This device can't start the hourly import itself (GitHub said " + state.ui.cdxKickErr + "): give the sync token Actions: Read and write, or GitHub's own schedule runs it when it can." : f && state.ui.cdxKickAt ? " Import last run " + new Date(state.ui.cdxKickAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "; this journal starts it every hour while open." : "");
       const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">${esc(text)}</a>`;
       const gh = "https://github.com/" + repo;
       steps.innerHTML = !repo
@@ -7865,13 +7895,17 @@
     // Alerts live on each device, and used to arrive only when you pressed "Load
     // scanner alerts". A device that had not pressed it lately had no alerts for its
     // recent trades, so none of them matched. Now the journal reads the scanner's
-    // files itself when it opens and when Signals opens, at most every 15 minutes,
-    // and adds what is new. A failed read changes nothing and is tried next time.
-    const SIG_AUTO_MS = 15 * 60e3;
-    let sigAutoBusy = false;
+    // files itself when it opens, when Signals opens, when the tab comes back into
+    // view, and every 10 minutes while it stays open, and adds what is new. A failed
+    // read changes nothing and is tried again 2 minutes later.
+    const SIG_AUTO_MS = 10 * 60e3, SIG_RETRY_MS = 2 * 60e3;
+    let sigAutoBusy = false, sigAutoFailAt = 0, sigRenderLater = false;
+    // Redrawing while you type would reset the field, so new alerts wait for that.
+    function typingNow() { const a = document.activeElement; return !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)); }
     async function autoRefreshAlerts(force) {
       if (sigAutoBusy || !state) return;
       if (!force && Date.now() - (state.ui.sigAutoAt || 0) < SIG_AUTO_MS) return;
+      if (!force && Date.now() - sigAutoFailAt < SIG_RETRY_MS) return;
       sigAutoBusy = true;
       try {
         const mk = ["crypto", "nse", "all"].indexOf(state.ui.sigMkt) !== -1 ? state.ui.sigMkt : "crypto";
@@ -7903,12 +7937,24 @@
         const n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
         if (n) applyScannerPlan(plan);
         state.ui.sigAutoAt = Date.now();
+        sigAutoFailAt = 0;
         save();
-        if (n) renderAll(); else renderSigFresh();
+        if (n && typingNow()) sigRenderLater = true;
+        if (n && !sigRenderLater) renderAll(); else renderSigFresh();
       } catch (e) {
+        sigAutoFailAt = Date.now();
         renderSigFresh();
       } finally { sigAutoBusy = false; }
     }
+    // While the journal stays open: check every minute whether a read is due.
+    function autoTick() {
+      if (!state || document.hidden) return;
+      if (sigRenderLater && !typingNow()) { sigRenderLater = false; renderAll(); }
+      autoRefreshAlerts();
+      cdxKick();
+    }
+    setInterval(autoTick, 60e3);
+    document.addEventListener("visibilitychange", autoTick);
     // Under the Signals title: how current this device's alerts are.
     function renderSigFresh() {
       const el = document.getElementById('sigFresh');
@@ -7916,7 +7962,8 @@
       let last = "";
       (state.signals || []).forEach(g => { const k = (g.date || "") + " " + (g.time || ""); if (k > last) last = k; });
       const at = state.ui.sigAutoAt ? new Date(state.ui.sigAutoAt) : null;
-      el.innerText = last ? "Newest alert " + last.trim() + (at ? " · checked " + hhmm(at.getHours() * 60 + at.getMinutes()) : "") : "";
+      el.innerText = (last ? "Newest alert " + last.trim() + (at ? " · checked " + hhmm(at.getHours() * 60 + at.getMinutes()) : "") : "")
+        + (sigAutoFailAt ? (last ? " · " : "") + "couldn't reach the scanner, trying again in 2 min" : last ? " · auto every 10 min" : "");
     }
     function openScannerImport() {
       const cache = {};
@@ -9318,6 +9365,7 @@
       renderStorageUsage();
       setTimeout(syncPull, 1500);
       setTimeout(() => autoRefreshAlerts(), 2500);
+      setTimeout(cdxKick, 4000);
       // A key saved by the earlier in-page CoinDCX import (CoinDCX never answered
       // it) is not kept on this device; the key belongs in GitHub's secrets.
       if (state.coindcx) { delete state.coindcx; save(); }
