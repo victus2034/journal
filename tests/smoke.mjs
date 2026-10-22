@@ -354,7 +354,7 @@ async function backtestRun(seed) {
     await page.click('#modalSheetSaveBtn');
     await page.waitForTimeout(300);
     v = await view();
-    check(v.analysis && v.report && !v.live && v.broker === 'CoinDCX' && v.account === BOOK && v.on === 'CoinDCX', 'after import Analysis did not open on CoinDCX: ' + JSON.stringify(v));
+    check(v.analysis && v.report && v.live && v.broker === 'CoinDCX' && v.account === BOOK && v.on === 'CoinDCX' && await page.evaluate(() => anCurSec()) === 'report', 'after import Analysis did not open on CoinDCX\'s report: ' + JSON.stringify(v));
     check(v.bar.join(',') === 'All books,Test NSE,Test Crypto,CoinDCX', 'broker switch: ' + v.bar.join(','));
     const dcx = v.lines.find(l => l.startsWith('CoinDCX')) || '';
     check(dcx.includes('+₹' + EXPECTED.closedNet.toFixed(2)) && dcx.includes(`${EXPECTED.closed.length} +1 open`) && dcx.includes(`${EXPECTED.wins}/${EXPECTED.losses}`) && dcx.includes('Uploaded report'), 'CoinDCX line in results by broker: ' + dcx);
@@ -426,19 +426,23 @@ async function backtestRun(seed) {
     check(!(await page.evaluate(() => { openTrade(); const o = [...document.querySelectorAll('#mAcc option')].map(x => x.innerText).join(','); closeModalSheet(); return o; })).includes('CoinDCX'), 'trade form offers the report book');
 
     // A ledger row opens the trade's report rows in Analysis.
-    const opened = await page.evaluate(() => { const t = reportTrades().slice().sort(byWhen)[0]; openReportTrade(t); return { account: state.ui.account, sec: state.ui.btSec, open: btOpenTrade, rows: document.getElementById('btBody').innerText }; });
+    const opened = await page.evaluate(() => { const t = reportTrades().slice().sort(byWhen)[0]; openReportTrade(t); return { account: state.ui.account, sec: state.ui.anSec, open: btOpenTrade, rows: document.getElementById('btBody').innerText }; });
     check(opened.account === BOOK && opened.sec === 'trades' && opened.open && /report rows?/.test(opened.rows), 'opening a report trade from the ledger: ' + JSON.stringify(opened).slice(0, 300));
 
-    // Files moved to Sync & Settings: Analysis has no Files tab, the Data tab lists them.
-    check(!(await page.innerText('#btSecBar')).includes('Files') && !(await page.$('[data-btsec="files"]')), 'Analysis still has a Files tab');
+    // Files live in Settings → Connections: Analysis has no Files tab, the Data tab lists them.
+    // A report book has one row of sections: its Report first, then the ones every book has.
+    check((await page.innerText('#anSecBar')).replace(/\s+/g, ' ').trim() === 'Report Overview Position size Trades Market days AI review' && !(await page.$('[data-btsec]')), 'report book sections: ' + await page.innerText('#anSecBar'));
     const dataFiles = await page.evaluate(() => { switchTab('data'); return document.getElementById('btFiles').innerText; });
     check(/Delete CoinDCX's report data/.test(dataFiles) && /Remove/.test(dataFiles), 'Sync & Settings does not list the report files: ' + JSON.stringify(dataFiles.slice(0, 400)));
     await page.evaluate(() => switchTab('analysis'));
-    for (const sec of ['overview', 'trades']) {
-      await page.evaluate(k => setBtSec(k), sec);
-      check(await page.evaluate(k => { const el = document.querySelector('[data-btsec="' + k + '"]'); return !!el && !el.classList.contains('hidden') && el.offsetHeight > 0; }, sec), 'report section "' + sec + '" did not show');
+    for (const sec of ['report', 'overview', 'size', 'trades', 'market', 'ai']) {
+      await page.evaluate(k => setAnSec(k), sec);
+      check(await page.evaluate(k => { const el = document.querySelector('[data-ansec="' + k + '"]'); return !!el && !el.classList.contains('hidden') && el.offsetHeight > 0; }, sec), 'report book section "' + sec + '" did not show');
     }
-    await page.evaluate(() => setBtSec('trades'));
+    // The old section names still land in the right place.
+    check(await page.evaluate(() => { setBtSec('overview'); const a = anCurSec(); setBtSec('checks'); const b = anCurSec(); return a + ',' + b; }) === 'report,overview', 'old report section names');
+    await page.evaluate(() => setAnSec('trades'));
+    check(await page.evaluate(() => !document.getElementById('btTradesWrap').classList.contains('hidden') && document.getElementById('anAllTrades').classList.contains('hidden')), 'report book Trades: its report table, not the journal list');
     await page.click('#btBody tr[data-bttrade]');
     check(/report rows?/.test(await page.innerText('#btBody')), 'clicking a trade did not list its report rows');
     // A report trade gets its own review from its row, kept apart from the report and synced.
@@ -478,9 +482,11 @@ async function backtestRun(seed) {
     await page.evaluate(() => anBrokerPick('acct:acc_nse'));
     v = await view();
     check(v.live && !v.report && v.broker === '' && v.account === 'acc_nse' && v.on === 'Test NSE', 'picking a book: ' + JSON.stringify(v));
+    // Results by broker sits in Overview; a click on CoinDCX opens its report.
+    await page.evaluate(() => setAnSec('overview'));
     await page.click(`#anBrokers tbody tr[data-anbroker="acct:${BOOK}"]`);
     v = await view();
-    check(v.report && !v.live && v.broker === 'CoinDCX', 'clicking CoinDCX in results by broker: ' + JSON.stringify(v));
+    check(v.report && v.live && v.broker === 'CoinDCX' && await page.evaluate(() => anCurSec()) === 'report', 'clicking CoinDCX in results by broker: ' + JSON.stringify(v));
     // The Analysis period narrows the report too (the made-up report is from early 2026).
     await page.evaluate(() => { state.ui.anPeriod = '7d'; renderAnalysis(); });
     v = await view();
@@ -532,7 +538,7 @@ async function backtestRun(seed) {
     check(csv.live === seed.trades.length, 'journal trades changed after CSV import');
     check(csv.book && csv.book.market === 'nse' && csv.book.name === 'Dhan', 'Dhan book: ' + JSON.stringify(csv.book));
     v = await view();
-    check(v.report && v.broker === 'Dhan' && v.account === 'rep-dhan-inr' && v.bar.join(',') === 'All books,Test NSE,Test Crypto,CoinDCX,Dhan', 'typed broker not used: ' + JSON.stringify(v));
+    check(v.report && v.broker === 'Dhan' && v.account === 'rep-dhan-inr' && v.bar.join(',') === 'All books,Test NSE,Test Crypto,Dhan', 'typed broker not used (CoinDCX, emptied above, is off the bar like the header\'s): ' + JSON.stringify(v));
 
     // A second broker, named like a journal book: each shows only its own rows,
     // and "Delete this broker's report data" leaves the other alone.
@@ -544,7 +550,7 @@ async function backtestRun(seed) {
       ensureReportBooks(state); state.ui.allCur = 'INR'; renderAnalysis();
     });
     v = await view();
-    check(v.bar.join(',') === 'All books,Test NSE,Test Crypto,CoinDCX,Dhan,Test Crypto report,Test Crypto report INR', 'report broker named like a book, in two currencies: ' + v.bar.join(','));
+    check(v.bar.join(',') === 'All books,Test NSE,Test Crypto,Dhan,Test Crypto report,Test Crypto report INR', 'report broker named like a book, in two currencies: ' + v.bar.join(','));
     check((v.lines.find(l => l.startsWith('Dhan')) || '').includes('+₹' + EXPECTED.closedNet.toFixed(2)) && v.lines.some(l => l.startsWith('Test Crypto report USD @ ₹85 +₹425.00 1 ')) && v.lines.some(l => l.startsWith('Test Crypto report INR +₹7.00 1 ')), 'results by broker mixed brokers: ' + v.lines.join(' | '));
     check((await page.textContent('#btSub')).startsWith(`1 file · ${EXPECTED.rows} rows`), 'Dhan view counts other brokers: ' + await page.textContent('#btSub'));
     await page.evaluate(() => anBrokerPick('acct:rep-test-crypto-usd'));
@@ -1234,16 +1240,17 @@ async function cdxSizeRun(seed) {
       const flat = btSize({ closed: true, carried: false, gross: 0, legs: [{ kind: 'order', gross: 0, settle: 0, fee: 1 }, { kind: 'order', gross: 0.0000001, settle: 0, fee: 1 }] }, null, 'rep-coindcx-inr');
       const fills = btSize({ closed: true, carried: false, gross: 5, legs: [{ kind: 'order', gross: 0, settle: 0, fee: 0 }, { kind: 'order', gross: 5, settle: 0, fee: 0 }] }, { direction: 'short', entry: 2, exit: 1.9, qty: 50 }, 'rep-coindcx-inr');
       // The CoinDCX book in Analysis: Overview is the report; Size & mistakes is the journal analysis on its trades.
-      Object.assign(state.ui, { account: 'rep-coindcx-inr', allCur: 'INR', anPeriod: 'all', btSec: 'overview', btPair: 'all', anSec: 'trades' });
+      Object.assign(state.ui, { account: 'rep-coindcx-inr', allCur: 'INR', anPeriod: 'all', anSec: 'report', btPair: 'all' });
       switchTab('analysis'); renderAnalysis();
       const shown = id => !document.getElementById(id).classList.contains('hidden');
-      const overview = { live: shown('anLive'), report: shown('anReport') };
-      setBtSec('checks');
-      const checks = { live: shown('anLive'), report: shown('anReport'), bar: document.getElementById('btSecBar').innerText };
+      const sec = k => !document.querySelector('[data-ansec="' + k + '"]').classList.contains('hidden');
+      const overview = { live: shown('anLive'), report: shown('anReport'), repSec: sec('report'), ovSec: sec('overview') };
+      setAnSec('trades');
+      const checks = { live: shown('anLive'), report: shown('anReport'), bar: document.getElementById('anSecBar').innerText };
       anVisible = 99; renderAnalysis();
       const table = [...document.querySelectorAll('#anBody tr')].map(tr => [...tr.children].map(td => td.innerText.trim()));
       const rows2 = analyzeTrades(statScoped()).map(x => ({ id: x.t.symbol.split('X/')[0], side: tradeSide(x.t), before: x.before, x: x.xBal, flags: x.flags }));
-      const strip = document.getElementById('anStrip').innerText.replace(/\s+/g, ' ');
+      const strip = [...document.querySelectorAll('#anStrip > div')].map(d => d.firstElementChild.textContent + ' ' + d.querySelector('.mono-num').textContent).join(' | ');
       // The pair picked in the report narrows the analysis too.
       state.ui.btPair = 'B-LX_USDT'; renderAnalysis();
       const onePair = document.querySelectorAll('#anBody tr').length;
@@ -1263,8 +1270,8 @@ async function cdxSizeRun(seed) {
     }
     check(v.flat === null, 'two alike fees should not give a side: ' + JSON.stringify(v.flat));
     check(v.fills && v.fills.direction === 'short' && v.fills.from === 'fills' && near(v.fills.open, 100 / v.k), 'size from fills when fees are missing: ' + JSON.stringify(v.fills));
-    check(v.overview.report && !v.overview.live, 'CoinDCX overview shows the report alone: ' + JSON.stringify(v.overview));
-    check(v.checks.report && v.checks.live && /Size & mistakes/.test(v.checks.bar), 'Size & mistakes shows the analysis: ' + JSON.stringify(v.checks));
+    check(v.overview.report && v.overview.repSec && !v.overview.ovSec, 'CoinDCX opens on its report section: ' + JSON.stringify(v.overview));
+    check(v.checks.report && v.checks.live && /^Report/.test(v.checks.bar.trim()) && /Overview/.test(v.checks.bar), 'the checks run on the report book too: ' + JSON.stringify(v.checks));
     check(v.journal.live && !v.journal.report, 'journal book in Analysis: ' + JSON.stringify(v.journal));
     check(v.rows.length === 4, 'report trades analysed: ' + v.rows.length);
     for (const w of want) {
@@ -1277,7 +1284,7 @@ async function cdxSizeRun(seed) {
     const line = id => v.table.find(r => r[1] === id + 'X/USDT') || [];
     check(line('L')[2] === 'LONG' && line('S')[2] === 'SHORT' && line('U')[2] === 'REPORT', 'side column: ' + JSON.stringify(v.table.map(r => r.slice(1, 3))));
     check(line('L')[4] === '₹10,000.00' && line('U')[4] === '—' && line('U')[5] === '—', 'position column: ' + JSON.stringify(v.table.map(r => r.slice(1, 6))));
-    check(/TRADES CHECKED 4 /.test(v.strip), 'headline: ' + v.strip);
+    check(/^TRADES CHECKED 4 \|/.test(v.strip), 'headline: ' + v.strip);
     check(v.onePair === 1, 'pair filter in the analysis: ' + v.onePair + ' rows');
     check(JSON.stringify(v.sigT) === JSON.stringify({ O: ['long', '2024-12-10', '10:00'], L: ['long', '2026-09-10', '10:00'], S: ['short', '2026-09-11', '09:00'] }), 'report trades on Signals, side from fees: ' + JSON.stringify(v.sigT));
   } catch (e) {
@@ -1392,7 +1399,7 @@ async function tradingDayRun(seed) {
     v = await look();
     check(v.today === '2026-10-12' && v.lim === false && v.goalN === 1, 'after 05:30: ' + JSON.stringify(v));
     // The setting: midnight puts every trade back on its calendar day, and survives a reload.
-    await page.evaluate(() => switchTab('data'));
+    await page.evaluate(() => openSettings('books'));
     check(await page.inputValue('#dayCutoffSel') === '330', 'setting does not show 05:30: ' + await page.inputValue('#dayCutoffSel'));
     await page.selectOption('#dayCutoffSel', '0');
     v = await look();
@@ -1909,12 +1916,14 @@ async function cleanupRun(seed) {
       // Review queue: today's three are waiting; Clean and a mistake each take one off.
       const ids = () => reviewQueue().map(t => t.id);
       out.q0 = ['tf1', 'tz1', 'tq2'].filter(id => ids().includes(id));
-      out.label = dashSecList().find(x => x.k === 'week').label;
+      out.label = dashSecList().find(x => x.k === 'review').label;
       quickReview('tf1', 'clean'); quickReview('tq2', 'FOMO Entry');
       out.q1 = ['tf1', 'tz1', 'tq2'].filter(id => ids().includes(id));
       out.tags = state.trades.find(t => t.id === 'tq2').tagsMistakes;
-      state.ui.dashSec = 'week'; switchTab('dashboard'); renderAll();
-      out.panel = document.getElementById('weeklyReview').innerText.replace(/\s+/g, ' ');
+      state.ui.dashSec = 'review'; switchTab('dashboard'); renderAll();
+      out.panel = document.getElementById('reviewQueuePanel').innerText.replace(/\s+/g, ' ');
+      out.week = document.getElementById('weeklyReview').textContent.replace(/\s+/g, ' ');
+      out.shown = [...document.querySelectorAll('[data-dashsec]')].filter(el => !el.classList.contains('hidden')).map(el => el.getAttribute('data-dashsec'));
       // Inspector: setup chips and the FIB checklist with L4 ticked.
       openInspector(allTrades().find(t => t.id === 'tf1'));
       out.chips = [...document.querySelectorAll('#inspChecklist [data-setup]')].map(b => b.textContent);
@@ -1939,7 +1948,7 @@ async function cleanupRun(seed) {
     check(v.zone.stop === 51.5 && v.zone.src === null && v.zone.setup === 'Breakout', 'typed stop and setup left alone: ' + JSON.stringify(v.zone));
     check(v.q0.length === 3 && /^Review \(\d+\)$/.test(v.label), 'queue before: ' + JSON.stringify([v.q0, v.label]));
     check(JSON.stringify(v.q1) === '["tz1"]' && JSON.stringify(v.tags) === '["FOMO Entry"]', 'queue after Clean and a tag: ' + JSON.stringify([v.q1, v.tags]));
-    check(v.panel.includes('TO REVIEW') && v.panel.includes('YZONUSD') && !v.panel.includes('XFIBUSD') && v.panel.includes('WEEK SUMMARY'), 'review panel: ' + v.panel.slice(0, 400));
+    check(v.panel.includes('TO REVIEW') && v.panel.includes('YZONUSD') && !v.panel.includes('XFIBUSD') && !v.panel.includes('WEEK SUMMARY') && /week summary/i.test(v.week) && JSON.stringify(v.shown) === '["review"]', 'review panel: ' + JSON.stringify([v.panel.slice(0, 300), v.shown]));
     check(JSON.stringify(v.chips) === '["FIB","None"]', 'setup chips: ' + JSON.stringify(v.chips));
     check(v.rows.includes('✓ L4') && v.rows.includes('○ L1') && v.rTxt.includes('stop from alert'), 'inspector checklist: ' + JSON.stringify([v.rows, v.rTxt]));
     check(v.afterNone.setup === '' && v.afterNone.pr === null, 'setup cleared from the inspector: ' + JSON.stringify(v.afterNone));
@@ -2127,11 +2136,11 @@ async function aiReviewRun(seed) {
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForTimeout(300);
     // No key yet: a clear message and no call.
-    await page.evaluate(() => { state.ui.aiPeriod = '30d'; switchTab('analysis'); renderAll(); });
+    await page.evaluate(() => { state.ui.aiPeriod = '30d'; state.ui.anSec = 'ai'; switchTab('analysis'); renderAll(); });
     await page.click('#aiRunBtn');
     check(/Gemini API key/.test(await page.innerText('#aiStatus')) && !calls.length, 'no key should ask for one');
     // Save the key in Settings.
-    await page.evaluate(() => switchTab('data'));
+    await page.evaluate(() => openSettings('connect'));
     await page.fill('#aiKeyInput', 'AIzaTESTKEY');
     await page.evaluate(() => saveAiKey());
     await page.waitForTimeout(300);
@@ -2165,7 +2174,7 @@ async function aiReviewRun(seed) {
     check(deltaCalls.some(c => c === 'XAIUSD 1m') && deltaCalls.includes('BTCUSD 1m'), 'candles asked: ' + JSON.stringify(deltaCalls.slice(0, 5)));
     // Review.
     calls.length = 0; deltaCalls.length = 0;
-    await page.evaluate(() => switchTab('analysis'));
+    await page.evaluate(() => { state.ui.anSec = 'ai'; switchTab('analysis'); });
     await page.click('#aiRunBtn');
     await page.waitForFunction(() => document.querySelector('#aiResult [data-ai-sec]'), null, { timeout: 5000 });
     const body = calls[0] ? JSON.parse(calls[0].body) : {};
@@ -2189,7 +2198,7 @@ async function aiReviewRun(seed) {
     check(!thinkingShown(shown), 'thought parts must be dropped');
     // Survives a reload.
     await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(300);
-    await page.evaluate(() => switchTab('analysis'));
+    await page.evaluate(() => { state.ui.anSec = 'ai'; switchTab('analysis'); });
     check((await page.innerText('#aiResult')).includes('Breakout longs win'), 'last review should stay after reload');
     // Quota error, and the fallback model when the default is gone.
     mode = 'quota'; calls.length = 0;
@@ -2225,6 +2234,96 @@ async function aiReviewRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'AI trade review (Gemini key, prompt, pros / cons / improve)');
   errs.forEach(e => { console.log('     ' + e); failures.push('ai review: ' + e); });
 }
+
+// The reorganized layout: what sits where on each tab, and the numbers that
+// moved with it (Results by broker total, the rule count in the strip, the
+// calculator's book, chart labels over more than a year).
+async function layoutRun(seed) {
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  const s2 = JSON.parse(JSON.stringify(seed));
+  s2.accounts.push({ id: 'acc_unused', name: 'Unused', market: 'nse', currency: 'INR', startBalance: 0, updatedAt: new Date().toISOString() });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(s2));
+  const page = await ctx.newPage();
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.dismiss());
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const v = await page.evaluate(() => {
+      const out = {};
+      const shown = el => !!el && !el.closest('.hidden') && el.offsetHeight > 0;
+      // Dashboard: today first, then the goal, then the month and its numbers, then the sections.
+      state.ui.account = 'all'; state.ui.allCur = 'USD'; save(); switchTab('dashboard');
+      const kids = [...document.getElementById('view-dashboard').children];
+      const at = el => kids.indexOf(el.closest('#view-dashboard > *'));
+      out.order = [document.getElementById('riskTodayPnl'), document.getElementById('goalTitle'), document.getElementById('activeMonthTitle'), document.getElementById('kpiRibbon'), document.getElementById('dashSecBar')].map(at);
+      out.today = kids[0].textContent.replace(/\s+/g, ' ').trim().slice(0, 5);
+      out.dash = DASH_SECS.map(x => x.label).join('|');
+      // Analysis, all books: one row of sections, empty book left out, a total line.
+      state.ui.anSec = 'overview'; state.ui.anPeriod = 'all'; switchTab('analysis'); renderAll();
+      out.anSecs = [...document.querySelectorAll('#anSecBar button')].map(b => b.innerText).join('|');
+      out.bar = [...document.querySelectorAll('#anBrokerBar [data-anbroker]')].map(b => b.innerText).join('|');
+      out.lines = [...document.querySelectorAll('#anBrokers tbody tr')].map(r => r.cells[0].innerText.split(/\s/)[0] + ' ' + r.cells[2].innerText);
+      out.total = [...document.querySelectorAll('#anBrokers tfoot td')].map(td => td.innerText.trim());
+      const st = computeStats(allTrades().map(t => toView(t, 'USD')));
+      out.want = { net: signedMoney(st.net, 'USD'), n: String(st.n) };
+      out.aiShown = shown(document.getElementById('aiReviewCard'));
+      out.brokersShown = shown(document.getElementById('anBrokers'));
+      // The strip's "broke a rule" is the scorecard's count.
+      out.strip = document.querySelector('#anStrip > div').textContent.replace(/\s+/g, ' ');
+      out.score = (document.getElementById('anRules').textContent.match(/Broke at least one\S*\s*[^·]*·\s*(\d+) trades/) || [])[1];
+      setAnSec('ai'); out.aiOnly = shown(document.getElementById('aiReviewCard')) && !shown(document.getElementById('anBrokers'));
+      setAnSec('trades'); out.allTrades = { here: shown(document.getElementById('anAllTrades')), closed: !document.getElementById('anAllTrades').open };
+      // A trade a year back: the size chart keeps the year in its labels.
+      const old = Object.assign({}, state.trades[0], { id: 'old1', date: '2025-01-15', exitDate: '2025-01-15' });
+      state.trades.push(old); save(); setAnSec('size'); renderAll();
+      out.labels = typeof Chart === 'undefined' ? null : anChartInstance.data.labels.slice(0, 2);
+      state.trades = state.trades.filter(t => t.id !== 'old1'); save();
+      // Settings in three groups, Books & rules first; a link can open another.
+      switchTab('data');
+      out.set = [...document.querySelectorAll('#setSecBar button')].map(b => b.innerText).join('|');
+      out.setBooks = shown(document.getElementById('booksList')) && !shown(document.getElementById('syncRepoInput'));
+      openSettings('connect');
+      out.setConnect = shown(document.getElementById('syncRepoInput')) && shown(document.getElementById('btFiles')) && !shown(document.getElementById('booksList'));
+      openSettings('backup');
+      out.setBackup = shown(document.getElementById('storageUsage')) && !shown(document.getElementById('syncRepoInput'));
+      out.nav = document.getElementById('navTab-data').innerText;
+      // Calculator: no book picked yet, so it sizes from the header's book, then the one traded last.
+      delete state.calculatorSettings; state.ui.account = 'acc_cry'; save(); switchTab('calculator');
+      out.calcCry = { id: calcSettings().accountId, cap: calcSettings().capital, bal: +(bookBalance(acct('acc_cry')) * fxk(acct('acc_cry'), viewCur())).toFixed(2) };
+      delete state.calculatorSettings; state.ui.account = 'all'; save(); switchTab('calculator');
+      const last = allTrades().slice().sort((a, b) => -byWhen(a, b))[0];
+      out.calcAll = { id: calcSettings().accountId, want: last.accountId };
+      calcPickAccount(''); switchTab('calculator'); renderCalculator();
+      out.calcCustom = { id: calcSettings().accountId, picked: calcSettings().accountPicked };
+      // A report trade's prices come from the broker's fills, when there are any.
+      out.px = [tradePx({ rep: true, px: { entry: 0.2176, exit: 0.2144 } }, 'entry'), tradePx({ rep: true, px: { entry: 0.2176, exit: 0.2144 } }, 'exit'), tradePx({ rep: true }, 'entry'), tradePx({ entry: 5 }, 'entry')];
+      return out;
+    });
+    check(JSON.stringify(v.order) === '[0,1,2,3,4]' && v.today === 'TODAY', 'dashboard order (today, goal, month, numbers, sections): ' + JSON.stringify([v.order, v.today]));
+    check(v.dash === "Equity & calendar|Day's trades|Review|Week & grade|Time & habits", 'dashboard sections: ' + v.dash);
+    check(v.anSecs === 'Overview|Position size|Trades|Market days|AI review', 'analysis sections: ' + v.anSecs);
+    check(v.bar === 'All books|Test NSE|Test Crypto' && v.lines.join(',') === 'Test 8,Test 8', 'empty book left out of Analysis: ' + JSON.stringify([v.bar, v.lines]));
+    check(v.total[0] === 'Total' && v.total[1] === v.want.net && v.total[2] === v.want.n, 'results by broker total: ' + JSON.stringify([v.total, v.want]));
+    check(v.brokersShown && !v.aiShown && v.aiOnly, 'AI review has its own section: ' + JSON.stringify([v.brokersShown, v.aiShown, v.aiOnly]));
+    check(v.score && v.strip.includes(v.score + ' (') && v.strip.includes('broke a rule'), 'strip and scorecard agree: ' + JSON.stringify([v.strip, v.score]));
+    check(v.allTrades.here && v.allTrades.closed, 'All trades folded under Trades: ' + JSON.stringify(v.allTrades));
+    check(v.labels === null || (/^25-01-15/.test(v.labels[0]) && /^\d\d-\d\d-\d\d/.test(v.labels[1])), 'size chart labels over two years: ' + JSON.stringify(v.labels));
+    check(v.set === 'Books & rules|Connections|Backup' && v.setBooks && v.setConnect && v.setBackup && v.nav === 'Settings', 'settings groups: ' + JSON.stringify([v.set, v.setBooks, v.setConnect, v.setBackup, v.nav]));
+    check(v.calcCry.id === 'acc_cry' && Math.abs(v.calcCry.cap - v.calcCry.bal) < 0.005, 'calculator sizes from the header book: ' + JSON.stringify(v.calcCry));
+    check(v.calcAll.id === v.calcAll.want, 'calculator on All accounts uses the book traded last: ' + JSON.stringify(v.calcAll));
+    check(v.calcCustom.id === '' && v.calcCustom.picked === true, 'Custom picked by hand stays: ' + JSON.stringify(v.calcCustom));
+    check(JSON.stringify(v.px) === '["0.2176","0.2144","—",5]', 'report trade prices from fills: ' + JSON.stringify(v.px));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'layout: sections per tab, broker total, strip vs scorecard, calculator book, chart years');
+  errs.forEach(e => { console.log('     ' + e); failures.push('layout: ' + e); });
+}
 function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
 
 const data = fixture();
@@ -2252,6 +2351,7 @@ await cleanupRun(data);
 await behaviourRun(data);
 await setupLevelRun(data);
 await aiReviewRun(data);
+await layoutRun(data);
 
 await browser.close();
 server.close();

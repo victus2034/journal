@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-22.130">
+  <meta name="app-version" content="2026-10-23.131">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -82,6 +82,11 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script async onload="window.chartReady && chartReady()" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.js" integrity="sha384-zYPBGXwO4633CABX/5Spf6emCKUJCfoOkhOMYyxMsatqQZPnDblmmOewfjsIVWCM" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <style>
+    /* A small menu: its button needs no disclosure triangle. */
+    details.menu > summary { list-style: none; }
+    details.menu > summary::-webkit-details-marker { display: none; }
+    details > summary .chev { transition: transform .15s; }
+    details[open] > summary .chev { transform: rotate(90deg); }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #05080E; }
     ::-webkit-scrollbar-thumb { background: #1B283E; border-radius: 4px; }
@@ -123,7 +128,7 @@
           <button onclick="switchTab('signals')" id="navTab-signals" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Signals</button>
           <button onclick="switchTab('analysis')" id="navTab-analysis" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Analysis</button>
           <button onclick="switchTab('calculator')" id="navTab-calculator" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Calculator</button>
-          <button onclick="switchTab('data')" id="navTab-data" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Sync &amp; Settings</button>
+          <button onclick="switchTab('data')" id="navTab-data" class="px-2.5 py-1 rounded-md text-[11px] font-medium text-slate-400 hover:text-white transition-all">Settings</button>
         </nav>
 
         <button type="button" id="themeBtn" onclick="toggleTheme()" title="Switch light / dark" class="px-2 py-1.5 rounded-lg border border-terminal-border bg-black/40 text-slate-300 hover:text-white text-xs font-mono">☀</button>
@@ -155,32 +160,32 @@
     
     <!-- DASHBOARD VIEW -->
     <div id="view-dashboard" class="space-y-4">
-      
-      <!-- Active Month Header Strip -->
-      <div class="bg-gradient-to-r from-[#0C121E] via-terminal-card to-[#090F1A] border border-terminal-border rounded-xl px-4 py-3 shadow-subtle flex flex-wrap items-center justify-between gap-3">
-        <div class="flex items-center gap-3">
-          <div class="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      <!-- Today: the day's P&L against its limits, first thing on the page -->
+      <div class="bg-[#090E17] border border-terminal-border rounded-lg px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+        <div class="flex items-center gap-2 text-slate-400 font-semibold uppercase text-[10px] tracking-wider">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span>TODAY</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-4 sm:gap-8">
+          <div>
+            <span class="text-slate-500 text-[10px] block" id="riskStatusDateLabel">TODAY'S P&amp;L</span>
+            <span id="riskTodayPnl" class="text-slate-200 font-bold">$0.00</span>
           </div>
           <div>
-            <div class="flex items-center gap-2">
-              <span id="activeMonthTitle" class="text-sm sm:text-base font-bold text-white font-mono">September 2026</span>
-              <span id="activeTradesCountBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">19 trades</span>
-              <span id="activeMonthStatusBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">Behind</span>
-              <button type="button" id="dupWarn" onclick="removeDuplicateTrades()" class="hidden text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25"></button>
-            </div>
-            <div class="text-xs text-slate-400 mt-0.5 font-mono">
-              Net P&amp;L: <span id="activePnlDeltaText" class="font-bold text-slate-200">—</span> • <span id="monthDaysRemainingText"></span>
-            </div>
+            <span class="text-slate-500 text-[10px] block">RISK USED</span>
+            <span id="riskPctUsed" class="text-slate-200 font-bold">0.0% <span class="text-slate-500 text-[10px]">/ 1.5% max</span></span>
+          </div>
+          <div>
+            <span class="text-slate-500 text-[10px] block">TRADES TODAY</span>
+            <span id="riskTradesToday" class="text-amber-400 font-bold">0 trades</span>
+          </div>
+          <div>
+            <span class="text-slate-500 text-[10px] block">DAILY MAX LOSS</span>
+            <span id="riskDailyMaxLoss" class="text-slate-200 font-bold">$5.00</span>
           </div>
         </div>
-
-        <div class="flex items-center gap-2">
-          <select id="fMonth" onchange="onMonthFilterChange()" class="bg-black/50 border border-terminal-border text-xs px-2.5 py-1.5 rounded-lg text-slate-300 font-mono focus:outline-none">
-            <!-- Dynamic months -->
-          </select>
-        </div>
       </div>
+
 
       <!-- Goal -->
       <section class="bg-gradient-to-br from-terminal-card to-[#0A0F1A] border border-terminal-border hover:border-amber-500/40 rounded-xl p-5 shadow-subtle transition-all font-mono">
@@ -232,34 +237,34 @@
         </div>
       </section>
 
+      <!-- The month: its headline and the numbers under it -->
+      <div class="bg-gradient-to-r from-[#0C121E] via-terminal-card to-[#090F1A] border border-terminal-border rounded-xl px-4 py-3 shadow-subtle flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <div class="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span id="activeMonthTitle" class="text-sm sm:text-base font-bold text-white font-mono">September 2026</span>
+              <span id="activeTradesCountBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">19 trades</span>
+              <span id="activeMonthStatusBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">Behind</span>
+              <button type="button" id="dupWarn" onclick="removeDuplicateTrades()" class="hidden text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25"></button>
+            </div>
+            <div class="text-xs text-slate-400 mt-0.5 font-mono">
+              Net P&amp;L: <span id="activePnlDeltaText" class="font-bold text-slate-200">—</span> • <span id="monthDaysRemainingText"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <select id="fMonth" onchange="onMonthFilterChange()" class="bg-black/50 border border-terminal-border text-xs px-2.5 py-1.5 rounded-lg text-slate-300 font-mono focus:outline-none">
+            <!-- Dynamic months -->
+          </select>
+        </div>
+      </div>
       <!-- 8 Executive KPI Cards -->
       <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="kpiRibbon"></section>
 
-      <!-- Risk Status Strip -->
-      <div class="bg-[#090E17] border border-terminal-border rounded-lg px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
-        <div class="flex items-center gap-2 text-slate-400 font-semibold uppercase text-[10px] tracking-wider">
-          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-          <span>RISK STATUS</span>
-        </div>
-        <div class="flex flex-wrap items-center gap-4 sm:gap-8">
-          <div>
-            <span class="text-slate-500 text-[10px] block" id="riskStatusDateLabel">TODAY'S P&amp;L</span>
-            <span id="riskTodayPnl" class="text-slate-200 font-bold">$0.00</span>
-          </div>
-          <div>
-            <span class="text-slate-500 text-[10px] block">RISK USED</span>
-            <span id="riskPctUsed" class="text-slate-200 font-bold">0.0% <span class="text-slate-500 text-[10px]">/ 1.5% max</span></span>
-          </div>
-          <div>
-            <span class="text-slate-500 text-[10px] block">TRADES TODAY</span>
-            <span id="riskTradesToday" class="text-amber-400 font-bold">0 executions</span>
-          </div>
-          <div>
-            <span class="text-slate-500 text-[10px] block">DAILY MAX LOSS</span>
-            <span id="riskDailyMaxLoss" class="text-slate-200 font-bold">$5.00</span>
-          </div>
-        </div>
-      </div>
 
       <!-- Sections -->
       <div id="dashSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
@@ -328,6 +333,8 @@
             </div>
           </div>
       </section>
+
+      <section data-dashsec="review" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle font-mono text-xs" id="reviewQueuePanel"></section>
 
       <section data-dashsec="week" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle font-mono text-xs" id="weeklyReview"></section>
 
@@ -447,9 +454,15 @@
           <p id="sigFresh" class="text-[10px] text-slate-500 font-mono"></p>
         </div>
           <div class="flex flex-wrap items-center gap-2">
-            <button onclick="openSignalImport()" class="px-2.5 py-1 text-xs font-mono bg-terminal-surface border border-terminal-border rounded hover:border-amber-500">Paste signals</button>
             <button onclick="openScannerImport()" class="px-2.5 py-1 text-xs font-mono bg-amber-500 text-black font-bold rounded">Load scanner alerts</button>
-            <button onclick="deleteAllSignals()" class="px-2.5 py-1 text-xs font-mono text-rose-400 border border-rose-500/30 rounded hover:bg-rose-500/10">Delete all signals</button>
+            <!-- Rarely needed: kept one tap away so Delete isn't next to Load -->
+            <details class="relative menu">
+              <summary class="px-2.5 py-1 text-xs font-mono bg-terminal-surface border border-terminal-border rounded hover:border-amber-500 cursor-pointer select-none text-slate-300">More ▾</summary>
+              <div class="absolute right-0 z-40 mt-1 w-44 bg-terminal-card border border-terminal-border rounded-lg p-1 flex flex-col gap-1 shadow-subtle">
+                <button onclick="this.closest('details').open=false;openSignalImport()" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Paste signals</button>
+                <button onclick="this.closest('details').open=false;deleteAllSignals()" class="px-2.5 py-1.5 text-xs font-mono text-left text-rose-400 rounded hover:bg-rose-500/10">Delete all signals</button>
+              </div>
+            </details>
           </div>
       </div>
 
@@ -601,7 +614,7 @@
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Account</span>
-          <select id="calcAccount" onchange="calcApplyAccount(this.value)" title="Fill the calculator from this account" class="min-w-[220px] bg-[#070A11] border border-terminal-border px-2.5 py-1.5 rounded-lg text-slate-200 text-[11px] focus:outline-none focus:border-amber-500"></select>
+          <select id="calcAccount" onchange="calcPickAccount(this.value)" title="Fill the calculator from this account" class="min-w-[220px] bg-[#070A11] border border-terminal-border px-2.5 py-1.5 rounded-lg text-slate-200 text-[11px] focus:outline-none focus:border-amber-500"></select>
         </div>
       </div>
 
@@ -887,29 +900,7 @@
         </details>
       </div>
 
-      <!-- AI review: the period's trades from every book, sent to Gemini with the key saved on this device -->
-      <div id="aiReviewCard" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h3 class="text-sm font-bold text-white uppercase tracking-wider">AI Trade Review</h3>
-            <p class="text-slate-400 text-[11px] mt-0.5">Gemini checks every trade (CoinDCX too), the price around it, your trailing SL and your VAS alerts, then gives short, direct feedback.</p>
-          </div>
-          <div class="flex flex-wrap gap-2">
-            <button type="button" id="aiRunBtn" onclick="runAiReview()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Review my trades</button>
-            <button type="button" onclick="copyAiPrompt()" title="Copy the trades and the question, to paste into the Gemini app yourself" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-amber-500">Copy for Gemini app</button>
-          </div>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Period</span>
-          <div id="aiPeriodBar" class="flex flex-wrap gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
-          <span id="aiCount" class="text-slate-500 text-[11px]"></span>
-        </div>
-        <div id="aiStatus" class="text-[11px] text-slate-400"></div>
-        <div id="aiResult"></div>
-      </div>
 
-      <!-- One line per broker: journal books and uploaded broker reports -->
-      <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
 
       <div id="anReport" class="hidden space-y-4">
         <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-2">
@@ -923,15 +914,23 @@
         <div id="btEmpty" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-6 font-mono text-xs text-center space-y-2">
           <p class="text-slate-200 font-bold">No trades in this report yet</p>
           <p class="text-slate-400 text-[11px] leading-relaxed">Upload an Excel (.xlsx) or CSV trade report. It needs a header row with a time column, a pair or symbol column and a P&amp;L column; fee, funding type and transaction ID columns are used when present. Uploading the same report twice adds nothing twice.</p>
-          <p class="text-slate-500 text-[11px]">Upload or remove report files in <button type="button" onclick="switchTab('data')" class="text-amber-300 hover:text-amber-200 underline">Sync &amp; Settings → Broker Report Files</button>.</p>
+          <p class="text-slate-500 text-[11px]">Upload or remove report files in <button type="button" onclick="openSettings('connect')" class="text-amber-300 hover:text-amber-200 underline">Settings → Connections → Broker Report Files</button>.</p>
         </div>
 
         <div id="btMain" class="space-y-4">
           <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="btStrip"></section>
           <div id="btCheck" class="font-mono text-[11px]"></div>
-          <div id="btSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
 
-          <section data-btsec="overview" class="space-y-4">
+
+        </div>
+      </div>
+
+      <div id="anLive" class="space-y-4">
+
+      <!-- Sections -->
+      <div id="anSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+
+          <section data-ansec="report" class="space-y-4 hidden">
             <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
               <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
                 <h3 class="font-bold text-white uppercase tracking-wider">Equity curve</h3>
@@ -953,46 +952,10 @@
             </div>
           </section>
 
-          <section data-btsec="trades" class="space-y-4 hidden">
-            <div class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs">
-              <div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-terminal-border">
-                <h3 class="font-bold text-white uppercase tracking-wider">Trade by trade</h3>
-                <span class="text-slate-500 text-[11px]">Newest first. Click a trade to see its report rows.</span>
-              </div>
-              <div class="overflow-x-auto">
-                <table class="w-full text-left text-xs font-mono">
-                  <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border">
-                    <tr>
-                      <th class="py-2.5 px-3">Opened</th>
-                      <th class="py-2.5 px-3">Pair</th>
-                      <th class="py-2.5 px-3 text-right">Net P&amp;L</th>
-                      <th class="py-2.5 px-3">Closed</th>
-                      <th class="py-2.5 px-3 text-right">Held</th>
-                      <th class="py-2.5 px-3 text-right">Gross</th>
-                      <th class="py-2.5 px-3 text-right">Fees</th>
-                      <th class="py-2.5 px-3 text-right">Funding</th>
-                      <th class="py-2.5 px-3">Status</th>
-                      <th class="py-2.5 px-3">Review</th>
-                    </tr>
-                  </thead>
-                  <tbody id="btBody" class="text-slate-300"></tbody>
-                </table>
-              </div>
-              <div id="btMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
-            </div>
-          </section>
-
-        </div>
-      </div>
-
-      <div id="anLive" class="space-y-4">
-      <!-- Headline numbers -->
-      <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="anStrip"></section>
-
-      <!-- Sections -->
-      <div id="anSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
-
       <section data-ansec="overview" class="space-y-4">
+        <!-- One line per broker: journal books and uploaded broker reports -->
+        <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
+        <section class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 font-mono" id="anStrip"></section>
         <div id="anRules" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
           <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
@@ -1019,6 +982,34 @@
       </section>
 
       <section data-ansec="trades" class="space-y-4 hidden">
+        <div id="btTradesWrap" class="hidden">
+            <div class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs">
+              <div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-terminal-border">
+                <h3 class="font-bold text-white uppercase tracking-wider">Report trades</h3>
+                <span class="text-slate-500 text-[11px]">As the broker reports them, newest first. Click a trade to see its report rows.</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs font-mono">
+                  <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border">
+                    <tr>
+                      <th class="py-2.5 px-3">Opened</th>
+                      <th class="py-2.5 px-3">Pair</th>
+                      <th class="py-2.5 px-3 text-right">Net P&amp;L</th>
+                      <th class="py-2.5 px-3">Closed</th>
+                      <th class="py-2.5 px-3 text-right">Held</th>
+                      <th class="py-2.5 px-3 text-right">Gross</th>
+                      <th class="py-2.5 px-3 text-right">Fees</th>
+                      <th class="py-2.5 px-3 text-right">Funding</th>
+                      <th class="py-2.5 px-3">Status</th>
+                      <th class="py-2.5 px-3">Review</th>
+                    </tr>
+                  </thead>
+                  <tbody id="btBody" class="text-slate-300"></tbody>
+                </table>
+              </div>
+              <div id="btMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
+            </div>
+          </div>
         <div class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs">
           <div class="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-terminal-border">
             <h3 class="font-bold text-white uppercase tracking-wider">Trade by trade</h3>
@@ -1045,14 +1036,14 @@
           </div>
           <div id="anMoreBar" class="flex flex-wrap items-center justify-center gap-3 py-3 border-t border-terminal-border"></div>
         </div>
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle space-y-3">
-          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-terminal-border pb-3">
+        <details id="anAllTrades" class="bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle">
+          <summary class="flex flex-wrap items-center justify-between gap-3 cursor-pointer select-none">
             <div>
-              <h2 class="text-sm font-bold text-white uppercase font-mono tracking-wider">All Trades</h2>
-              <p class="text-xs text-slate-400 font-mono">Every recorded execution, newest first. Click Edit to change one.</p>
+              <h2 class="inline text-sm font-bold text-white uppercase font-mono tracking-wider"><span class="chev inline-block text-amber-400">▸</span> All trades: prices, quantities, edit</h2>
+              <p class="text-xs text-slate-400 font-mono">Every recorded execution, newest first, with entry, exit and quantity. Click to open; Edit changes one.</p>
             </div>
             <span id="journalTotalBadge" class="text-xs font-mono px-2.5 py-1 rounded bg-slate-800 text-amber-300 border border-slate-700"></span>
-          </div>
+          </summary>
 
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs font-mono">
@@ -1074,11 +1065,34 @@
             </table>
           </div>
           <div id="journalMoreBar" class="flex flex-wrap items-center justify-center gap-3 pt-3 border-t border-terminal-border"></div>
-        </div>
+        </details>
       </section>
 
       <section data-ansec="market" class="space-y-4 hidden">
         <div class="bg-terminal-card border border-terminal-border rounded-xl p-4" id="mktCalAnalysis"></div>
+      </section>
+
+      <section data-ansec="ai" class="space-y-4 hidden">
+        <!-- AI review: the period's trades from every book, sent to Gemini with the key saved on this device -->
+        <div id="aiReviewCard" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 class="text-sm font-bold text-white uppercase tracking-wider">AI Trade Review</h3>
+            <p class="text-slate-400 text-[11px] mt-0.5">Gemini checks every trade (CoinDCX too), the price around it, your trailing SL and your VAS alerts, then gives short, direct feedback.</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" id="aiRunBtn" onclick="runAiReview()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Review my trades</button>
+            <button type="button" onclick="copyAiPrompt()" title="Copy the trades and the question, to paste into the Gemini app yourself" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-amber-500">Copy for Gemini app</button>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Period</span>
+          <div id="aiPeriodBar" class="flex flex-wrap gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
+          <span id="aiCount" class="text-slate-500 text-[11px]"></span>
+        </div>
+        <div id="aiStatus" class="text-[11px] text-slate-400"></div>
+        <div id="aiResult"></div>
+      </div>
       </section>
       </div>
 
@@ -1088,195 +1102,207 @@
 
     <!-- TAB: DATA & SYSTEM -->
     <div id="view-data" class="hidden space-y-4 pb-16">
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <!-- Three groups: what the books and rules are, where data comes from, and backups -->
+      <div id="setSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+
+      <section data-setsec="books" class="space-y-4">
+        <!-- Trading books: balance and limits -->
+        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+          <div class="flex items-center justify-between border-b border-terminal-border pb-2">
+            <h3 class="font-bold text-white uppercase tracking-wider">Trading Books</h3>
+            <!-- Trades come in from Delta and CoinDCX; this is for one their APIs don't cover. -->
+            <button type="button" id="manualLogBtn" onclick="openTrade(null)" title="Log a trade by hand (one Delta or CoinDCX doesn't bring in)" class="text-[11px] text-slate-400 hover:text-amber-300">+ Log trade by hand</button>
+          </div>
+          <p class="text-slate-400 text-[11px] leading-relaxed">Each book's balance and daily loss limit. The limit drives the breach counter and the red day markers.</p>
+          <div id="booksList" class="space-y-2"></div>
+        </div>
+
+        <!-- Setup Playbook -->
+        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+          <div class="flex items-center justify-between border-b border-terminal-border pb-2">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <h3 class="font-bold text-white uppercase tracking-wider">Setup playbook</h3>
+            </div>
+            <button onclick="openPlay(null)" class="px-2.5 py-1 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">+ Add setup</button>
+          </div>
+          <p class="text-slate-400 text-[11px] leading-relaxed">Rules for each setup. Pick the setup when you log a trade and its checklist shows up; the win rate below compares trades that kept every rule with trades that broke one. A levels setup (FIB, TRENDLINE) shows each level's win rate instead. Trades are filled in from the scanner's fib and trendline alerts on their own: the setup and the level the entry was at. Anything you pick by hand stays.</p>
+          <div id="playbookList" class="space-y-2"></div>
+        </div>
+
+
+        <!-- Trading Day -->
+        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+          <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Trading Day</h3>
+          <p class="text-slate-400 text-[11px] leading-relaxed">A new trading day starts at this time, not at midnight. 05:30 IST is 00:00 UTC, when exchanges reset their day. A trade before it counts for the day before on the dashboard, calendar, daily limits, goals and Analysis. Each trade keeps its real date and time. Saved on this device.</p>
+          <label class="flex flex-wrap items-center gap-2 text-slate-300">New day starts at
+            <select id="dayCutoffSel" onchange="setDayCutoff(this.value)" class="bg-[#080D15] border border-terminal-border p-1.5 rounded text-white">
+                <option value="0">Midnight (00:00)</option>
+                <option value="60">01:00</option>
+                <option value="120">02:00</option>
+                <option value="180">03:00</option>
+                <option value="240">04:00</option>
+                <option value="300">05:00</option>
+                <option value="330">05:30 (default, 00:00 UTC)</option>
+                <option value="360">06:00</option>
+                <option value="420">07:00</option>
+            </select>
+          </label>
+        </div>
+
+      </section>
+
+      <section data-setsec="connect" class="space-y-4 hidden">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         
-        <!-- GitHub Sync Configuration -->
+          <!-- GitHub Sync Configuration -->
+          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+            <div class="flex items-center justify-between border-b border-terminal-border pb-2">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                <h3 class="font-bold text-white uppercase tracking-wider">GitHub Private Repository Sync</h3>
+              </div>
+              <span id="syncStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Checking...</span>
+            </div>
+            <p class="text-slate-400 text-[11px] leading-relaxed">
+              Syncs your journal file (<code class="text-amber-300">journal.json</code>) securely to your private repo across your devices.
+            </p>
+
+            <div class="space-y-2.5">
+              <div>
+                <label class="text-slate-400 block mb-1">Repository Name</label>
+                <input type="text" id="syncRepoInput" placeholder="victus2034/trading-journal" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Branch</label>
+                <input type="text" id="syncBranchInput" value="main" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Fine-Grained Personal Access Token (PAT)</label>
+                <input type="password" id="syncTokenInput" placeholder="github_pat_..." class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+              </div>
+              <label class="flex items-center gap-2 text-slate-300 cursor-pointer pt-1">
+                <input type="checkbox" id="syncAutoCheckbox" class="rounded accent-amber-500">
+                <span>Automatically sync after every recorded trade</span>
+              </label>
+            </div>
+
+            <div class="flex gap-2 pt-2 border-t border-terminal-border">
+              <button onclick="saveSyncSettings()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Save &amp; Connect</button>
+              <button onclick="syncNow()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-amber-500">Sync Now</button>
+              <button onclick="disconnectSync()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Disconnect</button>
+            </div>
+          </div>
+
+          <!-- Delta Exchange Auto-Import -->
+          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+            <div class="flex items-center justify-between border-b border-terminal-border pb-2">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+                <h3 class="font-bold text-white uppercase tracking-wider">Delta Exchange Auto-Import</h3>
+              </div>
+              <span id="deltaStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Disconnected</span>
+            </div>
+            <p class="text-slate-400 text-[11px] leading-relaxed">
+              Pulls live crypto fills automatically using cryptographic HMAC-SHA256 signatures directly on your device.
+            </p>
+
+            <div class="space-y-2.5">
+              <div>
+                <label class="text-slate-400 block mb-1">API Key (Read Data only)</label>
+                <input type="text" id="deltaKeyInput" autocomplete="off" spellcheck="false" placeholder="Paste Delta API Key" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">API Secret</label>
+                <input type="password" id="deltaSecretInput" autocomplete="off" placeholder="Paste Delta API Secret" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+              </div>
+            </div>
+
+            <div class="flex gap-2 pt-2 border-t border-terminal-border">
+              <button onclick="saveDeltaSettings()" class="px-3 py-1.5 bg-cyan-500 text-black font-bold rounded hover:bg-cyan-400">Test &amp; Connect</button>
+              <button onclick="deltaSyncNow()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Now</button>
+              <button onclick="deltaFullReimport()" title="Fetch all available Delta history again. Trades already in the journal are skipped, not duplicated." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Full History</button>
+              <button onclick="undoDeltaFills()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Undo Delta Trades</button>
+            </div>
+          </div>
+
+          <!-- CoinDCX Futures Import -->
+          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+            <div class="flex items-center justify-between border-b border-terminal-border pb-2">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-violet-500"></span>
+                <h3 class="font-bold text-white uppercase tracking-wider">CoinDCX Futures Import</h3>
+              </div>
+              <span id="cdxStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Not set up</span>
+            </div>
+            <p id="cdxStatus" class="text-slate-300 text-[11px] leading-relaxed"></p>
+            <p class="text-slate-400 text-[11px] leading-relaxed">
+              CoinDCX doesn't answer web pages, so GitHub reads it for you: every hour a job in your sync repo signs in with your key and adds new futures transactions (INR and USDT margined) to the journal file. They arrive with the next sync, in the CoinDCX book an uploaded report fills; rows a report already has count once.
+            </p>
+            <div id="cdxSteps" class="space-y-2 text-[11px] leading-relaxed text-slate-300"></div>
+            <p class="text-amber-300 text-[11px] leading-relaxed">
+              CoinDCX has no read-only keys, so this key can also place orders. Make a separate key just for the journal, keep it only in GitHub's secrets, and don't bind it to an IP address: GitHub's servers change address.
+            </p>
+          </div>
+
+          <!-- AI review: Gemini key, kept in this browser only -->
+          <div id="aiKeyCard" class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
+            <div class="flex items-center justify-between border-b border-terminal-border pb-2">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-sky-400"></span>
+                <h3 class="font-bold text-white uppercase tracking-wider">AI Review (Gemini)</h3>
+              </div>
+              <span id="aiKeyBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">No key</span>
+            </div>
+            <p class="text-slate-400 text-[11px] leading-relaxed">
+              Get a free API key at <span class="text-amber-300">aistudio.google.com</span> → Get API key. It stays in this browser only: it is never synced to GitHub or put in backups. A review sends that period's trades (not your keys) to Google.
+            </p>
+            <div class="space-y-2.5">
+              <div>
+                <label class="text-slate-400 block mb-1">Gemini API key</label>
+                <input type="password" id="aiKeyInput" autocomplete="off" spellcheck="false" placeholder="AIza..." class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">Model</label>
+                <input type="text" id="aiModelInput" autocomplete="off" spellcheck="false" placeholder="gemini-2.5-flash" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+              </div>
+            </div>
+            <div class="flex gap-2 pt-2 border-t border-terminal-border">
+              <button type="button" onclick="saveAiKey()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Save &amp; Test</button>
+              <button type="button" onclick="removeAiKey()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Remove key</button>
+            </div>
+          </div>
+
+        </div>
+
+
+        <!-- Broker report files: every upload (and the CoinDCX API import), by broker -->
+        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs" id="repFilesCard">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
+            <h3 class="font-bold text-white uppercase tracking-wider">Broker Report Files</h3>
+            <button onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX. Its trades go into a book for that broker and count on the Dashboard." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Upload Broker Report (.XLSX / .CSV)</button>
+          </div>
+          <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
+          <div id="btFiles" class="space-y-3"></div>
+        </div>
+
+      </section>
+
+      <section data-setsec="backup" class="space-y-4 hidden">
+        <!-- Backup & Restore Panel -->
         <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-          <div class="flex items-center justify-between border-b border-terminal-border pb-2">
-            <div class="flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-              <h3 class="font-bold text-white uppercase tracking-wider">GitHub Private Repository Sync</h3>
-            </div>
-            <span id="syncStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Checking...</span>
+          <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Manual Data Backup &amp; Recovery</h3>
+          <div class="flex flex-wrap gap-2">
+            <button onclick="downloadBackupFile()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Save Backup File (.JSON)</button>
+            <button onclick="exportTradesCsv()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Export Trades (.CSV)</button>
+            <button onclick="triggerRestoreFileInput()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Open Backup File</button>
+            <input type="file" id="restoreFileInput" accept=".json" class="hidden" onchange="handleRestoreFile(this)">
+            <button onclick="copyBackupToClipboard()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Copy Backup to Clipboard</button>
+            <button onclick="openWipeModal()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded ml-auto">Purge Data</button>
           </div>
-          <p class="text-slate-400 text-[11px] leading-relaxed">
-            Syncs your journal file (<code class="text-amber-300">journal.json</code>) securely to your private repo across your devices.
-          </p>
-
-          <div class="space-y-2.5">
-            <div>
-              <label class="text-slate-400 block mb-1">Repository Name</label>
-              <input type="text" id="syncRepoInput" placeholder="victus2034/trading-journal" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-            </div>
-            <div>
-              <label class="text-slate-400 block mb-1">Branch</label>
-              <input type="text" id="syncBranchInput" value="main" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-            </div>
-            <div>
-              <label class="text-slate-400 block mb-1">Fine-Grained Personal Access Token (PAT)</label>
-              <input type="password" id="syncTokenInput" placeholder="github_pat_..." class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-            </div>
-            <label class="flex items-center gap-2 text-slate-300 cursor-pointer pt-1">
-              <input type="checkbox" id="syncAutoCheckbox" class="rounded accent-amber-500">
-              <span>Automatically sync after every recorded trade</span>
-            </label>
-          </div>
-
-          <div class="flex gap-2 pt-2 border-t border-terminal-border">
-            <button onclick="saveSyncSettings()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Save &amp; Connect</button>
-            <button onclick="syncNow()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-amber-500">Sync Now</button>
-            <button onclick="disconnectSync()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Disconnect</button>
-          </div>
+          <p id="storageUsage" class="text-[10px] text-slate-500"></p>
         </div>
-
-        <!-- AI review: Gemini key, kept in this browser only -->
-        <div id="aiKeyCard" class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-          <div class="flex items-center justify-between border-b border-terminal-border pb-2">
-            <div class="flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-sky-400"></span>
-              <h3 class="font-bold text-white uppercase tracking-wider">AI Review (Gemini)</h3>
-            </div>
-            <span id="aiKeyBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">No key</span>
-          </div>
-          <p class="text-slate-400 text-[11px] leading-relaxed">
-            Get a free API key at <span class="text-amber-300">aistudio.google.com</span> → Get API key. It stays in this browser only: it is never synced to GitHub or put in backups. A review sends that period's trades (not your keys) to Google.
-          </p>
-          <div class="space-y-2.5">
-            <div>
-              <label class="text-slate-400 block mb-1">Gemini API key</label>
-              <input type="password" id="aiKeyInput" autocomplete="off" spellcheck="false" placeholder="AIza..." class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-            </div>
-            <div>
-              <label class="text-slate-400 block mb-1">Model</label>
-              <input type="text" id="aiModelInput" autocomplete="off" spellcheck="false" placeholder="gemini-2.5-flash" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-            </div>
-          </div>
-          <div class="flex gap-2 pt-2 border-t border-terminal-border">
-            <button type="button" onclick="saveAiKey()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Save &amp; Test</button>
-            <button type="button" onclick="removeAiKey()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Remove key</button>
-          </div>
-        </div>
-
-        <!-- Delta Exchange Auto-Import -->
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-          <div class="flex items-center justify-between border-b border-terminal-border pb-2">
-            <div class="flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
-              <h3 class="font-bold text-white uppercase tracking-wider">Delta Exchange Auto-Import</h3>
-            </div>
-            <span id="deltaStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Disconnected</span>
-          </div>
-          <p class="text-slate-400 text-[11px] leading-relaxed">
-            Pulls live crypto fills automatically using cryptographic HMAC-SHA256 signatures directly on your device.
-          </p>
-
-          <div class="space-y-2.5">
-            <div>
-              <label class="text-slate-400 block mb-1">API Key (Read Data only)</label>
-              <input type="text" id="deltaKeyInput" autocomplete="off" spellcheck="false" placeholder="Paste Delta API Key" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-            </div>
-            <div>
-              <label class="text-slate-400 block mb-1">API Secret</label>
-              <input type="password" id="deltaSecretInput" autocomplete="off" placeholder="Paste Delta API Secret" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-            </div>
-          </div>
-
-          <div class="flex gap-2 pt-2 border-t border-terminal-border">
-            <button onclick="saveDeltaSettings()" class="px-3 py-1.5 bg-cyan-500 text-black font-bold rounded hover:bg-cyan-400">Test &amp; Connect</button>
-            <button onclick="deltaSyncNow()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Now</button>
-            <button onclick="deltaFullReimport()" title="Fetch all available Delta history again. Trades already in the journal are skipped, not duplicated." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Full History</button>
-            <button onclick="undoDeltaFills()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Undo Delta Trades</button>
-          </div>
-        </div>
-
-        <!-- CoinDCX Futures Import -->
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-          <div class="flex items-center justify-between border-b border-terminal-border pb-2">
-            <div class="flex items-center gap-2">
-              <span class="w-2 h-2 rounded-full bg-violet-500"></span>
-              <h3 class="font-bold text-white uppercase tracking-wider">CoinDCX Futures Import</h3>
-            </div>
-            <span id="cdxStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Not set up</span>
-          </div>
-          <p id="cdxStatus" class="text-slate-300 text-[11px] leading-relaxed"></p>
-          <p class="text-slate-400 text-[11px] leading-relaxed">
-            CoinDCX doesn't answer web pages, so GitHub reads it for you: every hour a job in your sync repo signs in with your key and adds new futures transactions (INR and USDT margined) to the journal file. They arrive with the next sync, in the CoinDCX book an uploaded report fills; rows a report already has count once.
-          </p>
-          <div id="cdxSteps" class="space-y-2 text-[11px] leading-relaxed text-slate-300"></div>
-          <p class="text-amber-300 text-[11px] leading-relaxed">
-            CoinDCX has no read-only keys, so this key can also place orders. Make a separate key just for the journal, keep it only in GitHub's secrets, and don't bind it to an IP address: GitHub's servers change address.
-          </p>
-        </div>
-
-      </div>
-
-      <!-- Trading books: balance and limits -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-        <div class="flex items-center justify-between border-b border-terminal-border pb-2">
-          <h3 class="font-bold text-white uppercase tracking-wider">Trading Books</h3>
-          <!-- Trades come in from Delta and CoinDCX; this is for one their APIs don't cover. -->
-          <button type="button" id="manualLogBtn" onclick="openTrade(null)" title="Log a trade by hand (one Delta or CoinDCX doesn't bring in)" class="text-[11px] text-slate-400 hover:text-amber-300">+ Log trade by hand</button>
-        </div>
-        <p class="text-slate-400 text-[11px] leading-relaxed">Each book's balance and daily loss limit. The limit drives the breach counter and the red day markers.</p>
-        <div id="booksList" class="space-y-2"></div>
-      </div>
-
-      <!-- Setup Playbook -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-        <div class="flex items-center justify-between border-b border-terminal-border pb-2">
-          <div class="flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <h3 class="font-bold text-white uppercase tracking-wider">Setup playbook</h3>
-          </div>
-          <button onclick="openPlay(null)" class="px-2.5 py-1 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">+ Add setup</button>
-        </div>
-        <p class="text-slate-400 text-[11px] leading-relaxed">Rules for each setup. Pick the setup when you log a trade and its checklist shows up; the win rate below compares trades that kept every rule with trades that broke one. A levels setup (FIB, TRENDLINE) shows each level's win rate instead. Trades are filled in from the scanner's fib and trendline alerts on their own: the setup and the level the entry was at. Anything you pick by hand stays.</p>
-        <div id="playbookList" class="space-y-2"></div>
-      </div>
-
-
-      <!-- Trading Day -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-        <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Trading Day</h3>
-        <p class="text-slate-400 text-[11px] leading-relaxed">A new trading day starts at this time, not at midnight. 05:30 IST is 00:00 UTC, when exchanges reset their day. A trade before it counts for the day before on the dashboard, calendar, daily limits, goals and Analysis. Each trade keeps its real date and time. Saved on this device.</p>
-        <label class="flex flex-wrap items-center gap-2 text-slate-300">New day starts at
-          <select id="dayCutoffSel" onchange="setDayCutoff(this.value)" class="bg-[#080D15] border border-terminal-border p-1.5 rounded text-white">
-              <option value="0">Midnight (00:00)</option>
-              <option value="60">01:00</option>
-              <option value="120">02:00</option>
-              <option value="180">03:00</option>
-              <option value="240">04:00</option>
-              <option value="300">05:00</option>
-              <option value="330">05:30 (default, 00:00 UTC)</option>
-              <option value="360">06:00</option>
-              <option value="420">07:00</option>
-          </select>
-        </label>
-      </div>
-
-      <!-- Broker report files: every upload (and the CoinDCX API import), by broker -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs" id="repFilesCard">
-        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-2">
-          <h3 class="font-bold text-white uppercase tracking-wider">Broker Report Files</h3>
-          <button onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX. Its trades go into a book for that broker and count on the Dashboard." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Upload Broker Report (.XLSX / .CSV)</button>
-        </div>
-        <p class="text-slate-400 text-[11px] leading-relaxed">Each upload, with the check that its rows add up to the report's own total. Removing a file removes its rows; with GitHub sync on, from your other devices too.</p>
-        <div id="btFiles" class="space-y-3"></div>
-      </div>
-
-      <!-- Backup & Restore Panel -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
-        <h3 class="font-bold text-white uppercase tracking-wider border-b border-terminal-border pb-2">Manual Data Backup &amp; Recovery</h3>
-        <div class="flex flex-wrap gap-2">
-          <button onclick="downloadBackupFile()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Save Backup File (.JSON)</button>
-          <button onclick="exportTradesCsv()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Export Trades (.CSV)</button>
-          <button onclick="triggerRestoreFileInput()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Open Backup File</button>
-          <input type="file" id="restoreFileInput" accept=".json" class="hidden" onchange="handleRestoreFile(this)">
-          <button onclick="copyBackupToClipboard()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">Copy Backup to Clipboard</button>
-          <button onclick="openWipeModal()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 border border-rose-500/30 rounded ml-auto">Purge Data</button>
-        </div>
-        <p id="storageUsage" class="text-[10px] text-slate-500"></p>
-      </div>
+      </section>
     </div>
 
   </main>
@@ -1480,7 +1506,7 @@
       warn.classList.remove("hidden");
       warn.innerText = "Browser storage is " + Math.round(u.pct) + "% full (" + split + " MB). "
         + "When it fills up, new trades are kept in memory only and lost when the page closes. "
-        + "Save a backup file in Sync & Settings, then free space: "
+        + "Save a backup file in Settings → Backup, then free space: "
         + (u.parts.alerts > u.parts.journal ? "alerts take the most room, so use \"Delete all signals\" on the Signals tab and load a shorter range." : "delete old alerts on the Signals tab, or delete trades you no longer need once the backup is saved.");
     }
     // Measuring reads every stored value, so it waits for a quiet moment after saves.
@@ -1895,7 +1921,7 @@
     function bookTrades(id) { return allTrades().filter(t => t.accountId === id); }
     // Rupees per dollar for a book. Delta India books deposits and withdrawals at
     // a fixed ₹85; CoinDCX values USDT at its own price (₹99.30 on 10 Oct 2026).
-    // Either can be changed per book in Sync & Settings → Trading Books.
+    // Either can be changed per book in Settings → Books & rules → Trading Books.
     const FX_DEFAULT = 85, FX_COINDCX = 99.3;
     function fxDefault(a) { return a && a.reportBroker && /coindcx/i.test(a.reportBroker) ? FX_COINDCX : FX_DEFAULT; }
     function fxRate(a) { const r = Number(a && a.fxRate); return r > 0 && isFinite(r) ? r : fxDefault(a); }
@@ -2119,7 +2145,7 @@
       });
       bar.appendChild(sw);
       // A book with nothing in it (no trades, balance or withdrawals) stays off the
-      // bar; Sync & Settings → Trading Books still lists it, and picking it there shows it.
+      // bar; Settings → Trading Books still lists it, and picking it there shows it.
       const empty = emptyBooks();
       const shown = state.accounts.filter(a => !empty[a.id] || a.id === selected());
       const hidden = state.accounts.length - shown.length;
@@ -2184,7 +2210,7 @@
             <div class="text-base sm:text-lg font-bold ${it.color} mono-num">${it.val}</div>
             <div class="text-[10px] text-slate-400 truncate">${it.sub}</div>
           </div>
-          <span class="text-[9px] ${it.foot ? 'text-amber-400/80' : 'text-slate-500'} truncate">${it.foot || 'Calculated'}</span>
+          ${it.foot ? `<span class="text-[9px] text-amber-400/80 truncate">${it.foot}</span>` : ''}
         `;
         ribbon.appendChild(card);
       });
@@ -2700,7 +2726,7 @@
           : `${riskPct.toFixed(1)}% <span class="text-slate-500 text-[10px]">/ ${esc(defAcct.maxRiskPct || 1)}% max</span>${unsized ? ` <span class="text-slate-500 text-[10px]">(${unsized} without a stop)</span>` : ''}`;
       }
       if (countEl) {
-        countEl.innerText = `${todayTrades.length} execution${todayTrades.length === 1 ? '' : 's'}`;
+        countEl.innerText = `${todayTrades.length} trade${todayTrades.length === 1 ? '' : 's'}`;
       }
       if (maxEl) {
         maxEl.innerText = maxLoss > 0 ? money(maxLoss, cur) : "off";
@@ -3099,10 +3125,10 @@
         titleEl.innerText = `Ledger: ${focus.label}`;
       } else if (titleEl) {
         titleEl.innerText = session.isToday
-          ? `Today's Executions Ledger (${fmtDay(activeDay)})`
+          ? `Today's trades (${fmtDay(activeDay)})`
           : (session.isFallback
-              ? `Previous Session Ledger (${fmtDay(activeDay)})`
-              : `Session Ledger (${fmtDay(activeDay)})`);
+              ? `Last trading day (${fmtDay(activeDay)})`
+              : `Trades on ${fmtDay(activeDay)}`);
       }
 
       if (badgeEl) badgeEl.onclick = null;
@@ -3113,24 +3139,24 @@
       } else if (badgeEl) {
         if (session.isToday) {
           badgeEl.className = "text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1.5";
-          badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> TODAY'S TRADES (${esc(activeDay)})`;
+          badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> TODAY`;
         } else if (session.isFallback) {
           badgeEl.className = "text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold flex items-center gap-1.5";
-          badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> NO TRADES TODAY • SHOWING PREVIOUS SESSION (${esc(activeDay)})`;
+          badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span> NO TRADES TODAY`;
         } else {
           badgeEl.className = "text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/40 font-bold flex items-center gap-1.5";
-          badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span> 1-DAY SESSION: ${esc(activeDay)}`;
+          badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-sky-400"></span> PICKED DAY`;
         }
       }
 
       if (subEl && focus) {
-        subEl.innerText = 'Every execution behind the card you clicked, across the month in view. Click the violet tag or Today / Latest to go back to a single day.';
+        subEl.innerText = 'Every trade behind the card you clicked, across the month in view. Click the violet tag or Today / Latest to go back to one day.';
       } else if (subEl) {
         subEl.innerText = session.isToday
-          ? `Strict 1-day view: Showing all executions recorded today (${activeDay}).`
+          ? `One day at a time. Pick another day on the calendar (Equity & calendar).`
           : (session.isFallback
-              ? `Strict 1-day view: No trades recorded today. Showing previous active session from ${activeDay}.`
-              : `Strict 1-day view: Showing executions from selected date ${activeDay}.`);
+              ? `No trades today yet, so this is the last day you traded. Pick another day on the calendar.`
+              : `The day you picked on the calendar. Today / Latest goes back to today.`);
       }
 
       // Filter STRICTLY within this single day's trades
@@ -3146,7 +3172,7 @@
       });
 
       if (countBadge) {
-        countBadge.innerText = focus ? `${filtered.length} execution${filtered.length === 1 ? '' : 's'}` : `${filtered.length} execution${filtered.length === 1 ? '' : 's'} on ${fmtDay(activeDay)}`;
+        countBadge.innerText = `${filtered.length} trade${filtered.length === 1 ? '' : 's'}`;
       }
 
       if (!filtered.length) {
@@ -3188,8 +3214,8 @@
           </td>
           <td class="py-3 px-4 align-middle whitespace-nowrap">${sidePill}</td>
           <td class="py-3 px-4 align-middle text-slate-300 whitespace-nowrap">${esc(trade.setup || '—')}</td>
-          <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${trade.rep ? '—' : esc(trade.entry)}</td>
-          <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${trade.rep ? '—' : esc(trade.exit)}</td>
+          <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${esc(tradePx(trade, 'entry'))}</td>
+          <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${esc(tradePx(trade, 'exit'))}</td>
           <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-400 whitespace-nowrap">${fmtHeld(heldMins(trade))}</td>
           <td class="py-3 px-4 align-middle text-right tabular-nums ${pnlClass} whitespace-nowrap">${pnlFormatted}</td>
           <td class="py-3 px-4 align-middle text-right whitespace-nowrap">
@@ -3202,6 +3228,13 @@
       });
     }
 
+    // A trade's entry or exit price. A broker-report trade has none of its own;
+    // the broker's fills give them when they have come in (the inspector shows the same).
+    function tradePx(t, k) {
+      if (!t.rep) return t[k];
+      const v = t.px && Number(t.px[k]);
+      return v > 0 ? cleanNum(+v.toPrecision(6)) : '—'; // fills average to long decimals
+    }
     /* =================== EXTENDED VIEWS =================== */
     const JOURNAL_PAGE = 10;
     let journalVisible = JOURNAL_PAGE;
@@ -3244,9 +3277,9 @@
           <td class="py-2.5 px-3 text-slate-400">${esc(a.name)}</td>
           <td class="py-2.5 px-3 font-bold text-white">${esc(trade.symbol)}</td>
           <td class="py-2.5 px-3">${sidePillHtml(trade)}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : esc(trade.entry)}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : esc(trade.exit)}</td>
-          <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? '—' : fmtQty(trade.qty)}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums">${esc(tradePx(trade, 'entry'))}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums">${esc(tradePx(trade, 'exit'))}</td>
+          <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? (trade.px && trade.px.qty > 0 ? fmtQty(trade.px.qty) : '—') : fmtQty(trade.qty)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums ${trade.pnl >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}">${signedMoney(trade.pnl, viewCur())}${pTag(tradePct(trade))}</td>
           <td class="py-2.5 px-3 text-right">
             <button data-id="${esc(trade.id)}" class="px-2 py-0.5 rounded bg-terminal-card border border-terminal-border hover:border-amber-500 text-[10px]">${trade.rep ? 'Report' : 'Edit'}</button>
@@ -3815,7 +3848,9 @@
       if (!canvas || typeof Chart === 'undefined') return;
       const asc = rows.slice().reverse();
       const cur = viewCur();
-      const labels = asc.map(x => x.t.date.slice(5) + (x.t.time ? ' ' + x.t.time : ''));
+      // Trades from more than one year: keep the year in the label (26-10-22), or the axis reads out of order.
+      const yrs = asc.length && asc[0].t.date.slice(0, 4) !== asc[asc.length - 1].t.date.slice(0, 4);
+      const labels = asc.map(x => x.t.date.slice(yrs ? 2 : 5) + (x.t.time ? ' ' + x.t.time : ''));
       const over = asc.map(x => x.flags.indexOf('oversize') !== -1);
       const mono = { family: 'JetBrains Mono', size: 10 };
       if (anChartInstance) anChartInstance.destroy();
@@ -3879,14 +3914,19 @@
       // "rep:CoinDCX" from older links: that broker's first book.
       if (k.indexOf("rep:") === 0) { const b = state.accounts.find(a => a.reportBroker === k.slice(4)); k = b ? "acct:" + b.id : "all"; }
       state.ui.account = k === "all" ? "all" : k.slice(5);
+      // A broker report opens on its own numbers.
+      const picked = state.accounts.find(a => a.id === state.ui.account);
+      if (picked && picked.reportBroker) state.ui.anSec = "report";
       anVisible = AN_PAGE; btVisible = BT_PAGE; btOpenTrade = null;
       save(); renderAll();
     }
     function renderAnBrokers() {
       const from = anRange();
       const current = isAll() ? "all" : "acct:" + selected();
+      // An empty book (an unused Dhan) stays off here too, as on the header's bar.
+      const empty = emptyBooks(), books = state.accounts.filter(a => !empty[a.id] || a.id === selected());
       const list = [{ k: "all", label: "All books", tip: "Your books together, each converted into the currency picked at the top" }]
-        .concat(state.accounts.map(a => ({ k: "acct:" + a.id, label: a.name, tip: a.reportBroker ? "Trades from " + a.reportBroker + ", from an uploaded report or its API (" + a.currency + ")" : "Journal book (" + a.currency + ")" })));
+        .concat(books.map(a => ({ k: "acct:" + a.id, label: a.name, tip: a.reportBroker ? "Trades from " + a.reportBroker + ", from an uploaded report or its API (" + a.currency + ")" : "Journal book (" + a.currency + ")" })));
       const bar = document.getElementById("anBrokerBar");
       bar.innerHTML = list.map(x => `<button type="button" data-anbroker="${esc(x.k)}" title="${esc(x.tip)}" class="px-2.5 py-1 rounded-md font-semibold transition-all ${x.k === current ? "bg-terminal-card border border-terminal-borderLight text-amber-400" : "text-slate-400 hover:text-white"}">${esc(x.label)}</button>`).join("");
       bar.querySelectorAll("[data-anbroker]").forEach(b => { b.onclick = () => anBrokerPick(b.getAttribute("data-anbroker")); });
@@ -3894,7 +3934,7 @@
       // ---- results by broker, each converted into the currency on screen ----
       const vc = viewCur();
       const live = allTrades().filter(t => !from || dayOf(t) >= from).map(t => toView(t, vc)), open = reportBooks().open;
-      const lines = state.accounts.map(a => {
+      const lines = books.map(a => {
         const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
         const files = a.reportBroker ? btState().files.filter(f => f.broker === a.reportBroker) : [];
         const api = files.some(f => f.id === CDX_FILE), rep = files.some(f => f.id !== CDX_FILE);
@@ -3920,6 +3960,18 @@
             <td class="py-2 px-3 text-right whitespace-nowrap">${!l.n ? "—" : l.pf === Infinity ? "∞" : l.pf.toFixed(2)}</td>
             <td class="py-2 px-3 text-right whitespace-nowrap text-slate-400">${l.n || l.fees ? money(l.fees, l.cur) : "—"}</td>
             <td class="py-2 px-3 whitespace-nowrap text-slate-500">${l.from}</td></tr>`).join("")}</tbody>
+          ${lines.length > 1 ? (() => {
+            // Every book together, in the currency on screen.
+            const tot = computeStats(live.filter(t => books.some(a => a.id === t.accountId))), fees = sum(lines.map(l => l.fees)), open = sum(lines.map(l => l.open));
+            return `<tfoot><tr class="border-t-2 border-terminal-borderLight bg-black/20">
+            <td class="py-2 px-3 font-bold text-slate-300">Total</td>
+            <td class="py-2 px-3 text-right font-bold whitespace-nowrap ${pos(tot.net)}">${tot.n ? signedMoney(tot.net, vc) : "—"}</td>
+            <td class="py-2 px-3 text-right whitespace-nowrap">${tot.n}${open ? ` <span class="text-sky-300">+${open} open</span>` : ""}</td>
+            <td class="py-2 px-3 text-right whitespace-nowrap">${tot.n ? pct(tot.wins / tot.n * 100) + ` <span class="text-slate-500">${tot.wins}/${tot.losses}</span>` : "—"}</td>
+            <td class="py-2 px-3 text-right whitespace-nowrap">${!tot.n ? "—" : tot.pf === Infinity ? "∞" : tot.pf.toFixed(2)}</td>
+            <td class="py-2 px-3 text-right whitespace-nowrap text-slate-400">${tot.n || fees ? money(fees, vc) : "—"}</td>
+            <td class="py-2 px-3"></td></tr></tfoot>`;
+          })() : ""}
         </table></div>`;
       host.querySelectorAll("tr[data-anbroker]").forEach(tr => { tr.onclick = () => anBrokerPick(tr.getAttribute("data-anbroker")); });
     }
@@ -4249,7 +4301,7 @@
     }
     function aiErrText(res, model) {
       const m = res.j && res.j.error && res.j.error.message ? String(res.j.error.message).slice(0, 200) : "";
-      if (res.status === 400 && /api key/i.test(m)) return "Gemini refused the key. Check it in Settings → AI Review.";
+      if (res.status === 400 && /api key/i.test(m)) return "Gemini refused the key. Check it in Settings → Connections → AI Review.";
       if (res.status === 403) return "This key can't use Gemini (" + (m || "forbidden") + "). Make a new key at aistudio.google.com.";
       if ([500, 502, 503, 504].indexOf(res.status) !== -1) return "Gemini is overloaded right now (all models tried). Wait a few minutes and press Review again.";
       if (res.status === 429) return "Gemini's free limit was reached. Wait a minute and try again.";
@@ -4270,7 +4322,7 @@
     async function runAiReview() {
       if (aiBusy) return;
       const cfg = aiCfg();
-      if (!cfg.key) { aiStatus("Add your Gemini API key first: Settings → AI Review (Gemini).", true); return; }
+      if (!cfg.key) { aiStatus("Add your Gemini API key first: Settings → Connections → AI Review (Gemini).", true); return; }
       const k = state.ui.aiPeriod || "tm", rows = aiPeriodRows(k);
       if (!rows.length) { aiStatus("No closed trades in " + (AI_PERIODS.find(x => x.k === k) || AI_PERIODS[0]).label.toLowerCase() + ".", true); return; }
       aiBusy = true;
@@ -4342,7 +4394,7 @@
       bar.querySelectorAll("[data-aiperiod]").forEach(b => { b.onclick = () => { state.ui.aiPeriod = b.getAttribute("data-aiperiod"); save(); renderAiReview(); }; });
       const { from, to } = aiRange(k);
       const n = allTrades().filter(t => { const d = dayOf(t); return d >= from && d <= to; }).length;
-      document.getElementById("aiCount").innerText = n + " closed trades, all books" + (aiCfg().key ? "" : " · add a Gemini key in Settings to review here");
+      document.getElementById("aiCount").innerText = n + " closed trades, all books" + (aiCfg().key ? "" : " · add a Gemini key in Settings → Connections to review here");
       let last = null; try { last = JSON.parse(localStorage.getItem(AI_LAST) || "null"); } catch (e) {}
       if (!aiBusy) renderAiResult(last);
     }
@@ -4380,12 +4432,16 @@
       // A broker from an uploaded report shows its report; its Size & mistakes
       // section is the journal analysis below, run on the report's trades.
       const rep = anReportBook();
-      ['anReport', 'anHowReport'].forEach(id => document.getElementById(id).classList.toggle('hidden', !rep));
+      ['anReport', 'anHowReport', 'btTradesWrap'].forEach(id => document.getElementById(id).classList.toggle('hidden', !rep));
+      // A report book's own trade table replaces the journal's raw list.
+      document.getElementById('anAllTrades').classList.toggle('hidden', !!rep);
       if (rep) renderBacktest();
       renderAiReview();
-      const live = !rep || (state.ui.btSec === "checks" && document.getElementById('btEmpty').classList.contains('hidden'));
+      // One row of sections for every book; a report with no rows yet shows only how to add one.
+      const live = !rep || document.getElementById('btEmpty').classList.contains('hidden');
       ['anLive', 'anMktRow', 'anHowLive'].forEach(id => document.getElementById(id).classList.toggle('hidden', !live));
       if (!live) return;
+      renderSecBar('anSecBar', anSecList(), 'data-ansec', anCurSec(), setAnSec);
       const cur = viewCur();
       const from = anRange();
       // The report's pair filter narrows this too.
@@ -4400,14 +4456,13 @@
       const book = isAll() ? (state.accounts.find(a => a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {}) : acct(selected());
       assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's live balance, CoinDCX's wallet). " : "Balances before each trade are your starting balance plus the trades before it; connect Delta to anchor them to its live balance. ")
         + "Deposits, withdrawals and funding can't be seen, so older balances are estimates. "
-        + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Sync & Settings → Trading Books.`
+        + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Settings → Books & rules → Trading Books.`
         + (state.accounts.some(a => a.reportBroker) ? " A broker-report trade (CoinDCX) has no stop or prices of its own: its side and position value are worked out from its fees (or fills), its balance from the broker's wallet, and a trade whose fees don't add up shows — for size." : "");
 
       renderJournalArchive();
       renderMarketCalendar('mktCalAnalysis', { pairs: matchSignals().filter(pr => !from || pr.signal.date >= from), trades: inPeriod.map(x => x.t), cur, rerender: renderAnalysis, scope: from ? 'from ' + from : 'all history' });
       if (mfAn) assume.innerText += ` Showing trades on BTC ${MKT_LABEL[mfAn].toLowerCase()} days only.`;
       renderMktFilterBar('anMktBar', 'mktCalAnalysis');
-      renderSecBar('anSecBar', AN_SECS, 'data-ansec', state.ui.anSec, setAnSec);
       if (!rows.length) {
         if (anChartInstance) { anChartInstance.destroy(); anChartInstance = null; }
         strip.innerHTML = '';
@@ -4421,20 +4476,18 @@
       }
 
       // ---- summary cards ----
-      const isMistake = x => x.flags.some(f => !AN_FLAGS[f].note);
-      const flagged = rows.filter(isMistake), clean = rows.filter(x => !isMistake(x));
+      // Clean or not is the rule scorecard's call (just below), so the two always agree.
+      const firstSig = (state.signals || []).map(g => g.date).sort()[0] || null;
+      rows.forEach(x => { x.alertKnown = !!firstSig && x.t.date >= firstSig; });
+      const brokeOne = rows.filter(x => AN_RULES.some(r => (!r.applies || r.applies(x)) && r.broke(x)));
       const over = rows.filter(x => x.flags.indexOf("oversize") !== -1);
       const xs = rows.map(x => x.xBal).filter(v => v != null);
-      const sFlag = anStats(flagged), sClean = anStats(clean);
       const cards = [
-        { label: "TRADES CHECKED", val: String(rows.length), sub: `${pct(flagged.length / rows.length * 100)} had a mistake`, color: "text-slate-200" },
+        { label: "TRADES CHECKED", val: String(rows.length), sub: `${brokeOne.length} (${pct(brokeOne.length / rows.length * 100)}) broke a rule`, color: "text-slate-200" },
         { label: "OVERSIZED", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} of trades`, color: over.length ? "text-rose-400" : "text-emerald-400" },
         { label: "AVG SIZE", val: xs.length ? avg(xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-slate-200" },
         { label: "BIGGEST", val: xs.length ? Math.max(...xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-amber-400" },
-        { label: "LOSS OVER LIMIT", val: String(rows.filter(x => x.flags.indexOf("lossOver") !== -1).length), sub: "lost more than max risk", color: "text-rose-400" },
-        { label: "MISTAKE TRADES", val: signedMoney(sFlag.net, cur), sub: `${flagged.length} trades · ${pct(sFlag.winRate)} won`, color: sFlag.net >= 0 ? "text-emerald-400" : "text-rose-400" },
-        { label: "CLEAN TRADES", val: signedMoney(sClean.net, cur), sub: `${clean.length} trades · ${pct(sClean.winRate)} won`, color: sClean.net >= 0 ? "text-emerald-400" : "text-rose-400" },
-        { label: "PER TRADE", val: `${signedMoney(sFlag.avg, cur)} / ${signedMoney(sClean.avg, cur)}`, sub: "mistake / clean", color: "text-slate-200" }
+        { label: "LOSS OVER LIMIT", val: String(rows.filter(x => x.flags.indexOf("lossOver") !== -1).length), sub: "lost more than max risk", color: "text-rose-400" }
       ];
       strip.innerHTML = '';
       cards.forEach(c => {
@@ -4629,7 +4682,14 @@
       });
     }
 
+    // Settings in three groups. A link elsewhere can open the right one.
+    const SET_SECS = [{ k: "books", label: "Books & rules" }, { k: "connect", label: "Connections" }, { k: "backup", label: "Backup" }];
+    function setSetSec(k) { state.ui.setSec = k; save(); renderSecBar('setSecBar', SET_SECS, 'data-setsec', state.ui.setSec, setSetSec); }
+    function openSettings(k) { state.ui.setSec = k; switchTab('data'); }
+    // A small menu closes when you tap anywhere else.
+    document.addEventListener('click', e => document.querySelectorAll('details.menu[open]').forEach(d => { if (!d.contains(e.target)) d.open = false; }));
     function renderDataView() {
+      renderSecBar('setSecBar', SET_SECS, 'data-setsec', state.ui.setSec, setSetSec);
       renderBooks();
       renderAiKeyCard();
       const dcSel = document.getElementById('dayCutoffSel');
@@ -5088,7 +5148,7 @@
       const q = reviewQueue(), shown = q.slice(0, state.ui.rqAll ? 200 : 8);
       const cls = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
       const btn = 'px-2 py-0.5 rounded border text-[10px] whitespace-nowrap';
-      return `<div class="border-b border-terminal-border pb-3 mb-3">
+      return `<div>
         <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
           <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded bg-sky-400"></span><h2 class="text-sm font-bold text-white uppercase tracking-wider">To review</h2>
             <span class="text-slate-400">${q.length ? q.length + ' trade' + (q.length === 1 ? '' : 's') + ' in the last ' + REVIEW_DAYS + ' days' : 'all caught up'}</span></div>
@@ -6918,6 +6978,15 @@
       else Object.assign(patch, { feePreset: DEFAULT_INR_PRESET, costPercent: calcPresetPercent(DEFAULT_INR_PRESET) });
       state.calculatorSettings = Object.assign(s, patch); save();
     }
+    // The account picked by hand stays, Custom included. Until one is picked the
+    // calculator sizes from a real book: the one on the header, else the one traded last,
+    // so it never sizes from a made-up $5,000.
+    function calcPickAccount(id) { state.calculatorSettings = Object.assign(calcSettings(), { accountPicked: true }); calcApplyAccount(id); }
+    function calcAutoBook() {
+      if (!isAll()) { const a = state.accounts.find(x => x.id === selected()); if (a) return a; }
+      const last = allTrades().slice().sort((a, b) => -byWhen(a, b))[0];
+      return last ? state.accounts.find(x => x.id === last.accountId) || null : null;
+    }
     function calcApplyAccount(accountId, quiet) {
       if (!accountId) { calcUpdate({ accountId: "" }); return; }
       const a = state.accounts.find(x => x.id === accountId);
@@ -7021,6 +7090,7 @@
       // The calculator follows the header's ₹ / $ switch: when it changes,
       // the amounts typed here are converted (at the linked book's rate).
       if (calcSettings().currency !== viewCur()) calcFollowCur(viewCur());
+      if (!calcSettings().accountPicked && !calcSettings().accountId) { const b = calcAutoBook(); if (b) calcApplyAccount(b.id, true); }
       const s = calcSettings();
       const cur = s.currency;
 
@@ -7909,9 +7979,11 @@
           if (by.open) bits.push(`${by.open} still open (fib/trendline results come in once a day after 08:00 IST)`);
           if (by["not graded"]) bits.push(`${by["not graded"]} the scanner chose not to grade (no data, stop too tight, or a zone cooldown repeat)`);
           if (by["not in report"]) bits.push(`${by["not in report"]} left out of the scanner's report (usually repeats on a zone it already graded)`);
-          const note = document.createElement('div');
+          // One short line; the reasons fold away under it.
+          const note = document.createElement('details');
           note.className = 'col-span-full text-[11px] text-slate-500 font-mono';
-          note.innerText = `${waiting.length} of these alerts have no result yet: ` + bits.join("; ") + ".";
+          note.innerHTML = `<summary class="cursor-pointer select-none hover:text-amber-300">${waiting.length} of these alerts have no result yet · why</summary><div class="mt-1 leading-relaxed"></div>`;
+          note.lastElementChild.innerText = bits.join("; ") + ".";
           strip.appendChild(note);
         }
       }
@@ -8194,11 +8266,15 @@
     const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
     const SIG_SECS_FIB = SIG_SECS.slice(0, 3).concat([{ k: "levels", label: "Fib levels" }], SIG_SECS.slice(3));
     const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
-    const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "week", label: "Review" }, { k: "ledger", label: "Day's trades" }, { k: "habits", label: "Time & habits" }];
+    const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "ledger", label: "Day's trades" }, { k: "review", label: "Review" }, { k: "week", label: "Week & grade" }, { k: "habits", label: "Time & habits" }];
     // The Review tab shows how many trades are waiting.
-    function dashSecList() { const n = reviewQueue().length; return DASH_SECS.map(x => x.k === 'week' && n ? Object.assign({}, x, { label: x.label + ' (' + n + ')' }) : x); }
+    function dashSecList() { const n = reviewQueue().length; return DASH_SECS.map(x => x.k === 'review' && n ? Object.assign({}, x, { label: x.label + ' (' + n + ')' }) : x); }
     function setDashSec(k) { state.ui.dashSec = k; save(); renderDashboard(); }
-    const AN_SECS = [{ k: "overview", label: "Overview" }, { k: "size", label: "Position size" }, { k: "trades", label: "Trades" }, { k: "market", label: "Market days" }];
+    const AN_SECS = [{ k: "overview", label: "Overview" }, { k: "size", label: "Position size" }, { k: "trades", label: "Trades" }, { k: "market", label: "Market days" }, { k: "ai", label: "AI review" }];
+    // A broker-report book (CoinDCX) adds its own report first: the broker's numbers,
+    // equity, pairs and days. The other sections run the journal's checks on its trades.
+    function anSecList() { return anReportBook() ? [{ k: "report", label: "Report" }].concat(AN_SECS) : AN_SECS; }
+    function anCurSec() { const l = anSecList(); return l.some(x => x.k === state.ui.anSec) ? state.ui.anSec : l[0].k; }
     // One row of big tabs; only the chosen section is shown. Everything still renders,
     // so switching is instant and nothing waits on a click.
     function renderSecBar(barId, list, attr, current, onPick) {
@@ -8968,7 +9044,6 @@
     const BT_AT_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
     const BT_KINDS = ["order", "funding", "other"];
     const BT_PAGE = 50;
-    const BT_SECS = [{ k: "overview", label: "Overview" }, { k: "checks", label: "Size & mistakes" }, { k: "trades", label: "Trades" }];
     let btVisible = BT_PAGE, btChartInstance = null, btOpenTrade = null;
 
     function btFinite(v) { const n = cNum(v); return isFinite(n) ? n : 0; }
@@ -9518,11 +9593,11 @@
         const checked = stored.every(Boolean) && Math.abs(sum(stored.map(r => r.net)) - res.net) < 0.005;
         bt.files = bt.files.concat([{ id: fileId, name: String(name).slice(0, 120), sheet: res.sheets.join(", ").slice(0, 120), broker, importedAt: now, updatedAt: now, rows: res.rows.length, added: fresh.length, net: res.net, cur, checked }]);
         ensureReportBooks(state);
-        state.ui.account = repBookId(broker, cur); state.ui.btPair = "all"; state.ui.btSec = "overview";
+        state.ui.account = repBookId(broker, cur); state.ui.btPair = "all"; state.ui.anSec = "report";
         btVisible = BT_PAGE; btOpenTrade = null;
         save();
         switchTab("analysis"); renderAccountsBar();
-        toast(checked ? `Imported ${fresh.length} rows to ${broker}; totals match the report and the dashboard counts them` : `Imported ${fresh.length} rows, but the totals differ from the report; see Sync & Settings → Broker Report Files`);
+        toast(checked ? `Imported ${fresh.length} rows to ${broker}; totals match the report and the dashboard counts them` : `Imported ${fresh.length} rows, but the totals differ from the report; see Settings → Connections → Broker Report Files`);
         return true;
       });
     }
@@ -9703,7 +9778,7 @@
     }
     // From the dashboard: the trade's own report rows, in Analysis under its book.
     function openReportTrade(trade) {
-      state.ui.account = trade.accountId; state.ui.btSec = "trades"; state.ui.btPair = "all";
+      state.ui.account = trade.accountId; state.ui.anSec = "trades"; state.ui.btPair = "all";
       const from = anRange();
       if (from && dayOf(trade) < from) state.ui.anPeriod = "all";
       btOpenTrade = null; btVisible = BT_PAGE;
@@ -9723,7 +9798,9 @@
     }
     function btToggleTrade(id) { btOpenTrade = btOpenTrade === id ? null : id; renderBacktestTable(); }
     function btMore() { btVisible += BT_PAGE; renderBacktestTable(); }
-    function setBtSec(k) { state.ui.btSec = k; save(); renderAnalysis(); }
+    // Older names for the report book's sections: its overview is now "Report", and
+    // "Size & mistakes" is the Overview every book has.
+    function setBtSec(k) { setAnSec(k === "overview" ? "report" : k === "checks" ? "overview" : k); }
     let btShown = [], btCurShown = "USD";
     function renderBacktest() {
       if (!document.getElementById("anReport")) return;
@@ -9744,8 +9821,6 @@
         + (ats.length ? " · " + fmtDay(ats[0].slice(0, 10)) + " " + ats[0].slice(0, 4) + " to " + fmtDay(ats[ats.length - 1].slice(0, 10)) + " " + ats[ats.length - 1].slice(0, 4) : "");
       document.getElementById("btEmpty").classList.toggle("hidden", !empty);
       const filters = document.getElementById("btFilters");
-      // Files live in Sync & Settings; with no rows left there is nothing to switch between.
-      renderSecBar("btSecBar", BT_SECS, "data-btsec", state.ui.btSec, setBtSec);
       document.getElementById("btMain").classList.toggle("hidden", empty);
       if (empty) {
         filters.innerHTML = "";
@@ -9798,7 +9873,7 @@
       document.getElementById("btCheck").innerHTML = `<div class="px-3 py-2 rounded-lg border ${ok && !filesBad ? "border-emerald-500/40 text-emerald-300" : "border-rose-500/40 text-rose-300"}">`
         + (ok ? `✓ All ${rowsCur.length} report rows are in ${inCur.length} trades, adding up to ${signedMoney(rowNet, cur)}, the same as the rows.` : `⚠ ${rowsCur.length} rows but ${legs} placed in trades (${signedMoney(rowNet, cur)} vs ${signedMoney(tradeNet, cur)}).`)
         + (twice ? ` ${twice} row${twice === 1 ? "" : "s"} from the API ${twice === 1 ? "is" : "are"} already in an uploaded report and count${twice === 1 ? "s" : ""} once.` : "")
-        + (filesBad ? ` ⚠ ${filesBad} file${filesBad === 1 ? "" : "s"} did not match the report's total; see Sync & Settings → Broker Report Files.` : "")
+        + (filesBad ? ` ⚠ ${filesBad} file${filesBad === 1 ? "" : "s"} did not match the report's total; see Settings → Connections → Broker Report Files.` : "")
         + (shown.length !== inCur.length ? ` <span class="text-slate-400">Showing ${shown.length} of them.</span>` : "") + `</div>`;
 
       renderBacktestChart(s.closed, cur);
@@ -9847,7 +9922,8 @@
       btChartInstance = new Chart(canvas.getContext("2d"), {
         type: "line",
         data: {
-          labels: ["Start"].concat(closed.map(t => btWhen(t.end) + " · " + btSym(t.sym))),
+          // Over more than one year the day alone repeats, so each label gets its year.
+          labels: ["Start"].concat(closed.map(t => btWhen(t.end) + (closed[0].end.slice(0, 4) !== closed[closed.length - 1].end.slice(0, 4) ? " " + t.end.slice(0, 4) : "") + " · " + btSym(t.sym))),
           datasets: [{ data, borderColor: "#F59E0B", borderWidth: 2, pointRadius: closed.length > 60 ? 0 : 3, pointBackgroundColor: ["#64748B"].concat(closed.map(t => t.net >= 0 ? "#10B981" : "#F43F5E")), tension: 0.15, fill: true, backgroundColor: "rgba(245, 158, 11, 0.12)" }]
         },
         options: {
@@ -10011,7 +10087,7 @@
       return o;
     }
 
-    // Sync & Settings: every broker's uploaded files, each broker with its own delete-all.
+    // Settings → Connections: every broker's uploaded files, each broker with its own delete-all.
     function renderBacktestFiles() {
       const host = document.getElementById("btFiles");
       if (!host) return;
@@ -10202,7 +10278,9 @@
       const rs = ts.map(t => t.r).filter(r => r != null && isFinite(r));
       const card = (label, val, sub) => `<div class="bg-black/40 border border-terminal-border rounded-lg p-3"><div class="text-[10px] text-slate-500 uppercase tracking-wider">${label}</div><div class="text-sm font-bold mt-1">${val}</div>${sub ? `<div class="text-[10px] text-slate-500 mt-0.5">${sub}</div>` : ''}</div>`;
       const best = setups[0], worstSetup = setups.length > 1 ? setups[setups.length - 1] : null, mk = mistakes[0];
-      host.innerHTML = reviewQueueHtml(cur) + `
+      const rq = document.getElementById('reviewQueuePanel');
+      if (rq) rq.innerHTML = reviewQueueHtml(cur);
+      host.innerHTML = `
         <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-3 mb-3">
           <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded bg-amber-400"></span><h2 class="text-sm font-bold text-white uppercase tracking-wider">Week summary</h2>
             <span class="text-slate-400">${fmtD(days[0])} – ${fmtD(days[6])}${off === 0 ? ' (this week)' : ''}</span></div>
@@ -10215,7 +10293,7 @@
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
           ${card("Net P&L", `<span class="${cls(s.net)}">${signedMoney(s.net, cur)}</span>`, `${ts.length} trade${ts.length === 1 ? '' : 's'}`)}
           ${card("Win rate", `${(ts.filter(t => t.pnl > 0).length / ts.length * 100).toFixed(0)}%`, `${ts.filter(t => t.pnl > 0).length} won · ${ts.filter(t => t.pnl < 0).length} lost`)}
-          ${card("Avg R", rs.length ? `<span class="${cls(avg(rs))}">${rfmt(avg(rs))}</span>${pTag(avg(ts.map(tradePct).filter(v => v != null)))}` : '<span class="text-slate-500">—</span>', rs.length ? `${rs.length} with a stop` : 'no stops set')}
+          ${card("Avg R", rs.length ? `<span class="${cls(avg(rs))}">${rfmt(avg(rs))}</span>${pTag((p => p.length ? avg(p) : null)(ts.filter(t => t.r != null && isFinite(t.r)).map(tradePct).filter(v => v != null)))}` : '<span class="text-slate-500">—</span>', rs.length ? `${rs.length} with a stop` : 'no stops set')}
           ${card("Rules broken", rated.length ? `<span class="${broke.length ? 'text-rose-400' : 'text-emerald-400'}">${broke.length} of ${rated.length}</span>` : '<span class="text-slate-500">—</span>', rated.length ? 'trades with rules ticked' : 'tick rules when logging')}
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-2">
