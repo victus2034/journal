@@ -2114,7 +2114,7 @@ async function aiReviewRun(seed) {
     const cors = { 'access-control-allow-origin': '*', 'content-type': 'application/json' };
     if (mode === 'quota') return route.fulfill({ status: 429, headers: cors, body: JSON.stringify({ error: { code: 429, message: 'Resource exhausted' } }) });
     if (mode === 'nomodel' && req.url().includes('gemini-2.5-flash')) return route.fulfill({ status: 404, headers: cors, body: JSON.stringify({ error: { code: 404, message: 'not found' } }) });
-    const answer = { verdict: 'You cut winners early.', exits: [{ point: 'Early exits after a loss', evidence: 'XAIUSD went 3% on' }], summary: 'Breakouts carry the month.', pros: [{ point: 'Breakout longs win', evidence: '6 of 8 won' }], cons: [{ point: 'Pullback shorts lose', evidence: '-3R total' }, { point: '<b>x</b>', evidence: '' }], improve: [{ action: 'Skip pullback shorts', why: 'They lost most' }] };
+    const answer = { verdict: 'You cut winners early.', wrong: [{ point: 'Pullback shorts lose', proof: '-3R total' }, { point: '<b>x</b>', proof: '' }], right: [{ point: 'Breakout longs win', proof: '6 of 8 won' }], trailing: [{ point: 'Trail starts too tight', proof: 'XAIUSD went 3% on' }], vas: [{ point: 'Fib 1h shorts lose', proof: 'avg -1R' }], setup: [{ point: 'Enter at L3 only', proof: 'L3 won 4 of 5' }], rules: [{ point: 'Skip pullback shorts', proof: 'They lost most' }] };
     route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'thinking', thought: true }, { text: JSON.stringify(answer) }] } }] }) });
   });
   await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
@@ -2149,7 +2149,11 @@ async function aiReviewRun(seed) {
     check(calls.length === 1 && calls[0].key === 'AIzaTESTKEY' && /models\/gemini-2\.5-flash$/.test(calls[0].url), 'Save & Test should check the key once: ' + JSON.stringify(calls.map(c => c.url)));
     // The price measures, by hand from the candles above.
     const m = await page.evaluate(([d]) => {
-      state.trades.push({ id: 'aiE1', accountId: 'acc_cry', date: d, exitDate: d, time: '10:00', exitTime: '10:30', symbol: 'XAIUSD', direction: 'long', entry: 100, exit: 101, stop: 99, qty: 2, fees: 0, leverage: 10, setup: 'Breakout', rules: [], notes: 'scared after a loss', tagsMistakes: [] , updatedAt: new Date().toISOString() });
+      state.trades.push({ id: 'aiE1', accountId: 'acc_cry', date: d, exitDate: d, time: '10:00', exitTime: '10:30', symbol: 'XAIUSD', direction: 'long', entry: 100, exit: 101, stop: 99, qty: 2, fees: 0, leverage: 10, setup: 'Breakout', rules: [], notes: 'scared after a loss', tagsMistakes: [], tagsPositives: ['Trailed Stop Loss'], updatedAt: new Date().toISOString() });
+      // Two VAS fib alerts: the long was taken (alert made 3R), the short skipped (-1R).
+      state.signals = (state.signals || []).concat([
+        { id: 'aiS1', kind: 'fib', date: d, time: '09:58', side: 'long', symbol: 'XAIUSDT', timeframe: '1h', score: '8', entry: 100, stop: 99, exit: 103, resultR: 3, outcome: 'win' },
+        { id: 'aiS2', kind: 'fib', date: d, time: '14:00', side: 'short', symbol: 'XAIUSDT', timeframe: '1h', score: '6', entry: 102, stop: 103, exit: 103, resultR: -1, outcome: 'loss' }]);
       save();
       return aiPriceCheck(aiPeriodRows('30d')).then(r => r.aiE1);
     }, [d3]);
@@ -2168,12 +2172,16 @@ async function aiReviewRun(seed) {
     check(lines.length === 17 && v.n30 === 16, 'trades sent: ' + lines.length + ' of 16 + 1');
     check(!deltaCalls.some(c => c.startsWith('XAIUSD')), 'a second read of finished trades should use the saved candles: ' + JSON.stringify(deltaCalls));
     const xai = lines.find(l => l.includes('|XAIUSD|')) || '';
-    check(prompt.includes('price data for 1 of 17 trades') && prompt.includes('early_exit (a winner closed') && /: 1, about 510 INR/.test(prompt) && xai.includes('|1.5|0.2|1.5R|67|20|3|0.1|3|0.5|early_exit|scared after a loss') && prompt.includes('no BTCUSD candles on Delta'), 'price check in prompt: ' + xai + ' / ' + (prompt.match(/PRICE CHECK[^\n]*\n[^\n]*/) || [''])[0]);
+    check(prompt.includes('price data for 1 of 17 trades') && prompt.includes('early_exit (a winner closed') && /: 1, about 510 INR/.test(prompt) && xai.includes('|3|1|1.5|0.2|1.5R|67|20|3|0.1|3|0.5|early_exit|scared after a loss') && prompt.includes('no BTCUSD candles on Delta'), 'price check in prompt: ' + xai + ' / ' + (prompt.match(/PRICE CHECK[^\n]*\n[^\n]*/) || [''])[0]);
+    check(prompt.includes('- fib: 2 alerts, result known 2, win 50%, avg 1R | taken 1: alert avg 3R, your avg 1R | skipped 1: alert avg -1R') && prompt.includes('- fib short: 1 alerts, result known 1, win 0%, avg -1R | taken 0 | skipped 1') && prompt.includes('TradingView'), 'VAS block: ' + (prompt.match(/VAS ALERTS[\s\S]{0,700}/) || [''])[0]);
+    check(prompt.includes('- trailed: 1 trades, 1 wins, net 170 INR, winners kept 67% of best move, early_exit 1, gave_back 0, your avg 1R, the alert\'s own avg 3R on the same trades'), 'trailing block: ' + (prompt.match(/TRAILING SL[\s\S]{0,500}/) || [''])[0]);
+    check(xai.includes('|first of day|trailed|fib 1h score 8 win|3|1|'), 'trade line alert columns: ' + xai);
     check(prompt.includes('Test Crypto (USD') && prompt.includes('BY SETUP') && prompt.includes('Breakout') && prompt.includes('Volume spike') && prompt.includes('FLAG MEANINGS') && !prompt.includes('AIzaTESTKEY'), 'prompt content: ' + prompt.slice(0, 400));
     check(body.generationConfig && body.generationConfig.responseMimeType === 'application/json' && body.generationConfig.responseSchema, 'asks for JSON');
     const shown = await page.innerText('#aiResult');
-    check(shown.includes('You cut winners early.') && /HOLDING & EXITS/i.test(shown) && shown.includes('XAIUSD went 3% on') && /price data for 1/.test(shown), 'verdict and exits shown: ' + shown.slice(0, 300));
-    check(shown.includes('Breakouts carry the month.') && shown.includes('Breakout longs win') && shown.includes('6 of 8 won') && shown.includes('Skip pullback shorts') && /PROS/i.test(shown) && /HOW TO IMPROVE/i.test(shown), 'review shown: ' + shown.slice(0, 300));
+    check(shown.includes('You cut winners early.') && /TRAILING SL/i.test(shown) && shown.includes('XAIUSD went 3% on') && /price data for 1/.test(shown) && /2 VAS alerts/.test(shown), 'verdict and trailing shown: ' + shown.slice(0, 300));
+    check(shown.includes('Breakout longs win') && shown.includes('6 of 8 won') && shown.includes('Skip pullback shorts') && shown.includes('Fib 1h shorts lose') && shown.includes('Enter at L3 only') && /WHAT YOU DO WRONG/i.test(shown) && /WHAT WORKS/i.test(shown) && /VAS ALERTS/i.test(shown) && /DO THIS NEXT/i.test(shown), 'review shown: ' + shown.slice(0, 400));
+    check(await page.$$eval('#aiResult [data-ai-sec]', els => els.length) === 6, 'six sections');
     check(shown.includes('<b>x</b>') && !(await page.$('#aiResult b')), 'AI text must be escaped');
     check(!thinkingShown(shown), 'thought parts must be dropped');
     // Survives a reload.
