@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-22.127">
+  <meta name="app-version" content="2026-10-22.128">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -892,7 +892,7 @@
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 class="text-sm font-bold text-white uppercase tracking-wider">AI Trade Review</h3>
-            <p class="text-slate-400 text-[11px] mt-0.5">Gemini reads every book's trades for the period (CoinDCX too) and tells you what works, what costs you, and how to improve.</p>
+            <p class="text-slate-400 text-[11px] mt-0.5">Gemini checks every trade (CoinDCX too), the price around it, your trailing SL and your VAS alerts, then gives short, direct feedback.</p>
           </div>
           <div class="flex flex-wrap gap-2">
             <button type="button" id="aiRunBtn" onclick="runAiReview()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Review my trades</button>
@@ -4056,7 +4056,8 @@
       const { from, to } = aiRange(k);
       return analyzeTrades(allTrades()).filter(x => { const d = dayOf(x.t); return d >= from && d <= to; }).sort((a, b) => byWhen(a.t, b.t));
     }
-    function aiReviewPrompt(k, pxm, rowsIn) {
+    function aiReviewPrompt(k, pxm, rowsIn) { return withOutcomeCache(() => aiReviewPromptNow(k, pxm, rowsIn)); }
+    function aiReviewPromptNow(k, pxm, rowsIn) {
       pxm = pxm || {};
       k = k || state.ui.aiPeriod || "tm";
       const { from, to } = aiRange(k);
@@ -4110,7 +4111,47 @@
         if (wins.length) L.push(`- winners kept on average ${Math.round(avg(wins.map(x => pxOf(x).kept)))}% of their best move while open`);
         L.push("A unit is 1R when the trade had a stop, else a 0.5% price move. mfe / mae = best / worst move while open; kept_pct = exit gain as % of the best move; peak_to_exit_min = minutes from the best price to the exit; after_1h / after_4h = best move on in the trade's direction, and worst against it, after the exit (all in % of price).");
       }
-      L.push("", "TRADES (in order of closing; a trade can open in an earlier period). Columns: entry_date|entry_time|book|symbol|side|entry|exit|qty|position_x_balance|balance_before|pnl|pnl_inr|fees|R|risk_pct|stop|held_min|setup|levels|confidence|good_tags|mistake_tags|rules_kept|flags|prev_trade|mfe_pct|mae_pct|mfe_units|kept_pct|peak_to_exit_min|after_1h_best|after_1h_worst|after_4h_best|after_4h_worst|price_labels|notes");
+      // ---- trailing stop: the trader's own tags, measured against the price ----
+      const stopOfTrade = {};
+      rows.forEach(x => { stopOfTrade[x.t.id] = aiStopHandling(x.t); });
+      const vas = aiVasPairs(from, to), alertOf = {};
+      vas.forEach(pr => { if (pr.trade) alertOf[pr.trade.id] = pr; });
+      const myR = x => { const pr = alertOf[x.t.id]; const o = pr && myOutcome(pr); return o ? o.r : x.r; };
+      const alertR = x => { const pr = alertOf[x.t.id]; const o = pr && outcomeOf(pr); return o ? o.r : null; };
+      const avgOf = v => { v = v.filter(n => n != null && isFinite(n)); return v.length ? avg(v) : null; };
+      L.push("", "TRAILING SL (from the trader's tags: trailed = Trailed Stop Loss / Partial Booked + Trailed Stop / Trailed SL Hit; moved = Moved Stop Loss):");
+      [["trailed", x => /trail/.test(stopOfTrade[x.t.id])], ["moved SL", x => /moved/.test(stopOfTrade[x.t.id])], ["not tagged", x => !stopOfTrade[x.t.id]]].forEach(([name, f]) => {
+        const g = rows.filter(f);
+        if (!g.length) return;
+        const pw = g.filter(x => x.t.pnl > 0 && pxOf(x) && pxOf(x).kept != null), lab = l => g.filter(x => pxOf(x) && pxOf(x).labels.indexOf(l) !== -1).length;
+        const mr = avgOf(g.map(myR)), ar = avgOf(g.map(alertR));
+        L.push(`- ${name}: ${g.length} trades, ${g.filter(x => x.t.pnl > 0).length} wins, net ${aiNum(sum(g.map(inr)), 0)} INR` + (pw.length ? `, winners kept ${Math.round(avg(pw.map(x => pxOf(x).kept)))}% of best move` : "") + `, early_exit ${lab("early_exit")}, gave_back ${lab("gave_back")}` + (mr != null ? `, your avg ${aiNum(mr)}R` : "") + (ar != null ? `, the alert's own avg ${aiNum(ar)}R on the same trades` : ""));
+      });
+      // ---- VAS: the scanner's alerts, taken and skipped ----
+      if (vas.length) {
+        const st = list => {
+          const res = list.map(outcomeOf).filter(Boolean), tk = list.filter(pr => pr.trade), sk = list.filter(pr => !pr.trade);
+          const r = l => avgOf(l.map(pr => { const o = outcomeOf(pr); return o ? o.r : null; }));
+          const mine = avgOf(tk.map(pr => { const o = myOutcome(pr); return o ? o.r : null; }));
+          return `${list.length} alerts, result known ${res.length}` + (res.length ? `, win ${Math.round(res.filter(o => o.r > 0).length / res.length * 100)}%, avg ${aiNum(avg(res.map(o => o.r)))}R` : "")
+            + ` | taken ${tk.length}` + (tk.length ? `: alert avg ${aiNum(r(tk))}R, your avg ${aiNum(mine)}R` : "") + ` | skipped ${sk.length}` + (sk.length ? `: alert avg ${aiNum(r(sk))}R` : "");
+        };
+        const by = (title, keyOf) => {
+          const g = {};
+          vas.forEach(pr => { const k2 = keyOf(pr); if (k2) (g[k2] = g[k2] || []).push(pr); });
+          const keys = Object.keys(g).sort((a, b) => g[b].length - g[a].length).slice(0, 14);
+          if (keys.length < 2 && title !== "BY ALERT TYPE") return;
+          L.push(title + ":"); keys.forEach(k2 => L.push(`- ${k2}: ${st(g[k2])}`));
+        };
+        L.push("", `VAS ALERTS (the trader's own scanner, "VAS"). The trader gets an alert, checks the chart on TradingView, and takes it only if it looks right. Alert R = what the alert itself did by the scanner's rules (its entry, stop and exit); your R = the trader's real trade on it, in the alert's R. All: ${st(vas)}`);
+        by("BY ALERT TYPE", pr => pr.kd);
+        by("BY TYPE + TIMEFRAME", pr => pr.kd + " " + (pr.signal.timeframe || "?"));
+        by("BY TYPE + SIDE", pr => pr.kd + " " + pr.signal.side);
+        by("BY SCORE", pr => { const m = String(pr.signal.score || "").match(/^(\d+)/); return m ? pr.kd + " score " + m[1] : null; });
+        by("BY SCANNER OUTCOME", pr => pr.signal.outcome ? pr.kd + " " + aiTxt(pr.signal.outcome, 30) : null);
+        by("BY ALERT HOUR (IST)", pr => pr.signal.time ? pr.signal.time.slice(0, 2) + ":00" : null);
+      } else L.push("", "VAS ALERTS: none loaded on this device for the period, so the alerts can't be judged.");
+      L.push("", "TRADES (in order of closing; a trade can open in an earlier period). Columns: entry_date|entry_time|book|symbol|side|entry|exit|qty|position_x_balance|balance_before|pnl|pnl_inr|fees|R|risk_pct|stop|held_min|setup|levels|confidence|good_tags|mistake_tags|rules_kept|flags|prev_trade|stop_handling|vas_alert|alert_R|your_R|mfe_pct|mae_pct|mfe_units|kept_pct|peak_to_exit_min|after_1h_best|after_1h_worst|after_4h_best|after_4h_worst|price_labels|notes");
       const prevOf = {}, lastIn = {};
       rows.forEach(x => { const b = x.t.accountId, d = dayOf(x.t), l = lastIn[b]; prevOf[x.t.id] = l && l.d === d ? (l.p > 0 ? "after win" : "after loss") : "first of day"; lastIn[b] = { d, p: x.t.pnl }; });
       use.forEach(x => {
@@ -4121,40 +4162,55 @@
           aiNum(px.entry, 6), aiNum(px.exit, 6), aiNum(px.qty, 6), aiNum(x.xBal), aiNum(x.before), aiNum(t.pnl), aiNum(inr(x)), aiNum(t.fees),
           aiNum(x.r), aiNum(x.riskPct), x.stopSrc || "none", aiNum(heldMins(t), 0), aiTxt(t.setup, 40) + (t.setupAuto ? " (auto)" : ""),
           aiLevels(t).join("+") + (t.playAuto && aiLevels(t).length ? " (auto)" : ""), t.confidence || "", (t.tagsPositives || []).join("+"), (t.tagsMistakes || []).join("+"),
-          rk || t.reviewed ? rk + "/" + RULES.length : "", x.flags.join("+"), prevOf[t.id] || "",
+          rk || t.reviewed ? rk + "/" + RULES.length : "", x.flags.join("+"), prevOf[t.id] || "", stopOfTrade[t.id] || "",
+          (pr => pr ? [pr.kd, pr.signal.timeframe || "", pr.signal.score ? "score " + aiTxt(pr.signal.score, 10) : "", pr.signal.outcome ? aiTxt(pr.signal.outcome, 20) : ""].filter(Boolean).join(" ") : "no alert")(alertOf[t.id]),
+          aiNum(alertR(x)), aiNum(myR(x)),
           ...(m => m ? [aiNum(m.mfePct), aiNum(m.maePct), aiNum(m.mfeU) + m.unit, m.kept == null ? "" : m.kept, m.peakToExit, aiNum(m.a1Best), aiNum(m.a1Worst), aiNum(m.a4Best), aiNum(m.a4Worst), m.labels.join("+")]
             : ["", "", "", "", "", "", "", "", "", (pxm[t.id] && pxm[t.id].none) || ""])(pxOf(x)),
           aiTxt(t.notes, 160)
         ].join("|"));
       });
-      return { text: L.join("\n"), n: rows.length, sent: use.length, from, to, label, k, priced: seen.length };
+      return { text: L.join("\n"), n: rows.length, sent: use.length, from, to, label, k, priced: seen.length, alerts: vas.length };
     }
     // The playbook boxes ticked on a trade (lakky ticks the fib level here), plus
     // a level field if the trade has one.
+    function aiStopHandling(t) {
+      const p = t.tagsPositives || [], m = t.tagsMistakes || [], out = [];
+      if (p.indexOf("Partial Booked + Trailed Stop") !== -1) out.push("partial+trailed");
+      else if (p.indexOf("Trailed Stop Loss") !== -1 || p.indexOf("Trailed SL Hit (Protected Win)") !== -1) out.push("trailed");
+      if (p.indexOf("Trailed SL Hit (Protected Win)") !== -1) out.push("trail hit");
+      if (m.indexOf("Moved Stop Loss") !== -1) out.push("moved SL");
+      if (m.indexOf("Early Exit / Cut Winner") !== -1) out.push("cut winner");
+      return out.join("+");
+    }
+    // Every fib, trendline and zone alert sent in the period, with the trade taken on it.
+    function aiVasPairs(from, to) {
+      const out = [];
+      ["fib", "trendline", "zone"].forEach(kd => matchSignals(kd).forEach(pr => { if (pr.signal.date >= from && pr.signal.date <= to) out.push(Object.assign({ kd }, pr)); }));
+      return out;
+    }
     function aiLevels(t) {
       const out = Object.keys(t.playRules || {}).filter(r => t.playRules[r]).map(r => aiTxt(r, 40));
       ["level", "fibLevel"].forEach(f => { if (t[f] != null && t[f] !== "" && out.indexOf(String(t[f])) === -1) out.push(aiTxt(t[f], 40)); });
       return out;
     }
-    const AI_SYSTEM = "You are a strict but kind trading coach. You review one trader's journal: crypto futures (Delta, CoinDCX) and Indian markets. "
-      + "Go through EVERY trade line yourself, one by one: the entry, how it was held, the exit, and what price did while it was open and after it was closed (the price columns). Do not just repeat the totals. "
-      + "Use only the data given and never invent trades or numbers. Back every point with evidence: trade dates and symbols, counts, P&L, setups, fib levels, hours, flags, tags, notes. "
-      + "verdict: a straight answer to 'what am I doing wrong?' in 2 to 4 sentences. "
-      + "exits: holding and exits. Am I cutting winners early, giving back profit, or holding losers too long? How many trades, how much was left, and THE PATTERN behind the early exits: when do they happen (hour, after a loss or a win, setup, fib level, symbol, size, how long held, how far in profit) and what reasons do the tags and notes give. Name the trades. "
-      + "pros: what is working and should be kept. cons: what is costing money or breaking the trader's own limits, biggest cost first. "
-      + "improve: concrete rules for the next period, each one a clear action the trader can follow, tied to the evidence (for example an exit rule). "
-      + "Write in short, simple English (one or two sentences per item). Give 3 to 6 items in each list. If there are too few trades, or too little price data, to judge something, say so.";
+    const AI_SYSTEM = "You are a blunt, practical trading coach for one crypto futures trader (Delta, CoinDCX). The trader gets alerts from their own scanner, VAS (fib, trendline and zone alerts), checks the chart on TradingView, and trades the ones that look right. "
+      + "Go through EVERY trade line and the VAS alert stats yourself; do not just repeat totals. Use only the data given, never invent numbers. "
+      + "STYLE: direct and easy to scan. Each point is at most 12 words. Each proof is at most 15 words and carries the numbers or trade (symbol + date). No filler, no repeats, no long sentences. 2 to 4 items per list. "
+      + "verdict: the main problem and the main strength, at most 2 short sentences. "
+      + "wrong: the habits that cost the most money, biggest first. "
+      + "right: what works and must be kept. "
+      + "trailing: judge the trailing stop-loss logic. Does trailing protect wins or cut them early? Compare trailed vs not (kept % of best move, early exits, after-exit moves) and the trader's R vs the alert's own R on the same trades. Say when to start trailing and how tight, if the data shows it. "
+      + "vas: feedback to improve the VAS scanner. Which alert types, timeframes, sides, scores and hours win or lose; which alerts the trader skips that worked; whether the TradingView check adds value (taken vs skipped alert R); what to change or filter in VAS. "
+      + "setup: how to improve the entry setup (fib level, trendline type, side, hour, symbol). "
+      + "rules: 3 to 5 clear rules for the next period, each tied to the data. "
+      + "If there is too little data for a section, give one item saying so.";
+    const AI_ITEM = { type: "ARRAY", items: { type: "OBJECT", properties: { point: { type: "STRING" }, proof: { type: "STRING" } }, required: ["point", "proof"] } };
+    const AI_SECS = [["wrong", "What you do wrong", "text-rose-400"], ["right", "What works", "text-emerald-400"], ["trailing", "Trailing SL", "text-sky-300"], ["vas", "VAS alerts", "text-amber-300"], ["setup", "Setup", "text-slate-300"], ["rules", "Do this next", "text-amber-400"]];
     const AI_SCHEMA = {
       type: "OBJECT",
-      properties: {
-        summary: { type: "STRING" },
-        verdict: { type: "STRING" },
-        exits: { type: "ARRAY", items: { type: "OBJECT", properties: { point: { type: "STRING" }, evidence: { type: "STRING" } }, required: ["point", "evidence"] } },
-        pros: { type: "ARRAY", items: { type: "OBJECT", properties: { point: { type: "STRING" }, evidence: { type: "STRING" } }, required: ["point", "evidence"] } },
-        cons: { type: "ARRAY", items: { type: "OBJECT", properties: { point: { type: "STRING" }, evidence: { type: "STRING" } }, required: ["point", "evidence"] } },
-        improve: { type: "ARRAY", items: { type: "OBJECT", properties: { action: { type: "STRING" }, why: { type: "STRING" } }, required: ["action", "why"] } }
-      },
-      required: ["verdict", "summary", "exits", "pros", "cons", "improve"]
+      properties: Object.assign({ verdict: { type: "STRING" } }, Object.fromEntries(AI_SECS.map(x => [x[0], AI_ITEM]))),
+      required: ["verdict"].concat(AI_SECS.map(x => x[0]))
     };
     async function aiCall(model, key, body) {
       const r = await fetch(AI_BASE + encodeURIComponent(model) + ":generateContent", {
@@ -4177,8 +4233,10 @@
       let o = null;
       try { o = JSON.parse(text); } catch (e) { const m = text.match(/\{[\s\S]*\}/); if (m) try { o = JSON.parse(m[0]); } catch (e2) {} }
       if (!o || typeof o !== "object") return null;
-      const list = (v, a, b) => (Array.isArray(v) ? v : []).filter(x => x && typeof x === "object").slice(0, 10).map(x => ({ [a]: aiTxt(x[a], 400), [b]: aiTxt(x[b], 600) })).filter(x => x[a]);
-      return { verdict: aiTxt(o.verdict, 800), exits: list(o.exits, "point", "evidence"), summary: aiTxt(o.summary, 800), pros: list(o.pros, "point", "evidence"), cons: list(o.cons, "point", "evidence"), improve: list(o.improve, "action", "why") };
+      const list = v => (Array.isArray(v) ? v : []).filter(x => x && typeof x === "object").slice(0, 6).map(x => ({ point: aiTxt(x.point, 200), proof: aiTxt(x.proof, 300) })).filter(x => x.point);
+      const out = { verdict: aiTxt(o.verdict, 500) };
+      AI_SECS.forEach(x => { out[x[0]] = list(o[x[0]]); });
+      return out;
     }
     async function runAiReview() {
       if (aiBusy) return;
@@ -4197,7 +4255,7 @@
       aiStatus("Gemini is reading " + p.sent + " trades (price data for " + p.priced + ")… this can take up to a minute.");
       const body = {
         systemInstruction: { parts: [{ text: AI_SYSTEM }] },
-        contents: [{ role: "user", parts: [{ text: "Review my trading for this period. Look at every trade yourself and tell me what I am doing wrong: holding, early exits and the pattern behind them, the pros, the cons, and how to improve.\n\n" + p.text }] }],
+        contents: [{ role: "user", parts: [{ text: "Review my trading for this period. Look at every trade and alert yourself. Tell me what I do wrong and right, judge my trailing SL, give feedback to improve VAS and my setup, and give me rules. Keep it short.\n\n" + p.text }] }],
         generationConfig: { temperature: 0.4, responseMimeType: "application/json", responseSchema: AI_SCHEMA }
       };
       try {
@@ -4207,7 +4265,7 @@
         if (!res.ok) { aiStatus(aiErrText(res), true); return; }
         const out = aiParse(res.j);
         if (!out) { aiStatus("Gemini's answer could not be read. Try again.", true); return; }
-        const saved = Object.assign(out, { at: new Date().toISOString(), k: p.k, label: p.label, from: p.from, to: p.to, n: p.n, priced: p.priced, model });
+        const saved = Object.assign(out, { v: 2, at: new Date().toISOString(), k: p.k, label: p.label, from: p.from, to: p.to, n: p.n, priced: p.priced, alerts: p.alerts, model });
         try { localStorage.setItem(AI_LAST, JSON.stringify(saved)); } catch (e) {}
         aiStatus("");
         renderAiResult(saved);
@@ -4232,27 +4290,21 @@
       try { let total = 0; pxm = await aiPriceCheck(rows, (d, t) => { if (t) total = t; aiStatus("Reading the price around each trade… " + d + " of " + total); }); } catch (e) {}
       aiBusy = false; aiStatus("");
       const p = aiReviewPrompt(k, pxm, rows);
-      const text = AI_SYSTEM + "\nAnswer with: Verdict, Holding & exits, Pros, Cons, How to improve.\n\nReview my trading for this period. Look at every trade yourself.\n\n" + p.text;
+      const text = AI_SYSTEM + "\nAnswer with short bullets under: Verdict, What you do wrong, What works, Trailing SL, VAS alerts, Setup, Do this next.\n\nReview my trading for this period. Look at every trade and alert yourself.\n\n" + p.text;
       (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => toast("Copied " + p.sent + " trades. Paste into the Gemini app.")).catch(() => toast("Could not copy"));
     }
     function renderAiResult(r) {
       const host = document.getElementById("aiResult");
       if (!host) return;
-      if (!r) { host.innerHTML = ""; return; }
-      const sec = (title, color, items, a, b) => items.length ? `<div class="space-y-1.5" data-ai-sec="${esc(title)}">
-          <div class="text-[10px] uppercase tracking-wider font-bold ${color}">${esc(title)}</div>
-          ${items.map(x => `<div class="border border-terminal-border rounded-lg p-2.5"><div class="text-slate-200 font-semibold">${esc(x[a])}</div>${x[b] ? `<div class="text-slate-400 text-[11px] mt-0.5">${esc(x[b])}</div>` : ""}</div>`).join("")}
+      if (!r || r.v !== 2) { host.innerHTML = ""; return; }
+      const sec = x => (r[x[0]] || []).length ? `<div class="border border-terminal-border rounded-lg p-2.5 space-y-1.5" data-ai-sec="${x[0]}">
+          <div class="text-[10px] uppercase tracking-wider font-bold ${x[2]}">${esc(x[1])}</div>
+          ${r[x[0]].map(i => `<div><span class="${x[2]}">•</span> <span class="text-slate-100 font-semibold">${esc(i.point)}</span>${i.proof ? `<div class="text-slate-400 text-[11px] ml-2">${esc(i.proof)}</div>` : ""}</div>`).join("")}
         </div>` : "";
       host.innerHTML = `<div class="space-y-3 border-t border-terminal-border pt-3">
-          <div class="text-slate-500 text-[11px]">${esc(r.label)} · ${esc(fmtDay(r.from))} to ${esc(fmtDay(r.to))} · ${r.n} trades${r.priced != null ? " · price data for " + r.priced : ""} · ${esc(r.model || "")} · ${esc(new Date(r.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}</div>
+          <div class="text-slate-500 text-[11px]">${esc(r.label)} · ${esc(fmtDay(r.from))} to ${esc(fmtDay(r.to))} · ${r.n} trades · price data for ${r.priced || 0} · ${r.alerts || 0} VAS alerts · ${esc(r.model || "")} · ${esc(new Date(r.at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}</div>
           ${r.verdict ? `<div class="border border-amber-500/40 rounded-lg p-2.5" data-ai-verdict><div class="text-[10px] uppercase tracking-wider font-bold text-amber-400">Verdict</div><p class="text-white font-semibold leading-relaxed mt-0.5">${esc(r.verdict)}</p></div>` : ""}
-          ${r.summary ? `<p class="text-slate-300 leading-relaxed">${esc(r.summary)}</p>` : ""}
-          ${sec("Holding & exits", "text-sky-300", r.exits || [], "point", "evidence")}
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-            ${sec("Pros", "text-emerald-400", r.pros, "point", "evidence")}
-            ${sec("Cons", "text-rose-400", r.cons, "point", "evidence")}
-            ${sec("How to improve", "text-amber-400", r.improve, "action", "why")}
-          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">${AI_SECS.map(sec).join("")}</div>
         </div>`;
     }
     function renderAiReview() {
@@ -4265,7 +4317,7 @@
       const n = allTrades().filter(t => { const d = dayOf(t); return d >= from && d <= to; }).length;
       document.getElementById("aiCount").innerText = n + " closed trades, all books" + (aiCfg().key ? "" : " · add a Gemini key in Settings to review here");
       let last = null; try { last = JSON.parse(localStorage.getItem(AI_LAST) || "null"); } catch (e) {}
-      if (!aiBusy) renderAiResult(last && Array.isArray(last.pros) ? last : null);
+      if (!aiBusy) renderAiResult(last);
     }
     function renderAiKeyCard() {
       const c = aiCfg(), badge = document.getElementById("aiKeyBadge");
