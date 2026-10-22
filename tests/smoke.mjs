@@ -2113,6 +2113,8 @@ async function aiReviewRun(seed) {
     calls.push({ url: req.url(), key: req.headers()['x-goog-api-key'], body: req.postData() });
     const cors = { 'access-control-allow-origin': '*', 'content-type': 'application/json' };
     if (mode === 'quota') return route.fulfill({ status: 429, headers: cors, body: JSON.stringify({ error: { code: 429, message: 'Resource exhausted' } }) });
+    if (mode === 'busy' && req.url().includes('gemini-2.5-flash:')) return route.fulfill({ status: 503, headers: cors, body: JSON.stringify({ error: { code: 503, message: 'This model is currently experiencing high demand.' } }) });
+    if (mode === 'allbusy') return route.fulfill({ status: 503, headers: cors, body: JSON.stringify({ error: { code: 503, message: 'high demand' } }) });
     if (mode === 'nomodel' && req.url().includes('gemini-2.5-flash')) return route.fulfill({ status: 404, headers: cors, body: JSON.stringify({ error: { code: 404, message: 'not found' } }) });
     const answer = { verdict: 'You cut winners early.', wrong: [{ point: 'Pullback shorts lose', proof: '-3R total' }, { point: '<b>x</b>', proof: '' }], right: [{ point: 'Breakout longs win', proof: '6 of 8 won' }], trailing: [{ point: 'Trail starts too tight', proof: 'XAIUSD went 3% on' }], vas: [{ point: 'Fib 1h shorts lose', proof: 'avg -1R' }], setup: [{ point: 'Enter at L3 only', proof: 'L3 won 4 of 5' }], rules: [{ point: 'Skip pullback shorts', proof: 'They lost most' }] };
     route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'thinking', thought: true }, { text: JSON.stringify(answer) }] } }] }) });
@@ -2196,6 +2198,17 @@ async function aiReviewRun(seed) {
     await page.click('#aiRunBtn');
     await page.waitForFunction(() => !aiBusy, null, { timeout: 5000 });
     check(calls.length === 2 && /gemini-flash-latest:generateContent$/.test(calls[1].url) && (await page.innerText('#aiResult')).includes('gemini-flash-latest'), 'fallback model: ' + JSON.stringify(calls.map(c => c.url)));
+    // Overloaded (503): the same model is tried again, then the next one answers.
+    await page.evaluate(() => { aiRetryMs = [10, 10]; });
+    mode = 'busy'; calls.length = 0;
+    await page.click('#aiRunBtn');
+    await page.waitForFunction(() => !aiBusy, null, { timeout: 8000 });
+    check(JSON.stringify(calls.map(c => c.url.replace(/^.*models\//, ''))) === JSON.stringify(['gemini-2.5-flash:generateContent', 'gemini-2.5-flash:generateContent', 'gemini-2.5-flash:generateContent', 'gemini-flash-latest:generateContent'])
+      && (await page.innerText('#aiResult')).includes('gemini-flash-latest'), 'busy retry then fallback: ' + JSON.stringify(calls.map(c => c.url.replace(/^.*models\//, ''))));
+    mode = 'allbusy'; calls.length = 0;
+    await page.click('#aiRunBtn');
+    await page.waitForFunction(() => !aiBusy, null, { timeout: 8000 });
+    check(calls.length === 9 && /overloaded/.test(await page.innerText('#aiStatus')), 'all busy: ' + calls.length + ' ' + await page.innerText('#aiStatus'));
     // Remove.
     await page.evaluate(() => { switchTab('data'); removeAiKey(); });
     check(await page.evaluate(() => !aiCfg().key && !localStorage.getItem('tapeAndTarget.gemini')), 'key should be removed');
