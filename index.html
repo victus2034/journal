@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-22.124">
+  <meta name="app-version" content="2026-10-22.125">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1181,7 +1181,7 @@
           </div>
           <button onclick="openPlay(null)" class="px-2.5 py-1 bg-terminal-surface border border-terminal-border hover:border-amber-500 rounded text-slate-200">+ Add setup</button>
         </div>
-        <p class="text-slate-400 text-[11px] leading-relaxed">Rules for each setup. Pick the setup when you log a trade and its checklist shows up; the win rate below compares trades that kept every rule with trades that broke one.</p>
+        <p class="text-slate-400 text-[11px] leading-relaxed">Rules for each setup. Pick the setup when you log a trade and its checklist shows up; the win rate below compares trades that kept every rule with trades that broke one. A levels setup (FIB, TRENDLINE) shows each level's win rate instead. Trades are filled in from the scanner's fib and trendline alerts on their own: the setup and the level the entry was at. Anything you pick by hand stays.</p>
         <div id="playbookList" class="space-y-2"></div>
       </div>
 
@@ -1548,6 +1548,8 @@
       // Filled in from the matched alert, not typed: the inspector says so.
       if (t.stopSrc === "alert" && o.stop) o.stopSrc = "alert"; else delete o.stopSrc;
       if (t.setupAuto === true) o.setupAuto = true; else delete o.setupAuto;
+      if (t.playAuto === true && o.playRules) o.playAuto = true; else delete o.playAuto;
+      if (t.noSetup === true && !String(o.setup || "").trim()) o.noSetup = true; else delete o.noSetup;
       if (t.reviewed === true) o.reviewed = true; else delete o.reviewed;
       return o;
     }
@@ -1599,6 +1601,7 @@
       const o = Object.assign({}, p);
       o.id = cText(p.id, 40); o.name = name;
       o.rules = (Array.isArray(p.rules) ? p.rules : []).map(r => cText(r, 120).trim()).filter(Boolean).slice(0, 20);
+      if (typeof p.levels === "boolean") o.levels = p.levels; else delete o.levels;
       return o;
     }
     function cleanSignal(g) {
@@ -4312,11 +4315,12 @@
       const own = trade.rep ? trade : state.trades.find(t => t.id === trade.id);
       const chk = document.getElementById('inspChecklist');
       chk.innerHTML = '';
-      const tickRow = (label, kept, flip) => {
+      // A level (pick one) shows ○ when it is not the one, not ✕ for "missed".
+      const tickRow = (label, kept, flip, level) => {
         const row = document.createElement(own ? 'button' : 'div');
         row.className = 'w-full text-left flex items-center gap-2 ' + (kept ? 'text-emerald-400' : 'text-slate-500') + (own ? ' hover:text-white' : '');
-        row.innerHTML = `<span>${kept ? '✓' : '✕'}</span> <span>${esc(label)}</span>`;
-        if (own) { row.type = 'button'; row.title = kept ? 'Done right. Tap to mark it missed' : 'Missed. Tap to mark it done'; row.onclick = flip; }
+        row.innerHTML = `<span>${kept ? '✓' : level ? '○' : '✕'}</span> <span>${esc(label)}</span>`;
+        if (own) { row.type = 'button'; row.title = level ? (kept ? 'The level this trade was taken at. Tap to clear' : 'Tap if this trade was taken at this level') : kept ? 'Done right. Tap to mark it missed' : 'Missed. Tap to mark it done'; row.onclick = flip; }
         chk.appendChild(row);
       };
       if (own) { const hint = document.createElement('div'); hint.className = 'text-[10px] text-slate-500'; hint.textContent = 'Rules followed · tap to change'; chk.appendChild(hint); }
@@ -4336,7 +4340,7 @@
           const b = document.createElement('button'); b.type = 'button'; b.dataset.setup = name;
           b.className = 'px-2 py-0.5 rounded-full border text-[10px] ' + (on ? 'bg-amber-500/20 text-amber-300 border-amber-500/50' : 'bg-[#080D15] text-slate-500 border-terminal-border hover:text-slate-300');
           b.textContent = name;
-          b.onclick = () => reviewTrade(own, t => { if (name === 'None') t.setup = ''; else t.setup = name; delete t.setupAuto; if (!on) delete t.playRules; });
+          b.onclick = () => reviewTrade(own, t => { if (name === 'None') { t.setup = ''; t.noSetup = true; } else { t.setup = name; delete t.noSetup; } delete t.setupAuto; if (!on) { delete t.playRules; delete t.playAuto; } });
           row.appendChild(b);
         });
         chk.appendChild(row);
@@ -4346,9 +4350,14 @@
       if (prKeys.length) {
         const head = document.createElement('div');
         head.className = 'text-slate-400 pt-1.5 mt-1 border-t border-terminal-border';
-        head.textContent = (play ? play.name + ' checklist' : 'Setup checklist') + (own ? ' · tap to change' : '');
+        head.textContent = (play ? play.name + (playIsLevels(play) ? ' level' : ' checklist') : 'Setup checklist') + (trade.playAuto ? ' (from alert)' : '') + (own ? ' · tap to change' : '');
         chk.appendChild(head);
-        prKeys.forEach(r => tickRow(r, !!pr[r], () => reviewTrade(own, t => { t.playRules = Object.assign({}, t.playRules, { [r]: !(t.playRules || {})[r] }); })));
+        prKeys.forEach(r => tickRow(r, !!pr[r], () => reviewTrade(own, t => {
+          const was = !!(t.playRules || {})[r];
+          // A levels setup (FIB, TRENDLINE): a trade sits at one level, so ticking one clears the rest.
+          t.playRules = play && playIsLevels(play) ? Object.fromEntries(prKeys.map(k => [k, k === r && !was])) : Object.assign({}, t.playRules, { [r]: !was });
+          delete t.playAuto;
+        }), play && playIsLevels(play)));
       }
 
       const conf = tradeConfidence(trade);
@@ -4396,43 +4405,126 @@
       openInspector(hydrate(t));
     }
 
-    /* =================== FILL IN FROM THE MATCHED ALERT =================== */
-    // A trade taken off an alert gets the alert's stop (when it has no stop of its
-    // own), its setup (FIB, TRENDLINE or ZONE, or the playbook setup of that name)
-    // and, for a fib, the level its entry was nearest ticked in the setup's checklist.
-    // Only empty fields are filled; anything typed stays. Runs when the trades,
-    // alerts or playbook change.
-    // Fib and trendline first: a trade that also sits in a zone alert keeps the more specific setup.
+    /* =================== SETUP AND LEVEL FROM THE SCANNER'S ALERTS =================== */
+    // Every trade is held against the scanner's fib and trendline alerts on its
+    // symbol, and gets the setup and the level it was taken at:
+    //  - FIB: the box edge its entry sits nearest (L1-L4), on a fib alert of the same side.
+    //  - TRENDLINE: SUPPORT (a long at the lower line), RESISTANCE (a short at the upper
+    //    line), SP BROKEN (a short below the lower line) or RT BROKEN (a long above
+    //    the upper line). The line's price at the entry minute comes from its two anchors.
+    // An alert counts from when it was sent for a few candles of its timeframe. When no
+    // fib or trendline alert fits, the alert the trade was matched to (same symbol, side
+    // and day) still gives its setup, and a zone alert gives ZONE.
+    // Only what was filled in automatically is ever changed: a setup you picked, a level
+    // you ticked, or "None" stays. Journal trades also take a matched alert's stop when
+    // they have none. Runs when the trades, alerts or playbook change.
     const KIND_SETUP = { fib: "FIB", trendline: "TRENDLINE", zone: "ZONE" };
+    const ALERT_LOOK_DAYS = { "30M": 1, "1H": 2, "4H": 4, "1D": 10, "1W": 30, "1MO": 60 };
     let alertFillKey = "";
     function alertSetupName(kind) { const base = KIND_SETUP[kind] || "ZONE", p = findPlay(base); return p ? p.name : base; }
-    function autoPlayRules(setup, have, sig, entry) {
-      if (have && Object.keys(have).some(k => have[k])) return null; // already ticked by hand
-      const play = findPlay(setup);
-      if (!play || !play.rules.length || !sig || sig.kind !== "fib") return null;
-      const g = fibGeom(sig), lv = g && isFinite(entry) ? fibNearest(g, entry) : null;
-      if (!lv || play.rules.indexOf(lv) === -1) return null;
-      const o = {}; play.rules.forEach(r => { o[r] = r === lv; });
-      return o;
+    // Alert and trade times are India time.
+    function istMs(date, time) { return Date.parse(date + "T" + (TIME_RE.test(String(time || "")) ? time : "00:00") + ":00+05:30"); }
+    // A trendline alert's line: which one (0 lower, 1 upper), the price it is at any
+    // minute, and the alert's own risk (entry to stop) as the unit of distance.
+    function tlGeom(sig) {
+      if (!sig || sig.kind !== "trendline") return null;
+      const parts = String(sig.key || "").split("|");
+      let line = parseInt(parts[3], 10);
+      if (line !== 0 && line !== 1) line = sig.side === "short" ? 1 : 0;
+      const t1 = parseFloat(parts[4]), t2 = parseFloat(parts[5]), e = signalEntry(sig), w = Math.abs(e - sig.stop);
+      if (!isFinite(e) || !(w > 0)) return null;
+      const p = Array.isArray(sig.tl) ? sig.tl : null;
+      const at = (p && isFinite(p[0]) && isFinite(p[1]) && isFinite(t1) && t2 > t1)
+        ? ms => p[0] + (p[1] - p[0]) * (ms / 1000 - t1) / (t2 - t1)
+        : () => e; // saved before the scanner wrote the anchors: flat at the alert's entry
+      return { line, w, at };
     }
-    function fillTradeFromAlert(t, sig, kind) {
+    // Where a trade sits against the line, in the alert's R: at it (bounce) or through it (break).
+    function tlLevel(g, side, entry, ms) {
+      const lp = g.at(ms), d = (entry - lp) / g.w; // above the line is positive
+      if (!isFinite(d)) return null;
+      if (g.line === 0) {
+        if (side === "long" && d >= -1 && d <= 1.5) return { rule: "SUPPORT", fit: Math.abs(d) };
+        if (side === "short" && d < 0 && d >= -3) return { rule: "SP BROKEN", fit: -d };
+      } else {
+        if (side === "short" && d <= 1 && d >= -1.5) return { rule: "RESISTANCE", fit: Math.abs(d) };
+        if (side === "long" && d > 0 && d <= 3) return { rule: "RT BROKEN", fit: d };
+      }
+      return null;
+    }
+    // Fib and trendline alerts by symbol, for classifyTrade.
+    function setupAlertIndex() {
+      const idx = {};
+      (state.signals || []).forEach(g => {
+        if (g.kind !== "fib" && g.kind !== "trendline") return;
+        const ms = istMs(g.date, g.time);
+        if (!isFinite(ms)) return;
+        const k = normSym(g.symbol);
+        (idx[k] || (idx[k] = [])).push({ g, ms });
+      });
+      return idx;
+    }
+    // The fib or trendline alert a trade fits best: nearest its level, then freshest.
+    function classifyTrade(t, idx) {
+      const entry = Number(t.entry), side = t.direction, ms = istMs(t.date, t.time);
+      if (!(entry > 0) || (side !== "long" && side !== "short") || !isFinite(ms)) return null;
+      let best = null;
+      (idx[normSym(t.symbol)] || []).forEach(({ g, ms: sm }) => {
+        if (!symbolsAgree(t.symbol, g.symbol)) return;
+        const span = (ALERT_LOOK_DAYS[g.timeframe] || 4) * 864e5;
+        if (sm > ms + 5 * 60e3 || ms - sm > span) return; // sent after the entry, or too long before
+        let hit = null;
+        if (g.kind === "fib") {
+          if (g.side !== side) return;
+          const fg = fibGeom(g), lv = fg ? fibNearest(fg, entry) : null;
+          if (!lv || FIB_RATIOS[lv] == null) return;
+          hit = { rule: lv, fit: Math.abs(fg.at(entry) - FIB_RATIOS[lv]) / (FIB_RATIOS.L2 - FIB_RATIOS.L1) };
+        } else {
+          const tg = tlGeom(g);
+          hit = tg ? tlLevel(tg, side, entry, ms) : null;
+          if (!hit) return;
+        }
+        const score = hit.fit + Math.max(0, ms - sm) / span;
+        if (!best || score < best.score) best = { kind: g.kind, rule: hit.rule, sig: g, score };
+      });
+      return best;
+    }
+    // A matched alert whose level could not be placed: its setup, and for a trendline
+    // the side of the line it alerted on.
+    function pairClass(kind, sig) {
+      if (kind === "trendline") { const g = tlGeom(sig); return { kind, rule: g ? (g.line === 0 ? "SUPPORT" : "RESISTANCE") : null, sig }; }
+      return { kind, rule: null, sig };
+    }
+    // Set a review record's setup and level from c. Returns true when it changed.
+    function applySetupClass(r, c) {
+      if (r.noSetup) return false;
+      const name = alertSetupName(c.kind), cur = String(r.setup || "").trim();
+      const pr = r.playRules || {}, handTicked = !r.playAuto && Object.keys(pr).some(k => pr[k]);
+      let ch = false;
+      if (!cur || (r.setupAuto && cur.toLowerCase() !== name.toLowerCase() && !handTicked)) {
+        r.setup = name; r.setupAuto = true; ch = true;
+        if (cur) { delete r.playRules; delete r.playAuto; }
+      }
+      if (!c.rule || handTicked || String(r.setup).trim().toLowerCase() !== name.toLowerCase()) return ch;
+      const play = findPlay(name), rule = play && play.rules.find(x => x.toUpperCase() === c.rule.toUpperCase());
+      if (!rule) return ch;
+      const o = {}; play.rules.forEach(x => { o[x] = x === rule; });
+      if (JSON.stringify(o) !== JSON.stringify(r.playRules || null) || !r.playAuto) { r.playRules = o; r.playAuto = true; ch = true; }
+      return ch;
+    }
+    function fillTradeFromAlert(t, c, pairSig) {
       if (t.rep) {
         state.repReviews = state.repReviews || {};
         const r = Object.assign({ rules: RULES.map(() => false), tagsPositives: [], tagsMistakes: [], notes: "", setup: "", confidence: null }, state.repReviews[t.id] || {});
-        let ch = false;
-        if (!String(r.setup || "").trim()) { r.setup = alertSetupName(kind); r.setupAuto = true; ch = true; }
-        const pr = autoPlayRules(r.setup, r.playRules, sig, Number(t.entry));
-        if (pr) { r.playRules = pr; ch = true; }
-        if (ch) state.repReviews[t.id] = stamp(r);
-        return ch;
+        if (c && applySetupClass(r, c)) { state.repReviews[t.id] = stamp(r); return true; }
+        return false;
       }
       const own = state.trades.find(x => x.id === t.id);
       if (!own) return false;
       let ch = false;
-      if (!stopOk(own) && isFinite(sig.stop) && sig.stop > 0 && stopOk(Object.assign({}, own, { stop: sig.stop }))) { own.stop = +sig.stop; own.stopSrc = "alert"; ch = true; }
-      if (!String(own.setup || "").trim()) { own.setup = alertSetupName(kind); own.setupAuto = true; ch = true; }
-      const pr = autoPlayRules(own.setup, own.playRules, sig, Number(own.entry));
-      if (pr) { own.playRules = pr; ch = true; }
+      const sig = pairSig;
+      if (sig && !stopOk(own) && isFinite(sig.stop) && sig.stop > 0 && stopOk(Object.assign({}, own, { stop: sig.stop }))) { own.stop = +sig.stop; own.stopSrc = "alert"; ch = true; }
+      if (c && applySetupClass(own, c)) ch = true;
       if (ch) { stamp(own); hydrate(own); }
       return ch;
     }
@@ -4445,10 +4537,24 @@
       alertFillKey = key;
       let n = 0;
       try {
-        Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind).forEach(pr => { if (pr.trade && fillTradeFromAlert(pr.trade, pr.signal, kind)) n++; }));
+        // The alert each trade was matched to; fib and trendline before zone.
+        const pair = {};
+        Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind).forEach(p => { if (p.trade && !pair[p.trade.id]) pair[p.trade.id] = { kind, sig: p.signal }; }));
+        const idx = setupAlertIndex();
+        signalTrades().forEach(t => {
+          const p = pair[t.id], c = classifyTrade(t, idx) || (p ? pairClass(p.kind, p.sig) : null);
+          if ((c || p) && fillTradeFromAlert(t, c, p && p.sig)) n++;
+        });
       } catch (e) { console.warn("alert fill", e); }
       if (n) save();
       return n;
+    }
+    // How many trades have a setup, and a level, for the Playbook card.
+    function setupCoverage() {
+      const ts = allTrades();
+      const withSetup = ts.filter(t => String(t.setup || "").trim());
+      const withLevel = withSetup.filter(t => t.playRules && Object.keys(t.playRules).some(k => t.playRules[k]));
+      return { n: ts.length, setup: withSetup.length, level: withLevel.length, auto: withSetup.filter(t => t.setupAuto).length };
     }
 
     /* =================== REVIEW QUEUE =================== */
@@ -4753,6 +4859,10 @@
         if (pr) rec.playRules = pr; else delete rec.playRules;
         if (existing && existing.stopSrc && rec.stop !== existing.stop) delete rec.stopSrc;
         if (existing && existing.setupAuto && rec.setup !== existing.setup) delete rec.setupAuto;
+        // A level changed by hand is yours; a setup cleared by hand stays empty.
+        if (existing && existing.playAuto && JSON.stringify(rec.playRules || null) !== JSON.stringify(existing.playRules || null)) delete rec.playAuto;
+        if (existing && String(existing.setup || "").trim() && !String(rec.setup || "").trim()) rec.noSetup = true;
+        if (String(rec.setup || "").trim()) delete rec.noSetup;
         if (existing) rec.reviewed = true;
         // A same-day trade moved to another date takes its exit day along; an
         // overnight one keeps the exit day it was imported with.
@@ -4789,6 +4899,9 @@
         <div class="space-y-1 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2">
           ${play.rules.map((r, i) => `<label class="flex items-center gap-2 text-slate-300"><input type="checkbox" data-play-rule="${esc(r)}" ${had[r] ? 'checked' : ''} class="accent-emerald-500"> ${esc(r)}</label>`).join('')}
         </div>`;
+      if (playIsLevels(play)) host.querySelectorAll('[data-play-rule]').forEach(b => b.addEventListener('change', () => {
+        if (b.checked) host.querySelectorAll('[data-play-rule]').forEach(x => { if (x !== b) x.checked = false; });
+      }));
     }
     function readPlayRules() {
       const boxes = document.querySelectorAll('#mPlayRules [data-play-rule]');
@@ -4797,21 +4910,36 @@
       boxes.forEach(b => { out[b.dataset.playRule] = b.checked; });
       return out;
     }
-    // Trades logged under the setup with its checklist filled: kept every rule vs broke one.
+    // A setup's rules are either a checklist (every one should be kept) or levels: the
+    // one place a trade was taken (FIB L1-L4, TRENDLINE SUPPORT ... RT BROKEN), where
+    // ticking one means the others were not, not that they were broken. Set in the
+    // setup's editor; FIB and TRENDLINE, the scanner's two, are levels unless set.
+    function playIsLevels(p) {
+      if (!p) return false;
+      if (typeof p.levels === "boolean") return p.levels;
+      const n = String(p.name || "").trim().toUpperCase();
+      return n === "FIB" || n === "TRENDLINE";
+    }
+    // Trades logged under the setup with its checklist filled: kept every rule vs broke
+    // one. For a levels setup, each level's trades, win rate and P&L instead.
     function playStats(play) {
       const ts = allTrades().filter(t => (t.setup || "").trim().toLowerCase() === play.name.toLowerCase());
       const rated = ts.filter(t => t.playRules && Object.keys(t.playRules).length);
       const kept = rated.filter(t => Object.keys(t.playRules).every(k => t.playRules[k]));
       const broke = rated.filter(t => !Object.keys(t.playRules).every(k => t.playRules[k]));
       const wr = list => list.length ? Math.round(100 * list.filter(t => t.pnl > 0).length / list.length) + "%" : "—";
-      return { n: ts.length, kept: kept.length, broke: broke.length, keptWr: wr(kept), brokeWr: wr(broke) };
+      const cur = viewCur(), pnl = list => sum(list.map(t => pnlIn(t, cur)));
+      const levels = play.rules.map(r => { const l = ts.filter(t => t.playRules && t.playRules[r]); return { rule: r, n: l.length, wr: wr(l), pnl: pnl(l) }; });
+      const none = ts.filter(t => !(t.playRules && play.rules.some(r => t.playRules[r])));
+      return { n: ts.length, kept: kept.length, broke: broke.length, keptWr: wr(kept), brokeWr: wr(broke), levels, noLevel: none.length, cur, auto: ts.filter(t => t.setupAuto).length };
     }
     function renderPlaybook() {
       const host = document.getElementById('playbookList');
       if (!host) return;
       const list = state.playbook || [];
       if (!list.length) { host.innerHTML = '<p class="text-slate-500 text-[11px]">No setups yet. Add one, for example "ORB Breakout", with the rules you check before entering.</p>'; return; }
-      host.innerHTML = list.map(p => {
+      const cov = setupCoverage();
+      host.innerHTML = (cov.n ? `<div class="text-[11px] text-slate-400" id="playCoverage">${cov.setup} of ${cov.n} trades have a setup · ${cov.level} have a level · ${cov.auto} filled in from alerts</div>` : '') + list.map(p => {
         const s = playStats(p);
         return `<div class="rounded-lg bg-[#070A11] border border-terminal-border p-2.5">
           <div class="flex items-center justify-between gap-2">
@@ -4821,11 +4949,12 @@
               <button onclick="removePlay('${esc(p.id)}')" class="px-2 py-0.5 rounded text-rose-400 hover:bg-rose-500/10">Delete</button>
             </span>
           </div>
-          <div class="text-slate-500 text-[10px] mt-1">${p.rules.length} rule${p.rules.length === 1 ? '' : 's'} · ${s.n} trade${s.n === 1 ? '' : 's'}</div>
-          <div class="grid grid-cols-2 gap-2 mt-2">
+          <div class="text-slate-500 text-[10px] mt-1">${playIsLevels(p) ? p.rules.length + ' level' + (p.rules.length === 1 ? '' : 's') : p.rules.length + ' rule' + (p.rules.length === 1 ? '' : 's')} · ${s.n} trade${s.n === 1 ? '' : 's'}${s.auto ? ` (${s.auto} from alerts)` : ''}</div>
+          ${playIsLevels(p) ? `<div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-2">${s.levels.map(l => `<div class="rounded bg-[#080D15] border border-terminal-border p-1.5" data-level="${esc(l.rule)}"><span class="text-[10px] text-slate-400 block">${esc(l.rule)}</span><span class="${l.n ? 'text-amber-300' : 'text-slate-500'} font-bold">${l.wr}</span> <span class="text-slate-500 text-[10px]">win · ${l.n} trade${l.n === 1 ? '' : 's'}</span>${l.n ? `<span class="block text-[10px] ${l.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}">${money(l.pnl, s.cur)}</span>` : ''}</div>`).join('')}</div>
+          ${s.noLevel ? `<div class="text-slate-500 text-[10px] mt-1">${s.noLevel} trade${s.noLevel === 1 ? '' : 's'} with no level marked</div>` : ''}` : `<div class="grid grid-cols-2 gap-2 mt-2">
             <div class="rounded bg-emerald-500/10 border border-emerald-500/30 p-1.5"><span class="text-[10px] text-slate-400 block">Kept every rule</span><span class="text-emerald-300 font-bold">${s.keptWr}</span> <span class="text-slate-500 text-[10px]">win · ${s.kept} trade${s.kept === 1 ? '' : 's'}</span></div>
             <div class="rounded bg-rose-500/10 border border-rose-500/30 p-1.5"><span class="text-[10px] text-slate-400 block">Broke a rule</span><span class="text-rose-300 font-bold">${s.brokeWr}</span> <span class="text-slate-500 text-[10px]">win · ${s.broke} trade${s.broke === 1 ? '' : 's'}</span></div>
-          </div>
+          </div>`}
         </div>`;
       }).join('');
     }
@@ -4840,14 +4969,16 @@
           <div>
             <label class="text-slate-400 block mb-1">Rules <span class="text-slate-600">(one per line)</span></label>
             <textarea id="pRules" rows="6" placeholder="Price above VWAP&#10;Volume above average&#10;Stop below the opening range" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">${esc(existing ? existing.rules.join('\n') : '')}</textarea>
-          </div>`;
+          </div>
+          <label class="flex items-start gap-2 text-slate-300"><input type="checkbox" id="pLevels" ${playIsLevels(existing) ? 'checked' : ''} class="accent-amber-500 mt-0.5">
+            <span>These are levels, not a checklist<span class="block text-[10px] text-slate-500">A trade is at one of them (like L1-L4). Stats then show each level's win rate instead of "kept every rule".</span></span></label>`;
       }, () => {
         const name = document.getElementById('pName').value.trim();
         if (!name) { toast("Name the setup"); return false; }
         const clash = findPlay(name);
         if (clash && (!existing || clash.id !== existing.id)) { toast("A setup with that name already exists"); return false; }
         const rules = uniq(document.getElementById('pRules').value.split('\n').map(r => r.trim().slice(0, 120)).filter(Boolean)).slice(0, 20);
-        const rec = stamp(Object.assign({}, existing || {}, { id: existing ? existing.id : uid(), name: name.slice(0, 100), rules }));
+        const rec = stamp(Object.assign({}, existing || {}, { id: existing ? existing.id : uid(), name: name.slice(0, 100), rules, levels: !!document.getElementById('pLevels').checked }));
         state.playbook = existing ? state.playbook.map(p => p.id === existing.id ? rec : p) : (state.playbook || []).concat([rec]);
         save();
         renderPlaybook();
@@ -7883,7 +8014,10 @@
           side: r.plan.side === "short" ? "short" : "long", score: "",
           market, timeframe: tf, channel: market + " " + tf,
           filled, outcome, resultR: resultR != null ? +resultR.toFixed(4) : null, hasReportR: true,
-          price: n(r.price), stop: sl, entry, srcRank: rank, fibWhatIf: whatIf
+          price: n(r.price), stop: sl, entry, srcRank: rank, fibWhatIf: whatIf,
+          // The line's prices at its two anchors (their times are in the key), so its
+          // price at any minute is known: SUPPORT / RESISTANCE / broken for your trades.
+          tl: r.kind === "trendline" && Array.isArray(r.from) && Array.isArray(r.to) && n(r.from[0]) != null && n(r.to[0]) != null ? [n(r.from[0]), n(r.to[0])] : undefined
         });
       });
       return { records: out, skipped: bad };
@@ -8049,7 +8183,9 @@
           // the same result, re-priced: the journal's fib/trendline costs changed, or the scanner re-graded it
           || (r.srcRank >= 3 && typeof r.resultR === "number" && typeof ex.resultR === "number" && Math.abs(r.resultR - ex.resultR) > 1e-4)
           // new or changed L1 / L2 / L4 what-ifs
-          || (r.fibWhatIf && JSON.stringify(r.fibWhatIf) !== JSON.stringify(ex.fibWhatIf || null))) upgrades.push({ ex, r });
+          || (r.fibWhatIf && JSON.stringify(r.fibWhatIf) !== JSON.stringify(ex.fibWhatIf || null))
+          // a trendline's anchors, for alerts saved before they were kept
+          || (r.tl && !ex.tl)) upgrades.push({ ex, r });
       });
       return { incoming, fresh, upgrades, staleIds };
     }
@@ -9279,7 +9415,7 @@
     }
     // A report trade's own review (rules kept, what went right, mistakes, notes):
     // the report has none, so it is kept apart, keyed by the trade's first row.
-    const REP_REVIEW_KEYS = ["rules", "tagsPositives", "tagsMistakes", "notes", "setup", "confidence", "playRules", "reviewed", "setupAuto"];
+    const REP_REVIEW_KEYS = ["rules", "tagsPositives", "tagsMistakes", "notes", "setup", "confidence", "playRules", "reviewed", "setupAuto", "playAuto", "noSetup"];
     function repReviewOf(id) { return (state.repReviews || {})[id] || null; }
     // The Review button both trade tables show: how many rules were kept, once reviewed.
     function reviewBtnHtml(rv, attrs) {
@@ -9333,12 +9469,17 @@
       }, () => {
         const picked = group => [...document.querySelectorAll(`#modalSheetBody [data-tag-group="${group}"].active`)].map(b => b.dataset.tag);
         state.repReviews = state.repReviews || {};
-        state.repReviews[id] = stamp({
+        // The setup's level and whether it came from an alert stay unless the setup was changed here.
+        const old = state.repReviews[id] || {}, setup = document.getElementById('mSetup').value.trim();
+        const keep = String(old.setup || "").trim() === setup
+          ? ["playRules", "setupAuto", "playAuto", "reviewed"].reduce((o, k) => { if (old[k] !== undefined) o[k] = old[k]; return o; }, {})
+          : (setup ? {} : { noSetup: true });
+        state.repReviews[id] = stamp(Object.assign(keep, {
           rules: RULES.map((r, i) => !!(document.getElementById('mRule' + i) || {}).checked),
           tagsPositives: picked('positives'), tagsMistakes: picked('mistakes'),
-          notes: document.getElementById('mNotes').value, setup: document.getElementById('mSetup').value.trim(),
+          notes: document.getElementById('mNotes').value, setup,
           confidence: parseInt(document.getElementById('mConfidence').value, 10) || null
-        });
+        }));
         save();
         renderAll();
         if (typeof renderBacktestTable === "function") renderBacktestTable();
@@ -9362,6 +9503,8 @@
         }
         if (v.reviewed === true) o[k].reviewed = true;
         if (v.setupAuto === true) o[k].setupAuto = true;
+        if (v.playAuto === true) o[k].playAuto = true;
+        if (v.noSetup === true) o[k].noSetup = true;
       });
       return o;
     }

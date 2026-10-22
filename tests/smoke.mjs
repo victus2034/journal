@@ -1940,7 +1940,7 @@ async function cleanupRun(seed) {
     check(JSON.stringify(v.q1) === '["tz1"]' && JSON.stringify(v.tags) === '["FOMO Entry"]', 'queue after Clean and a tag: ' + JSON.stringify([v.q1, v.tags]));
     check(v.panel.includes('TO REVIEW') && v.panel.includes('YZONUSD') && !v.panel.includes('XFIBUSD') && v.panel.includes('WEEK SUMMARY'), 'review panel: ' + v.panel.slice(0, 400));
     check(JSON.stringify(v.chips) === '["FIB","None"]', 'setup chips: ' + JSON.stringify(v.chips));
-    check(v.rows.includes('✓ L4') && v.rows.includes('✕ L1') && v.rTxt.includes('stop from alert'), 'inspector checklist: ' + JSON.stringify([v.rows, v.rTxt]));
+    check(v.rows.includes('✓ L4') && v.rows.includes('○ L1') && v.rTxt.includes('stop from alert'), 'inspector checklist: ' + JSON.stringify([v.rows, v.rTxt]));
     check(v.afterNone.setup === '' && v.afterNone.pr === null, 'setup cleared from the inspector: ' + JSON.stringify(v.afterNone));
     check(!v.bar.includes('EmptyBook') && v.barPicked.includes('EmptyBook'), 'empty book on the bar: ' + JSON.stringify([v.bar, v.barPicked]));
     check(JSON.stringify(v.tomb) === '["trades:new","trades:src:delta:1"]', 'deletion markers kept: ' + JSON.stringify(v.tomb));
@@ -2002,6 +2002,75 @@ async function behaviourRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('behaviour: ' + e); });
 }
 
+// Every trade gets a setup and its level from the scanner's alerts. Line 0 (support)
+// runs 100 -> 102 over the day before its alert, so an hour after the alert it is at
+// 102.083; the alert's risk is 1. A long at 102.3 is SUPPORT, a short at 100.5 is
+// 1.58R under it: SP BROKEN. Line 1 (resistance) sits at 120: a short at 120.2 is
+// RESISTANCE, a long at 121.5 RT BROKEN. Anything picked by hand stays.
+async function setupLevelRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const v = await page.evaluate(() => {
+      const out = {};
+      const d = iso(new Date(Date.now() - 2 * 864e5)), later = iso(new Date(Date.now() + 5 * 864e5 - 2 * 864e5));
+      const at = istMs(d, '09:00') / 1000;
+      // The scanner's file: a trendline record keeps its two anchor prices.
+      const line = JSON.stringify({ id: 'tl|XLINE/USDT:USDT|4h|0|' + (at - 86400) + '|' + at + '@' + at, kind: 'trendline', line: 0, market: 'crypto', symbol: 'XLINE/USDT:USDT', tf: '4h', price: 102.5, sent_ts: at, plan: { side: 'long', entry: 102, sl: 101 }, from: [100, 'a'], to: [102, 'b'] });
+      out.parsed = parseFibTl(line, '{}', '{}').records[0].tl;
+      state.playbook = [{ id: 'pbf', name: 'FIB', rules: ['L1', 'L2', 'L3', 'L4'] }, { id: 'pbt', name: 'TRENDLINE', rules: ['SUPPORT', 'RESISTANCE', 'SP BROKEN', 'RT BROKEN'] }, { id: 'pbc', name: 'Checklist', rules: ['A', 'B'] }];
+      const sig = (id, sym, ln, side, entry, stop, tl) => ({ id, kind: 'trendline', key: `tl|${sym}|4h|${ln}|${at - 86400}|${at}@${at}`, date: d, time: '09:00', symbol: sym, side, entry, stop, tl, timeframe: '4H', filled: true, scoredDaily: true });
+      state.signals = [sig('sga', 'TLA', 0, 'long', 102, 101, [100, 102]), sig('sgb', 'TLB', 1, 'short', 120, 121, [120, 120])];
+      const tr = (id, sym, dir, entry, exit, extra) => Object.assign({ id, accountId: 'acc_cry', date: d, time: '10:00', symbol: sym + 'USD', direction: dir, entry, exit, qty: 1, fees: 0, stop: 0, setup: '', rules: [], notes: '' }, extra || {});
+      state.trades = state.trades.concat([
+        tr('a1', 'TLA', 'long', 102.3, 103), tr('a2', 'TLA', 'short', 100.5, 100), tr('b1', 'TLB', 'short', 120.2, 119), tr('b2', 'TLB', 'long', 121.5, 121),
+        tr('old', 'TLA', 'long', 102.3, 103, { date: later }),
+        tr('h1', 'TLA', 'long', 102.3, 102, { setup: 'FIB', playRules: { L1: false, L2: true, L3: false, L4: false } }),
+        tr('z1', 'TLA', 'long', 102.2, 103, { setup: 'ZONE', setupAuto: true }),
+        tr('n1', 'TLA', 'long', 102.3, 103, { noSetup: true }),
+        tr('c1', 'TLB', 'short', 120.1, 119, { setup: 'Checklist', playRules: { A: true, B: false } })
+      ]);
+      save(); renderAll();
+      const one = id => { const t = state.trades.find(x => x.id === id); return [t.setup, Object.keys(t.playRules || {}).filter(k => t.playRules[k]).join(','), !!t.playAuto]; };
+      out.got = {}; ['a1', 'a2', 'b1', 'b2', 'old', 'h1', 'z1', 'n1', 'c1'].forEach(id => { out.got[id] = one(id); });
+      renderPlaybook();
+      const card = n => [...document.querySelectorAll('#playbookList > div')].find(x => x.querySelector('.text-amber-300') && x.querySelector('.text-amber-300').textContent === n);
+      out.tl = card('TRENDLINE').innerText.replace(/\s+/g, ' ');
+      out.chk = card('Checklist').innerText.replace(/\s+/g, ' ');
+      out.cov = document.getElementById('playCoverage').innerText;
+      // The inspector: one level at a time, and a level tapped by hand is yours.
+      openInspector(allTrades().find(t => t.id === 'a1'));
+      out.rows0 = [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' ')).slice(-4);
+      [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].find(b => /RESISTANCE/.test(b.innerText) && !/BROKEN/.test(b.innerText)).click();
+      out.after = one('a1');
+      alertFillKey = ''; fillFromAlerts();
+      out.kept = one('a1');
+      return out;
+    });
+    check(JSON.stringify(v.parsed) === '[100,102]', 'trendline anchors kept from the scanner file: ' + JSON.stringify(v.parsed));
+    const want = { a1: ['TRENDLINE', 'SUPPORT', true], a2: ['TRENDLINE', 'SP BROKEN', true], b1: ['TRENDLINE', 'RESISTANCE', true], b2: ['TRENDLINE', 'RT BROKEN', true], old: ['', '', false],
+      h1: ['FIB', 'L2', false], z1: ['TRENDLINE', 'SUPPORT', true], n1: ['', '', false], c1: ['Checklist', 'A', false] };
+    Object.keys(want).forEach(id => check(JSON.stringify(v.got[id]) === JSON.stringify(want[id]), id + ': ' + JSON.stringify(v.got[id]) + ' wanted ' + JSON.stringify(want[id])));
+    check(/SUPPORT ?100% win · 2 trades/.test(v.tl) && /SP BROKEN ?100% win · 1 trade/.test(v.tl) && /RESISTANCE ?100% win · 1 trade/.test(v.tl) && /RT BROKEN ?0% win · 1 trade/.test(v.tl) && !/Broke a rule/.test(v.tl) && /5 trades \(5 from alerts\)/.test(v.tl), 'trendline levels card: ' + v.tl);
+    check(/Kept every rule/.test(v.chk) && /Broke a rule ?100% win · 1 trade/.test(v.chk), 'checklist setup still kept/broke: ' + v.chk);
+    check(/have a setup · \d+ have a level · \d+ filled in from alerts/.test(v.cov), 'coverage line: ' + v.cov);
+    check(JSON.stringify(v.rows0) === '["✓ SUPPORT","○ RESISTANCE","○ SP BROKEN","○ RT BROKEN"]', 'inspector levels: ' + JSON.stringify(v.rows0));
+    check(JSON.stringify(v.after) === '["TRENDLINE","RESISTANCE",false]' && JSON.stringify(v.kept) === '["TRENDLINE","RESISTANCE",false]', 'level picked by hand stays: ' + JSON.stringify([v.after, v.kept]));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'setup and level from fib and trendline alerts, playbook levels');
+  errs.forEach(e => { console.log('     ' + e); failures.push('setup level: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -2025,6 +2094,7 @@ await fibTlRun(data);
 await sigBacktestRun(data);
 await cleanupRun(data);
 await behaviourRun(data);
+await setupLevelRun(data);
 
 await browser.close();
 server.close();
