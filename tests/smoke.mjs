@@ -1641,7 +1641,7 @@ async function alertRefreshRun(seed) {
     check(got.trade === 'trSol', 'trade did not match the fresh alert: ' + JSON.stringify(got));
     const before = hits;
     await page.evaluate(() => switchTab('signals')); await page.waitForTimeout(400);
-    check(hits === before, 'read the scanner again inside 15 minutes: ' + (hits - before) + ' more requests');
+    check(hits === before, 'read the scanner again inside 10 minutes: ' + (hits - before) + ' more requests');
     const fresh = await page.evaluate(() => document.getElementById('sigFresh').innerText);
     check(/^Newest alert /.test(fresh), 'freshness line: ' + JSON.stringify(fresh));
     // A reload keeps them, and does not add the same alert twice.
@@ -1654,6 +1654,80 @@ async function alertRefreshRun(seed) {
   await ctx.close();
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Scanner alerts load by themselves and match a fresh trade');
   errs.forEach(e => { console.log('     ' + e); failures.push('alert refresh: ' + e); });
+}
+
+// While the journal stays open it keeps reading the scanner by itself (every 10
+// minutes, 2 after a failed read), and starts GitHub's CoinDCX import once the
+// last run is an hour old, so the wallet balance stays fresh.
+async function autoKeepRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  let scanner = 0, scanDown = false, lastRun = null, runReads = 0, dispatched = [], dispatchStatus = 204;
+  await ctx.route(url => !url.href.startsWith(base), async r => {
+    const u = r.request().url();
+    if (u.includes('/scanner-runtime-state/')) {
+      scanner++;
+      if (scanDown) return r.fulfill({ status: 503, body: '' });
+      return r.fulfill({ status: 200, body: u.split('?')[0].endsWith('.json') ? '{}' : '' });
+    }
+    if (u.startsWith('https://api.github.com/repos/victus/sync/actions/workflows/coindcx.yml/runs')) {
+      runReads++;
+      return r.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ workflow_runs: lastRun ? [{ created_at: lastRun }] : [] }) });
+    }
+    if (u === 'https://api.github.com/repos/victus/sync/actions/workflows/coindcx.yml/dispatches' && r.request().method() === 'POST') {
+      dispatched.push({ body: r.request().postData(), auth: (await r.request().allHeaders()).authorization });
+      return r.fulfill({ status: dispatchStatus, headers: { 'Access-Control-Allow-Origin': '*' }, body: dispatchStatus === 204 ? '' : '{"message":"Resource not accessible by personal access token"}' });
+    }
+    return r.abort();
+  });
+  const now = Date.parse('2026-10-22T10:00:00Z');
+  const cdx = { files: [{ id: 'cdx-api', name: 'CoinDCX API', broker: 'CoinDCX', importedAt: new Date(now).toISOString(), cur: 'INR', wallet: { at: new Date(now).toISOString(), INR: 5000 } }], rows: [] };
+  const seeded = Object.assign({}, seed, { backtest: cdx, sync: { token: 'gh-token', repo: 'victus/sync', branch: 'main', auto: false, lastAt: '', lastSha: '' } });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  await page.clock.install({ time: now });
+  lastRun = new Date(now - 20 * 60e3).toISOString();   // GitHub ran it 20 min ago
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.clock.runFor(5000);
+    await page.waitForTimeout(300);
+    check(scanner > 0, 'scanner not read on opening');
+    check(runReads === 1 && dispatched.length === 0, 'import started though GitHub ran it 20 min ago: ' + JSON.stringify({ runReads, dispatched }));
+    // 9 minutes on: nothing due yet. 11 minutes on: the scanner is read again.
+    let before = scanner;
+    await page.clock.runFor(9 * 60e3); await page.waitForTimeout(200);
+    check(scanner === before, 'scanner read again inside 10 minutes: ' + (scanner - before));
+    await page.clock.runFor(2 * 60e3); await page.waitForTimeout(300);
+    check(scanner > before, 'scanner not read again after 10 minutes while open');
+    // The scanner is down: the line says so, and it tries again 2 minutes later.
+    scanDown = true; before = scanner;
+    await page.clock.runFor(11 * 60e3); await page.waitForTimeout(300);
+    const down = await page.evaluate(() => document.getElementById('sigFresh').innerText);
+    check(scanner > before && /couldn't reach the scanner/.test(down), 'failed read not shown: ' + JSON.stringify(down));
+    scanDown = false; before = scanner;
+    await page.clock.runFor(3 * 60e3); await page.waitForTimeout(300);
+    const up = await page.evaluate(() => document.getElementById('sigFresh').innerText);
+    check(scanner > before && !/couldn't reach/.test(up), 'no retry 2 minutes after a failed read: ' + JSON.stringify(up));
+    // An hour after GitHub's last run, the journal starts it itself, with the sync token.
+    check(dispatched.length === 0, 'import started before the hour: ' + dispatched.length);
+    await page.clock.runFor(30 * 60e3); await page.waitForTimeout(300);
+    check(dispatched.length === 1 && JSON.parse(dispatched[0].body).ref === 'main' && dispatched[0].auth === 'Bearer gh-token', 'import not started an hour after the last run: ' + JSON.stringify(dispatched));
+    // And not again for the next hour, even though the run list still shows the old run.
+    await page.clock.runFor(40 * 60e3); await page.waitForTimeout(300);
+    check(dispatched.length === 1, 'import started twice inside an hour: ' + dispatched.length);
+    // A token without Actions access: the CoinDCX card says what to give it.
+    dispatchStatus = 403;
+    await page.clock.runFor(15 * 60e3); await page.waitForTimeout(300);
+    const card = await page.evaluate(() => { switchTab('data'); renderDataView(); return document.getElementById('cdxStatus').innerText; });
+    check(dispatched.length === 2 && /GitHub said 403/.test(card) && /Actions: Read and write/.test(card), 'card after a refused start: ' + JSON.stringify({ n: dispatched.length, card }));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Alerts and the CoinDCX import keep refreshing while the journal stays open');
+  errs.forEach(e => { console.log('     ' + e); failures.push('auto keep: ' + e); });
 }
 
 // Fib / trendline / 1D+ zone results priced as the scanner prices them (its
@@ -1896,6 +1970,7 @@ await goalPlannerRun(data);
 await goalPctRun(data);
 await deltaShareRun(data);
 await alertRefreshRun(data);
+await autoKeepRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
 await cleanupRun(data);
