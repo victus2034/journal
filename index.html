@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-23.131">
+  <meta name="app-version" content="2026-10-23.132">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -41,7 +41,7 @@
       body{padding-bottom:68px}
       .top-nav{display:none!important}
     }
-    .mnav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;font:600 10px/1 'JetBrains Mono',monospace;color:#94a3b8;background:none;border:0}
+    .mnav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;font:600 10.5px/1 Inter,sans-serif;color:#94a3b8;background:none;border:0}
     .mnav-btn svg{width:20px;height:20px}
     .mnav-btn.on{color:#fbbf24}
     /* Light theme: the dark palette remapped. Charts keep their own colours. */
@@ -94,6 +94,119 @@
     .mono-num { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
     .dashed-breach { border-style: dashed !important; }
   </style>
+  <style id="clean-theme">
+    /* Clean look (v.132): one sans font, quiet surfaces, hairline borders, no
+       shadows or gradients. Colours come from these tokens, so the light theme
+       only swaps the tokens. Loaded last, so it wins over the older rules. */
+    :root{--bg:#0b0d12;--surface:#12151c;--inset:#0e1117;--hover:#191d26;--line:#1e232d;--line2:#2a303c;--txt:#e7e9ee;--mut:#9aa1ad;--dim:#6b7280;--acc:#f5a524}
+    html.light{--bg:#f5f6f8;--surface:#ffffff;--inset:#f7f8fa;--hover:#f0f2f5;--line:#e6e8ec;--line2:#d5d9e0;--txt:#111827;--mut:#4b5563;--dim:#8a919c;--acc:#d97706}
+
+    body,.font-mono,.font-sans,button,input,select,textarea{font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif!important}
+    body{background:var(--bg)!important;color:var(--txt);font-feature-settings:"tnum","cv11";font-variant-numeric:tabular-nums;letter-spacing:-.003em}
+    .uppercase{text-transform:none!important}
+    .tracking-wide,.tracking-wider,.tracking-widest{letter-spacing:0!important}
+    .text-\[9px\]{font-size:10px!important}
+    .text-\[10px\]{font-size:11px!important}
+    .text-\[11px\]{font-size:12px!important}
+    /* Calendars keep their tight sizes so the numbers fit in each day */
+    :is(#sigCalGrid,#calGridCells,#mktCalAnalysis,#mktCalSignals) .text-\[9px\]{font-size:9px!important}
+    :is(#sigCalGrid,#calGridCells,#mktCalAnalysis,#mktCalSignals) .text-\[10px\]{font-size:10px!important}
+    :is(#sigCalGrid,#calGridCells,#mktCalAnalysis,#mktCalSignals) .text-\[11px\]{font-size:11px!important}
+    /* Little coloured squares in front of titles: decoration only */
+    :is(span.w-2,span.w-2\.5,span.w-1\.5):has(+ :is(h2,h3,span)):not(:empty){display:revert}
+    :is(span.w-2,span.w-2\.5):empty:has(+ :is(h2,h3)){display:none}
+
+    /* Surfaces: page, cards, insets */
+    .bg-terminal-bg,.bg-\[\#05080E\],.bg-\[\#060910\]{background-color:var(--bg)!important}
+    .bg-terminal-surface,.bg-terminal-card,.bg-\[\#090E17\],.bg-\[\#0A0F18\],.bg-\[\#0B101A\],.bg-\[\#080D16\]{background-color:var(--surface)!important}
+    .bg-\[\#070A11\],.bg-\[\#080D15\],.bg-black\/20,.bg-black\/30,.bg-black\/40,.bg-black\/50{background-color:var(--inset)!important}
+    .bg-terminal-cardHover,.bg-\[\#131C2D\],.hover\:bg-terminal-cardHover\/80:hover,.hover\:bg-white\/5:hover{background-color:var(--hover)!important}
+    .bg-gradient-to-r.from-terminal-card,.bg-gradient-to-br.from-terminal-card,.from-\[\#0C121E\]{background-image:none!important;background-color:var(--surface)!important}
+    .border-terminal-border,.border-terminal-border\/60,.border-slate-800{border-color:var(--line)!important}
+    .border-terminal-borderLight,.border-slate-700{border-color:var(--line2)!important}
+    .bg-terminal-border{background-color:var(--line)!important}
+    .shadow-subtle,.shadow,.shadow-lg{box-shadow:none!important}
+    .rounded-xl{border-radius:14px}
+    .text-white,.text-slate-100,.text-slate-200{color:var(--txt)!important}
+    .text-slate-400{color:var(--mut)!important}
+    .text-slate-500,.text-slate-600{color:var(--dim)!important}
+    input,select,textarea{background-color:var(--inset)!important;border-color:var(--line2)!important;color:var(--txt)!important}
+    ::-webkit-scrollbar-track{background:var(--bg)}
+    ::-webkit-scrollbar-thumb{background:var(--line2)}
+
+    /* Header: flat, one hairline under it */
+    header.sticky{background:color-mix(in srgb,var(--bg) 88%,transparent)!important;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+    #appVerPill{background:transparent!important;border-color:var(--line2)!important;color:var(--dim)!important;font-weight:500!important}
+    .top-nav,#accountsBar{background:transparent!important;border-color:transparent!important}
+    .top-nav button{font-size:13px!important;font-weight:500!important;border-color:transparent!important;background:transparent!important}
+    .top-nav button.text-amber-400{color:var(--txt)!important;background:var(--hover)!important}
+    .mnav{background:var(--surface)!important;border-top-color:var(--line)!important}
+    .mnav-btn.on{color:var(--acc)}
+
+    /* Section tabs: plain text with a line under the open one */
+    .tabs{display:flex;flex-wrap:nowrap;gap:1.25rem;overflow-x:auto;border-bottom:1px solid var(--line);padding:0 .25rem;background:none!important;border-radius:0!important;scrollbar-width:none}
+    .tabs::-webkit-scrollbar{display:none}
+    .tabs .tab{flex:0 0 auto;padding:.6rem 0;margin-bottom:-1px;font-size:13.5px;font-weight:500;color:var(--mut);background:none;border:0;border-bottom:2px solid transparent;white-space:nowrap}
+    .tabs .tab:hover{color:var(--txt)}
+    .tabs .tab.on{color:var(--txt);border-bottom-color:var(--acc);font-weight:600}
+    .tabs .tab .cnt{margin-left:.35rem;font-size:11.5px;color:var(--dim);font-weight:500}
+
+    /* Number rows: one card split by hairlines instead of a box per number */
+    .statrow{gap:1px!important;background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+    .statrow>*{background:var(--surface)!important;border:0!important;border-radius:0!important;box-shadow:none!important}
+    .statrow>*:hover{background:var(--hover)!important}
+
+    /* Simple stat line used by Today and the goal */
+    .kv{display:flex;flex-direction:column;gap:2px}
+    .kv>span:first-child{font-size:12px;color:var(--dim)}
+    .kv>span:last-child{font-size:15px;font-weight:600;color:var(--txt)}
+    .statrow>*{padding:.8rem 1rem!important;justify-content:flex-start!important;gap:.15rem}
+    .statrow>* .my-0\.5{margin:0}
+    .statrow>*>span:first-child{font-size:12px!important;color:var(--dim)!important;font-weight:500!important}
+    .statrow .text-base,.statrow .sm\:text-lg{font-size:1.15rem!important;line-height:1.6rem;font-weight:600!important}
+    .statrow .text-\[10px\]{color:var(--dim)!important}
+    #goalCurrent{font-weight:600}
+    .card .kv>span:last-child{font-size:14px}
+    /* Utilities the static Tailwind build lacks */
+    .mt-auto{margin-top:auto}.gap-y-1{row-gap:.25rem}.gap-y-3{row-gap:.75rem}.transition-opacity{transition:opacity .15s}.hover\:opacity-100:hover{opacity:1}
+    @media (min-width:1024px){.lg\:col-span-8{grid-column:span 8/span 8}.lg\:col-span-4{grid-column:span 4/span 4}}
+    /* Page title row and the one-line filter row under it */
+    .pagehead{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:.75rem;padding-top:.25rem}
+    .pagehead h2{font-size:1.35rem;font-weight:600;color:var(--txt);letter-spacing:-.01em}
+    .pagehead p{font-size:13px;color:var(--dim);margin-top:2px}
+    .filters{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1rem}
+    /* Boxes inside a card: no outline of their own, just a slightly different fill */
+    .bg-terminal-card :is(.bg-\[\#070A11\],.bg-\[\#080D15\],.bg-\[\#080D16\],.bg-black\/40,.bg-black\/30).border-terminal-border:not(input,select,textarea,button){border-color:transparent!important}
+    .bg-terminal-card :is(.bg-\[\#070A11\],.bg-\[\#080D15\],.bg-\[\#080D16\]).border-terminal-border:hover{border-color:var(--line2)!important}
+    .filters details[open]{flex-basis:100%}
+    /* Card titles: a touch bigger, not shouting */
+    :is(.bg-terminal-card,.card) :is(h2,h3).text-sm{font-size:15px;font-weight:600}
+    #sigCalGrid *{line-height:1.15}
+    #topBalLive{background:transparent!important;border:0!important;padding:0!important}
+    main.flex-1{padding-top:1.25rem}
+    /* Light theme: green / red day fills as soft tints */
+    html.light :is(.bg-emerald-950\/30,.bg-emerald-950\/40){background-color:rgba(16,185,129,.12)!important}
+    html.light :is(.bg-rose-950\/20,.bg-rose-950\/30,.bg-rose-950\/40,.bg-rose-950\/60){background-color:rgba(244,63,94,.10)!important}
+    html.light .bg-rose-900\/80{background-color:rgba(244,63,94,.22)!important}
+    /* Phone header: brand and balance on one line, books under it */
+    @media (max-width:639px){
+      .hdr-left{display:contents}
+      .hdr-row{row-gap:.5rem}
+      .hdr-wide,#appVerPill,.hdr-bal{display:none!important}
+      .hdr-row{flex-wrap:wrap}
+      .hdr-right{flex-wrap:nowrap!important;gap:.4rem!important}
+      .hdr-right{margin-left:auto}
+      #accountsBar{order:3;width:100%}
+    }
+    .card{background:var(--surface);border:1px solid var(--line);border-radius:14px}
+      /* Small one-of-a-few switch (scanner kind) and picked filter chips */
+    .seg{display:inline-flex;gap:2px;padding:3px;background:var(--inset);border:1px solid var(--line);border-radius:10px;max-width:100%;overflow-x:auto;align-self:flex-start}
+    .seg button{padding:.4rem .85rem;border-radius:7px;font-size:13px;font-weight:500;color:var(--mut);white-space:nowrap}
+    .seg button:hover{color:var(--txt)}
+    .seg button.on{background:var(--surface);color:var(--txt);box-shadow:0 0 0 1px var(--line2)}
+    .seg .cnt{margin-left:.3rem;color:var(--dim);font-size:11.5px}
+    .chip-on{background:color-mix(in srgb,var(--acc) 16%,transparent)!important;color:var(--acc)!important;border:1px solid color-mix(in srgb,var(--acc) 45%,transparent)!important;font-weight:600}
+</style>
 </head>
 <body class="bg-terminal-bg text-slate-200 font-sans antialiased min-h-screen flex flex-col selection:bg-amber-500/25 selection:text-amber-200">
 
@@ -160,114 +273,87 @@
     
     <!-- DASHBOARD VIEW -->
     <div id="view-dashboard" class="space-y-4">
-      <!-- Today: the day's P&L against its limits, first thing on the page -->
-      <div class="bg-[#090E17] border border-terminal-border rounded-lg px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
-        <div class="flex items-center gap-2 text-slate-400 font-semibold uppercase text-[10px] tracking-wider">
-          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-          <span>TODAY</span>
-        </div>
-        <div class="flex flex-wrap items-center gap-4 sm:gap-8">
-          <div>
-            <span class="text-slate-500 text-[10px] block" id="riskStatusDateLabel">TODAY'S P&amp;L</span>
-            <span id="riskTodayPnl" class="text-slate-200 font-bold">$0.00</span>
-          </div>
-          <div>
-            <span class="text-slate-500 text-[10px] block">RISK USED</span>
-            <span id="riskPctUsed" class="text-slate-200 font-bold">0.0% <span class="text-slate-500 text-[10px]">/ 1.5% max</span></span>
-          </div>
-          <div>
-            <span class="text-slate-500 text-[10px] block">TRADES TODAY</span>
-            <span id="riskTradesToday" class="text-amber-400 font-bold">0 trades</span>
-          </div>
-          <div>
-            <span class="text-slate-500 text-[10px] block">DAILY MAX LOSS</span>
-            <span id="riskDailyMaxLoss" class="text-slate-200 font-bold">$5.00</span>
-          </div>
-        </div>
-      </div>
-
-
-      <!-- Goal -->
-      <section class="bg-gradient-to-br from-terminal-card to-[#0A0F1A] border border-terminal-border hover:border-amber-500/40 rounded-xl p-5 shadow-subtle transition-all font-mono">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex items-center gap-3 min-w-0">
-            <span class="w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
-            <span class="text-[10px] uppercase tracking-wider text-slate-500 font-bold shrink-0">Goal</span>
-            <h3 id="goalTitle" class="text-sm font-bold text-white uppercase tracking-wide truncate">Goal</h3>
-          </div>
-          <div class="flex items-center gap-2">
-            <div id="goalNav" class="hidden items-center gap-1 text-[11px] text-slate-400">
-              <button type="button" onclick="stepGoal(-1)" class="px-2 py-0.5 rounded border border-terminal-border hover:border-amber-500/50">&lsaquo;</button>
-              <span id="goalNavLabel" class="px-1"></span>
-              <button type="button" onclick="stepGoal(1)" class="px-2 py-0.5 rounded border border-terminal-border hover:border-amber-500/50">&rsaquo;</button>
+      <!-- Top: the goal you're working toward, and today against its limits -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <section class="card p-5 lg:col-span-8 flex flex-col">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-baseline gap-2 min-w-0">
+              <span class="text-xs text-slate-500 shrink-0">Goal</span>
+              <h3 id="goalTitle" class="text-sm font-semibold text-white truncate">Goal</h3>
             </div>
-            <button type="button" onclick="openWithdraw()" title="Log money you took out to your bank" class="text-[11px] text-emerald-300 hover:text-emerald-200 px-2 py-0.5 rounded border border-emerald-500/30 hover:border-emerald-500/60">Withdraw</button>
-            <button type="button" onclick="openGoal('new')" class="text-[11px] text-slate-400 hover:text-amber-300 px-2 py-0.5 rounded border border-terminal-border hover:border-amber-500/50">+ Add</button>
-            <button type="button" id="goalEditBtn" onclick="openGoal(currentGoalId())" class="text-[11px] text-amber-400 hover:text-amber-300 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 hover:border-amber-500/40">Edit</button>
+            <div class="flex items-center gap-1 text-xs">
+              <div id="goalNav" class="hidden items-center gap-1 text-slate-400 mr-1">
+                <button type="button" onclick="stepGoal(-1)" class="px-1.5 rounded hover:bg-white/5">&lsaquo;</button>
+                <span id="goalNavLabel"></span>
+                <button type="button" onclick="stepGoal(1)" class="px-1.5 rounded hover:bg-white/5">&rsaquo;</button>
+              </div>
+              <button type="button" onclick="openWithdraw()" title="Log money you took out to your bank" class="px-2 py-1 rounded text-slate-400 hover:text-white hover:bg-white/5">Withdraw</button>
+              <button type="button" onclick="openGoal('new')" class="px-2 py-1 rounded text-slate-400 hover:text-white hover:bg-white/5">+ Add</button>
+              <button type="button" id="goalEditBtn" onclick="openGoal(currentGoalId())" class="px-2 py-1 rounded text-amber-400 hover:bg-white/5">Edit</button>
+            </div>
           </div>
-        </div>
 
-        <div class="mt-4 flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-          <div class="flex items-baseline gap-2">
-            <span id="goalCurrent" class="text-3xl font-bold mono-num">$0.00</span>
-            <span id="goalTarget" class="text-sm text-slate-500">/ $0.00 target</span>
+          <div class="mt-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-1">
+            <div class="flex items-baseline gap-2">
+              <span id="goalCurrent" class="text-3xl font-semibold mono-num">$0.00</span>
+              <span id="goalTarget" class="text-sm text-slate-500">/ $0.00 target</span>
+            </div>
+            <span id="goalPct" class="text-sm font-semibold text-amber-400">0%</span>
           </div>
-          <span id="goalPct" class="text-sm font-bold text-amber-400">0%</span>
-        </div>
+          <div class="w-full h-1.5 rounded-full overflow-hidden mt-3 bg-terminal-border">
+            <div id="goalBar" class="bg-amber-500 h-full rounded-full transition-all duration-300" style="width: 2%;"></div>
+          </div>
 
-        <div class="w-full bg-[#060910] h-3 rounded-full overflow-hidden border border-slate-800 mt-3 p-0.5">
-          <div id="goalBar" class="bg-gradient-to-r from-amber-600 via-amber-500 to-amber-400 h-full rounded-full transition-all duration-300" style="width: 2%;"></div>
-        </div>
+          <div id="goalChips" class="mt-4 flex flex-wrap gap-x-6 gap-y-3"></div>
 
-        <div id="goalChips" class="mt-3 flex flex-wrap gap-2"></div>
+          <div class="mt-auto pt-4 grid grid-cols-3 gap-3 text-xs">
+            <div class="kv"><span id="goalLbl1">To go today</span><span id="goalToGo" class="text-amber-300">—</span></div>
+            <div class="kv"><span id="goalLbl2">If you miss today</span><span id="goalRunRate">—</span></div>
+            <div class="kv"><span>Trading days left</span><span id="goalDaysLeft">—</span></div>
+          </div>
+        </section>
 
-        <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-          <div class="rounded-lg bg-[#070A11] border border-terminal-border px-3 py-2">
-            <span id="goalLbl1" class="text-[10px] uppercase tracking-wider text-slate-500 block">To go today</span>
-            <span id="goalToGo" class="font-bold text-amber-300">—</span>
+        <section class="card p-5 lg:col-span-4 flex flex-col">
+          <div class="flex items-baseline justify-between">
+            <h3 class="text-sm font-semibold text-white">Today</h3>
+            <span id="riskStatusDateLabel" class="text-xs text-slate-500">P&amp;L</span>
           </div>
-          <div class="rounded-lg bg-[#070A11] border border-terminal-border px-3 py-2">
-            <span id="goalLbl2" class="text-[10px] uppercase tracking-wider text-slate-500 block">If you miss today</span>
-            <span id="goalRunRate" class="font-bold text-slate-200">—</span>
+          <span id="riskTodayPnl" class="text-3xl font-semibold mono-num mt-3 text-slate-200">$0.00</span>
+          <div class="mt-3">
+            <div class="flex justify-between text-xs text-slate-500"><span>Daily loss used</span><span id="riskLossUsedText"></span></div>
+            <div class="w-full h-1.5 rounded-full overflow-hidden mt-1.5 bg-terminal-border"><div id="riskLossBar" class="h-full rounded-full bg-emerald-500" style="width:0%"></div></div>
           </div>
-          <div class="rounded-lg bg-[#070A11] border border-terminal-border px-3 py-2">
-            <span class="text-[10px] uppercase tracking-wider text-slate-500 block">Trading days left</span>
-            <span id="goalDaysLeft" class="font-bold text-slate-200">—</span>
+          <div class="mt-auto pt-4 grid grid-cols-3 gap-3 text-xs">
+            <div class="kv"><span>Risk used</span><span id="riskPctUsed">0.0%</span></div>
+            <div class="kv"><span>Trades</span><span id="riskTradesToday">0 trades</span></div>
+            <div class="kv"><span>Max loss</span><span id="riskDailyMaxLoss">$5.00</span></div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
       <!-- The month: its headline and the numbers under it -->
-      <div class="bg-gradient-to-r from-[#0C121E] via-terminal-card to-[#090F1A] border border-terminal-border rounded-xl px-4 py-3 shadow-subtle flex flex-wrap items-center justify-between gap-3">
-        <div class="flex items-center gap-3">
-          <div class="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      <div class="flex flex-wrap items-end justify-between gap-3 pt-2">
+        <div>
+          <div class="flex flex-wrap items-center gap-2">
+            <span id="activeMonthTitle" class="text-lg font-semibold text-white">September 2026</span>
+            <span id="activeTradesCountBadge" class="text-xs text-slate-500">19 trades</span>
+            <span id="activeMonthStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-rose-500/15 text-rose-400">Behind</span>
+            <button type="button" id="dupWarn" onclick="removeDuplicateTrades()" class="hidden text-[10px] px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25"></button>
           </div>
-          <div>
-            <div class="flex items-center gap-2">
-              <span id="activeMonthTitle" class="text-sm sm:text-base font-bold text-white font-mono">September 2026</span>
-              <span id="activeTradesCountBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">19 trades</span>
-              <span id="activeMonthStatusBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">Behind</span>
-              <button type="button" id="dupWarn" onclick="removeDuplicateTrades()" class="hidden text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40 hover:bg-amber-500/25"></button>
-            </div>
-            <div class="text-xs text-slate-400 mt-0.5 font-mono">
-              Net P&amp;L: <span id="activePnlDeltaText" class="font-bold text-slate-200">—</span> • <span id="monthDaysRemainingText"></span>
-            </div>
+          <div class="text-xs text-slate-500 mt-0.5">
+            Net P&amp;L <span id="activePnlDeltaText" class="font-semibold text-slate-200">—</span> · <span id="monthDaysRemainingText"></span>
           </div>
         </div>
-
-        <div class="flex items-center gap-2">
-          <select id="fMonth" onchange="onMonthFilterChange()" class="bg-black/50 border border-terminal-border text-xs px-2.5 py-1.5 rounded-lg text-slate-300 font-mono focus:outline-none">
-            <!-- Dynamic months -->
-          </select>
-        </div>
+        <select id="fMonth" onchange="onMonthFilterChange()" class="border text-xs px-2.5 py-1.5 rounded-lg focus:outline-none">
+          <!-- Dynamic months -->
+        </select>
       </div>
       <!-- 8 Executive KPI Cards -->
-      <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="kpiRibbon"></section>
+      <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="kpiRibbon"></section>
 
 
       <!-- Sections -->
-      <div id="dashSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+      <div id="dashSecBar" class="tabs"></div>
 
       <section data-dashsec="overview" class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
           <div class="lg:col-span-7 lg:col-start-1 lg:row-start-1 flex flex-col bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle relative">
@@ -447,11 +533,10 @@
     <!-- TAB: SIGNALS & ALERTS -->
     <div id="view-signals" class="hidden space-y-4">
       <!-- Title and actions -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+      <div class="pagehead">
         <div>
-          <h2 class="text-sm font-bold text-white uppercase font-mono tracking-wider">Alert Signals &amp; Scanner Edge</h2>
-          <p class="text-xs text-slate-400 font-mono">How the scanner's alerts did, and how you traded them</p>
-          <p id="sigFresh" class="text-[10px] text-slate-500 font-mono"></p>
+          <h2>Signals</h2>
+          <p>How the scanner's alerts did, and how you traded them. <span id="sigFresh"></span></p>
         </div>
           <div class="flex flex-wrap items-center gap-2">
             <button onclick="openScannerImport()" class="px-2.5 py-1 text-xs font-mono bg-amber-500 text-black font-bold rounded">Load scanner alerts</button>
@@ -467,35 +552,27 @@
       </div>
 
       <!-- Which alerts: the zone scanner, or the fib / trendline scanner. Each is measured on its own. -->
-      <div id="sigKindBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
-
-      <!-- Filters: apply to every section below -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-2.5 font-mono">
+      <!-- Filters: scanner, period, channel, BTC day. They apply to every section below. -->
+      <div class="filters">
+        <div id="sigKindBar" class="seg"></div>
         <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Period</span>
-                    <div id="sigPeriodBar" class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono"></div>
+          <div id="sigPeriodBar" class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
           <div id="sigCustomRange" class="hidden flex flex-wrap items-center gap-1.5">
             <input type="date" id="sigCustomFrom" onchange="setSigPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
             <span class="text-slate-500 text-xs">to</span>
             <input type="date" id="sigCustomTo" onchange="setSigPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
           </div>
-          <span id="sigPeriodHint" class="text-[11px] text-slate-500 font-mono ml-auto"></span>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Channel</span>
-          <div id="sigChanBar" class="flex flex-wrap items-center gap-1.5"></div>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">BTC day</span>
-          <div id="sigMktBar"></div>
-        </div>
+        <div id="sigChanBar" class="flex items-center"></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-slate-500">BTC day</span><div id="sigMktBar"></div></div>
+        <span id="sigPeriodHint" class="text-xs text-slate-500 ml-auto"></span>
       </div>
 
       <!-- Headline numbers for whatever the filters select -->
-      <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="sigEdgeStrip"></section>
+      <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="sigEdgeStrip"></section>
 
       <!-- Sections -->
-      <div id="sigSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+      <div id="sigSecBar" class="tabs"></div>
 
       <section data-sigsec="alerts" class="space-y-4">
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
@@ -607,22 +684,21 @@
     <div id="view-calculator" class="hidden space-y-4">
 
       <!-- Title and the account it sizes from -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
+      <div class="pagehead">
         <div>
-          <h3 class="text-sm font-bold text-white uppercase tracking-wider">Position Calculator</h3>
-          <p class="text-slate-400 text-[11px] mt-0.5">How big to trade for your stop and risk, and what a goal really takes.</p>
+          <h2>Calculator</h2>
+          <p>How big to trade for your stop and risk, and what a goal really takes.</p>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Account</span>
+        <label class="flex items-center gap-2 text-xs text-slate-500">Account
           <select id="calcAccount" onchange="calcPickAccount(this.value)" title="Fill the calculator from this account" class="min-w-[220px] bg-[#070A11] border border-terminal-border px-2.5 py-1.5 rounded-lg text-slate-200 text-[11px] focus:outline-none focus:border-amber-500"></select>
-        </div>
+        </label>
       </div>
 
       <!-- Sections -->
-      <div id="calcViewSeg" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+      <div id="calcViewSeg" class="tabs"></div>
 
       <!-- Quick size: type a stop-loss, get the margin to put on the trade -->
-      <div class="bg-terminal-card border border-amber-500/40 rounded-xl p-4 font-mono text-xs" id="quickSizeCard" data-calcsec="quick">
+      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs" id="quickSizeCard" data-calcsec="quick">
         <div class="flex items-center gap-2 mb-3">
           <span class="w-2 h-2 rounded-full bg-amber-400"></span>
           <h3 class="font-bold text-white uppercase tracking-wider">Quick size</h3>
@@ -673,7 +749,7 @@
 
       <!-- Goal planner: target, days and trades a day in; what each day and each trade must earn out.
            The win-rate / risk planning sits folded underneath. -->
-      <div class="bg-terminal-card border border-emerald-500/40 rounded-xl p-4 font-mono text-xs hidden" id="goalPlannerCard" data-calcsec="planner">
+      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs hidden" id="goalPlannerCard" data-calcsec="planner">
         <div class="flex flex-wrap items-center gap-2 mb-3">
           <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
           <h3 class="font-bold text-white uppercase tracking-wider">Goal planner</h3>
@@ -871,23 +947,19 @@
     <!-- TAB: ANALYSIS (position size and mistakes, worked out from every trade) -->
     <div id="view-analysis" class="hidden space-y-4">
       <!-- Title and filters -->
-      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
+      <div class="pagehead">
         <div>
-          <h3 class="text-sm font-bold text-white uppercase tracking-wider">Trade Analysis</h3>
-          <p class="text-slate-400 text-[11px] mt-0.5">Every trade checked against your balance at that moment, and what went wrong. Pick a broker to see its results on their own.</p>
+          <h2>Analysis</h2>
+          <p>Every trade checked against your balance at that moment, and what went wrong. Pick a broker to see its results on their own.</p>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Broker</span>
-          <div id="anBrokerBar" class="flex flex-wrap gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
-          <button type="button" onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX" class="px-2.5 py-1 rounded-md border border-terminal-border text-[11px] text-slate-300 hover:text-white hover:border-amber-500">+ Upload broker report</button>
-          <input type="file" id="btFileInput" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" class="hidden" onchange="handleBacktestFile(this)">
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">Period</span>
-          <div id="anPeriodBar" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
-        </div>
+        <button type="button" onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX" class="px-3 py-1.5 rounded-lg border border-terminal-border text-xs text-slate-300 hover:text-white hover:border-amber-500">+ Upload broker report</button>
+        <input type="file" id="btFileInput" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" class="hidden" onchange="handleBacktestFile(this)">
+      </div>
+      <div class="filters text-xs">
+        <div id="anBrokerBar" class="flex flex-wrap gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
+        <div id="anPeriodBar" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
         <div id="anMktRow" class="flex flex-wrap items-center gap-2">
-          <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold w-20 shrink-0">BTC day</span>
+          <span class="text-xs text-slate-500">BTC day</span>
           <div id="anMktBar"></div>
         </div>
         <details id="anHowLive" class="text-[11px] text-slate-500">
@@ -918,7 +990,7 @@
         </div>
 
         <div id="btMain" class="space-y-4">
-          <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 font-mono" id="btStrip"></section>
+          <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="btStrip"></section>
           <div id="btCheck" class="font-mono text-[11px]"></div>
 
 
@@ -928,7 +1000,7 @@
       <div id="anLive" class="space-y-4">
 
       <!-- Sections -->
-      <div id="anSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+      <div id="anSecBar" class="tabs"></div>
 
           <section data-ansec="report" class="space-y-4 hidden">
             <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
@@ -955,7 +1027,7 @@
       <section data-ansec="overview" class="space-y-4">
         <!-- One line per broker: journal books and uploaded broker reports -->
         <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
-        <section class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 font-mono" id="anStrip"></section>
+        <section class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 statrow" id="anStrip"></section>
         <div id="anRules" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
           <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
@@ -1103,7 +1175,13 @@
     <!-- TAB: DATA & SYSTEM -->
     <div id="view-data" class="hidden space-y-4 pb-16">
       <!-- Three groups: what the books and rules are, where data comes from, and backups -->
-      <div id="setSecBar" class="flex flex-wrap gap-1 bg-terminal-card p-1 rounded-xl border border-terminal-border font-mono"></div>
+      <div class="pagehead">
+        <div>
+          <h2>Settings</h2>
+          <p>Your books and rules, the broker and sync connections, and backups.</p>
+        </div>
+      </div>
+      <div id="setSecBar" class="tabs"></div>
 
       <section data-setsec="books" class="space-y-4">
         <!-- Trading books: balance and limits -->
@@ -2174,8 +2252,8 @@
       const opening = sum(viewBooks().map(a => balanceAtStart(a, from) * fxk(a, cur)));
       const pctRet = opening > 0 ? s.net / opening * 100 : null;
       const card = showDays
-        ? { label: "GREEN DAYS", val: `${greenDays} of ${days.length}`, sub: days.length ? pct(greenDays / days.length * 100) : "0%", color: "text-slate-200" }
-        : { label: "RETURN", val: pctRet == null ? "—" : (pctRet >= 0 ? "+" : "") + pctRet.toFixed(2) + "%", sub: pctRet == null ? "no balance to measure against" : `${signedMoney(s.net, cur)} on ${money(opening, cur)}`, color: pctRet == null ? "text-slate-200" : pctRet >= 0 ? "text-emerald-400" : "text-rose-400" };
+        ? { label: "Green days", val: `${greenDays} of ${days.length}`, sub: days.length ? pct(greenDays / days.length * 100) : "0%", color: "text-slate-200" }
+        : { label: "Return", val: pctRet == null ? "—" : (pctRet >= 0 ? "+" : "") + pctRet.toFixed(2) + "%", sub: pctRet == null ? "no balance to measure against" : `${signedMoney(s.net, cur)} on ${money(opening, cur)}`, color: pctRet == null ? "text-slate-200" : pctRet >= 0 ? "text-emerald-400" : "text-rose-400" };
       card.foot = showDays ? "click for % return" : "click for green days";
       card.onclick = () => { state.ui.kpiGreenDays = !showDays; save(); renderDashboard(); };
       return card;
@@ -2189,15 +2267,15 @@
       const breaches = days.filter(d => d.breached).length;
 
       const items = [
-        { label: "NET P&L", val: signedMoney(s.net, cur), sub: (() => { const f = sum(monthFilter(statScoped()).map(t => t.fees || 0)); return `${s.n} trades · gross ${signedMoney(s.net + f, cur)} · fees ${money(f, cur)}`; })(), color: s.net >= 0 ? "text-emerald-400" : "text-rose-400" },
-        { label: "WIN RATE", val: pct(s.winRate), sub: `${s.wins}W / ${s.losses}L`, color: "text-emerald-400" },
-        { label: "PROFIT FACTOR", val: isFinite(s.pf) ? s.pf.toFixed(2) : "∞", sub: s.pf >= 1 ? "positive edge" : "losses outweigh", color: s.pf >= 1 ? "text-emerald-400" : "text-amber-400" },
+        { label: "Net P&L", val: signedMoney(s.net, cur), sub: (() => { const f = sum(monthFilter(statScoped()).map(t => t.fees || 0)); return `${s.n} trades · gross ${signedMoney(s.net + f, cur)} · fees ${money(f, cur)}`; })(), color: s.net >= 0 ? "text-emerald-400" : "text-rose-400" },
+        { label: "Win rate", val: pct(s.winRate), sub: `${s.wins}W / ${s.losses}L`, color: "text-emerald-400" },
+        { label: "Profit factor", val: isFinite(s.pf) ? s.pf.toFixed(2) : "∞", sub: s.pf >= 1 ? "positive edge" : "losses outweigh", color: s.pf >= 1 ? "text-emerald-400" : "text-amber-400" },
         // Expectancy in money per trade always works; R only exists for trades with a real stop.
-        { label: "EXPECTANCY", val: s.n ? signedMoney(s.net / s.n, cur) : "—", sub: s.rCount ? `per trade · ${rfmt(s.expectancy)} avg on ${s.rCount} with a stop` : "per trade · no stops to work out R", color: s.net >= 0 ? "text-emerald-400" : "text-rose-400" },
+        { label: "Expectancy", val: s.n ? signedMoney(s.net / s.n, cur) : "—", sub: s.rCount ? `per trade · ${rfmt(s.expectancy)} avg on ${s.rCount} with a stop` : "per trade · no stops to work out R", color: s.net >= 0 ? "text-emerald-400" : "text-rose-400" },
         greenOrReturn(greenDays, days, s, cur),
-        { label: "BEST DAY", val: days.length ? signedMoney(Math.max(...days.map(d => d.net)), cur) : "—", sub: days.length ? `worst ${signedMoney(Math.min(...days.map(d => d.net)), cur)}` : "", color: !days.length || Math.max(...days.map(d => d.net)) >= 0 ? "text-emerald-400" : "text-rose-400" },
-        { label: "MAX DRAWDOWN", val: money(-s.maxDD, cur), sub: "peak to trough", color: "text-rose-400" },
-        { label: "LIMIT BREACHES", val: String(breaches), sub: breaches === 0 ? "rule intact" : "plan violations", color: breaches === 0 ? "text-emerald-400" : "text-rose-400" }
+        { label: "Best day", val: days.length ? signedMoney(Math.max(...days.map(d => d.net)), cur) : "—", sub: days.length ? `worst ${signedMoney(Math.min(...days.map(d => d.net)), cur)}` : "", color: !days.length || Math.max(...days.map(d => d.net)) >= 0 ? "text-emerald-400" : "text-rose-400" },
+        { label: "Max drawdown", val: money(-s.maxDD, cur), sub: "peak to trough", color: "text-rose-400" },
+        { label: "Limit breaches", val: String(breaches), sub: breaches === 0 ? "rule intact" : "plan violations", color: breaches === 0 ? "text-emerald-400" : "text-rose-400" }
       ];
 
       items.forEach(it => {
@@ -2365,9 +2443,9 @@
         const c = goalChipStatus(g0, k, gp), tn = tones[c.tone];
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'text-left rounded-lg bg-[#070A11] border px-2.5 py-2 min-w-[120px] flex-1 transition-colors ' + (k === focus ? 'border-amber-500' : 'border-terminal-border hover:border-amber-500/50');
+        b.className = 'text-left min-w-[120px] flex-1 transition-opacity ' + (k === focus ? '' : 'opacity-60 hover:opacity-100');
         b.title = 'Click to show this target in the big card';
-        b.innerHTML = '<div class="text-[10px] uppercase tracking-wider text-slate-500">' + esc(c.label) + '</div><div class="text-xs font-bold ' + tn[1] + ' mono-num">' + esc(c.text) + '</div><div class="h-1 bg-[#131C2D] rounded-full mt-1.5 overflow-hidden"><div class="h-full ' + tn[0] + '" style="width:' + Math.max(3, c.pct) + '%"></div></div>';
+        b.innerHTML = '<div class="flex items-baseline justify-between gap-2"><span class="text-xs text-slate-500">' + esc(c.label) + '</span><span class="text-xs font-semibold ' + tn[1] + ' mono-num">' + esc(c.text) + '</span></div><div class="h-1 bg-terminal-border rounded-full mt-1.5 overflow-hidden"><div class="h-full ' + tn[0] + '" style="width:' + Math.max(3, c.pct) + '%"></div></div>';
         b.onclick = () => { state.ui.goalFocus = state.ui.goalFocus || {}; state.ui.goalFocus[g0.id] = k; save(); renderAll(); };
         host.appendChild(b);
       });
@@ -2714,8 +2792,18 @@
       
       if (pnlEl) {
         pnlEl.innerText = todayTrades.length ? signedMoney(todayPnl, cur) : signedMoney(0, cur);
-        pnlEl.className = todayPnl >= 0 ? "text-emerald-400 font-bold" : "text-rose-400 font-bold";
+        pnlEl.className = "text-3xl font-semibold mono-num mt-3 " + (!todayTrades.length ? "text-slate-200" : todayPnl >= 0 ? "text-emerald-400" : "text-rose-400");
       }
+      // How much of the daily loss limit today's losses have used up.
+      const lossBar = document.getElementById('riskLossBar'), lossTxt = document.getElementById('riskLossUsedText');
+      if (lossBar && lossTxt) {
+        const used = maxLoss > 0 ? Math.max(0, -todayPnl) / maxLoss * 100 : 0;
+        lossBar.style.width = Math.min(100, used).toFixed(1) + '%';
+        lossBar.className = 'h-full rounded-full ' + (used >= 100 ? 'bg-rose-500' : used >= 60 ? 'bg-amber-500' : 'bg-emerald-500');
+        lossTxt.innerText = maxLoss > 0 ? Math.round(used) + '% of ' + money(maxLoss, cur) : 'no limit set';
+      }
+      const dateLbl = document.getElementById('riskStatusDateLabel');
+      if (dateLbl) dateLbl.innerText = parseDay(todayStr).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
       if (usedEl) {
         // Risk needs a stop. Trades without one carry no risk figure, and saying
         // 0.0% would read as "no risk taken".
@@ -2826,8 +2914,8 @@
               backgroundColor: '#0D1422',
               borderColor: '#24344E',
               borderWidth: 1,
-              titleFont: { family: 'JetBrains Mono', size: 11 },
-              bodyFont: { family: 'JetBrains Mono', size: 11 },
+              titleFont: { family: 'Inter', size: 11 },
+              bodyFont: { family: 'Inter', size: 11 },
               callbacks: {
                 label: ctx => signedMoney(ctx.parsed.y, cur)
               }
@@ -2835,12 +2923,12 @@
           },
           scales: {
             x: {
-              grid: { color: 'rgba(24, 36, 56, 0.5)' },
-              ticks: { color: '#64748B', font: { family: 'JetBrains Mono', size: 9 }, maxTicksLimit: 8 }
+              grid: { color: gridC() },
+              ticks: { color: '#64748B', font: { family: 'Inter', size: 9 }, maxTicksLimit: 8 }
             },
             y: {
-              grid: { color: 'rgba(24, 36, 56, 0.5)' },
-              ticks: { color: '#64748B', font: { family: 'JetBrains Mono', size: 9 }, callback: v => signedMoney(v, cur) }
+              grid: { color: gridC() },
+              ticks: { color: '#64748B', font: { family: 'Inter', size: 9 }, callback: v => signedMoney(v, cur) }
             }
           }
         }
@@ -3347,8 +3435,8 @@
       bar.innerHTML = '';
       SIG_KINDS.forEach(x => {
         const b = document.createElement('button'); b.type = 'button';
-        b.className = 'flex-1 min-w-[140px] px-3 py-2.5 rounded-lg text-xs sm:text-sm font-bold tracking-wide transition-all ' + (x.k === kind ? 'bg-amber-500 text-black' : 'text-slate-400 hover:text-white hover:bg-white/5');
-        b.innerHTML = esc(x.label) + ' <span class="font-normal ' + (x.k === kind ? 'text-black/70' : 'text-slate-500') + '">' + (n[x.k] || 0) + '</span>';
+        b.className = x.k === kind ? 'on' : '';
+        b.innerHTML = esc(x.label) + ' <span class="cnt">' + (n[x.k] || 0) + '</span>';
         b.onclick = () => setSigKind(x.k);
         bar.appendChild(b);
       });
@@ -3492,15 +3580,15 @@
         // Zone channels always show; fib and trendline show the ones that have alerts, in timeframe order.
         const keys = kind === "zone" ? SIG_CHANNELS.concat(Object.keys(chanCount).filter(k => SIG_CHANNELS.indexOf(k) === -1))
           : FIBTL_CHANNELS.filter(k => chanCount[k]).concat(Object.keys(chanCount).filter(k => FIBTL_CHANNELS.indexOf(k) === -1));
-        const mk = (label, k, n) => {
-          const b = document.createElement('button'); b.type = 'button';
-          b.className = 'px-2.5 py-1 rounded text-[11px] font-mono ' + (chan === k ? 'bg-amber-500 text-black font-bold' : 'bg-terminal-surface border border-terminal-border text-slate-300 hover:border-amber-500');
-          b.innerText = label + (n != null ? ' (' + n + ')' : '');
-          b.onclick = () => setSigChan(k);
-          chanBar.appendChild(b);
-        };
-        mk('All channels', "", pairs.length);
-        keys.forEach(k => mk(chanLabel(k), k, chanCount[k] || 0));
+        // One dropdown instead of a row of buttons; empty channels are left out.
+        const sel = document.createElement('select');
+        sel.id = 'sigChanSel';
+        sel.className = 'border text-xs px-2.5 py-1.5 rounded-lg focus:outline-none';
+        const opt = (label, k, n) => { const o = document.createElement('option'); o.value = k; o.innerText = label + (n != null ? ' (' + n + ')' : ''); if (chan === k) o.selected = true; sel.appendChild(o); };
+        opt('All channels', "", pairs.length);
+        keys.filter(k => chanCount[k] || chan === k).forEach(k => opt(chanLabel(k), k, chanCount[k] || 0));
+        sel.onchange = () => { state.ui.sigChan = sel.value; sigVisible = SIG_PAGE; save(); renderSignalsTable(); };
+        chanBar.appendChild(sel);
       }
       if (chan) pairs = pairs.filter(pr => chanKey(pr.signal) === chan);
       if (range.from) pairs = pairs.filter(pr => pr.signal.date >= range.from);
@@ -3533,7 +3621,7 @@
         if (tinyN) {
           const b = document.createElement('button');
           b.type = 'button';
-          b.className = 'px-2.5 py-1 rounded text-[11px] font-mono border ' + (skipTiny ? 'bg-amber-500 text-black font-bold border-amber-500' : 'bg-terminal-surface border-terminal-border text-slate-300 hover:border-amber-500');
+          b.className = 'px-2.5 py-1 rounded text-[11px] font-mono border ' + (skipTiny ? 'chip-on' : 'bg-terminal-surface border-terminal-border text-slate-300 hover:border-amber-500');
           b.innerText = (skipTiny ? 'Tiny stops left out of stats' : 'Tiny stops included in stats') + ` (${tinyN})`;
           b.title = `Alerts with a stop under ${TINY_STOP_PCT}% from entry. Fees and slippage alone cost several R on those, so they distort total R, average R and the worst figure. Click to ${skipTiny ? 'include' : 'leave out'} them. The table above always lists every alert.`;
           b.onclick = () => { state.ui.sigSkipTiny = !skipTiny; save(); renderSignalsTable(); };
@@ -3565,7 +3653,7 @@
         SIG_MODES.forEach(m => {
           const n = m.k === "orphans" ? orphans.length : pairs.filter(m.test).length;
           const b = document.createElement('button');
-          b.className = 'px-2.5 py-1 rounded text-[11px] font-mono ' + (m.k === mode ? 'bg-amber-500 text-black font-bold' : 'bg-terminal-surface border border-terminal-border text-slate-300 hover:border-amber-500');
+          b.className = 'px-2.5 py-1 rounded text-[11px] font-mono ' + (m.k === mode ? 'chip-on' : 'bg-terminal-surface border border-terminal-border text-slate-300 hover:border-amber-500');
           b.innerText = `${m.label} (${n})`;
           b.onclick = () => setSigMode(m.k);
           modeBar.appendChild(b);
@@ -3852,7 +3940,7 @@
       const yrs = asc.length && asc[0].t.date.slice(0, 4) !== asc[asc.length - 1].t.date.slice(0, 4);
       const labels = asc.map(x => x.t.date.slice(yrs ? 2 : 5) + (x.t.time ? ' ' + x.t.time : ''));
       const over = asc.map(x => x.flags.indexOf('oversize') !== -1);
-      const mono = { family: 'JetBrains Mono', size: 10 };
+      const mono = { family: 'Inter', size: 10 };
       if (anChartInstance) anChartInstance.destroy();
       anChartInstance = new Chart(canvas.getContext('2d'), {
         type: 'line',
@@ -3883,8 +3971,8 @@
             }
           },
           scales: {
-            x: { grid: { color: 'rgba(24,36,56,0.5)' }, ticks: { color: '#64748B', font: mono, maxTicksLimit: 8 } },
-            y: { position: 'left', beginAtZero: true, grid: { color: 'rgba(24,36,56,0.5)' }, ticks: { color: '#64748B', font: mono, callback: v => v + '×' } },
+            x: { grid: { color: gridC() }, ticks: { color: '#64748B', font: mono, maxTicksLimit: 8 } },
+            y: { position: 'left', beginAtZero: true, grid: { color: gridC() }, ticks: { color: '#64748B', font: mono, callback: v => v + '×' } },
             y2: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#38BDF8', font: mono, callback: v => money(v, cur, 0) } }
           }
         }
@@ -4483,11 +4571,11 @@
       const over = rows.filter(x => x.flags.indexOf("oversize") !== -1);
       const xs = rows.map(x => x.xBal).filter(v => v != null);
       const cards = [
-        { label: "TRADES CHECKED", val: String(rows.length), sub: `${brokeOne.length} (${pct(brokeOne.length / rows.length * 100)}) broke a rule`, color: "text-slate-200" },
-        { label: "OVERSIZED", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} of trades`, color: over.length ? "text-rose-400" : "text-emerald-400" },
-        { label: "AVG SIZE", val: xs.length ? avg(xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-slate-200" },
-        { label: "BIGGEST", val: xs.length ? Math.max(...xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-amber-400" },
-        { label: "LOSS OVER LIMIT", val: String(rows.filter(x => x.flags.indexOf("lossOver") !== -1).length), sub: "lost more than max risk", color: "text-rose-400" }
+        { label: "Trades checked", val: String(rows.length), sub: `${brokeOne.length} (${pct(brokeOne.length / rows.length * 100)}) broke a rule`, color: "text-slate-200" },
+        { label: "Oversized", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} of trades`, color: over.length ? "text-rose-400" : "text-emerald-400" },
+        { label: "Avg size", val: xs.length ? avg(xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-slate-200" },
+        { label: "Biggest", val: xs.length ? Math.max(...xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-amber-400" },
+        { label: "Loss over limit", val: String(rows.filter(x => x.flags.indexOf("lossOver") !== -1).length), sub: "lost more than max risk", color: "text-rose-400" }
       ];
       strip.innerHTML = '';
       cards.forEach(c => {
@@ -4767,8 +4855,8 @@
       document.getElementById('activeTradesCountBadge').innerText = `${s.n} trades`;
       document.getElementById('activeMonthStatusBadge').innerText = s.net >= 0 ? "Ahead" : "Behind";
       document.getElementById('activeMonthStatusBadge').className = s.net >= 0
-        ? "text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
-        : "text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30";
+        ? "text-[10px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400"
+        : "text-[10px] px-2 py-0.5 rounded bg-rose-500/15 text-rose-400";
 
       const accFilterSel = document.getElementById('filterAccountSelect');
       if (accFilterSel) {
@@ -5150,9 +5238,9 @@
       const btn = 'px-2 py-0.5 rounded border text-[10px] whitespace-nowrap';
       return `<div>
         <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
-          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded bg-sky-400"></span><h2 class="text-sm font-bold text-white uppercase tracking-wider">To review</h2>
+          <div class="flex items-center gap-2"><h2 class="text-sm font-bold text-white">To review</h2>
             <span class="text-slate-400">${q.length ? q.length + ' trade' + (q.length === 1 ? '' : 's') + ' in the last ' + REVIEW_DAYS + ' days' : 'all caught up'}</span></div>
-          <span class="text-[10px] text-slate-500">Tap Clean if there's nothing to note, a mistake to tag it, or Review for everything</span>
+          <span class="text-[10px] text-slate-500">Clean if there's nothing to note, pick a mistake to tag it, or Review for everything</span>
         </div>
         ${!q.length ? '<div class="text-center py-4 text-emerald-400">✓ Every trade from the last ' + REVIEW_DAYS + ' days is reviewed.</div>' : `
         <div class="divide-y divide-terminal-border">
@@ -5166,7 +5254,7 @@
             </button>
             <div class="flex flex-wrap gap-1">
               <button type="button" onclick="quickReview('${esc(t.id)}','clean')" class="${btn} border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10">✓ Clean</button>
-              ${QUICK_MISTAKES.map(m => `<button type="button" onclick="quickReview('${esc(t.id)}','${esc(m)}')" class="${btn} border-rose-500/30 text-rose-300 hover:bg-rose-500/10">${esc(m)}</button>`).join('')}
+              <select onchange="if(this.value)quickReview('${esc(t.id)}',this.value)" title="Tag a mistake" class="${btn} border-rose-500/30 text-rose-300"><option value="">Mistake…</option>${QUICK_MISTAKES.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('')}</select>
               <button type="button" onclick="openQueued('${esc(t.id)}')" class="${btn} border-terminal-border text-slate-300 hover:border-amber-500/60">✎ Review</button>
             </div>
           </div>`).join('')}
@@ -7053,7 +7141,7 @@
         const b = document.createElement("button");
         b.type = "button";
         b.className = big
-          ? "flex-1 px-4 py-2.5 rounded-lg text-xs sm:text-sm font-bold tracking-wide transition-all " + (it.v === current ? "bg-amber-500 text-black shadow" : "text-slate-400 hover:text-white hover:bg-white/5")
+          ? "tab" + (it.v === current ? " on" : "")
           : "px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all " + (it.v === current
           ? "bg-terminal-card border border-terminal-borderLight text-amber-400" : "text-slate-400 hover:text-white");
         b.innerText = it.label;
@@ -7717,7 +7805,7 @@
       else if (dim.sortKey) rows.sort((a, b) => a.key.localeCompare(b.key) * dim.sortKey);
       else rows.sort((a, b) => (b.tot ?? -1e9) - (a.tot ?? -1e9));
       const LIMIT = 25, shownRows = btShowAll ? rows : rows.slice(0, LIMIT);
-      const dimBar = '<div class="flex flex-wrap items-center gap-1.5 mb-2"><span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold mr-1">Break down by</span>' + BT_DIMS.map(d => '<button type="button" onclick="setSigBtDim(\'' + d.k + '\')" class="px-2 py-0.5 rounded text-[11px] ' + (d.k === dim.k ? 'bg-amber-500 text-black font-bold' : 'bg-terminal-surface border border-terminal-border text-slate-300 hover:border-amber-500') + '">' + esc(d.label) + '</button>').join('') + '</div>';
+      const dimBar = '<div class="flex flex-wrap items-center gap-1.5 mb-2"><span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold mr-1">Break down by</span>' + BT_DIMS.map(d => '<button type="button" onclick="setSigBtDim(\'' + d.k + '\')" class="px-2 py-0.5 rounded text-[11px] ' + (d.k === dim.k ? 'chip-on' : 'bg-terminal-surface border border-terminal-border text-slate-300 hover:border-amber-500') + '">' + esc(d.label) + '</button>').join('') + '</div>';
       const th = c => '<th class="py-1.5 pr-3 cursor-pointer hover:text-amber-300 whitespace-nowrap' + (c[0] === 'key' ? '' : ' text-right') + '" onclick="setSigBtSort(\'' + c[0] + '\')" title="Sort by ' + esc(c[1]) + '">' + esc(c[1]) + (so && so.k === c[0] ? (so.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>';
       const td = (v, c) => '<td class="pr-3 text-right whitespace-nowrap ' + (c || '') + '">' + v + '</td>';
       const table = '<div>' + dimBar + '<div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr>' + COLS.map(th).join('') + '</tr></thead><tbody>'
@@ -7952,14 +8040,14 @@
         const filledN = pairs.filter(pr => pr.signal.filled === true).length;
         const ungraded = pairs.length - filledN - unfilled;
         const items = [
-          { label: "ALERTS", val: String(pairs.length), sub: `${taken} taken by you`, color: "text-slate-200" },
-          { label: "FILLED", val: String(filledN), sub: `${unfilled} never reached zone · ${ungraded} not graded yet`, color: "text-slate-200" },
-          { label: "WIN RATE", val: scored.length ? pct(wins / scored.length * 100) : "—", sub: `${wins}W / ${scored.length - wins}L`, color: "text-emerald-400" },
-          { label: "TOTAL R", val: scored.length ? rfmt(sum(rs)) + pTag(sumPct(psAll)) : "—", sub: "across all signals", color: sum(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
-          { label: "AVERAGE R", val: scored.length ? rfmt(avg(rs)) + (psAll.some(x => x != null) ? pTag(sumPct(psAll) / psAll.filter(x => x != null).length) : "") : "—", sub: "per signal", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
-          { label: "PROFIT FACTOR", val: gl > 0 ? (gw / gl).toFixed(2) : (gw > 0 ? "∞" : "—"), sub: gw / Math.max(gl, 0.0001) >= 1.5 ? "healthy" : "thin", color: gw >= gl ? "text-emerald-400" : "text-rose-400" },
-          { label: "BEST", val: scored.length ? rfmt(Math.max(...rs)) + pTag(pOfPick(pick((a, b) => a > b))) : "—", sub: describe(pick((a, b) => a > b)), tip: tipFor(pick((a, b) => a > b)), color: "text-emerald-400" },
-          { label: "WORST", val: scored.length ? rfmt(Math.min(...rs)) + pTag(pOfPick(pick((a, b) => a < b))) : "—", sub: describe(pick((a, b) => a < b)), tip: tipFor(pick((a, b) => a < b)), color: "text-rose-400" }
+          { label: "Alerts", val: String(pairs.length), sub: `${taken} taken by you`, color: "text-slate-200" },
+          { label: "Filled", val: String(filledN), sub: `${unfilled} never reached zone · ${ungraded} not graded yet`, color: "text-slate-200" },
+          { label: "Win rate", val: scored.length ? pct(wins / scored.length * 100) : "—", sub: `${wins}W / ${scored.length - wins}L`, color: "text-emerald-400" },
+          { label: "Total R", val: scored.length ? rfmt(sum(rs)) + pTag(sumPct(psAll)) : "—", sub: "across all signals", color: sum(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
+          { label: "Average R", val: scored.length ? rfmt(avg(rs)) + (psAll.some(x => x != null) ? pTag(sumPct(psAll) / psAll.filter(x => x != null).length) : "") : "—", sub: "per signal", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
+          { label: "Profit factor", val: gl > 0 ? (gw / gl).toFixed(2) : (gw > 0 ? "∞" : "—"), sub: gw / Math.max(gl, 0.0001) >= 1.5 ? "healthy" : "thin", color: gw >= gl ? "text-emerald-400" : "text-rose-400" },
+          { label: "Best", val: scored.length ? rfmt(Math.max(...rs)) + pTag(pOfPick(pick((a, b) => a > b))) : "—", sub: describe(pick((a, b) => a > b)), tip: tipFor(pick((a, b) => a > b)), color: "text-emerald-400" },
+          { label: "Worst", val: scored.length ? rfmt(Math.min(...rs)) + pTag(pOfPick(pick((a, b) => a < b))) : "—", sub: describe(pick((a, b) => a < b)), tip: tipFor(pick((a, b) => a < b)), color: "text-rose-400" }
         ];
         items.forEach(it => {
           const card = document.createElement('div');
@@ -8228,7 +8316,7 @@
       const ranked = avgRng.map((v, i) => ({ v, i })).filter(x => x.v != null).sort((a, b) => b.v - a.v);
       const busy = ranked.slice(0, 3).map(x => x.i), quiet = ranked.slice(-3).map(x => x.i);
       const lbl = i => String(i).padStart(2, '0') + ':30';
-      const btn = d => '<button type="button" onclick="setMktHrDays(\'' + hostId + '\',' + d + ')" class="px-2 py-0.5 rounded text-[10px] ' + (d === days ? 'bg-amber-500 text-black font-bold' : 'border border-terminal-border text-slate-300 hover:border-amber-500') + '">' + d + 'D</button>';
+      const btn = d => '<button type="button" onclick="setMktHrDays(\'' + hostId + '\',' + d + ')" class="px-2 py-0.5 rounded text-[10px] ' + (d === days ? 'chip-on' : 'border border-terminal-border text-slate-300 hover:border-amber-500') + '">' + d + 'D</button>';
       const loading = mktHrLoading ? '<span class="text-[10px] text-slate-500 ml-2">loading…</span>' : '';
       const dayLbl = day ? new Date(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10)).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
       const back = '<button type="button" onclick="mktPickDay(\'' + hostId + '\',\'' + day + '\')" class="px-2 py-0.5 rounded text-[10px] border border-amber-500 text-amber-300 hover:bg-amber-500/15">✕ Back to ' + days + 'D average</button>';
@@ -8284,8 +8372,9 @@
       bar.innerHTML = '';
       list.forEach(x => {
         const b = document.createElement('button'); b.type = 'button';
-        b.className = 'flex-1 min-w-[120px] px-3 py-2 rounded-lg text-xs font-bold tracking-wide transition-all ' + (x.k === cur ? 'bg-amber-500 text-black' : 'text-slate-400 hover:text-white hover:bg-white/5');
-        b.innerText = x.label;
+        b.className = 'tab' + (x.k === cur ? ' on' : '');
+        const m = /^(.*?) \((\d+)\)$/.exec(x.label);
+        if (m) { b.innerText = m[1]; const c = document.createElement('span'); c.className = 'cnt'; c.innerText = m[2]; b.appendChild(c); } else b.innerText = x.label;
         b.onclick = () => onPick(x.k);
         bar.appendChild(b);
       });
@@ -9852,14 +9941,14 @@
       const s = btStats(shown);
       const pos = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
       const cards = [
-        { label: "NET P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, 0)}`, color: pos(s.net) },
-        { label: "WIN RATE", val: s.n ? pct(s.winRate) : "—", sub: `${s.wins} won · ${s.losses} lost`, color: s.winRate >= 50 ? "text-emerald-400" : "text-amber-400" },
-        { label: "PROFIT FACTOR", val: s.pf === Infinity ? "∞" : s.n ? s.pf.toFixed(2) : "—", sub: "won ÷ lost", color: s.pf >= 1 ? "text-emerald-400" : "text-rose-400" },
-        { label: "AVG WIN / LOSS", val: `${signedMoney(s.avgWin, cur, 0)} / ${signedMoney(s.avgLoss, cur, 0)}`, sub: "per trade", color: "text-slate-200" },
-        { label: "BEST / WORST", val: `${signedMoney(s.best, cur, 0)} / ${signedMoney(s.worst, cur, 0)}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
-        { label: "MAX DRAWDOWN", val: money(-s.maxDD, cur), sub: "from a running peak", color: s.maxDD > 0 ? "text-rose-400" : "text-slate-200" },
-        { label: "FEES / FUNDING", val: `${money(s.fees, cur, 0)} / ${signedMoney(s.funding, cur, 0)}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
-        { label: "OPEN", val: String(s.open.length), sub: s.open.length ? `${signedMoney(s.openNet, cur)} so far` : "none open", color: s.open.length ? "text-sky-300" : "text-slate-200" }
+        { label: "Net P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, 0)}`, color: pos(s.net) },
+        { label: "Win rate", val: s.n ? pct(s.winRate) : "—", sub: `${s.wins} won · ${s.losses} lost`, color: s.winRate >= 50 ? "text-emerald-400" : "text-amber-400" },
+        { label: "Profit factor", val: s.pf === Infinity ? "∞" : s.n ? s.pf.toFixed(2) : "—", sub: "won ÷ lost", color: s.pf >= 1 ? "text-emerald-400" : "text-rose-400" },
+        { label: "Avg win / loss", val: `${signedMoney(s.avgWin, cur, 0)} / ${signedMoney(s.avgLoss, cur, 0)}`, sub: "per trade", color: "text-slate-200" },
+        { label: "Best / worst", val: `${signedMoney(s.best, cur, 0)} / ${signedMoney(s.worst, cur, 0)}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
+        { label: "Max drawdown", val: money(-s.maxDD, cur), sub: "from a running peak", color: s.maxDD > 0 ? "text-rose-400" : "text-slate-200" },
+        { label: "Fees / funding", val: `${money(s.fees, cur, 0)} / ${signedMoney(s.funding, cur, 0)}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
+        { label: "Open", val: String(s.open.length), sub: s.open.length ? `${signedMoney(s.openNet, cur)} so far` : "none open", color: s.open.length ? "text-sky-300" : "text-slate-200" }
       ];
       document.getElementById("btStrip").innerHTML = cards.map(c => `<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors">
           <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${c.label}</span>
@@ -9932,13 +10021,13 @@
             legend: { display: false },
             tooltip: {
               backgroundColor: "#0D1422", borderColor: "#24344E", borderWidth: 1,
-              titleFont: { family: "JetBrains Mono", size: 11 }, bodyFont: { family: "JetBrains Mono", size: 11 },
+              titleFont: { family: "Inter", size: 11 }, bodyFont: { family: "Inter", size: 11 },
               callbacks: { label: c => c.dataIndex ? `Trade ${signedMoney(closed[c.dataIndex - 1].net, cur)} · total ${signedMoney(c.parsed.y, cur)}` : "Start" }
             }
           },
           scales: {
-            x: { grid: { color: "rgba(24, 36, 56, 0.5)" }, ticks: { color: "#64748B", font: { family: "JetBrains Mono", size: 9 }, maxTicksLimit: 8, callback: function (v) { return String(this.getLabelForValue(v)).split(" · ")[0]; } } },
-            y: { grid: { color: "rgba(24, 36, 56, 0.5)" }, ticks: { color: "#64748B", font: { family: "JetBrains Mono", size: 9 }, callback: v => signedMoney(v, cur, 0) } }
+            x: { grid: { color: gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 9 }, maxTicksLimit: 8, callback: function (v) { return String(this.getLabelForValue(v)).split(" · ")[0]; } } },
+            y: { grid: { color: gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 9 }, callback: v => signedMoney(v, cur, 0) } }
           }
         }
       });
@@ -10336,7 +10425,10 @@
       const light = document.documentElement.classList.toggle('light');
       try { localStorage.setItem('tapeAndTarget.theme', light ? 'light' : 'dark'); } catch (e) {}
       applyThemeButton();
+      if (state) renderAll(); // charts pick up the new grid colour
     }
+    // Chart grid lines: faint in either theme.
+    function gridC() { return document.documentElement.classList.contains('light') ? 'rgba(15,23,42,0.07)' : 'rgba(255,255,255,0.05)'; }
 
     // Chart.js loads on its own (async), so a slow CDN never holds up the journal.
     // When it arrives after the first render, draw again to fill in the charts.
