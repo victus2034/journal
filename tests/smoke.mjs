@@ -431,7 +431,7 @@ async function backtestRun(seed) {
 
     // Files live in Settings → Connections: Analysis has no Files tab, the Data tab lists them.
     // A report book has one row of sections: its Report first, then the ones every book has.
-    check((await page.innerText('#anSecBar')).replace(/\s+/g, ' ').trim() === 'Report Overview Position size Trades Market days AI review' && !(await page.$('[data-btsec]')), 'report book sections: ' + await page.innerText('#anSecBar'));
+    check(/^Report Overview Review( \d+)? Position size Trades Market days AI review$/.test((await page.innerText('#anSecBar')).replace(/\s+/g, ' ').trim()) && !(await page.$('[data-btsec]')), 'report book sections: ' + await page.innerText('#anSecBar'));
     const dataFiles = await page.evaluate(() => { switchTab('data'); return document.getElementById('btFiles').innerText; });
     check(/Delete CoinDCX's report data/.test(dataFiles) && /Remove/.test(dataFiles), 'Sync & Settings does not list the report files: ' + JSON.stringify(dataFiles.slice(0, 400)));
     await page.evaluate(() => switchTab('analysis'));
@@ -1916,14 +1916,14 @@ async function cleanupRun(seed) {
       // Review queue: today's three are waiting; Clean and a mistake each take one off.
       const ids = () => reviewQueue().map(t => t.id);
       out.q0 = ['tf1', 'tz1', 'tq2'].filter(id => ids().includes(id));
-      out.label = dashSecList().find(x => x.k === 'review').label;
+      out.label = anSecList().find(x => x.k === 'review').label;
       quickReview('tf1', 'clean'); quickReview('tq2', 'FOMO Entry');
       out.q1 = ['tf1', 'tz1', 'tq2'].filter(id => ids().includes(id));
       out.tags = state.trades.find(t => t.id === 'tq2').tagsMistakes;
-      state.ui.dashSec = 'review'; switchTab('dashboard'); renderAll();
+      state.ui.anSec = 'review'; switchTab('analysis'); renderAll();
       out.panel = document.getElementById('reviewQueuePanel').innerText.replace(/\s+/g, ' ');
       out.week = document.getElementById('weeklyReview').textContent.replace(/\s+/g, ' ');
-      out.shown = [...document.querySelectorAll('[data-dashsec]')].filter(el => !el.classList.contains('hidden')).map(el => el.getAttribute('data-dashsec'));
+      out.shown = [...document.querySelectorAll('[data-ansec]')].filter(el => !el.classList.contains('hidden')).map(el => el.getAttribute('data-ansec'));
       // Inspector: setup chips and the FIB checklist with L4 ticked.
       openInspector(allTrades().find(t => t.id === 'tf1'));
       out.chips = [...document.querySelectorAll('#inspChecklist [data-setup]')].map(b => b.textContent);
@@ -2304,8 +2304,8 @@ async function layoutRun(seed) {
       return out;
     });
     check(JSON.stringify(v.order) === '[0,0,1,2,3]' && v.today === 'goal|today', 'dashboard order (goal + today, month, numbers, sections): ' + JSON.stringify([v.order, v.today]));
-    check(v.dash === "Equity & calendar|Day's trades|Review|Week & grade|Time & habits", 'dashboard sections: ' + v.dash);
-    check(v.anSecs === 'Overview|Position size|Trades|Market days|AI review', 'analysis sections: ' + v.anSecs);
+    check(v.dash === "Equity & calendar|Day's trades|Week & grade|Time & habits", 'dashboard sections: ' + v.dash);
+    check(/^Overview\|Review(\s*\d+)?\|Position size\|Trades\|Market days\|AI review$/.test(v.anSecs), 'analysis sections: ' + v.anSecs);
     check(v.bar === 'All books|Test NSE|Test Crypto' && v.lines.join(',') === 'Test 8,Test 8', 'empty book left out of Analysis: ' + JSON.stringify([v.bar, v.lines]));
     check(v.total[0] === 'Total' && v.total[1] === v.want.net && v.total[2] === v.want.n, 'results by broker total: ' + JSON.stringify([v.total, v.want]));
     check(v.brokersShown && !v.aiShown && v.aiOnly, 'AI review has its own section: ' + JSON.stringify([v.brokersShown, v.aiShown, v.aiOnly]));
@@ -2365,24 +2365,38 @@ async function cleanRun(seed) {
       out.picked = document.getElementById('sigChanSel').value;
       out.kind = [...document.querySelectorAll('#sigKindBar button')].map(b => (b.classList.contains('on') ? '*' : '') + b.innerText).join('|');
       // Review queue: a mistake is picked from one dropdown, which tags the trade.
-      state.ui.account = 'all'; state.ui.dashSec = 'review'; save(); switchTab('dashboard'); renderAll();
+      state.ui.account = 'all'; state.ui.anSec = 'review'; save(); switchTab('analysis'); renderAll();
+      out.anTabs = [...document.querySelectorAll('#anSecBar .tab')].map(b => b.firstChild.textContent + (b.querySelector('.cnt') ? '(' + b.querySelector('.cnt').innerText + ')' : '')).join('|');
       const row = [...document.querySelectorAll('#reviewQueuePanel select')].find(x => x.closest('div.py-2').innerText.includes('ETHUSD'));
       out.mistakeOpts = row ? [...row.options].map(o => o.value).filter(Boolean) : null;
       out.btns = row ? row.closest('div.py-2').querySelectorAll('button').length : null;
       if (row) { row.value = 'FOMO Entry'; row.dispatchEvent(new Event('change')); }
       out.tags = state.trades.find(t => t.id === 'cl1').tagsMistakes;
-      // One font everywhere: the old monospace face is gone from what's drawn.
+      let a;
+      // Time & habits: one short row per half-hour slot, in time order, with a bar; tags the same way.
+      state.ui.account = 'acc_cry'; state.ui.dashSec = 'habits'; save(); switchTab('dashboard'); renderAll();
+      const slots = [...document.querySelectorAll('#timeOfDayContainer > .hrow')];
+      out.slotTimes = slots.map(r => r.innerText.slice(0, 13));
+      out.slotBars = slots.every(r => r.querySelector('.hbar > i'));
+      out.habitsTall = document.querySelector('[data-dashsec="habits"]').offsetHeight;
+      out.reviewOnDash = !!document.querySelector('#view-dashboard #reviewQueuePanel');
+      a = slots.find(r => r.innerText.startsWith('10:00 - 10:30'));
+      if (a) a.click();
+      out.afterClick = state.ui.dashSec;
+
       out.fonts = [...new Set([...document.querySelectorAll('#view-dashboard *')].map(el => getComputedStyle(el).fontFamily.split(',')[0].replace(/"/g, '').trim()))];
       return out;
     });
     check(v.bar === '40%' && /bg-emerald-500/.test(v.barCls) && v.barTxt === '40% of $2.50' && v.pnl === '-$1.00', 'loss bar at 40%: ' + JSON.stringify([v.bar, v.barCls, v.barTxt, v.pnl]));
     check(v.bar2[0] === '80%' && /bg-amber-500/.test(v.bar2[1]), 'loss bar at 80% turns amber: ' + JSON.stringify(v.bar2));
-    check(/^\*Equity & calendar\|Day's trades\|Review\(\d+\)\|Week & grade\|Time & habits$/.test(v.tabs), 'dashboard tabs: ' + v.tabs);
+    check(/^\*Equity & calendar\|Day's trades\|Week & grade\|Time & habits$/.test(v.tabs) && /^Overview\|Review\(\d+\)\|Position size/.test(v.anTabs), 'dashboard and analysis tabs: ' + v.tabs + ' / ' + v.anTabs);
     check(v.opts === 'All channels (3)|CRYPTO 30m (2)|CRYPTO 4h (1)' && v.chipsLeft === 0, 'channel dropdown: ' + JSON.stringify([v.opts, v.chipsLeft]));
     check(v.chan === 'CRYPTO 4H' && v.picked === 'CRYPTO 4H', 'channel picked from the dropdown: ' + JSON.stringify([v.chan, v.picked]));
     check(/^\*Zone alerts 3\|Fib alerts 0\|Trendline alerts 0$/.test(v.kind), 'scanner switch: ' + v.kind);
     check(Array.isArray(v.mistakeOpts) && v.mistakeOpts.includes('FOMO Entry') && v.btns === 3, 'mistake dropdown in the review row: ' + JSON.stringify([v.mistakeOpts, v.btns]));
     check(Array.isArray(v.tags) && v.tags.includes('FOMO Entry'), 'mistake picked tags the trade: ' + JSON.stringify(v.tags));
+    check(v.slotTimes.length > 0 && v.slotTimes.every((t, i, l) => !i || l[i - 1] <= t) && v.slotBars && v.habitsTall < 900 && !v.reviewOnDash, 'time & habits compact rows: ' + JSON.stringify([v.slotTimes, v.slotBars, v.habitsTall, v.reviewOnDash]));
+    check(v.afterClick === 'ledger', 'clicking a slot opens its trades: ' + v.afterClick);
     check(!v.fonts.some(f => /mono/i.test(f)), 'no monospace font left on the dashboard: ' + JSON.stringify(v.fonts));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
