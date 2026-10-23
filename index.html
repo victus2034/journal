@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-23.132">
+  <meta name="app-version" content="2026-10-23.133">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -198,6 +198,17 @@
       .hdr-right{margin-left:auto}
       #accountsBar{order:3;width:100%}
     }
+    /* Time & habits: short rows, a bar for the size of each result */
+    /* Slots read down each column, in time order */
+    .habit-grid{columns:1;column-gap:1.5rem}
+    .habit-grid>.hrow{break-inside:avoid}
+    @media (min-width:768px){.habit-grid{columns:2}}
+    @media (min-width:1280px){.habit-grid{columns:3}}
+    .hrow{display:grid;grid-template-columns:minmax(0,1fr) 56px 88px;align-items:center;gap:.6rem;padding:.3rem .45rem;border-radius:7px;font-size:12.5px;border-bottom:1px solid var(--line)}
+    .hrow:hover{background:var(--hover)}
+    .hrow.sev{background:rgba(244,63,94,.06)}
+    .hbar{height:5px;border-radius:3px;background:var(--line);overflow:hidden}
+    .hbar>i{display:block;height:100%;border-radius:3px}
     .card{background:var(--surface);border:1px solid var(--line);border-radius:14px}
       /* Small one-of-a-few switch (scanner kind) and picked filter chips */
     .seg{display:inline-flex;gap:2px;padding:3px;background:var(--inset);border:1px solid var(--line);border-radius:10px;max-width:100%;overflow-x:auto;align-self:flex-start}
@@ -420,7 +431,6 @@
           </div>
       </section>
 
-      <section data-dashsec="review" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle font-mono text-xs" id="reviewQueuePanel"></section>
 
       <section data-dashsec="week" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle font-mono text-xs" id="weeklyReview"></section>
 
@@ -487,44 +497,43 @@
       </section>
       </section>
 
-      <section data-dashsec="habits" class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start hidden">
-          <!-- Time of Day Performance Leaks -->
-          <div class="lg:col-span-7 lg:col-start-1 lg:row-start-2 bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle">
-            <div class="flex items-center justify-between border-b border-terminal-border pb-2.5">
-              <div>
-                <h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">Time of day</h3>
-                <p class="text-[11px] text-slate-400">Half-hour slots you actually traded</p>
+      <section data-dashsec="habits" class="space-y-4 hidden">
+          <!-- Time of day: one short row per half-hour slot you traded -->
+          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-baseline gap-2">
+                <h3 class="text-sm font-semibold text-white">Time of day</h3>
+                <span class="text-xs text-slate-500">half-hour slots you traded · click one to list its trades</span>
               </div>
-              <span id="criticalLeakPill" class="hidden text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/25">
-                Critical Leak: 14:00 - 15:00
-              </span>
+              <span id="criticalLeakPill" class="hidden text-[11px] px-2 py-0.5 rounded bg-rose-500/10 text-rose-400">Critical Leak</span>
             </div>
-
-            <div id="timeOfDayContainer" class="mt-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-xs font-mono"></div>
+            <div id="timeOfDayContainer" class="habit-grid mt-3"></div>
           </div>
-          <!-- Execution Quality & Mistake Audit -->
-          <div class="lg:col-span-5 lg:col-start-8 lg:row-start-2 bg-terminal-card border border-terminal-border rounded-xl p-4 shadow-subtle">
-            <div class="flex items-center justify-between gap-2 border-b border-terminal-border pb-2.5">
-              <div>
-                <h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">Execution Quality &amp; Mistake Audit</h3>
-                <p class="text-[11px] text-slate-400">What each tag has cost or earned you</p>
+          <!-- What each tag and confidence level has cost or earned -->
+          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-baseline gap-2">
+                <h3 class="text-sm font-semibold text-white">Execution &amp; mistakes</h3>
+                <span class="text-xs text-slate-500">what each tag has cost or earned you</span>
               </div>
-              <button onclick="openReview(null)" class="text-[10px] font-mono text-amber-400 hover:underline shrink-0">Daily Review</button>
+              <div class="flex items-center gap-3">
+                <span id="mistakeLeakPill" class="hidden text-[11px] px-2 py-0.5 rounded bg-rose-500/10 text-rose-400"></span>
+                <button onclick="openReview(null)" class="text-xs text-amber-400 hover:underline shrink-0">Daily Review</button>
+              </div>
             </div>
-            <span id="mistakeLeakPill" class="hidden mt-2 inline-block text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/25"></span>
-
-            <div class="mt-3">
-              <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Confidence performance <span id="confidenceNote" class="normal-case font-normal tracking-normal text-slate-600 ml-1"></span></span>
-              <div id="confidenceStrip" class="mt-1.5 grid grid-cols-2 gap-2 text-xs font-mono"></div>
-            </div>
-
-            <div class="mt-3">
-              <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Mistakes</span>
-              <div id="mistakeTagContainer" class="mt-1.5 grid grid-cols-1 gap-2 text-xs font-mono"></div>
-            </div>
-            <div class="mt-3">
-              <span class="text-[10px] text-slate-500 uppercase tracking-wider font-bold">What went right</span>
-              <div id="positiveTagContainer" class="mt-1.5 grid grid-cols-1 gap-2 text-xs font-mono"></div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4 mt-3">
+              <div>
+                <div class="text-xs text-slate-500 mb-1">Confidence <span id="confidenceNote"></span></div>
+                <div id="confidenceStrip" class="habit-list"></div>
+              </div>
+              <div>
+                <div class="text-xs text-slate-500 mb-1">Mistakes</div>
+                <div id="mistakeTagContainer" class="habit-list"></div>
+              </div>
+              <div>
+                <div class="text-xs text-slate-500 mb-1">What went right</div>
+                <div id="positiveTagContainer" class="habit-list"></div>
+              </div>
             </div>
           </div>
       </section>
@@ -1144,6 +1153,9 @@
         <div class="bg-terminal-card border border-terminal-border rounded-xl p-4" id="mktCalAnalysis"></div>
       </section>
 
+      <!-- Trades from the last 30 days still to review, every book -->
+      <section data-ansec="review" class="hidden bg-terminal-card border border-terminal-border rounded-xl p-4 text-xs" id="reviewQueuePanel"></section>
+
       <section data-ansec="ai" class="space-y-4 hidden">
         <!-- AI review: the period's trades from every book, sent to Gemini with the key saved on this device -->
         <div id="aiReviewCard" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs space-y-3">
@@ -1517,6 +1529,8 @@
     let activeLedgerFocus = null;
     function focusLedger(label, test) {
       activeLedgerFocus = { label, test };
+      // The trades list is its own section: open it, or the click shows nothing.
+      if (state.ui.dashSec !== 'ledger') { state.ui.dashSec = 'ledger'; save(); renderSecBar('dashSecBar', dashSecList(), 'data-dashsec', 'ledger', setDashSec); }
       renderLedgerView();
       const title = document.getElementById('ledgerSessionTitle');
       const sec = title && title.closest('section');
@@ -2963,6 +2977,20 @@
       const bal = sum(viewBooks().map(a => balIn(a, cur)));
       return bal > 0 ? bal * 0.01 : 2;
     }
+    // One short line: label and its count on the left, a bar for the size of
+    // the result, and the money on the right. Used by Time & habits.
+    function habitRow(label, sub, net, max, cur, severe, onclick) {
+      const row = document.createElement('div');
+      const neg = net < 0, w = max > 0 ? Math.max(4, Math.min(100, Math.abs(net) / max * 100)) : 0;
+      row.className = 'hrow' + (severe ? ' sev' : '') + (onclick ? ' cursor-pointer' : '');
+      row.innerHTML = `<div class="min-w-0 truncate"><span class="${severe ? 'text-rose-300 font-semibold' : 'text-slate-200'}">${esc(label)}</span>`
+        + (severe ? ' <span class="text-[10px] text-rose-400">severe</span>' : '')
+        + ` <span class="text-slate-500 text-[11px]">${esc(sub)}</span></div>`
+        + `<div class="hbar"><i class="${neg ? 'bg-rose-500' : 'bg-emerald-500'}" style="width:${w.toFixed(0)}%"></i></div>`
+        + `<span class="text-right font-semibold mono-num ${neg ? 'text-rose-400' : 'text-emerald-400'}">${signedMoney(net, cur)}</span>`;
+      if (onclick) { row.title = 'Show these trades in the ledger'; row.onclick = onclick; }
+      return row;
+    }
     function renderTimeOfDaySlots(ts, cur) {
       const container = document.getElementById('timeOfDayContainer');
       if (!container) return;
@@ -2978,7 +3006,7 @@
 
       const keys = Object.keys(by).map(Number).sort((a, b) => a - b);
       if (!keys.length) {
-        container.innerHTML = '<div class="col-span-3 text-slate-500 text-center py-4">No time-stamped trades recorded.</div>';
+        container.innerHTML = '<div class="text-slate-500 text-xs py-2">No time-stamped trades recorded.</div>';
         return;
       }
 
@@ -2986,37 +3014,17 @@
       if (leakPill) {
         const worst = keys.map(k => ({ k, net: sum(by[k].map(t => t.pnl)) })).sort((x, y) => x.net - y.net)[0];
         leakPill.classList.toggle('hidden', !(worst && worst.net < 0));
-        if (worst && worst.net < 0) leakPill.innerText = `Critical Leak: ${hhmm(worst.k)} - ${hhmm((worst.k + 30) % 1440)} (${signedMoney(worst.net, cur)})`;
+        if (worst && worst.net < 0) leakPill.innerText = `Worst slot: ${hhmm(worst.k)} - ${hhmm((worst.k + 30) % 1440)} (${signedMoney(worst.net, cur)})`;
       }
+      const nets = {}; keys.forEach(k => { nets[k] = sum(by[k].map(t => t.pnl)); });
+      const max = Math.max(...keys.map(k => Math.abs(nets[k])));
       keys.forEach(k => {
-        const inSlot = by[k];
-        const wins = inSlot.filter(t => t.pnl > 0).length;
-        const netSlot = sum(inSlot.map(t => t.pnl));
-        const isWin = netSlot >= 0;
-        const isSevereLeak = netSlot < -severeLossLimit(cur);
-
-        const slotCard = document.createElement('div');
-        slotCard.className = isSevereLeak
-          ? 'p-2.5 rounded-lg bg-rose-950/30 border border-rose-800/60 flex items-center justify-between'
-          : (!isWin ? 'p-2.5 rounded-lg bg-rose-950/20 border border-rose-900/40 flex items-center justify-between' : 'p-2.5 rounded-lg bg-[#080D16] border border-terminal-border flex items-center justify-between');
-
-        slotCard.innerHTML = `
-          <div>
-            <div class="flex items-center gap-1.5">
-              <span class="${isSevereLeak ? 'text-rose-300 font-bold' : (!isWin ? 'text-rose-300 font-medium' : 'text-slate-200 font-medium')}">${hhmm(k)} - ${hhmm((k + 30) % 1440)}</span>
-              ${isSevereLeak ? '<span class="text-[9px] bg-rose-600 text-white font-bold px-1 py-0.5 rounded">SEVERE</span>' : (!isWin ? '<span class="text-[9px] bg-rose-900/80 px-1 py-0.2 rounded text-rose-200">LEAK</span>' : '')}
-            </div>
-            <span class="text-[10px] text-slate-500 block">${inSlot.length} trade${inSlot.length === 1 ? '' : 's'} • ${pct(wins / inSlot.length * 100)} won</span>
-          </div>
-          <span class="${isWin ? 'text-emerald-400' : 'text-rose-400'} font-bold">${signedMoney(netSlot, cur)}</span>
-        `;
-        slotCard.classList.add('cursor-pointer', 'hover:border-amber-500/60', 'transition-colors');
-        slotCard.title = 'Show these trades in the ledger below';
-        slotCard.onclick = () => focusLedger(`${hhmm(k)} - ${hhmm((k + 30) % 1440)}`, t => {
-          const m = toMin(t.rep ? t.openTime : t.time);
-          return m != null && Math.floor(m / 30) * 30 === k;
-        });
-        container.appendChild(slotCard);
+        const inSlot = by[k], wins = inSlot.filter(t => t.pnl > 0).length, label = `${hhmm(k)} - ${hhmm((k + 30) % 1440)}`;
+        container.appendChild(habitRow(label, `${inSlot.length} trade${inSlot.length === 1 ? '' : 's'} · ${pct(wins / inSlot.length * 100)} won`, nets[k], max, cur,
+          nets[k] < -severeLossLimit(cur), () => focusLedger(label, t => {
+            const m = toMin(t.rep ? t.openTime : t.time);
+            return m != null && Math.floor(m / 30) * 30 === k;
+          })));
       });
     }
 
@@ -3062,31 +3070,14 @@
         return { tag, tagged, net: sum(tagged.map(t => t.pnl)) };
       }).filter(r => r.tagged.length);
       if (!rows.length) {
-        container.innerHTML = `<div class="col-span-full text-slate-500 py-2">No ${isMistake ? 'mistakes' : 'positives'} tagged yet.</div>`;
+        container.innerHTML = `<div class="text-slate-500 text-xs py-1">No ${isMistake ? 'mistakes' : 'positives'} tagged yet.</div>`;
         return;
       }
+      const max = Math.max(...rows.map(r => Math.abs(r.net)));
       rows.sort((a, b) => a.net - b.net).forEach(r => {
         const wins = r.tagged.filter(t => t.pnl > 0).length;
-        const isWin = r.net >= 0;
-        const severe = isMistake && r.net < -severeLossLimit(cur);
-        const card = document.createElement('div');
-        card.className = severe
-          ? 'p-2.5 rounded-lg bg-rose-950/30 border border-rose-800/60 flex items-center justify-between'
-          : 'p-2.5 rounded-lg bg-[#080D16] border border-terminal-border flex items-center justify-between';
-        card.innerHTML = `
-          <div>
-            <div class="flex items-center gap-1.5">
-              <span class="${severe ? 'text-rose-300' : 'text-slate-200'} font-bold">${esc(r.tag)}</span>
-              ${severe ? '<span class="text-[9px] bg-rose-600 text-white font-bold px-1 py-0.5 rounded">SEVERE</span>' : ''}
-            </div>
-            <span class="text-[10px] text-slate-500 block">${r.tagged.length} trade${r.tagged.length === 1 ? '' : 's'} • ${pct(wins / r.tagged.length * 100)} won</span>
-          </div>
-          <span class="${isWin ? 'text-emerald-400' : 'text-rose-400'} font-bold">${signedMoney(r.net, cur)}</span>
-        `;
-        card.classList.add('cursor-pointer', 'hover:border-amber-500/60', 'transition-colors');
-        card.title = 'Show these trades in the ledger below';
-        card.onclick = () => focusLedger(r.tag, t => (t[field] || []).indexOf(r.tag) !== -1);
-        container.appendChild(card);
+        container.appendChild(habitRow(r.tag, `${r.tagged.length} · ${pct(wins / r.tagged.length * 100)} won`, r.net, max, cur,
+          isMistake && r.net < -severeLossLimit(cur), () => focusLedger(r.tag, t => (t[field] || []).indexOf(r.tag) !== -1)));
       });
       return rows;
     }
@@ -3111,24 +3102,13 @@
       ];
       const rated = ts.filter(t => tradeConfidence(t) != null).length;
       const noteEl = document.getElementById('confidenceNote');
-      if (noteEl) noteEl.innerText = rated ? `· ${rated} of ${ts.length} trades rated` : `· none rated yet — rate a trade to start tracking`;
-      buckets.forEach(b => {
-        const inB = ts.filter(t => { const c = tradeConfidence(t); return c != null && b.test(c); });
-        const net = sum(inB.map(t => t.pnl));
+      if (noteEl) noteEl.innerText = rated ? `· ${rated} of ${ts.length} rated` : `· none rated yet`;
+      const per = buckets.map(b => { const inB = ts.filter(t => { const c = tradeConfidence(t); return c != null && b.test(c); }); return { b, inB, net: sum(inB.map(t => t.pnl)) }; });
+      const max = Math.max(...per.map(x => Math.abs(x.net)));
+      per.forEach(({ b, inB, net }) => {
         const wins = inB.filter(t => t.pnl > 0).length;
-        const card = document.createElement('div');
-        card.className = 'p-2.5 rounded-lg bg-[#080D16] border border-terminal-border';
-        card.innerHTML = `
-          <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${b.label}</span>
-          <div class="${inB.length ? (net >= 0 ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-500'} font-bold text-sm mt-0.5">${inB.length ? signedMoney(net, cur) : '—'}</div>
-          <span class="text-[10px] text-slate-500">${inB.length} trade${inB.length === 1 ? '' : 's'}${inB.length ? ' • ' + pct(wins / inB.length * 100) + ' won' : ''}</span>
-        `;
-        if (inB.length) {
-          card.classList.add('cursor-pointer', 'hover:border-amber-500/60', 'transition-colors');
-          card.title = 'Show these trades in the ledger below';
-          card.onclick = () => focusLedger(b.label + ' confidence', t => { const c = tradeConfidence(t); return c != null && b.test(c); });
-        }
-        strip.appendChild(card);
+        strip.appendChild(habitRow(b.label, inB.length ? `${inB.length} · ${pct(wins / inB.length * 100)} won` : 'none', net, max, cur, false,
+          inB.length ? () => focusLedger(b.label + ' confidence', t => { const c = tradeConfidence(t); return c != null && b.test(c); }) : null));
       });
     }
 
@@ -4531,6 +4511,8 @@
       if (!live) return;
       renderSecBar('anSecBar', anSecList(), 'data-ansec', anCurSec(), setAnSec);
       const cur = viewCur();
+      const rqHost = document.getElementById('reviewQueuePanel');
+      if (rqHost) rqHost.innerHTML = reviewQueueHtml(cur);
       const from = anRange();
       // The report's pair filter narrows this too.
       const pairPick = rep && state.ui.btPair && state.ui.btPair !== "all" ? btSym(state.ui.btPair) : null;
@@ -8354,14 +8336,19 @@
     const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
     const SIG_SECS_FIB = SIG_SECS.slice(0, 3).concat([{ k: "levels", label: "Fib levels" }], SIG_SECS.slice(3));
     const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
-    const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "ledger", label: "Day's trades" }, { k: "review", label: "Review" }, { k: "week", label: "Week & grade" }, { k: "habits", label: "Time & habits" }];
+    const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "ledger", label: "Day's trades" }, { k: "week", label: "Week & grade" }, { k: "habits", label: "Time & habits" }];
     // The Review tab shows how many trades are waiting.
-    function dashSecList() { const n = reviewQueue().length; return DASH_SECS.map(x => x.k === 'review' && n ? Object.assign({}, x, { label: x.label + ' (' + n + ')' }) : x); }
+    function dashSecList() { return DASH_SECS; }
     function setDashSec(k) { state.ui.dashSec = k; save(); renderDashboard(); }
-    const AN_SECS = [{ k: "overview", label: "Overview" }, { k: "size", label: "Position size" }, { k: "trades", label: "Trades" }, { k: "market", label: "Market days" }, { k: "ai", label: "AI review" }];
+    const AN_SECS = [{ k: "overview", label: "Overview" }, { k: "review", label: "Review" }, { k: "size", label: "Position size" }, { k: "trades", label: "Trades" }, { k: "market", label: "Market days" }, { k: "ai", label: "AI review" }];
     // A broker-report book (CoinDCX) adds its own report first: the broker's numbers,
     // equity, pairs and days. The other sections run the journal's checks on its trades.
-    function anSecList() { return anReportBook() ? [{ k: "report", label: "Report" }].concat(AN_SECS) : AN_SECS; }
+    // Review carries the number of trades still waiting, e.g. "Review (5)".
+    function anSecList() {
+      const n = reviewQueue().length;
+      const l = AN_SECS.map(x => x.k === 'review' && n ? Object.assign({}, x, { label: x.label + ' (' + n + ')' }) : x);
+      return anReportBook() ? [{ k: "report", label: "Report" }].concat(l) : l;
+    }
     function anCurSec() { const l = anSecList(); return l.some(x => x.k === state.ui.anSec) ? state.ui.anSec : l[0].k; }
     // One row of big tabs; only the chosen section is shown. Everything still renders,
     // so switching is instant and nothing waits on a click.
@@ -10367,8 +10354,6 @@
       const rs = ts.map(t => t.r).filter(r => r != null && isFinite(r));
       const card = (label, val, sub) => `<div class="bg-black/40 border border-terminal-border rounded-lg p-3"><div class="text-[10px] text-slate-500 uppercase tracking-wider">${label}</div><div class="text-sm font-bold mt-1">${val}</div>${sub ? `<div class="text-[10px] text-slate-500 mt-0.5">${sub}</div>` : ''}</div>`;
       const best = setups[0], worstSetup = setups.length > 1 ? setups[setups.length - 1] : null, mk = mistakes[0];
-      const rq = document.getElementById('reviewQueuePanel');
-      if (rq) rq.innerHTML = reviewQueueHtml(cur);
       host.innerHTML = `
         <div class="flex flex-wrap items-center justify-between gap-2 border-b border-terminal-border pb-3 mb-3">
           <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded bg-amber-400"></span><h2 class="text-sm font-bold text-white uppercase tracking-wider">Week summary</h2>
