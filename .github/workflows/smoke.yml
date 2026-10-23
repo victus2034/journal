@@ -8,12 +8,21 @@ jobs:
   smoke:
     # ubuntu-latest moved to 26.04, which Playwright 1.56 cannot install Chromium on.
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The browser download is sometimes very slow on GitHub's side (8+ min on
+    # 2026-10-23), so the job gets room for it; the tests keep their own 10 min cap.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
+      # Keep the downloaded Chromium between runs, so it is fetched once per Playwright version.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package.json') }}
       - run: npx playwright install --with-deps chromium
+        timeout-minutes: 15
       - run: npm run test:twice
+        timeout-minutes: 10

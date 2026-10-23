@@ -1151,7 +1151,7 @@ async function fixesRun(seed) {
       ensureReportBooks(state);
       Object.assign(state.ui, { account: 'rep-coindcx-inr', allCur: 'INR', month: 'current', kpiGreenDays: false, dashSec: 'habits' });
       switchTab('dashboard'); renderAll();
-      const ret = [...document.querySelectorAll('#kpiRibbon > div')].find(c => /RETURN/.test(c.innerText)).innerText.replace(/\s+/g, ' ');
+      const ret = [...document.querySelectorAll('#kpiRibbon > div')].find(c => /RETURN/i.test(c.innerText)).innerText.replace(/\s+/g, ' ');
       const head = document.getElementById('activePnlDeltaText');
       const headLine = head.parentElement.innerText;
       // The 10:00 card: clicking it lists the report trade that opened then.
@@ -1178,8 +1178,8 @@ async function fixesRun(seed) {
       return { ret, headLine, headCls: head.className, focused, kept, said, refused, saved: !!saveBtn, added: added && [added.stop, added.exitTime] };
     });
     // Opening balance: wallet 5000 less this month's 495 = 4505; 495 on it is +10.99%.
-    check(/RETURN \+10\.99% \+₹495\.00 on ₹4,505\.00/.test(v.ret), 'CoinDCX return from its wallet: ' + v.ret);
-    check(/^Net P&L: \+₹495\.00/.test(v.headLine) && v.headCls.includes('emerald'), 'month headline: ' + v.headLine + ' ' + v.headCls);
+    check(/RETURN \+10\.99% \+₹495\.00 on ₹4,505\.00/i.test(v.ret), 'CoinDCX return from its wallet: ' + v.ret);
+    check(/^Net P&L:? \+₹495\.00/.test(v.headLine) && v.headCls.includes('emerald'), 'month headline: ' + v.headLine + ' ' + v.headCls);
     check(/ETH\/USDT/.test(v.focused), 'time-of-day card lists its report trade: ' + v.focused.replace(/\s+/g, ' ').slice(0, 200));
     check(v.kept === 'rep-coindcx-inr', 'ledger book filter reset to ' + v.kept);
     check(v.saved && v.refused && v.said.some(m => /stop must be below/.test(m)), 'wrong-side stop: ' + JSON.stringify(v.said));
@@ -1284,7 +1284,7 @@ async function cdxSizeRun(seed) {
     const line = id => v.table.find(r => r[1] === id + 'X/USDT') || [];
     check(line('L')[2] === 'LONG' && line('S')[2] === 'SHORT' && line('U')[2] === 'REPORT', 'side column: ' + JSON.stringify(v.table.map(r => r.slice(1, 3))));
     check(line('L')[4] === '₹10,000.00' && line('U')[4] === '—' && line('U')[5] === '—', 'position column: ' + JSON.stringify(v.table.map(r => r.slice(1, 6))));
-    check(/^TRADES CHECKED 4 \|/.test(v.strip), 'headline: ' + v.strip);
+    check(/^TRADES CHECKED 4 \|/i.test(v.strip), 'headline: ' + v.strip);
     check(v.onePair === 1, 'pair filter in the analysis: ' + v.onePair + ' rows');
     check(JSON.stringify(v.sigT) === JSON.stringify({ O: ['long', '2024-12-10', '10:00'], L: ['long', '2026-09-10', '10:00'], S: ['short', '2026-09-11', '09:00'] }), 'report trades on Signals, side from fees: ' + JSON.stringify(v.sigT));
   } catch (e) {
@@ -1873,7 +1873,7 @@ async function sigBacktestRun(seed) {
     check(v.edgeStill === '' && v.edge.length > 0, 'edge drawn only when opened: ' + JSON.stringify([v.edgeStill, v.edge.slice(0, 80)]));
     const st = v.st;
     check(st.n === 7 && st.tot === 1 && st.maxDD === 2 && st.longestDD === 4 && st.maxLs === 2 && st.maxWs === 1 && Math.abs(st.pf - 1.25) < 1e-9 && Math.abs(st.payoff - 5 / 3) < 1e-9 && st.wins === 3 && st.losses === 4, 'run stats: ' + JSON.stringify(st));
-    const has = t => v.rep.includes(t);
+    const has = t => v.rep.toUpperCase().includes(t.toUpperCase());
     ['GRADED ALERTS 7', 'WIN RATE 43%', 'EXPECTANCY +0.14R', 'TOTAL R +1.00R', 'PROFIT FACTOR 1.25', 'AVERAGE WIN +1.67R', 'AVERAGE LOSS -1.00R', 'PAYOFF RATIO 1.67', 'MAX DRAWDOWN -2.00R longest 4 alerts', 'STREAKS 1W / 2L', 'FILL RATE 89%']
       .forEach(t => check(has(t), 'report should show "' + t + '": ' + v.rep.slice(0, 900)));
     check(/CRYPTO 4h 4 100% 4 50% \+0\.25R \+1\.00R 1\.50 -2\.00R/.test(v.rep) && /CRYPTO 1D 5 80% 3 33% \+0\.00R \+0\.00R 1\.00 -1\.00R/.test(v.rep), 'channel rows: ' + v.rep.slice(-700));
@@ -1948,7 +1948,7 @@ async function cleanupRun(seed) {
     check(v.zone.stop === 51.5 && v.zone.src === null && v.zone.setup === 'Breakout', 'typed stop and setup left alone: ' + JSON.stringify(v.zone));
     check(v.q0.length === 3 && /^Review \(\d+\)$/.test(v.label), 'queue before: ' + JSON.stringify([v.q0, v.label]));
     check(JSON.stringify(v.q1) === '["tz1"]' && JSON.stringify(v.tags) === '["FOMO Entry"]', 'queue after Clean and a tag: ' + JSON.stringify([v.q1, v.tags]));
-    check(v.panel.includes('TO REVIEW') && v.panel.includes('YZONUSD') && !v.panel.includes('XFIBUSD') && !v.panel.includes('WEEK SUMMARY') && /week summary/i.test(v.week) && JSON.stringify(v.shown) === '["review"]', 'review panel: ' + JSON.stringify([v.panel.slice(0, 300), v.shown]));
+    check(/TO REVIEW/i.test(v.panel) && v.panel.includes('YZONUSD') && !v.panel.includes('XFIBUSD') && !/WEEK SUMMARY/i.test(v.panel) && /week summary/i.test(v.week) && JSON.stringify(v.shown) === '["review"]', 'review panel: ' + JSON.stringify([v.panel.slice(0, 300), v.shown]));
     check(JSON.stringify(v.chips) === '["FIB","None"]', 'setup chips: ' + JSON.stringify(v.chips));
     check(v.rows.includes('✓ L4') && v.rows.includes('○ L1') && v.rTxt.includes('stop from alert'), 'inspector checklist: ' + JSON.stringify([v.rows, v.rTxt]));
     check(v.afterNone.setup === '' && v.afterNone.pr === null, 'setup cleared from the inspector: ' + JSON.stringify(v.afterNone));
@@ -2003,7 +2003,7 @@ async function behaviourRun(seed) {
     // Nothing reviewed or ticked, so those checks stay out; one stop in four.
     check(v.score.n === 4 && v.score.calm === 0.25 && v.score.clean === null && v.score.rules === null && v.score.disc === 25 && v.score.stops === 0.25 && v.score.rev === 1, 'behaviour score: ' + JSON.stringify(v.score));
     check(v.empty.overall === null && v.empty.grade === null, 'empty week should have no grade: ' + JSON.stringify(v.empty));
-    check(/^[A-F]$/.test(v.grade || '') && v.bars === 3 && v.panel.includes('PROCESS GRADE') && v.panel.includes('XREVUSD') && v.panel.includes('3.0× size after 2 losses') && v.panel.includes('revenge-sized trade'), 'process grade panel: ' + JSON.stringify([v.grade, v.bars, v.panel.slice(0, 600)]));
+    check(/^[A-F]$/.test(v.grade || '') && v.bars === 3 && /PROCESS GRADE/i.test(v.panel) && v.panel.includes('XREVUSD') && v.panel.includes('3.0× size after 2 losses') && v.panel.includes('revenge-sized trade'), 'process grade panel: ' + JSON.stringify([v.grade, v.bars, v.panel.slice(0, 600)]));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
@@ -2255,12 +2255,12 @@ async function layoutRun(seed) {
     const v = await page.evaluate(() => {
       const out = {};
       const shown = el => !!el && !el.closest('.hidden') && el.offsetHeight > 0;
-      // Dashboard: today first, then the goal, then the month and its numbers, then the sections.
+      // Dashboard: the goal and today side by side at the top, then the month and its numbers, then the sections.
       state.ui.account = 'all'; state.ui.allCur = 'USD'; save(); switchTab('dashboard');
       const kids = [...document.getElementById('view-dashboard').children];
       const at = el => kids.indexOf(el.closest('#view-dashboard > *'));
       out.order = [document.getElementById('riskTodayPnl'), document.getElementById('goalTitle'), document.getElementById('activeMonthTitle'), document.getElementById('kpiRibbon'), document.getElementById('dashSecBar')].map(at);
-      out.today = kids[0].textContent.replace(/\s+/g, ' ').trim().slice(0, 5);
+      out.today = [...kids[0].children].map(c => c.querySelector('#goalTitle') ? 'goal' : c.querySelector('#riskTodayPnl') ? 'today' : '?').join('|');
       out.dash = DASH_SECS.map(x => x.label).join('|');
       // Analysis, all books: one row of sections, empty book left out, a total line.
       state.ui.anSec = 'overview'; state.ui.anPeriod = 'all'; switchTab('analysis'); renderAll();
@@ -2303,7 +2303,7 @@ async function layoutRun(seed) {
       out.px = [tradePx({ rep: true, px: { entry: 0.2176, exit: 0.2144 } }, 'entry'), tradePx({ rep: true, px: { entry: 0.2176, exit: 0.2144 } }, 'exit'), tradePx({ rep: true }, 'entry'), tradePx({ entry: 5 }, 'entry')];
       return out;
     });
-    check(JSON.stringify(v.order) === '[0,1,2,3,4]' && v.today === 'TODAY', 'dashboard order (today, goal, month, numbers, sections): ' + JSON.stringify([v.order, v.today]));
+    check(JSON.stringify(v.order) === '[0,0,1,2,3]' && v.today === 'goal|today', 'dashboard order (goal + today, month, numbers, sections): ' + JSON.stringify([v.order, v.today]));
     check(v.dash === "Equity & calendar|Day's trades|Review|Week & grade|Time & habits", 'dashboard sections: ' + v.dash);
     check(v.anSecs === 'Overview|Position size|Trades|Market days|AI review', 'analysis sections: ' + v.anSecs);
     check(v.bar === 'All books|Test NSE|Test Crypto' && v.lines.join(',') === 'Test 8,Test 8', 'empty book left out of Analysis: ' + JSON.stringify([v.bar, v.lines]));
@@ -2323,6 +2323,73 @@ async function layoutRun(seed) {
   await ctx.close();
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'layout: sections per tab, broker total, strip vs scorecard, calculator book, chart years');
   errs.forEach(e => { console.log('     ' + e); failures.push('layout: ' + e); });
+}
+// The clean redesign (v.132): today's loss-limit bar, channel dropdown, mistake picker, tabs.
+async function cleanRun(seed) {
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.dismiss());
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof state !== 'undefined' && state);
+    const v = await page.evaluate(() => {
+      const out = {};
+      const now = new Date().toISOString(), d = todayDay();
+      // Test Crypto (USD) has a $2.50 daily loss limit; a $1.00 loss today uses 40% of it.
+      state.trades = state.trades.filter(t => !(t.accountId === 'acc_cry' && dayOf(t) === d));
+      state.trades.push({ id: 'cl1', accountId: 'acc_cry', date: d, exitDate: d, time: '10:00', exitTime: '10:30', symbol: 'ETHUSD', direction: 'long', entry: 100, exit: 99.5, stop: 99, qty: 2, fees: 0, leverage: 10, pnl: -1, risk: 2, r: -0.5, updatedAt: now });
+      state.ui.account = 'acc_cry'; save(); switchTab('dashboard'); renderAll();
+      out.bar = document.getElementById('riskLossBar').style.width;
+      out.barCls = document.getElementById('riskLossBar').className;
+      out.barTxt = document.getElementById('riskLossUsedText').innerText;
+      out.pnl = document.getElementById('riskTodayPnl').innerText;
+      // A $2.00 loss is 80%: the bar turns amber.
+      Object.assign(state.trades.find(t => t.id === 'cl1'), { exit: 99, pnl: -2, r: -1 }); renderAll();
+      out.bar2 = [document.getElementById('riskLossBar').style.width, document.getElementById('riskLossBar').className];
+      // Section bars are plain tabs; the open one is marked, a count sits in its own span.
+      out.tabs = [...document.querySelectorAll('#dashSecBar .tab')].map(b => (b.classList.contains('on') ? '*' : '') + b.firstChild.textContent + (b.querySelector('.cnt') ? '(' + b.querySelector('.cnt').innerText + ')' : '')).join('|');
+      // Signals: channels are one dropdown, empty channels left out, and picking one filters.
+      const g = (id, ch) => ({ id, key: 'z|' + id, kind: 'zone', date: d, time: '09:00', symbol: 'X' + id, side: 'long', market: 'CRYPTO', timeframe: '30M', channel: ch, entry: 100, stop: 99, price: 100, updatedAt: now });
+      state.signals = [g('a', 'CRYPTO 30M'), g('b', 'CRYPTO 30M'), g('c', 'CRYPTO 4H')];
+      state.ui.sigKind = 'zone'; state.ui.sigChan = ''; state.ui.sigPeriod = 'all'; save(); switchTab('signals'); renderAll();
+      const sel = document.getElementById('sigChanSel');
+      out.opts = sel ? [...sel.options].map(o => o.innerText).join('|') : null;
+      out.chipsLeft = document.querySelectorAll('#sigChanBar button').length;
+      sel.value = 'CRYPTO 4H'; sel.dispatchEvent(new Event('change'));
+      out.chan = state.ui.sigChan;
+      out.picked = document.getElementById('sigChanSel').value;
+      out.kind = [...document.querySelectorAll('#sigKindBar button')].map(b => (b.classList.contains('on') ? '*' : '') + b.innerText).join('|');
+      // Review queue: a mistake is picked from one dropdown, which tags the trade.
+      state.ui.account = 'all'; state.ui.dashSec = 'review'; save(); switchTab('dashboard'); renderAll();
+      const row = [...document.querySelectorAll('#reviewQueuePanel select')].find(x => x.closest('div.py-2').innerText.includes('ETHUSD'));
+      out.mistakeOpts = row ? [...row.options].map(o => o.value).filter(Boolean) : null;
+      out.btns = row ? row.closest('div.py-2').querySelectorAll('button').length : null;
+      if (row) { row.value = 'FOMO Entry'; row.dispatchEvent(new Event('change')); }
+      out.tags = state.trades.find(t => t.id === 'cl1').tagsMistakes;
+      // One font everywhere: the old monospace face is gone from what's drawn.
+      out.fonts = [...new Set([...document.querySelectorAll('#view-dashboard *')].map(el => getComputedStyle(el).fontFamily.split(',')[0].replace(/"/g, '').trim()))];
+      return out;
+    });
+    check(v.bar === '40%' && /bg-emerald-500/.test(v.barCls) && v.barTxt === '40% of $2.50' && v.pnl === '-$1.00', 'loss bar at 40%: ' + JSON.stringify([v.bar, v.barCls, v.barTxt, v.pnl]));
+    check(v.bar2[0] === '80%' && /bg-amber-500/.test(v.bar2[1]), 'loss bar at 80% turns amber: ' + JSON.stringify(v.bar2));
+    check(/^\*Equity & calendar\|Day's trades\|Review\(\d+\)\|Week & grade\|Time & habits$/.test(v.tabs), 'dashboard tabs: ' + v.tabs);
+    check(v.opts === 'All channels (3)|CRYPTO 30m (2)|CRYPTO 4h (1)' && v.chipsLeft === 0, 'channel dropdown: ' + JSON.stringify([v.opts, v.chipsLeft]));
+    check(v.chan === 'CRYPTO 4H' && v.picked === 'CRYPTO 4H', 'channel picked from the dropdown: ' + JSON.stringify([v.chan, v.picked]));
+    check(/^\*Zone alerts 3\|Fib alerts 0\|Trendline alerts 0$/.test(v.kind), 'scanner switch: ' + v.kind);
+    check(Array.isArray(v.mistakeOpts) && v.mistakeOpts.includes('FOMO Entry') && v.btns === 3, 'mistake dropdown in the review row: ' + JSON.stringify([v.mistakeOpts, v.btns]));
+    check(Array.isArray(v.tags) && v.tags.includes('FOMO Entry'), 'mistake picked tags the trade: ' + JSON.stringify(v.tags));
+    check(!v.fonts.some(f => /mono/i.test(f)), 'no monospace font left on the dashboard: ' + JSON.stringify(v.fonts));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'clean redesign: loss bar, tabs, channel dropdown, mistake picker, one font');
+  errs.forEach(e => { console.log('     ' + e); failures.push('clean: ' + e); });
 }
 function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
 
@@ -2352,6 +2419,7 @@ await behaviourRun(data);
 await setupLevelRun(data);
 await aiReviewRun(data);
 await layoutRun(data);
+await cleanRun(data);
 
 await browser.close();
 server.close();
