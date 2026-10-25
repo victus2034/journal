@@ -212,6 +212,21 @@ async function currencyRun(seed) {
     await page.click('#modalSheetSaveBtn');
     check(near(goals.inr[0], 20) && near(goals.usd[0], 20 / 85) && near(goals.inr[1], 900) && near(goals.usd[1], 10) && goals.win === 50, 'goal targets: ' + JSON.stringify(goals));
     check(await page.evaluate(() => (state.goals.find(g => g.title === 'New dollar goal') || {}).cur) === 'USD', 'a new all-books goal did not keep its currency');
+    // A % of capital goal is the same % in ₹ and $ (each book at its own rate), not one figure moved at ₹85.
+    const pctGoal = await page.evaluate(() => {
+      const g = { id: 'gp', title: 'Pct goal', metric: 'net_pnl', targets: { net_pnl: 1 }, pnlPct: 10, period: 'month', accountId: 'all', cur: 'INR' };
+      return { inr: goalTargetIn(g, 'net_pnl', 'INR'), usd: goalTargetIn(g, 'net_pnl', 'USD'), capInr: goalStartCapital(g, 'INR'), capUsd: goalStartCapital(g, 'USD') };
+    });
+    check(pctGoal.capInr > 0 && Math.abs(pctGoal.inr - pctGoal.capInr / 10) <= 0.01 && Math.abs(pctGoal.usd - pctGoal.capUsd / 10) <= 0.01, '% of capital goal: ' + JSON.stringify(pctGoal));
+    // Today card on All accounts: max risk is every book's, the same in ₹ and $.
+    const riskMax = await page.evaluate(() => {
+      const prev = [state.ui.account, state.ui.allCur]; state.ui.account = 'all';
+      const read = cur => { state.ui.allCur = cur; updateRiskStatusStrip(cur); return document.getElementById('riskPctUsed').innerText; };
+      const r = { inr: read('INR'), usd: read('USD') };
+      state.ui.account = prev[0]; state.ui.allCur = prev[1];
+      return r;
+    });
+    check(riskMax.inr.includes('1–1.5% max') && riskMax.usd.includes('1–1.5% max'), 'max risk on All accounts: ' + JSON.stringify(riskMax));
     // Editing the older goal while dollars are on screen keeps it in rupees.
     const label = await page.evaluate(() => { state.ui.allCur = 'USD'; openGoal('g1'); return document.getElementById('gk_net_pnl').parentElement.innerText; });
     await page.click('#modalSheetSaveBtn');

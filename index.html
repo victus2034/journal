@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-25.134">
+  <meta name="app-version" content="2026-10-25.135">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -2424,7 +2424,13 @@
     }
     function goalKeys(g) { const t = goalTargets(g); return GOAL_ORDER.filter(k => t[k] != null); }
     // One target in the given currency (money targets are converted, counts and % are not).
-    function goalTargetIn(g, key, cur) { const T = goalTargets(g)[key]; return T != null && MONEY_GOALS.indexOf(key) !== -1 ? T * goalK(g, cur) : T; }
+    // A % of capital profit is taken from the capital in that currency (each book at its own rate),
+    // so ₹ and $ show the same %, not one figure moved across at ₹85.
+    function goalTargetIn(g, key, cur) {
+      const T = goalTargets(g)[key];
+      if (T != null && key === "net_pnl" && g && g.pnlPct > 0 && cur) { const B = goalStartCapital(g, cur); if (B > 0) return +(B * g.pnlPct / 100).toFixed(2); }
+      return T != null && MONEY_GOALS.indexOf(key) !== -1 ? T * goalK(g, cur) : T;
+    }
     // The goal seen through one of its targets: the big card shows one at a time.
     function goalFocused(g0) {
       const keys = goalKeys(g0);
@@ -2804,10 +2810,12 @@
       const ts = statScoped();
       const todayStr = todayDay();
       const todayTrades = ts.filter(t => dayOf(t) === todayStr);
-      // The book whose max risk % is shown: the selected one, or (all books) the
-      // first one in the currency being shown. The daily loss limit on All is
-      // every book's limit added up, each converted.
-      const defAcct = isAll() ? (state.accounts.find(a => a.currency === cur) || state.accounts[0] || acct('')) : acct(selected());
+      // Max risk % shown: the selected book's, or on All every book's (a range when
+      // they differ), the same in ₹ and $. The daily loss limit on All is every
+      // book's limit added up, each converted.
+      const riskCaps = viewBooks().map(a => +(a.maxRiskPct || 1));
+      const rLo = riskCaps.length ? Math.min(...riskCaps) : 1, rHi = riskCaps.length ? Math.max(...riskCaps) : 1;
+      const defAcct = { maxRiskPct: rLo === rHi ? rLo : cleanNum(rLo) + '–' + cleanNum(rHi) };
       const maxLoss = sum(viewBooks().map(a => a.dailyLossLimit > 0 ? a.dailyLossLimit * fxk(a, cur) : 0)); // 0 = limit off
 
       const todayPnl = sum(todayTrades.map(t => t.pnl));
@@ -10441,6 +10449,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-10-25.135', pr: 49, title: '₹ and $ views agree', pts: ['% of capital goal: same % in ₹ and $', 'Today card on All accounts: max risk shows every book, not one picked by currency'] },
       { v: '2026-10-25.134', title: "What's new on tap", pts: ['Tap the version number to see this list', 'Each update: version, date and what changed'] },
       { v: '2026-10-23.133', pr: 47, title: 'Review in Analysis', pts: ['Review queue moved to the Analysis tab', 'Time & habits: short rows with a bar each', 'Tap a time slot to open that day\'s trades'] },
       { v: '2026-10-23.132', pr: 46, title: 'Clean redesign', pts: ['One font, quiet cards, line tabs', 'Goal and Today side by side', 'Channel dropdown, one Mistake… picker'] },
