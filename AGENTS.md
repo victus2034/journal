@@ -14,6 +14,7 @@ Say in the summary what both checks were.
 ## Every update
 
 - Bump `<meta name="app-version">` in `index.html`.
+- Add a What's new entry for that version at the top of `CHANGELOG` in `index.html`: short title, 1-3 short bullets, PR number.
 - Keep the README in step with what changed.
 
 ## Summaries
