@@ -2405,6 +2405,66 @@ async function cleanRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'clean redesign: loss bar, tabs, channel dropdown, mistake picker, one font');
   errs.forEach(e => { console.log('     ' + e); failures.push('clean: ' + e); });
 }
+// What's new: tapping the version pill opens the update log. The newest entry
+// is this build's version and marked Current; versions only go down the list.
+async function whatsNewRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  for (const vp of [{ width: 1366, height: 900 }, { width: 390, height: 844 }]) {
+    const ctx = await browser.newContext({ viewport: vp });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const w = vp.width;
+    try {
+      const pill = page.locator('#appVerPill');
+      check(await pill.isVisible(), w + 'px: version pill visible');
+      await pill.click();
+      const v = await page.evaluate(() => {
+        const ver = document.querySelector('meta[name="app-version"]').content;
+        const items = [...document.querySelectorAll('#wnBack .wn-item')];
+        const box = document.getElementById('wnBox');
+        const r = box ? box.getBoundingClientRect() : null;
+        return {
+          ver, pill: document.getElementById('appVerPill').textContent.trim(),
+          first: items[0] ? items[0].querySelector('.wn-title b').innerText : null,
+          firstCur: items[0] ? !!items[0].querySelector('.wn-cur') : false,
+          curCount: document.querySelectorAll('#wnBack .wn-cur').length,
+          sub: (document.querySelector('#wnBack .wn-sub') || {}).innerText,
+          vers: CHANGELOG.map(e => e.v),
+          empty: CHANGELOG.filter(e => !e.title || !e.pts || !e.pts.length).map(e => e.v),
+          shown: items.length, n: CHANGELOG.length,
+          fits: r ? r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight : false,
+          date: items[0] ? items[0].querySelector('.wn-date').innerText : null,
+        };
+      });
+      const num = x => { const [d, n] = x.split('.'); return [d, +n]; };
+      const down = v.vers.every((x, i, l) => { if (!i) return true; const [a, an] = num(l[i - 1]), [b, bn] = num(x); return a > b || (a === b && an > bn); });
+      check(v.vers[0] === v.ver, w + 'px: newest entry is this build (' + v.vers[0] + ' vs ' + v.ver + ')');
+      check(v.first === v.pill && v.firstCur && v.curCount === 1, w + 'px: current marked once on the pill version: ' + JSON.stringify([v.first, v.pill, v.firstCur, v.curCount]));
+      check(down && new Set(v.vers).size === v.vers.length, w + 'px: versions go down the list: ' + v.vers.join(','));
+      check(v.empty.length === 0 && v.shown === v.n && v.n >= 30, w + 'px: every entry has a title and bullets: ' + JSON.stringify([v.empty, v.shown, v.n]));
+      check(v.sub === 'This copy: ' + v.ver && v.fits && /^\d{1,2} [A-Z][a-z]{2} \d{4}$/.test(v.date), w + 'px: header, date and fit: ' + JSON.stringify([v.sub, v.fits, v.date]));
+      await page.locator('#wnBack .wn-head button').click();
+      check(await page.locator('#wnBack').count() === 0, w + 'px: Close shuts it');
+      await pill.click();
+      await page.keyboard.press('Escape');
+      check(await page.locator('#wnBack').count() === 0, w + 'px: Escape shuts it');
+      await pill.click();
+      await page.mouse.click(5, vp.height - 5);
+      check(await page.locator('#wnBack').count() === 0, w + 'px: tapping outside shuts it');
+    } catch (e) {
+      errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+    }
+    await ctx.close();
+  }
+  const label = "what's new: version pill opens the update log";
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
 function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
 
 const data = fixture();
@@ -2434,6 +2494,7 @@ await setupLevelRun(data);
 await aiReviewRun(data);
 await layoutRun(data);
 await cleanRun(data);
+await whatsNewRun(data);
 
 await browser.close();
 server.close();

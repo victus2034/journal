@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-23.133">
+  <meta name="app-version" content="2026-10-25.134">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -32,7 +32,6 @@
     }
     @media (min-width:640px) and (max-width:1365px){
       .hdr-row{gap:.5rem}.hdr-left{gap:.5rem}
-      #appVerPill{display:none}
       .top-nav button{padding-left:.4rem;padding-right:.4rem}
     }
     @media (min-width:1900px){ .hdr-bal{display:inline!important} }
@@ -192,7 +191,7 @@
     @media (max-width:639px){
       .hdr-left{display:contents}
       .hdr-row{row-gap:.5rem}
-      .hdr-wide,#appVerPill,.hdr-bal{display:none!important}
+      .hdr-wide,.hdr-bal{display:none!important}
       .hdr-row{flex-wrap:wrap}
       .hdr-right{flex-wrap:nowrap!important;gap:.4rem!important}
       .hdr-right{margin-left:auto}
@@ -217,6 +216,27 @@
     .seg button.on{background:var(--surface);color:var(--txt);box-shadow:0 0 0 1px var(--line2)}
     .seg .cnt{margin-left:.3rem;color:var(--dim);font-size:11.5px}
     .chip-on{background:color-mix(in srgb,var(--acc) 16%,transparent)!important;color:var(--acc)!important;border:1px solid color-mix(in srgb,var(--acc) 45%,transparent)!important;font-weight:600}
+    /* What's new: the version pill opens the update log */
+    #appVerPill{cursor:pointer}
+    @media (max-width:419px){#appVerPill .vp-date{display:none}} /* phone: just v134, so the header stays one line */
+    #appVerPill:hover{color:var(--txt)!important;border-color:var(--mut)!important}
+    #wnBack{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;padding:4.5rem 1rem 1rem}
+    html.light #wnBack{background:rgba(15,23,42,.25)}
+    #wnBox{background:var(--surface);border:1px solid var(--line);border-radius:14px;width:100%;max-width:520px;max-height:calc(100vh - 6rem);display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+    .wn-head{display:flex;align-items:center;justify-content:space-between;padding:1rem 1.15rem .35rem}
+    .wn-head h2{font-size:16px;font-weight:600;color:var(--txt)}
+    .wn-head button{font-size:13px;color:var(--acc);font-weight:500}
+    .wn-sub{padding:0 1.15rem .75rem;font-size:12.5px;color:var(--dim);border-bottom:1px solid var(--line)}
+    .wn-list{overflow-y:auto;padding:0 1.15rem .5rem}
+    .wn-item{padding:.8rem 0;border-bottom:1px solid var(--line)}
+    .wn-item:last-child{border-bottom:0}
+    .wn-top{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+    .wn-title{font-size:14px;font-weight:600;color:var(--txt)}
+    .wn-title b{font-weight:600;font-variant-numeric:tabular-nums}
+    .wn-cur{font-size:11px;font-weight:600;color:#059669;border:1px solid rgba(16,185,129,.45);background:rgba(16,185,129,.1);border-radius:999px;padding:.1rem .55rem;white-space:nowrap}
+    .wn-date{font-size:12px;color:var(--dim);margin-top:.1rem}
+    .wn-pts{margin:.35rem 0 0 1.1rem;list-style:disc;font-size:13px;color:var(--mut);line-height:1.55}
+    .wn-pr{font-size:11.5px;color:var(--dim);margin-left:.35rem;font-weight:400}
 </style>
 </head>
 <body class="bg-terminal-bg text-slate-200 font-sans antialiased min-h-screen flex flex-col selection:bg-amber-500/25 selection:text-amber-200">
@@ -232,7 +252,7 @@
           <div>
             <div class="flex items-center gap-2">
               <h1 class="font-bold text-sm sm:text-base tracking-wider text-white font-mono uppercase">Victus Journal</h1>
-              <span id="appVerPill" class="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-mono font-bold tracking-wide">v2.0</span>
+              <button type="button" id="appVerPill" onclick="openWhatsNew()" aria-label="What's new" class="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-mono font-bold tracking-wide">v2.0</button>
               <span id="syncPulse" class="w-2 h-2 rounded-full bg-slate-500 hidden sm:inline-block" title="Sync not connected"></span>
             </div>
             <p class="text-[10px] text-slate-400 font-mono tracking-wider uppercase -mt-0.5 hdr-wide">Intraday Journal &amp; Goal Tracker</p>
@@ -10418,10 +10438,76 @@
     // Chart.js loads on its own (async), so a slow CDN never holds up the journal.
     // When it arrives after the first render, draw again to fill in the charts.
     function chartReady() { if (state) renderAll(); }
+    // What's new: one entry per version, newest first. Every update adds one
+    // here, with the same version as <meta name="app-version"> (the test checks).
+    const CHANGELOG = [
+      { v: '2026-10-25.134', title: "What's new on tap", pts: ['Tap the version number to see this list', 'Each update: version, date and what changed'] },
+      { v: '2026-10-23.133', pr: 47, title: 'Review in Analysis', pts: ['Review queue moved to the Analysis tab', 'Time & habits: short rows with a bar each', 'Tap a time slot to open that day\'s trades'] },
+      { v: '2026-10-23.132', pr: 46, title: 'Clean redesign', pts: ['One font, quiet cards, line tabs', 'Goal and Today side by side', 'Channel dropdown, one Mistake… picker'] },
+      { v: '2026-10-23.131', pr: 45, title: 'Tabs reorganized', pts: ['Every tab: one row of sections', 'Settings split: Books, Connect, Backup', 'Fixed report prices, totals and calculator book'] },
+      { v: '2026-10-22.130', pr: 44, title: 'AI review: busy Gemini', pts: ['Says when Gemini is overloaded', 'Tries flash-lite-latest too'] },
+      { v: '2026-10-22.129', pr: 43, title: 'AI review retries', pts: ['Retries when Gemini is busy (503)', 'Falls back to other models'] },
+      { v: '2026-10-22.128', pr: 42, title: 'Sharper AI review', pts: ['Short, direct answer', 'Trailing SL check', 'Feedback on VAS alerts'] },
+      { v: '2026-10-22.127', pr: 41, title: 'AI trade review', pts: ['Gemini verdict on your trades', 'Holding and early exits measured', 'Pros, cons, how to improve'] },
+      { v: '2026-10-22.125', pr: 40, title: 'Setup & level for every trade', pts: ['FIB L1-L4 / trendline tagged from alerts', 'Playbook stats per level'] },
+      { v: '2026-10-22.124', pr: 39, title: 'Behaviour score', pts: ['Revenge sizing flag', 'Behaviour score', 'Weekly process grade'] },
+      { v: '2026-10-22.123', pr: 38, title: 'Review queue', pts: ['Stop and setup filled from the alert', 'Queue of trades to review', 'Empty books hidden'] },
+      { v: '2026-10-22.122', pr: 37, title: 'Auto refresh', pts: ['Alerts refresh every 10 min while open', 'Journal starts the CoinDCX import hourly'] },
+      { v: '2026-10-22.121', pr: 36, title: 'Signals: backtest report', pts: ['Backtest report section in Signals', 'Faster Signals tab'] },
+      { v: '2026-10-21.120', pr: 35, title: "Today's CoinDCX trades", pts: ["Signals lists today's CoinDCX trades", "Reads today's fills", 'Every unmatched trade shown'] },
+      { v: '2026-10-21.119', pr: 34, title: 'Quick size in ₹ or $', pts: ['Risk follows the header ₹/$', 'Shows capital used and leveraged position'] },
+      { v: '2026-10-20.118', pr: 33, title: 'Calculator balance', pts: ['Sizes from the balance Trading Books shows'] },
+      { v: '2026-10-19.117', pr: 32, title: 'Fib what-ifs', pts: ['L1, L2 and L4 what-if results'] },
+      { v: '2026-10-19.116', pr: 31, title: 'Fib levels breakdown', pts: ['Signals: results by fib level L1-L4'] },
+      { v: '2026-10-19.115', pr: 29, title: 'Signals match the scanner', pts: ['Fib/trendline results match the scanner', 'Late 1W/1M results arrive', '1D+ zones shown as zones'] },
+      { v: '2026-10-19.114', pr: '27, #28', title: 'Goal % and alert loading', pts: ['Goal profit target as a % of capital', "Scanner alerts load on their own, so recent trades match"] },
+      { v: '2026-10-19.113', pr: 26, title: 'Goal planner in %', pts: ['Planner target as a % of capital'] },
+      { v: '2026-10-18.112', pr: 25, title: 'Simpler goal planner', pts: ['Header ₹/$ everywhere', '05:30 trading day', 'Report files in Settings'] },
+      { v: '2026-10-12.107', pr: 24, title: 'Day rolls at 2 AM', pts: ['Late-night trades count for the day before'] },
+      { v: '2026-10-11.106', pr: 23, title: 'CoinDCX in size analysis', pts: ['CoinDCX trades in size and mistake analysis'] },
+      { v: '2026-10-11.105', pr: 22, title: 'Delta balance on open', pts: ['Held Delta balance sent as soon as the journal opens'] },
+      { v: '2026-10-11.104', pr: 21, title: 'Delta balance everywhere', pts: ['Delta balance shown on every device', 'Mobile Log trade moved into Settings'] },
+      { v: '2026-10-11.103', pr: 20, title: 'Withdrawals', pts: ['Log money taken out', 'Money withdrawn goal target'] },
+      { v: '2026-10-11.102', pr: 19, title: 'CoinDCX in the inspector', pts: ['Open CoinDCX trades in the Trade Inspector', 'Review button in Analysis'] },
+      { v: '2026-10-11.101', pr: 18, title: 'Review report trades', pts: ['Review CoinDCX report trades from Analysis'] },
+      { v: '2026-10-11.100', pr: 16, title: 'Next week & month goals', pts: ['Goals for next week / next month', 'One-line header', 'Review a trade from the inspector'] },
+      { v: '2026-10-11.98', pr: '15, #17', title: 'Audit fixes', pts: ['Wallet-based return', 'Time-slot and ledger filters, trade form checks', 'Lighter sync; tests run twice'] },
+      { v: '2026-10-10.97', pr: '9-#14', title: 'CoinDCX book', pts: ['CoinDCX as its own book', 'Every book in ₹ or $', 'CoinDCX import through GitHub', 'Trades matched to their alerts'] },
+      { v: '2026-10-10.95', pr: 8, title: 'Backtest tab', pts: ['Upload an Excel or CSV trade report'] },
+      { v: '2026-10-04.94', pr: 7, title: 'Setup playbook', pts: ['Checklists per setup', 'Tighter auto-sync'] },
+      { v: '2026-10-04.93', pr: 6, title: 'Storage warning', pts: ['Warns when storage passes 80%'] },
+      { v: '2026-10-03.92', pr: '4, #5', title: 'README and smoke test', pts: ['Every tab tested in a browser on each push'] },
+      { v: '2026-10-03.82', pr: 2, title: 'Breakeven exits', pts: ['Fib/trendline BE exits scored as BE'] },
+      { v: '2026-10-03.81', title: '% move next to R', pts: ['% move shown next to every R'] },
+      { v: '2026-10-03.80', title: 'Alerts and review', pts: ['Log a trade from an alert', 'Missed winners, weekly review', 'CSV export, mobile bar, light theme'] },
+      { v: '2026-09-24.59', title: 'First version', pts: ['Journal, goals and Delta import'] },
+    ];
+    function verLabel(v) { return 'v' + String(v || '').slice(5); }
+    function verDate(v) { const d = new Date(String(v).slice(0, 10) + 'T12:00:00'); return isNaN(d) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); }
+    function openWhatsNew() {
+      closeWhatsNew();
+      const ver = (document.querySelector('meta[name="app-version"]') || {}).content || '';
+      const esc = x => String(x).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      const items = CHANGELOG.map(e => '<div class="wn-item"' + (e.v === ver ? ' data-current="1"' : '') + '>' +
+        '<div class="wn-top"><div class="wn-title"><b>' + verLabel(e.v) + '</b> · ' + esc(e.title) + (e.pr ? '<span class="wn-pr">#' + e.pr + '</span>' : '') + '</div>' +
+        (e.v === ver ? '<span class="wn-cur">Current</span>' : '') + '</div>' +
+        '<div class="wn-date">' + verDate(e.v) + '</div>' +
+        '<ul class="wn-pts">' + e.pts.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul></div>').join('');
+      const back = document.createElement('div');
+      back.id = 'wnBack';
+      back.innerHTML = '<div id="wnBox" role="dialog" aria-modal="true" aria-label="What\'s new">' +
+        '<div class="wn-head"><h2>What\'s new</h2><button type="button" onclick="closeWhatsNew()">Close</button></div>' +
+        '<div class="wn-sub">This copy: ' + esc(ver || 'unknown') + '</div>' +
+        '<div class="wn-list">' + items + '</div></div>';
+      back.addEventListener('click', ev => { if (ev.target === back) closeWhatsNew(); });
+      document.body.appendChild(back);
+    }
+    function closeWhatsNew() { const b = document.getElementById('wnBack'); if (b) b.remove(); }
+    document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && document.getElementById('wnBack')) closeWhatsNew(); });
     function startApp() {
       const ver = (document.querySelector('meta[name="app-version"]') || {}).content || '';
       const pill = document.getElementById('appVerPill');
-      if (pill && ver) { pill.innerText = 'v' + ver.slice(5); pill.title = 'This copy: ' + ver + '. Devices on different builds can disagree, so check they match.'; }
+      if (pill && ver) { pill.innerHTML = 'v<span class="vp-date">' + ver.slice(5, 11) + '</span>' + ver.slice(11); pill.title = 'This copy: ' + ver + '. Tap to see what\'s new.'; }
       state = load();
       migrateConfidence();
       // A balance Delta gave a past session survives a reload too — reopening the
