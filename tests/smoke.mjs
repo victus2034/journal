@@ -1699,8 +1699,15 @@ async function zoneRebuildRun(seed) {
       zone_bottom: 99.5, zone_top: 100, id: 'zone|RBDAYUSD|1d@1|rb', key: 'zone|RBDAYUSD|1d', sent_ts: Math.floor((cutoff - 40 * H) / 1000), rebuild: true }),
     'zone_rebuild_htf_results.json': JSON.stringify({ 'zone|RBDAYUSD|1d@1|rb': { outcome: '2R', filled: true, resolved: true, r1: true, r2: true, sl: false, be: false } }),
     'zone_rebuild_meta.json': JSON.stringify({ since: isoAt(cutoff - 50 * 24 * H), cutoff: isoAt(cutoff), built_at: isoAt(cutoff) }),
-    'fib_trendline_alert_records.jsonl': JSON.stringify({ market: 'crypto', symbol: 'FIBUSD', tf: '4h', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
-      id: 'fib|FIBUSD@1', sent_ts: Math.floor((cutoff - 30 * H) / 1000) }),
+    'fib_trendline_alert_records.jsonl': [
+      JSON.stringify({ market: 'crypto', symbol: 'FIBUSD', tf: '4h', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
+        id: 'fib|FIBUSD@1', sent_ts: Math.floor((cutoff - 30 * H) / 1000) }),
+      JSON.stringify({ market: 'crypto', symbol: 'LFIBUSD', tf: '4h', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
+        id: 'fib|LFIBUSD@1', sent_ts: Math.floor((cutoff + 3 * H) / 1000) })].join('\n'),
+    'fibtl_rebuild_records.jsonl': JSON.stringify({ market: 'crypto', symbol: 'RBFIBUSD', tf: '1d', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
+      id: 'fib|RBFIBUSD@1|rb', key: 'fib|RBFIBUSD', sent_ts: Math.floor((cutoff - 30 * H) / 1000), rebuild: true }),
+    'fibtl_rebuild_results.json': JSON.stringify({ 'fib|RBFIBUSD@1|rb': { outcome: 'SL', filled: true, resolved: true, r1: false, r2: false, sl: true, be: false } }),
+    'fibtl_rebuild_meta.json': JSON.stringify({ cutoff: isoAt(cutoff), built_at: isoAt(cutoff) }),
   };
   await ctx.route(url => !url.href.startsWith(base), async r => {
     const u = r.request().url();
@@ -1723,17 +1730,17 @@ async function zoneRebuildRun(seed) {
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForFunction(() => (state.signals || []).some(g => g.symbol === 'RB4HUSD'), null, { timeout: 8000 });
     const syms = await page.evaluate(() => state.signals.map(g => g.symbol).sort().join(','));
-    check(syms === 'FIBUSD,HAND,LIVE4HUSD,RB4HUSD,RBDAYUSD', 'signals after the rebuild: ' + syms);
+    check(syms === 'HAND,LFIBUSD,LIVE4HUSD,RB4HUSD,RBDAYUSD,RBFIBUSD', 'signals after the rebuild: ' + syms);
     const day = await page.evaluate(() => { const g = state.signals.find(x => x.symbol === 'RBDAYUSD'); return g && [g.channel, g.outcome, g.rb]; });
     check(day && day[0] === 'CRYPTO 1D' && day[1] === '+2R' && day[2] === true, 'rebuilt 1D zone: ' + JSON.stringify(day));
     // A second read changes nothing.
     const again = await page.evaluate(() => { state.ui.sigAutoAt = 0; return autoRefreshAlerts().then(() => state.signals.length); });
-    check(again === 5, 'signals after a second read: ' + again);
+    check(again === 6, 'signals after a second read: ' + again);
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
   await ctx.close();
-  console.log((errs.length ? 'FAIL ' : 'ok   ') + '30m zones dropped, rebuilt zone backtest replaces old zone alerts');
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + '30m zones dropped, rebuilt zone / fib / trendline backtest replaces old alerts');
   errs.forEach(e => { console.log('     ' + e); failures.push('zone rebuild: ' + e); });
 }
 

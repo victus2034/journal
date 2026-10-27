@@ -8621,7 +8621,11 @@
       zr4h: "zone_rebuild_4h.jsonl",
       zrHtf: "zone_rebuild_htf.jsonl",
       zrHtfRes: "zone_rebuild_htf_results.json",
-      zrMeta: "zone_rebuild_meta.json"
+      zrMeta: "zone_rebuild_meta.json",
+      // The same for fib and trendline alerts (research/fibtl_rebuild.py).
+      ftrRec: "fibtl_rebuild_records.jsonl",
+      ftrRes: "fibtl_rebuild_results.json",
+      ftrMeta: "fibtl_rebuild_meta.json"
     };
     // 30m S/R zones are off in the scanner (since 2026-10-16) and their history is
     // dropped here (lakky, 2026-10-27): no 30m zone alert is loaded or kept.
@@ -8829,6 +8833,8 @@
       const p = istParts(d);
       return { cutoff: `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`, builtAt: String(m.built_at || m.cutoff) };
     }
+    // Which rebuilds this device has taken in whole: one stamp for both.
+    function rebuildStamp(zr, fr) { return zr || fr ? (zr ? zr.builtAt : "") + "|" + (fr ? fr.builtAt : "") : null; }
     // The scanner's files, read into one list of alerts and held against the ones
     // this device already has: which are new, which gain a result, which are old
     // copies under a shorter key. Shared by "Load scanner alerts" and the quiet
@@ -8846,8 +8852,11 @@
         all.push(...parseScannerRecords(got.zr4h || "", 3).records);
         all.push(...parseFibTl(got.zrHtf || "", got.zrHtfRes || "{}", "{}").records);
       }
+      const fr = rebuildInfo(got.ftrMeta);
+      if (fr) all.push(...parseFibTl(got.ftrRec || "", got.ftrRes || "{}", "{}").records);
       const whenKey = r => (r.date || "") + " " + (r.time || "");
-      const oldZone = r => isZoneSig(r) && (is30m(r) || (zr && !r.rb && whenKey(r) < zr.cutoff));
+      const oldZone = r => isZoneSig(r) ? (is30m(r) || (zr && !r.rb && whenKey(r) < zr.cutoff))
+        : (fr && !r.rb && whenKey(r) < fr.cutoff);
 
       // one record per alert: the most resolved version wins
       const best = new Map();
@@ -8896,7 +8905,7 @@
           // a trendline's anchors, for alerts saved before they were kept
           || (r.tl && !ex.tl)) upgrades.push({ ex, r });
       });
-      return { incoming, fresh, upgrades, staleIds, zrBuiltAt: zr ? zr.builtAt : null };
+      return { incoming, fresh, upgrades, staleIds, zrBuiltAt: rebuildStamp(zr, fr) };
     }
     function applyScannerPlan(plan) {
       plan.upgrades.forEach(({ ex, r }) => {
@@ -8925,7 +8934,8 @@
         const mk = ["crypto", "nse", "all"].indexOf(state.ui.sigMkt) !== -1 ? state.ui.sigMkt : "crypto";
         // [key, file, what to use if it is missing]: fib and trendline files are optional.
         const files = [["fin", "finalized"], ["pen", "pending"], ["ft", "fibtl", ""], ["ftr", "fibtlRes", "{}"], ["flv", "fibLv", "{}"],
-          ["zr4h", "zr4h", ""], ["zrHtf", "zrHtf", ""], ["zrHtfRes", "zrHtfRes", "{}"], ["zrMeta", "zrMeta", ""]];
+          ["zr4h", "zr4h", ""], ["zrHtf", "zrHtf", ""], ["zrHtfRes", "zrHtfRes", "{}"], ["zrMeta", "zrMeta", ""],
+          ["ftrRec", "ftrRec", ""], ["ftrRes", "ftrRes", "{}"], ["ftrMeta", "ftrMeta", ""]];
         if (mk !== "nse") files.push(["c4", "cryptoLive4h"]);
         if (mk !== "crypto") files.push(["n4", "nseLive4h"]);
         const got = {};
@@ -8949,9 +8959,9 @@
         if (openFrom && openFrom < iso(d)) { d.setTime(new Date(openFrom + "T00:00:00").getTime()); }
         const marketOk = r => { const isNse = /^NSE$/i.test(r.market); return mk === "all" || (mk === "nse" ? isNse : !isNse); };
         // A new zone rebuild is taken in whole once, then only the usual window.
-        const zr = rebuildInfo(got.zrMeta);
-        const plan = buildScannerPlan(got, iso(d), marketOk, !!(zr && state.ui.zoneRebuildAt !== zr.builtAt));
-        if (zr) state.ui.zoneRebuildAt = zr.builtAt;
+        const rb = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta));
+        const plan = buildScannerPlan(got, iso(d), marketOk, !!(rb && state.ui.zoneRebuildAt !== rb));
+        if (rb) state.ui.zoneRebuildAt = rb;
         const n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
         if (n) applyScannerPlan(plan);
         state.ui.sigAutoAt = Date.now();
@@ -9046,7 +9056,8 @@
               // Fib and trendline files are newer; if one is missing the zone alerts still load.
               ["ft", fetchText("fibtl").catch(() => "")], ["ftr", fetchText("fibtlRes").catch(() => "{}")], ["flv", fetchText("fibLv").catch(() => "{}")],
               ["zr4h", fetchText("zr4h").catch(() => "")], ["zrHtf", fetchText("zrHtf").catch(() => "")],
-              ["zrHtfRes", fetchText("zrHtfRes").catch(() => "{}")], ["zrMeta", fetchText("zrMeta").catch(() => "")]];
+              ["zrHtfRes", fetchText("zrHtfRes").catch(() => "{}")], ["zrMeta", fetchText("zrMeta").catch(() => "")],
+              ["ftrRec", fetchText("ftrRec").catch(() => "")], ["ftrRes", fetchText("ftrRes").catch(() => "{}")], ["ftrMeta", fetchText("ftrMeta").catch(() => "")]];
             if (wantCrypto) jobs.push(["c4", fetchText("cryptoLive4h")]);
             if (wantNse) jobs.push(["n4", fetchText("nseLive4h")]);
             const got = {}; const texts = await Promise.all(jobs.map(j => j[1]));
@@ -10489,7 +10500,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
-      { v: '2026-10-27.136', pr: 50, title: 'Zone backtest rebuilt', pts: ['30m S/R zone alerts removed', 'Zone alerts since Sep 1 re-run under today\'s rules: 4H, 1D, 1W, 1M', 'News-window fills left out'] },
+      { v: '2026-10-27.136', pr: 50, title: 'Backtest rebuilt', pts: ['30m S/R zone alerts removed', 'Zone, fib and trendline alerts since Sep 1 re-run under today\'s rules', 'News-window fills left out'] },
       { v: '2026-10-25.135', pr: 49, title: '₹ and $ views agree', pts: ['% of capital goal: same % in ₹ and $', 'Today card on All accounts: max risk shows every book, not one picked by currency'] },
       { v: '2026-10-25.134', title: "What's new on tap", pts: ['Tap the version number to see this list', 'Each update: version, date and what changed'] },
       { v: '2026-10-23.133', pr: 47, title: 'Review in Analysis', pts: ['Review queue moved to the Analysis tab', 'Time & habits: short rows with a bar each', 'Tap a time slot to open that day\'s trades'] },
