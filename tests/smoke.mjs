@@ -1637,16 +1637,16 @@ async function alertRefreshRun(seed) {
   // Noon IST two days ago, so the trade 20 min later never crosses midnight (a run near midnight IST failed).
   const at = Math.floor((Date.now() + 5.5 * 3600e3) / 864e5) * 864e5 - 5.5 * 3600e3 + 12 * 3600e3 - 2 * 864e5, ist = new Date(at + 5.5 * 3600e3).toISOString();
   const tradeTime = new Date(at + 5.5 * 3600e3 + 20 * 60e3).toISOString();
-  const line = JSON.stringify({ delivered_at_utc: new Date(at).toISOString(), symbol: 'SOLUSDT', exchange: 'bitunix', timeframe: '30m', side: 'long', zone_type: 'demand',
+  const line = JSON.stringify({ delivered_at_utc: new Date(at).toISOString(), symbol: 'SOLUSDT', exchange: 'bitunix', timeframe: '4h', side: 'long', zone_type: 'demand',
     alert_price: 150.2, level: 149, zone_bottom: 149, zone_top: 150, body_entry: 150, planned_entry: 150, stop_price: 148.5, score: 8,
-    message: '**SOL | BUY | 30m**\nPrice 150.20\nEntry 150 · SL 148.5', trade_id: 'smoke-sol-1' });
+    message: '**SOL | BUY | 4H**\nPrice 150.20\nEntry 150 · SL 148.5', trade_id: 'smoke-sol-1' });
   let hits = 0;
   await ctx.route(url => !url.href.startsWith(base), async r => {
     const u = r.request().url();
     if (!u.includes('/scanner-runtime-state/')) return r.abort();
     hits++;
     const f = u.split('/').pop().split('?')[0];
-    return r.fulfill({ status: 200, body: f === 'crypto_alert_records_30m.jsonl' ? line + '\n' : f.endsWith('.json') ? '{}' : '' });
+    return r.fulfill({ status: 200, body: f === 'crypto_alert_records.jsonl' ? line + '\n' : f.endsWith('.json') ? '{}' : '' });
   });
   const trade = { id: 'trSol', accountId: 'acc_cry', date: tradeTime.slice(0, 10), exitDate: tradeTime.slice(0, 10), time: tradeTime.slice(11, 16), exitTime: tradeTime.slice(11, 16),
     symbol: 'SOLUSD', direction: 'long', entry: 150, exit: 151.5, stop: 148.5, qty: 1, fees: 0, leverage: 10, setup: '', rules: [], notes: '', updatedAt: new Date().toISOString() };
@@ -1677,6 +1677,64 @@ async function alertRefreshRun(seed) {
   await ctx.close();
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Scanner alerts load by themselves and match a fresh trade');
   errs.forEach(e => { console.log('     ' + e); failures.push('alert refresh: ' + e); });
+}
+
+// 30m S/R zones are gone (lakky, 2026-10-27) and the zone backtest rebuilt under
+// today's rules replaces every zone alert before its cutoff: a 30m row, an old 4H
+// row and a stored 30m signal all go; rebuilt 4H / 1D rows and a live 4H row after
+// the cutoff stay; a rebuilt fill inside a US news window is left out; fib alerts
+// and hand-pasted signals are untouched.
+async function zoneRebuildRun(seed) {
+  const errs = [];
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const H = 3600e3, now = Date.now(), cutoff = now - 2 * 24 * H;
+  const isoAt = t => new Date(t).toISOString(), ist = t => new Date(t + 5.5 * H).toISOString().replace('Z', '+05:30');
+  const fin = (sym, tf, t, extra) => JSON.stringify(Object.assign({ market: 'CRYPTO', timeframe: tf, date: ist(t).slice(0, 10), symbol: sym, side: 'long',
+    trade_id: sym + tf + t, alert_time: ist(t), filled: true, outcome: 'SL', final_result: 'SL', net_realized_r: -1.1, alert_price: 100, stop_price: 99,
+    planned_entry: 100, zone_bottom: 99.5, zone_top: 100 }, extra || {}));
+  const files = {
+    'daily_backtest_finalized_records.jsonl': [fin('OLD30USD', '30m', cutoff - 30 * H), fin('OLD4HUSD', '4h', cutoff - 30 * H), fin('LIVE4HUSD', '4h', cutoff + 5 * H)].join('\n'),
+    'zone_rebuild_4h.jsonl': [fin('RB4HUSD', '4h', cutoff - 20 * H, { rebuild: true }), fin('NEWSUSD', '4h', cutoff - 19 * H, { rebuild: true, news_window: true })].join('\n'),
+    'zone_rebuild_htf.jsonl': JSON.stringify({ market: 'crypto', symbol: 'RBDAYUSD', tf: '1d', price: 101, kind: 'zone', plan: { side: 'long', entry: 100, sl: 99 },
+      zone_bottom: 99.5, zone_top: 100, id: 'zone|RBDAYUSD|1d@1|rb', key: 'zone|RBDAYUSD|1d', sent_ts: Math.floor((cutoff - 40 * H) / 1000), rebuild: true }),
+    'zone_rebuild_htf_results.json': JSON.stringify({ 'zone|RBDAYUSD|1d@1|rb': { outcome: '2R', filled: true, resolved: true, r1: true, r2: true, sl: false, be: false } }),
+    'zone_rebuild_meta.json': JSON.stringify({ since: isoAt(cutoff - 50 * 24 * H), cutoff: isoAt(cutoff), built_at: isoAt(cutoff) }),
+    'fib_trendline_alert_records.jsonl': JSON.stringify({ market: 'crypto', symbol: 'FIBUSD', tf: '4h', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
+      id: 'fib|FIBUSD@1', sent_ts: Math.floor((cutoff - 30 * H) / 1000) }),
+  };
+  await ctx.route(url => !url.href.startsWith(base), async r => {
+    const u = r.request().url();
+    if (!u.includes('/scanner-runtime-state/')) return r.abort();
+    const f = u.split('/').pop().split('?')[0];
+    return r.fulfill({ status: 200, body: files[f] != null ? files[f] + '\n' : f.endsWith('.json') ? '{}' : '' });
+  });
+  const d = ist(cutoff - 60 * H).slice(0, 10);
+  const signals = [
+    { id: 's30', key: 'SOL|x|30m|long', date: d, time: '10:00', symbol: 'SOL', side: 'long', market: 'CRYPTO', timeframe: '30m', channel: 'CRYPTO 30m', srcRank: 3 },
+    { id: 'sOld', key: 'ETH|x|4h|long', date: d, time: '10:00', symbol: 'ETH', side: 'long', market: 'CRYPTO', timeframe: '4h', channel: 'CRYPTO 4h', srcRank: 3 },
+    { id: 'sHand', date: d, time: '11:00', symbol: 'HAND', side: 'long', channel: 'CRYPTO 30M' },
+  ];
+  const seeded = Object.assign({}, seed, { signals });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => (state.signals || []).some(g => g.symbol === 'RB4HUSD'), null, { timeout: 8000 });
+    const syms = await page.evaluate(() => state.signals.map(g => g.symbol).sort().join(','));
+    check(syms === 'FIBUSD,HAND,LIVE4HUSD,RB4HUSD,RBDAYUSD', 'signals after the rebuild: ' + syms);
+    const day = await page.evaluate(() => { const g = state.signals.find(x => x.symbol === 'RBDAYUSD'); return g && [g.channel, g.outcome, g.rb]; });
+    check(day && day[0] === 'CRYPTO 1D' && day[1] === '+2R' && day[2] === true, 'rebuilt 1D zone: ' + JSON.stringify(day));
+    // A second read changes nothing.
+    const again = await page.evaluate(() => { state.ui.sigAutoAt = 0; return autoRefreshAlerts().then(() => state.signals.length); });
+    check(again === 5, 'signals after a second read: ' + again);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + '30m zones dropped, rebuilt zone backtest replaces old zone alerts');
+  errs.forEach(e => { console.log('     ' + e); failures.push('zone rebuild: ' + e); });
 }
 
 // While the journal stays open it keeps reading the scanner by itself (every 10
@@ -2369,8 +2427,8 @@ async function cleanRun(seed) {
       // Section bars are plain tabs; the open one is marked, a count sits in its own span.
       out.tabs = [...document.querySelectorAll('#dashSecBar .tab')].map(b => (b.classList.contains('on') ? '*' : '') + b.firstChild.textContent + (b.querySelector('.cnt') ? '(' + b.querySelector('.cnt').innerText + ')' : '')).join('|');
       // Signals: channels are one dropdown, empty channels left out, and picking one filters.
-      const g = (id, ch) => ({ id, key: 'z|' + id, kind: 'zone', date: d, time: '09:00', symbol: 'X' + id, side: 'long', market: 'CRYPTO', timeframe: '30M', channel: ch, entry: 100, stop: 99, price: 100, updatedAt: now });
-      state.signals = [g('a', 'CRYPTO 30M'), g('b', 'CRYPTO 30M'), g('c', 'CRYPTO 4H')];
+      const g = (id, ch) => ({ id, key: 'z|' + id, kind: 'zone', date: d, time: '09:00', symbol: 'X' + id, side: 'long', market: 'CRYPTO', timeframe: ch.split(' ')[1], channel: ch, entry: 100, stop: 99, price: 100, updatedAt: now });
+      state.signals = [g('a', 'CRYPTO 1D'), g('b', 'CRYPTO 1D'), g('c', 'CRYPTO 4H')];
       state.ui.sigKind = 'zone'; state.ui.sigChan = ''; state.ui.sigPeriod = 'all'; save(); switchTab('signals'); renderAll();
       const sel = document.getElementById('sigChanSel');
       out.opts = sel ? [...sel.options].map(o => o.innerText).join('|') : null;
@@ -2405,7 +2463,7 @@ async function cleanRun(seed) {
     check(v.bar === '40%' && /bg-emerald-500/.test(v.barCls) && v.barTxt === '40% of $2.50' && v.pnl === '-$1.00', 'loss bar at 40%: ' + JSON.stringify([v.bar, v.barCls, v.barTxt, v.pnl]));
     check(v.bar2[0] === '80%' && /bg-amber-500/.test(v.bar2[1]), 'loss bar at 80% turns amber: ' + JSON.stringify(v.bar2));
     check(/^\*Equity & calendar\|Day's trades\|Week & grade\|Time & habits$/.test(v.tabs) && /^Overview\|Review\(\d+\)\|Position size/.test(v.anTabs), 'dashboard and analysis tabs: ' + v.tabs + ' / ' + v.anTabs);
-    check(v.opts === 'All channels (3)|CRYPTO 30m (2)|CRYPTO 4h (1)' && v.chipsLeft === 0, 'channel dropdown: ' + JSON.stringify([v.opts, v.chipsLeft]));
+    check(v.opts === 'All channels (3)|CRYPTO 4h (1)|CRYPTO 1D (2)' && v.chipsLeft === 0, 'channel dropdown: ' + JSON.stringify([v.opts, v.chipsLeft]));
     check(v.chan === 'CRYPTO 4H' && v.picked === 'CRYPTO 4H', 'channel picked from the dropdown: ' + JSON.stringify([v.chan, v.picked]));
     check(/^\*Zone alerts 3\|Fib alerts 0\|Trendline alerts 0$/.test(v.kind), 'scanner switch: ' + v.kind);
     check(Array.isArray(v.mistakeOpts) && v.mistakeOpts.includes('FOMO Entry') && v.btns === 3, 'mistake dropdown in the review row: ' + JSON.stringify([v.mistakeOpts, v.btns]));
@@ -2500,6 +2558,7 @@ await goalPlannerRun(data);
 await goalPctRun(data);
 await deltaShareRun(data);
 await alertRefreshRun(data);
+await zoneRebuildRun(data);
 await autoKeepRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
