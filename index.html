@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-27.136">
+  <meta name="app-version" content="2026-10-28.137">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -594,6 +594,7 @@
         </div>
         <div id="sigChanBar" class="flex items-center"></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">BTC day</span><div id="sigMktBar"></div></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Target</span><div id="sigTgtBar"></div></div>
         <span id="sigPeriodHint" class="text-xs text-slate-500 ml-auto"></span>
       </div>
 
@@ -3637,6 +3638,8 @@
         }
       }
       sigView.pairs = skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs;
+      renderTgtBar();
+      if (tgtMode()) tgtEnsure(sigView.pairs);
       renderSignalEdgeAnalysis(sigView.pairs);
       drawSigSec(sigCurSec());
 
@@ -7428,6 +7431,13 @@
       return v;
     }
     function outcomeNow(pair) {
+      const base = sigBaseOutcome(pair);
+      if (!base || !tgtMode()) return base;
+      const t = tgtResult(pair.signal);
+      return t ? { r: t.r, source: "replay", exit: t.x } : null;
+    }
+    // The alert's own result, as the scanner graded it.
+    function sigBaseOutcome(pair) {
       const sig = pair.signal;
       if (sig.filled === false) return null;
       if (typeof sig.resultR === "number" && isFinite(sig.resultR)) return { r: sig.resultR, source: "scanner" };
@@ -7435,6 +7445,173 @@
       const r = sigR(sig);
       if (r != null) return { r, source: "recorded" };
       return null;
+    }
+    /* ---- Fixed-target replay (Target filter) ----
+       Each alert with a result is played again on Delta's candles with one fixed
+       take-profit: 1R, 1.5R, 2R, 3R, or a 1%, 2% or 3% move. The stop stays the
+       alert's own. A candle that touches both the stop and the target counts as
+       the stop. Neither within 20 candles of the alert's timeframe: out at the
+       last candle's close. Same fee and stop slippage as the scanner's pricing. */
+    const SIG_TGTS = [
+      { k: "", label: "As alerted" },
+      { k: "1r", label: "1R", r: 1 }, { k: "1.5r", label: "1.5R", r: 1.5 }, { k: "2r", label: "2R", r: 2 }, { k: "3r", label: "3R", r: 3 },
+      { k: "1p", label: "1%", p: 1 }, { k: "2p", label: "2%", p: 2 }, { k: "3p", label: "3%", p: 3 }
+    ];
+    const TGT_EXIT = { t: "Target hit", s: "Stopped out", e: "Out after 20 candles" };
+    const TGT_KEY = "tapeAndTarget.sigTgt.v1", TGT_FILL_BARS = 5, TGT_HOLD_BARS = 20;
+    const TGT_COST = { CRYPTO: 0.0826, NSE: 0.1063 }, TGT_SLIP = 0.05;
+    const TGT_RES = [[5, "5m"], [15, "15m"], [30, "30m"], [60, "1h"], [120, "2h"], [240, "4h"], [1440, "1d"], [10080, "1w"]];
+    function tgtMode() { const k = state.ui.sigTgt || ""; return SIG_TGTS.some(x => x.k === k) ? k : ""; }
+    function tgtIdx() { return SIG_TGTS.findIndex(x => x.k === tgtMode()) - 1; }
+    function tgtTfMin(sig) {
+      const tf = String(sig.timeframe || "").trim();
+      if (/^1mo$/i.test(tf) || tf === "1M") return 43200;
+      const m = tf.toLowerCase().match(/^(\d+)\s*(m|h|d|w)$/);
+      return m ? +m[1] * { m: 1, h: 60, d: 1440, w: 10080 }[m[2]] : null;
+    }
+    function tgtSym(sig) {
+      const s = aiDeltaSym(sig.symbol);
+      return /USD$/.test(s) ? s : s + "USD";
+    }
+    function tgtCacheKey(sig) { return [sig.key || sig.id, signalEntry(sig), sig.stop, sig.fillTs || ""].join("|"); }
+    // Pure: one alert's results at every fixed target, from its candles ({t ms, h, l, c}).
+    // Returns null when no candle covers the trade, and null at a target the trade is
+    // still open on (its 20 candles are not over yet).
+    function tgtReplay(p, bars, resMs, nowMs) {
+      const s = p.side === "short" ? -1 : 1, risk = Math.abs(p.entry - p.stop);
+      if (!(risk > 0) || !(p.entry > 0)) return null;
+      bars = bars.filter(k => k.h > 0 && k.l > 0).sort((a, b) => a.t - b.t);
+      let start = p.startMs;
+      if (!p.filledAt) {
+        // No fill time from the scanner: the first candle after the alert that reaches the entry.
+        const f = bars.find(k => k.t + resMs > p.sentMs && k.t < p.sentMs + TGT_FILL_BARS * p.tfMs && (s > 0 ? k.l <= p.entry : k.h >= p.entry));
+        if (!f) return null;
+        start = Math.max(f.t, p.sentMs);
+      }
+      const end = start + TGT_HOLD_BARS * p.tfMs;
+      const win = bars.filter(k => k.t + resMs > start && k.t < end);
+      if (!win.length) return null;
+      const done = end <= nowMs;
+      const riskPct = risk / p.entry * 100;
+      const costR = (p.cost || 0) / riskPct, slipR = (p.stop / p.entry) * TGT_SLIP / riskPct;
+      const r4 = v => +v.toFixed(4);
+      return SIG_TGTS.slice(1).map(T => {
+        const tp = T.r != null ? p.entry + s * T.r * risk : p.entry * (1 + s * T.p / 100);
+        for (const k of win) {
+          if (s > 0 ? k.l <= p.stop : k.h >= p.stop) return { r: r4(-1 - slipR - costR), x: "s" };
+          if (s > 0 ? k.h >= tp : k.l <= tp) return { r: r4(s * (tp - p.entry) / risk - costR), x: "t" };
+        }
+        if (!done) return null;
+        return { r: r4(s * (win[win.length - 1].c - p.entry) / risk - costR), x: "e" };
+      });
+    }
+    let tgtStore = null; const tgtMem = {}, tgtQueue = [], tgtQueued = new Set();
+    let tgtRunning = 0, tgtRedrawAt = 0, tgtRedrawTimer = null;
+    function tgtCache() {
+      if (!tgtStore) { try { const v = JSON.parse(localStorage.getItem(TGT_KEY) || "null"); tgtStore = v && typeof v === "object" ? v : {}; } catch (e) { tgtStore = {}; } }
+      return tgtStore;
+    }
+    function tgtSaveCache() { try { localStorage.setItem(TGT_KEY, JSON.stringify(tgtCache())); } catch (e) {} }
+    function tgtEntry(sig) { const k = tgtCacheKey(sig); return tgtMem[k] || tgtCache()[k] || null; }
+    // The replayed result at the picked target, or null (not loaded, no candles, still open).
+    function tgtResult(sig) {
+      const e = tgtEntry(sig), i = tgtIdx();
+      return e && e.v && i >= 0 ? e.v[i] || null : null;
+    }
+    function tgtPlan(sig) {
+      const tfMin = tgtTfMin(sig), entry = signalEntry(sig);
+      if (/nse/i.test(String(sig.market || "") + " " + String(sig.channel || ""))) return { none: "nse" };
+      if (!tfMin || !(entry > 0) || !(sig.stop > 0)) return { none: "data" };
+      const sentMs = new Date(sig.date + "T" + (sig.time || "00:00") + ":00+05:30").getTime();
+      if (!isFinite(sentMs)) return { none: "data" };
+      const tfMs = tfMin * 60000, filledAt = sig.fillTs ? sig.fillTs * 1000 : 0;
+      const from = (filledAt || sentMs) - tfMs, to = Math.min(Date.now(), (filledAt || sentMs) + (TGT_HOLD_BARS + (filledAt ? 1 : TGT_FILL_BARS + 1)) * tfMs);
+      const span = to - from;
+      const res = TGT_RES.find(x => span / (x[0] * 60000) <= 1900) || TGT_RES[TGT_RES.length - 1];
+      return { side: sig.side, entry, stop: sig.stop, sentMs, startMs: filledAt, filledAt, tfMs, from, to, res, sym: tgtSym(sig), cost: TGT_COST.CRYPTO };
+    }
+    async function tgtOne(sig) {
+      const key = tgtCacheKey(sig), p = tgtPlan(sig);
+      if (p.none) { tgtCache()[key] = { none: p.none }; return; }
+      const url = DELTA_BASE + "/v2/history/candles?resolution=" + p.res[1] + "&symbol=" + encodeURIComponent(p.sym) + "&start=" + Math.floor(p.from / 1000) + "&end=" + Math.ceil(p.to / 1000);
+      let j = null;
+      try { const r = await fetch(url); j = await r.json().catch(() => null); }
+      catch (e) { tgtMem[key] = { err: true }; return; }
+      if (!j || j.success !== true || !Array.isArray(j.result) || !j.result.length) { tgtCache()[key] = { none: "nodata" }; return; }
+      const bars = j.result.map(k => ({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close }));
+      const v = tgtReplay(p, bars, p.res[0] * 60000, Date.now());
+      if (!v) { tgtMem[key] = { none: "nodata" }; return; }
+      // Kept on this device once every target is settled, so it is never fetched again.
+      if (v.every(Boolean)) { tgtCache()[key] = { v }; delete tgtMem[key]; } else tgtMem[key] = { v, open: true };
+    }
+    function tgtRedraw(final) {
+      const go = () => { tgtRedrawTimer = null; tgtRedrawAt = Date.now(); const v = document.getElementById('view-signals'); if (v && !v.classList.contains('hidden')) renderSignalsTable(); };
+      if (final) { clearTimeout(tgtRedrawTimer); go(); return; }
+      if (!tgtRedrawTimer) tgtRedrawTimer = setTimeout(go, Math.max(0, 1200 - (Date.now() - tgtRedrawAt)));
+    }
+    // Queue every alert in the view that has a result and no replay yet; 4 at a time.
+    function tgtEnsure(pairs) {
+      pairs.forEach(pr => {
+        const sig = pr.signal;
+        if (!sigBaseOutcome(pr)) return;
+        const k = tgtCacheKey(sig), e = tgtEntry(sig);
+        if ((e && !e.open) || tgtQueued.has(k)) return;
+        tgtQueued.add(k); tgtQueue.push(sig);
+      });
+      const worker = async () => {
+        tgtRunning++;
+        let n = 0;
+        while (tgtQueue.length) {
+          const sig = tgtQueue.shift();
+          try { await tgtOne(sig); } catch (e) { tgtMem[tgtCacheKey(sig)] = { err: true }; }
+          if (++n % 10 === 0) tgtSaveCache();
+          tgtRedraw(false);
+        }
+        tgtRunning--;
+        if (!tgtRunning) { tgtSaveCache(); tgtRedraw(true); }
+      };
+      for (let i = tgtRunning; i < 4 && tgtQueue.length; i++) worker();
+    }
+    // Counts behind the picked target, for the note under the numbers.
+    function tgtStatus(pairs) {
+      const st = { graded: 0, done: 0, open: 0, nse: 0, nodata: 0, err: 0, loading: 0 };
+      pairs.forEach(pr => {
+        if (!sigBaseOutcome(pr)) return;
+        st.graded++;
+        const e = tgtEntry(pr.signal);
+        if (!e) st.loading++;
+        else if (e.err) st.err++;
+        else if (e.none === "nse") st.nse++;
+        else if (e.none) st.nodata++;
+        else if (tgtResult(pr.signal)) st.done++;
+        else st.open++;
+      });
+      return st;
+    }
+    function tgtRetry() { Object.keys(tgtMem).forEach(k => { if (tgtMem[k].err) { delete tgtMem[k]; tgtQueued.delete(k); } }); renderSignalsTable(); }
+    function renderTgtBar() {
+      const bar = document.getElementById('sigTgtBar');
+      if (!bar) return;
+      bar.innerHTML = '';
+      const sel = document.createElement('select');
+      sel.id = 'sigTgtSel';
+      sel.className = 'border text-xs px-2.5 py-1.5 rounded-lg focus:outline-none';
+      sel.title = 'Play every alert again with one fixed take-profit, keeping its own stop';
+      const cur = tgtMode();
+      SIG_TGTS.forEach(x => { const o = document.createElement('option'); o.value = x.k; o.innerText = x.k ? (x.r != null ? '1:' + x.label : x.label + ' profit') : x.label; if (x.k === cur) o.selected = true; sel.appendChild(o); });
+      sel.onchange = () => { state.ui.sigTgt = sel.value; save(); renderSignalsTable(); };
+      bar.appendChild(sel);
+    }
+    function tgtNoteHtml(pairs) {
+      const T = SIG_TGTS.find(x => x.k === tgtMode());
+      const st = tgtStatus(pairs);
+      const bits = [`${st.done} of ${st.graded} alerts with a result replayed`];
+      if (st.loading) bits.push(`loading ${st.loading} more from Delta's candles…`);
+      if (st.open) bits.push(`${st.open} still open at this target`);
+      if (st.nse) bits.push(`${st.nse} NSE left out (no candles)`);
+      if (st.nodata) bits.push(`${st.nodata} with no candles on Delta left out`);
+      if (st.err) bits.push(`${st.err} could not reach Delta <button type="button" onclick="tgtRetry()" class="underline">retry</button>`);
+      return `<span class="text-amber-300">Target ${esc(T.r != null ? "1:" + T.label : T.label + " profit")}</span> · ${bits.join(" · ")}. <span title="The alert's own stop. A candle touching both the stop and the target counts as the stop. Neither within 20 candles of the alert's timeframe: out at the last close. Fees and stop slippage as in the scanner's pricing.">Rules ⓘ</span>`;
     }
     function slPct(sig) {
       const e = signalEntry(sig);
@@ -8084,6 +8261,13 @@
           note.lastElementChild.innerText = bits.join("; ") + ".";
           strip.appendChild(note);
         }
+        if (tgtMode()) {
+          const tn = document.createElement('div');
+          tn.id = 'sigTgtNote';
+          tn.className = 'col-span-full text-[11px] text-slate-500 font-mono';
+          tn.innerHTML = tgtNoteHtml(pairs);
+          strip.appendChild(tn);
+        }
       }
       renderAlertVsMine(pairs);
     }
@@ -8096,7 +8280,8 @@
       sigPerfBars('sigByHour', groupPerf(pairs, slotBand), ALL_SLOTS, note);
       sigPerfBars('sigBySector', groupPerf(pairs, g => g.sector || g.market || "No sector"), null, note);
       sigPerfBars('sigByTimeframe', groupPerf(pairs, g => g.timeframe || "No timeframe"), null, note);
-      sigPerfBars('sigByOutcome', groupPerf(pairs, g => g.outcome || "Not stated"), ["+2R", "+1R", "BE", "Neither", "SL", "Not stated"], note);
+      if (tgtMode()) sigPerfBars('sigByOutcome', groupPerf(pairs, g => TGT_EXIT[(tgtResult(g) || {}).x] || "Not stated"), Object.values(TGT_EXIT).concat(["Not stated"]), note);
+      else sigPerfBars('sigByOutcome', groupPerf(pairs, g => g.outcome || "Not stated"), ["+2R", "+1R", "BE", "Neither", "SL", "Not stated"], note);
       sigPerfBars('sigBySl', groupPerf(pairs, slBand), SL_BANDS.map(b => b.label).concat(["Not recorded"]), note);
       sigPerfBars('sigBySymbol', groupPerf(pairs, g => g.symbol).slice(0, 12), null, note);
     }
@@ -8709,6 +8894,7 @@
           market, timeframe: tf, channel: market + " " + tf,
           filled, outcome, resultR: resultR != null ? +resultR.toFixed(4) : null, hasReportR: true,
           price: n(r.price), stop: sl, entry, srcRank: rank, fibWhatIf: whatIf, rb: r.rebuild ? true : undefined,
+          fillTs: res[r.id] && n(res[r.id].fill_ts) ? n(res[r.id].fill_ts) : undefined,
           // The line's prices at its two anchors (their times are in the key), so its
           // price at any minute is known: SUPPORT / RESISTANCE / broken for your trades.
           tl: r.kind === "trendline" && Array.isArray(r.from) && Array.isArray(r.to) && n(r.from[0]) != null && n(r.to[0]) != null ? [n(r.from[0]), n(r.to[0])] : undefined
@@ -8769,7 +8955,8 @@
           stop: (typeof r.stop_price === "number") ? r.stop_price : null,
           zoneLow: (typeof r.zone_bottom === "number") ? r.zone_bottom : null,
           zoneHigh: (typeof r.zone_top === "number") ? r.zone_top : null,
-          srcRank: rank || 3, rb: r.rebuild ? true : undefined
+          srcRank: rank || 3, rb: r.rebuild ? true : undefined,
+          fillTs: r.filled === true && r.entry_time && isFinite(Date.parse(r.entry_time)) ? Math.round(Date.parse(r.entry_time) / 1000) : undefined
         });
       });
       return { records: out, skipped: bad };
@@ -8903,7 +9090,9 @@
           // new or changed L1 / L2 / L4 what-ifs
           || (r.fibWhatIf && JSON.stringify(r.fibWhatIf) !== JSON.stringify(ex.fibWhatIf || null))
           // a trendline's anchors, for alerts saved before they were kept
-          || (r.tl && !ex.tl)) upgrades.push({ ex, r });
+          || (r.tl && !ex.tl)
+          // the fill time, for alerts saved before it was kept (the fixed-target replay starts there)
+          || (r.fillTs && ex.fillTs !== r.fillTs)) upgrades.push({ ex, r });
       });
       return { incoming, fresh, upgrades, staleIds, zrBuiltAt: rebuildStamp(zr, fr) };
     }
@@ -10500,6 +10689,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-10-28.137', pr: 51, title: 'Target filter on Signals', pts: ['Replay alerts at a fixed 1R, 1.5R, 2R, 3R or 1%, 2%, 3% target', 'Same stop; stop counts first when a candle hits both', 'Numbers, breakdowns and backtest follow the pick'] },
       { v: '2026-10-27.136', pr: 50, title: 'Backtest rebuilt', pts: ['30m S/R zone alerts removed', 'Zone, fib and trendline alerts since Sep 1 re-run under today\'s rules', 'News-window fills left out'] },
       { v: '2026-10-25.135', pr: 49, title: '₹ and $ views agree', pts: ['% of capital goal: same % in ₹ and $', 'Today card on All accounts: max risk shows every book, not one picked by currency'] },
       { v: '2026-10-25.134', title: "What's new on tap", pts: ['Tap the version number to see this list', 'Each update: version, date and what changed'] },

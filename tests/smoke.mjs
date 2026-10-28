@@ -2545,6 +2545,82 @@ async function whatsNewRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
+// Target filter: each alert played again on (fake) Delta candles with one fixed
+// take-profit and its own stop. Long AAA rises to 101.6 then hits its stop; short
+// BBB drifts to 49.5 and ends at 49.6; CCC's candles touch its stop and every
+// target at once, which counts as the stop; the NSE alert has no candles and is left out.
+async function targetRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  const F = Math.floor((Date.now() - 10 * 864e5) / 3e5) * 3e5; // fill time, 5-minute aligned, long done
+  let calls = 0;
+  await ctx.route(url => url.href.includes('/v2/history/candles'), r => {
+    const u = new URL(r.request().url()), sym = u.searchParams.get('symbol');
+    if (/^(AAA|BBB|CCC)USD$/.test(sym)) calls++;
+    const from = +u.searchParams.get('start') * 1000, to = +u.searchParams.get('end') * 1000;
+    const out = [];
+    for (let t = Math.floor(from / 3e5) * 3e5; t <= to; t += 3e5) {
+      let b;
+      if (sym === 'AAAUSD') b = t < F ? [100.6, 100.4, 100.5] : t === F ? [100.2, 99.95, 100.1] : t <= F + 2 * 3600e3 ? [101.6, 100.2, 101] : t <= F + 3 * 3600e3 ? [100, 98.9, 99] : [99.6, 99.4, 99.5];
+      else if (sym === 'CCCUSD') b = t < F ? [10.05, 10.01, 10.03] : t === F ? [10.02, 9.99, 10] : [10.25, 9.85, 10];
+      else if (sym === 'BBBUSD') b = t < F ? [50.8, 50.3, 50.5] : t === F ? [50.1, 49.9, 50] : [50.2, 49.5, 49.6];
+      else return r.abort();
+      out.push({ time: t / 1000, open: b[2], high: b[0], low: b[1], close: b[2], volume: 1 });
+    }
+    r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ success: true, result: out }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(F => {
+      const ip = istParts(new Date(F - 3600e3));
+      const sg = (id, sym, side, entry, stop, extra) => Object.assign({ id, key: 'k' + id, kind: 'fib', date: `${ip.year}-${ip.month}-${ip.day}`, time: `${ip.hour}:${ip.minute}`, symbol: sym, side, score: '',
+        market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H', filled: true, outcome: '+1R', resultR: 0.9, hasReportR: true, price: entry, stop, entry, srcRank: 3, fillTs: F / 1000 }, extra || {});
+      state.signals = [sg('a', 'AAAUSD', 'long', 100, 99), sg('b', 'BBBUSD', 'short', 50, 51), sg('d', 'CCCUSD', 'long', 10, 9.9), sg('c', 'RELIANCE', 'long', 2000, 1980, { market: 'NSE', channel: 'NSE 4H' })];
+      Object.assign(state.ui, { sigKind: 'fib', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '' });
+      switchTab('signals'); renderAll();
+    }, F);
+    await page.evaluate(() => { window.__r = 0; const o = renderSignalsTable; renderSignalsTable = function () { window.__r++; return o.apply(this, arguments); }; });
+    await page.waitForTimeout(1500);
+    check(await page.evaluate(() => window.__r) <= 2, 'Signals keeps redrawing on its own: ' + await page.evaluate(() => window.__r));
+    const opts = await page.$$eval('#sigTgtSel option', os => os.map(o => o.innerText));
+    check(opts.join(',') === 'As alerted,1:1R,1:1.5R,1:2R,1:3R,1% profit,2% profit,3% profit', 'target options: ' + opts.join(','));
+    const total = () => page.evaluate(() => withOutcomeCache(() => sigView.pairs.map(pr => outcomeOf(pr)).filter(Boolean).map(o => +o.r.toFixed(4))));
+    check((await total()).join(',') === '0.9,0.9,0.9,0.9', 'as alerted keeps the scanner R: ' + await total());
+    // Expected R: fee 0.0826% over the stop %, stop slippage 0.05% of the stop price.
+    const want = {
+      '1r': [0.9174, 0.3587, -1.1321], '1.5r': [1.4174, 0.3587, -1.1321], '2r': [-1.1321, 0.3587, -1.1321], '3r': [-1.1321, 0.3587, -1.1321],
+      '1p': [0.9174, 0.4587, -1.1321], '2p': [-1.1321, 0.3587, -1.1321], '3p': [-1.1321, 0.3587, -1.1321]
+    };
+    for (const k of Object.keys(want)) {
+      await page.evaluate(k => { const el = document.getElementById('sigTgtSel'); el.value = k; el.dispatchEvent(new Event('change')); }, k);
+      await page.waitForFunction(() => !/loading/.test((document.getElementById('sigTgtNote') || {}).innerText || 'loading'), null, { timeout: 5000 });
+      const got = await total();
+      check(got.join(',') === want[k].join(','), k + ': ' + got.join(',') + ' want ' + want[k].join(','));
+      const note = await page.innerText('#sigTgtNote');
+      check(note.includes('3 of 4 alerts') && note.includes('1 NSE left out'), k + ' note: ' + note);
+    }
+    const strip = (await page.innerText('#sigEdgeStrip')).replace(/\s+/g, ' ');
+    check(/Win rate 33%/i.test(strip) && /1W \/ 2L/.test(strip), '3% strip: ' + strip.slice(0, 300));
+    const outc = (await page.innerText('#sigByOutcome')).replace(/\s+/g, ' ');
+    check(outc.includes('Stopped out') && outc.includes('Out after 20 candles'), 'by outcome: ' + outc);
+    const before = calls;
+    await page.reload({ waitUntil: 'load' });
+    await page.evaluate(F => { renderAll(); }, F);
+    check(calls === before, 'finished replays are kept and not fetched again: ' + (calls - before) + ' more calls');
+    check(await page.evaluate(() => tgtMode()) === '3p', 'picked target is kept');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'target filter: fixed 1R-3R and 1-3% targets replayed on candles';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
 function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
 
 const data = fixture();
@@ -2576,6 +2652,7 @@ await aiReviewRun(data);
 await layoutRun(data);
 await cleanRun(data);
 await whatsNewRun(data);
+await targetRun(data);
 
 await browser.close();
 server.close();
