@@ -2545,6 +2545,67 @@ async function whatsNewRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
+// Signals "Exit at": alerts re-scored at fixed targets from (fake) Delta candles,
+// every number worked out by hand.
+async function exitTargetRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const t0 = Date.parse('2026-10-01T10:00:00+05:30') / 1000, Q = 900;
+  // A: long 100, stop 99. Fills, runs to +2.1%, then stopped. B: short 200, stop 202:
+  // fills, best -0.75%, then sits; 20 4H candles later closes at 199.4 (+0.3% its way).
+  const bars = { AUSD: [[t0, 100.2, 99.9, 100.1], [t0 + Q, 101.6, 100, 101.5], [t0 + 2 * Q, 102.1, 101, 101.2], [t0 + 3 * Q, 101, 98.9, 99]], BUSD: [] };
+  for (let i = 0; i < 320; i++) bars.BUSD.push(i === 0 ? [t0, 200.1, 199.8, 199.9] : i === 1 ? [t0 + Q, 200.5, 198.5, 199] : [t0 + i * Q, 200, 199, 199.4]);
+  let calls = 0;
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const u = new URL(route.request().url()), b = bars[u.searchParams.get('symbol')];
+    if (!b) return route.abort();
+    calls++;
+    check(u.searchParams.get('resolution') === '15m', 'a 4H alert reads 15m candles: ' + u.href);
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: b.map(([time, high, low, close]) => ({ time, open: close, high, low, close })) }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => {
+      const sg = (id, sym, side, entry, stop, r, mkt) => ({ id, key: 'k' + id, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: sym, side, score: '', market: mkt || 'CRYPTO', timeframe: '4H', channel: (mkt || 'CRYPTO') + ' 4H',
+        filled: true, outcome: r > 0 ? '+1R' : 'SL', resultR: r, hasReportR: true, price: entry, stop, entry });
+      state.signals = [sg('a', 'A', 'long', 100, 99, 0.9), sg('b', 'B', 'short', 200, 202, -1), sg('c', 'RELIANCE', 'long', 100, 99, 0.9, 'NSE')];
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '' });
+      switchTab('signals'); renderAll();
+    });
+    await page.waitForFunction(() => /2 of 3 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText) && !/reading/.test(document.getElementById('sigTgtCmp').innerText), null, { timeout: 10000 });
+    const rows = await page.$$eval('#sigTgtCmp tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
+    // costs 0.0826R; SL = -1 - 0.99*0.05 - 0.0826 = -1.1321; B time exit = 0.3 - 0.0826 = 0.2174
+    const want = ['Scanner 2 50% -0.10R -0.05R 0.90 -0.10%', '1R 2 100% +1.13R +0.57R ∞ +1.13%', '1.5R 2 100% +1.63R +0.82R ∞ +1.63%', '2R best 2 100% +2.13R +1.07R ∞ +2.13%', '3R 2 50% -0.91R -0.46R 0.19 -0.91%', '1% 2 100% +1.13R +0.57R ∞ +1.13%', '2% 2 100% +2.13R +1.07R ∞ +2.13%', '3% 2 50% -0.91R -0.46R 0.19 -0.91%'];
+    check(JSON.stringify(rows) === JSON.stringify(want), 'compare rows:\n       ' + rows.join('\n       '));
+    check(calls === 2, 'one candle read per crypto alert, none for NSE: ' + calls);
+    // Pick 2R: the whole tab re-scores, and By outcome speaks in targets.
+    await page.click('#sigTgtBar button[data-tgt="2R"]');
+    const v = await page.evaluate(() => ({ strip: document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '), out: document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' '),
+      on: document.querySelector('#sigTgtCmp tr[data-tgt="2R"]').className, kept: Object.keys(JSON.parse(localStorage.getItem('tapeAndTarget.sigTgt') || '{}')).length,
+      // Pure: a candle that touches both the target and the stop counts as the stop.
+      both: tgtScore({ side: 'long', entry: 100, stop: 99, timeframe: '4H', date: '2026-10-01', time: '10:00' }, tgtWalk({ side: 'long', entry: 100, stop: 99, timeframe: '4H', date: '2026-10-01', time: '10:00' }, [{ time: 1790829000, high: 100.1, low: 99.95, close: 100 }, { time: 1790829900, high: 102.5, low: 98.5, close: 100 }], 15), { r: 2 }),
+      analysisSame: (() => { tgtScope = false; const o = outcomeOf({ signal: state.signals[0] }); return o.r; })() }));
+    check(/What if every alert exited at 2R/.test(v.strip) && /\+2\.13R/.test(v.strip) && /100%/.test(v.strip), '2R strip: ' + v.strip);
+    check(/Target 1/.test(v.out) && /Time exit 1/.test(v.out) && !/\+1R 1/.test(v.out), 'By outcome at 2R: ' + v.out);
+    check(/text-amber-300/.test(v.on), 'picked row marked');
+    check(v.kept === 2, 'finished candles kept on the device: ' + v.kept);
+    check(v.both && v.both.label === 'SL', 'both in one candle = stop: ' + JSON.stringify(v.both));
+    check(v.analysisSame === 0.9, 'outside Signals the scanner result stands: ' + v.analysisSame);
+    await page.click('#sigTgtNote button:last-child');
+    const back = await page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+    check(!/What if/.test(back) && /Total R \+0\.80R/.test(back), 'back to scanner: ' + back);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals exit at a fixed target: re-scored by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('exit target: ' + e); });
+}
 function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
 
 const data = fixture();
@@ -2576,6 +2637,7 @@ await aiReviewRun(data);
 await layoutRun(data);
 await cleanRun(data);
 await whatsNewRun(data);
+await exitTargetRun(data);
 
 await browser.close();
 server.close();
