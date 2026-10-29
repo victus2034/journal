@@ -2618,6 +2618,107 @@ async function exitTargetRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals exit at a fixed target: re-scored by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('exit target: ' + e); });
 }
+// NSE "Exit at": the sync repo's job reads Yahoo candles (a fake one here) and writes
+// nse-paths.json; the journal reads it with its sync token and re-scores NSE alerts.
+async function nsePathsRun() {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  // A 4H NSE zone alert, long 100, stop 98 (2%), sent Tue 20 Oct 2026 10:00 IST.
+  // 15m candles: fills at 10:00 (close 100.2), best 103.1 (+3.1%) on 22 Oct 11:00,
+  // stopped (97.9) on 27 Oct 14:00, still inside its 20 4H candles (10 NSE days).
+  const alertMs = Date.parse('2026-10-20T10:00:00+05:30');
+  const zone = { market: 'NSE', symbol: 'ABC.NS', side: 'long', filled: true, net_realized_r: 0.9, stop_price: 98, zone_bottom: 99, zone_top: 100, alert_time: '2026-10-20T10:00:00+05:30', timeframe: '4h', rebuild: true, news_window: false };
+  const files = {
+    'zone_rebuild_4h.jsonl': [zone, Object.assign({}, zone, { market: 'CRYPTO', symbol: 'BTCUSD' }), Object.assign({}, zone, { symbol: 'NOPE.NS', filled: false })].map(x => JSON.stringify(x)).join('\n'),
+    'fibtl_rebuild_records.jsonl': JSON.stringify({ id: 'f1', market: 'nse', symbol: 'XYZ.NS', tf: '1d', sent_ts: alertMs / 1000, plan: { entry: 50, sl: 49, side: 'short' } }),
+    'fibtl_rebuild_results.json': JSON.stringify({ f1: { filled: true, outcome: 'timeout' } })
+  };
+  const bars = [];
+  for (let d = 20; d <= 31; d++) {
+    const day = Date.parse('2026-10-' + d + 'T09:15:00+05:30'), dow = new Date(day + 5.5 * 3600e3).getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    for (let i = 0; i < 25; i++) {
+      const t = day + i * 900e3;
+      let b = [100.5, 99.5, 100];
+      if (t === alertMs) b = [100.3, 99.9, 100.2];
+      if (t === Date.parse('2026-10-22T11:00:00+05:30')) b = [103.1, 100.5, 102];
+      if (t === Date.parse('2026-10-27T14:00:00+05:30')) b = [100, 97.9, 98.5];
+      bars.push([t / 1000, ...b]);
+    }
+  }
+  let put = null, yahooAsks = [];
+  const fake = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname.startsWith('/scanner/')) { const f = files[u.pathname.slice(9)]; res.writeHead(f ? 200 : 404); return res.end(f || ''); }
+    if (u.pathname.startsWith('/v8/finance/chart/')) {
+      yahooAsks.push(decodeURIComponent(u.pathname.slice(18)) + ' ' + u.searchParams.get('interval'));
+      const p1 = +u.searchParams.get('period1'), p2 = +u.searchParams.get('period2'), list = decodeURIComponent(u.pathname.slice(18)) === 'ABC.NS' ? bars.filter(b => b[0] >= p1 && b[0] <= p2) : [];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ chart: { result: [{ timestamp: list.map(b => b[0]), indicators: { quote: [{ high: list.map(b => b[1]), low: list.map(b => b[2]), close: list.map(b => b[3]) }] } }] } }));
+    }
+    if (u.pathname === '/repos/victus/sync/contents/nse-paths.json') {
+      if (req.method === 'GET') { res.writeHead(404); return res.end('{}'); }
+      let body = ''; req.on('data', c => body += c); req.on('end', () => { put = JSON.parse(body); res.writeHead(201); res.end('{}'); }); return;
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise(r => fake.listen(0, r));
+  const fb = 'http://127.0.0.1:' + fake.address().port;
+  Object.assign(process.env, { SCANNER_BASE: fb + '/scanner', YAHOO_BASE: fb, GITHUB_API_URL: fb, GITHUB_REPOSITORY: 'victus/sync', GITHUB_TOKEN: 'tok', JOURNAL_BRANCH: 'main' });
+  let file = null;
+  try {
+    const tool = await import('../tools/nse-paths.mjs?' + Date.now());
+    const log = console.log; console.log = () => {};
+    try { await tool.main(Date.parse('2026-11-20T12:00:00Z')); } finally { console.log = log; }
+    file = put && JSON.parse(Buffer.from(put.content, 'base64').toString());
+    const p = file && file.paths['ABC|long|98|2026-10-20 10:00'];
+    check(p && p.m === 0.031 && p.sl === 1 && p.done === 1, 'ABC walked: ' + JSON.stringify(file && file.paths));
+    check(file && Object.keys(file.paths).length === 1, 'only graded NSE alerts (no crypto, no unfilled, no timeout): ' + JSON.stringify(file && Object.keys(file.paths)));
+    check(JSON.stringify(yahooAsks) === '["ABC.NS 15m"]', 'one 15m read for the one symbol: ' + JSON.stringify(yahooAsks));
+    // Window: 20 NSE 4H candles after the fill. A stop on the 11th trading day is outside it.
+    const w = tool.walkAlert({ side: 'long', entry: 100, stop: 98, alertMs, tf: '4h' }, bars.map(b => ({ t: b[0] * 1000, h: b[1], l: b[0] * 1000 >= Date.parse('2026-10-27T09:15:00+05:30') ? 100 : b[2], c: b[3] })).concat(['2026-11-02T09:15', '2026-11-02T13:15', '2026-11-03T09:15'].map(x => ({ t: Date.parse(x + ':00+05:30'), h: 100.4, l: x.endsWith('03T09:15') ? 90 : 99.8, c: 100.1 }))), 15);
+    check(w && w.sl === 0 && w.done === 1 && w.e === 0.001, 'stop after 20 NSE candles is outside the window: ' + JSON.stringify(w));
+    check(tool.tfBucket(Date.parse('2026-10-20T13:14:00+05:30'), 240) !== tool.tfBucket(Date.parse('2026-10-20T13:15:00+05:30'), 240), 'NSE 4H candle turns at 13:15');
+  } catch (e) { errs.push('tool threw: ' + e.message); }
+  fake.close();
+
+  // The journal side: same alert, its summary read from the sync repo.
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  let reads = 0;
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
+  await ctx.route('https://api.github.com/**', route => {
+    if (/\/repos\/victus\/sync\/contents\/nse-paths\.json/.test(route.request().url())) { reads++; return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify(file || {}) }); }
+    return route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' }, body: '{}' });
+  });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => {
+      state.signals = [{ id: 'n1', key: 'nk1', date: '2026-10-20', time: '10:00', symbol: 'ABC', side: 'long', score: '', market: 'NSE', timeframe: '4h', channel: 'NSE 4h', filled: true, outcome: '+1R', resultR: 0.9, price: 100, stop: 98, zoneLow: 99, zoneHigh: 100, srcRank: 3 }];
+      state.sync = { token: 'tok', repo: 'victus/sync', branch: 'main', auto: false, lastAt: '', lastSha: '' };
+      Object.assign(state.ui, { sigKind: 'zone', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '1R', sigNoFee: false });
+      switchTab('signals'); renderAll();
+    });
+    await page.waitForFunction(() => /1 of 1 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText), null, { timeout: 10000 });
+    const rows = await page.$$eval('#sigTgtCmp tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
+    // NSE fee 0.1063% on a 2% stop = 0.0532R; stop = -1 - 0.98*0.05/2 - 0.0532 = -1.0777R
+    const has = (k, t) => check(rows.some(r => r.startsWith(k + ' ') && r.includes(t)), k + ' row should show ' + t + ': ' + JSON.stringify(rows));
+    has('1R', '+0.95R'); has('1.5R', '+1.45R'); has('2R', '-1.08R'); has('3R', '-1.08R'); has('1%', '+0.45R'); has('3%', '+1.45R');
+    check(reads === 1, 'nse-paths.json read once: ' + reads);
+    const strip = await page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+    check(/Total R \+0\.95R/.test(strip) && !/NSE without prices/.test(strip), 'NSE strip at 1R: ' + strip);
+    // No sync: says how to get NSE prices.
+    await page.evaluate(() => { state.sync = null; nsePaths = null; renderSignalsTable(); });
+    const off = await page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+    check(/1 NSE without prices: turn on GitHub sync/.test(off), 'no-sync note: ' + off);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'NSE exit at: Yahoo job + journal re-score, by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('nse paths: ' + e); });
+}
 function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
 
 const data = fixture();
@@ -2650,6 +2751,7 @@ await layoutRun(data);
 await cleanRun(data);
 await whatsNewRun(data);
 await exitTargetRun(data);
+await nsePathsRun();
 
 await browser.close();
 server.close();
