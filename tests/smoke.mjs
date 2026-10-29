@@ -2596,7 +2596,19 @@ async function exitTargetRun(seed) {
     check(v.kept === 2, 'finished candles kept on the device: ' + v.kept);
     check(v.both && v.both.label === 'SL', 'both in one candle = stop: ' + JSON.stringify(v.both));
     check(v.analysisSame === 0.9, 'outside Signals the scanner result stands: ' + v.analysisSame);
+    // Without fees: each result gets its 0.0826% round trip back (NSE 0.1063%), in R = fee % / stop %.
+    await page.click('#sigFeeBar button[data-nofee="1"]');
+    await page.waitForFunction(() => /no fees/.test(document.getElementById('sigEdgeStrip').innerText));
+    const rowsNf = await page.$$eval('#sigTgtCmp tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
+    const wantNf = ['Scanner 2 50% +0.07R +0.03R 1.07 +0.07%', '1R 2 100% +1.30R +0.65R ∞ +1.30%', '1.5R 2 100% +1.80R +0.90R ∞ +1.80%', '2R best 2 100% +2.30R +1.15R ∞ +2.30%', '3R 2 50% -0.75R -0.37R 0.29 -0.75%', '1% 2 100% +1.30R +0.65R ∞ +1.30%', '2% 2 100% +2.30R +1.15R ∞ +2.30%', '3% 2 50% -0.75R -0.37R 0.29 -0.75%'];
+    check(JSON.stringify(rowsNf) === JSON.stringify(wantNf), 'compare rows without fees:\n       ' + rowsNf.join('\n       '));
+    const nf = await page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+    check(/Total R \+2\.30R/.test(nf), '2R strip without fees: ' + nf);
     await page.click('#sigTgtNote button:last-child');
+    const nfScan = await page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+    // 0.9826 - 0.9174 + 1.0063 (the NSE alert, 0.1063% fee) = 1.0715
+    check(/Total R \+1\.07R/.test(nfScan) && /No fees/.test(nfScan), 'scanner results without fees: ' + nfScan);
+    await page.click('#sigFeeBar button[data-nofee="0"]');
     const back = await page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
     check(!/What if/.test(back) && /Total R \+0\.80R/.test(back), 'back to scanner: ' + back);
   } catch (e) {

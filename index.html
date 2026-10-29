@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-28.137">
+  <meta name="app-version" content="2026-10-29.138">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -595,6 +595,7 @@
         <div id="sigChanBar" class="flex items-center"></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">BTC day</span><div id="sigMktBar"></div></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Exit at</span><div id="sigTgtBar"></div></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Fees</span><div id="sigFeeBar"></div></div>
         <span id="sigPeriodHint" class="text-xs text-slate-500 ml-auto"></span>
       </div>
 
@@ -3616,6 +3617,7 @@
       const mfSig = mktFilter();
       renderMktFilterBar('sigMktBar', 'mktCalSignals');
       renderSigTgtBar();
+      renderSigFeeBar();
       renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
       if (mfSig) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig);
 
@@ -7432,10 +7434,22 @@
       return v;
     }
     function outcomeNow(pair) {
-      const base = outcomeBase(pair), tg = tgtScope ? sigTgt() : null;
+      const nf = sigNoFee(), base = scanR(pair, nf), tg = tgtScope ? sigTgt() : null;
       if (!base || !tg) return base;
-      const o = tgtScore(pair.signal, tgtPath(pair.signal), tg);
+      const o = tgtScore(pair.signal, tgtPath(pair.signal), tg, nf);
       return o ? { r: o.r, source: "target", label: o.label } : null;
+    }
+    // Fees: the scanner's results are after its round-trip fee, Delta's 0.02% maker in
+    // + 0.05% taker out + 18% GST = 0.0826% (NSE 0.1063%), the same rates lakky's fills
+    // show. "No fees" on the Signals tab adds that back; stop slippage stays either way.
+    function sigFeePct(sig) { return /^nse$/i.test(sig.market || "") ? 0.1063 : 0.0826; }
+    function sigFeeR(sig) { const p = slPct(sig); return p > 0 ? sigFeePct(sig) / p : 0; }
+    function sigNoFee() { return tgtScope && state.ui.sigNoFee === true; }
+    function setSigNoFee(v) { state.ui.sigNoFee = !!v; save(); renderSignalsTable(); }
+    // The scanner's own result, with or without its fee.
+    function scanR(pair, nf) {
+      const b = outcomeBase(pair);
+      return b && nf && b.source === "scanner" ? { r: b.r + sigFeeR(pair.signal), source: "scanner" } : b;
     }
     function outcomeBase(pair) {
       const sig = pair.signal;
@@ -7508,10 +7522,10 @@
       return { m, sl: 0, e: mv(last.c), done: last.t + resMs >= end ? 1 : 0 };
     }
     // Pure: one walked alert at one target -> { r, label } or null (still open / no data).
-    function tgtScore(sig, w, tg) {
+    function tgtScore(sig, w, tg, noFee) {
       const entry = signalEntry(sig), riskPct = slPct(sig);
       if (!w || w.none || !(riskPct > 0)) return null;
-      const costR = TGT_COST_PCT / riskPct;
+      const costR = noFee ? 0 : TGT_COST_PCT / riskPct;
       const tR = tg.r != null ? tg.r : tg.p / riskPct, d = tR * riskPct / 100;
       if (w.m >= d - 1e-12) return { r: tR - costR, label: "Target" };
       if (w.sl) return { r: -1 - (sig.stop / entry) * TGT_SLIP_PCT / riskPct - costR, label: "SL" };
@@ -7587,6 +7601,22 @@
         bar.appendChild(b);
       });
     }
+    function renderSigFeeBar() {
+      const bar = document.getElementById('sigFeeBar');
+      if (!bar) return;
+      const off = state.ui.sigNoFee === true;
+      bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+      bar.title = "With fees: the scanner's 0.0826% round trip (0.02% maker in + 0.05% taker out + 18% GST; NSE 0.1063%). No fees: the same results with that added back. Stop slippage (0.05%) counts in both.";
+      bar.innerHTML = '';
+      [[false, "With"], [true, "Without"]].forEach(([v, l]) => {
+        const b = document.createElement('button'); b.type = 'button';
+        b.dataset.nofee = v ? '1' : '0';
+        b.className = 'px-2 py-1 rounded-md font-semibold ' + (v === off ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
+        b.innerText = l;
+        b.onclick = () => setSigNoFee(v);
+        bar.appendChild(b);
+      });
+    }
     // "Exit targets compared": the same alerts at every target, side by side.
     function renderTgtCompare(pairs) {
       const host = document.getElementById('sigTgtCmp');
@@ -7595,7 +7625,7 @@
       const tgs = SIG_TGTS.filter(x => x.k);
       // Alerts every target can score, so each row is measured on the same alerts.
       const set = pairs.filter(pr => outcomeBase(pr) && tgs.every(tg => tgtScore(pr.signal, tgtPath(pr.signal), tg)));
-      const cv = tgtCoverNote(pairs);
+      const cv = tgtCoverNote(pairs), nf = sigNoFee();
       let h = '<div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Exit targets compared</h3><span class="text-[11px] text-slate-500">' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + '</span></div>';
       if (!set.length) {
         host.innerHTML = h + '<p class="text-slate-500">' + (tgtProg ? 'Reading prices…' : 'No graded crypto alert with price data in this view yet.') + '</p>';
@@ -7603,7 +7633,7 @@
       }
       const rows = SIG_TGTS.map(tg => {
         const rs = [], ps = [];
-        set.forEach(pr => { const o = tg.k ? tgtScore(pr.signal, tgtPath(pr.signal), tg) : outcomeBase(pr); rs.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) ps.push(p); });
+        set.forEach(pr => { const o = tg.k ? tgtScore(pr.signal, tgtPath(pr.signal), tg, nf) : scanR(pr, nf); rs.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) ps.push(p); });
         const w = rs.filter(r => r > 0).length, gw = sum(rs.filter(r => r > 0)), gl = -sum(rs.filter(r => r < 0));
         return { tg, n: rs.length, wr: w / rs.length * 100, tot: sum(rs), avg: avg(rs), pf: gl > 0 ? gw / gl : (gw > 0 ? Infinity : null), totP: ps.length ? sum(ps) : null };
       });
@@ -7619,7 +7649,7 @@
           + `<td class="pr-2 text-right">${x.pf == null ? '—' : x.pf === Infinity ? '∞' : x.pf.toFixed(2)}</td>`
           + `<td class="text-right">${x.totP == null ? '—' : (x.totP >= 0 ? '+' : '') + x.totP.toFixed(2) + '%'}</td></tr>`;
       });
-      h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row. Fixed target, the alert\'s own stop, no breakeven move; a candle touching both counts as the stop. Not hit in 20 candles of the alert\'s timeframe: closed there. Costs as the scanner (0.08% + 0.05% stop slippage). Click a row to score the whole tab at that exit.</p>';
+      h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row. Fixed target, the alert\'s own stop, no breakeven move; a candle touching both counts as the stop. Not hit in 20 candles of the alert\'s timeframe: closed there. ' + (nf ? 'No fees (the 0.05% stop slippage still counts).' : 'Fees as the scanner (0.08% round trip) + 0.05% stop slippage.') + ' Click a row to score the whole tab at that exit.</p>';
       host.innerHTML = h;
     }
     function sumPct(list) { const v = list.filter(x => x != null && isFinite(x)); return v.length ? sum(v) : null; }
@@ -8101,7 +8131,9 @@
       const stopped = items.filter(x => x.pr.signal.outcome === "SL").length;
       // A level no alert entered at shows the scanner's what-if for it instead: the
       // same alerts as if entered there, same stop (fib_level_whatif.py).
-      const whatIfOf = k => items.map(x => x.pr.signal.fibWhatIf && x.pr.signal.fibWhatIf[k]).filter(w => w && w.outcome !== "not reached" && w.outcome !== "");
+      const whatIfOf = k => items.map(x => { const w = x.pr.signal.fibWhatIf && x.pr.signal.fibWhatIf[k]; return w ? Object.assign({ sig: x.pr.signal }, w) : null; }).filter(w => w && w.outcome !== "not reached" && w.outcome !== "");
+      // A what-if's R with its fee added back when the tab shows results without fees.
+      const wiR = w => { const rp = w.entry > 0 ? Math.abs(w.entry - w.sig.stop) / w.entry * 100 : 0; return w.resultR + (sigNoFee() && rp > 0 ? sigFeePct(w.sig) / rp : 0); };
       let anyWhatIf = false;
       const levelRows = FIB_LEVEL_KEYS.map(k => {
         const real = byEntry[k];
@@ -8109,7 +8141,7 @@
         if (wi.length) anyWhatIf = true;
         const list = real.length ? real : wi;
         const filled = real.length ? real.filter(x => x.pr.signal.filled === true).length : wi.filter(w => w.filled === true).length;
-        const st = fibRStats(real.length ? real.map(x => outcomeOf(x.pr)).filter(Boolean).map(o => o.r) : wi.filter(w => w.filled && typeof w.resultR === "number").map(w => w.resultR));
+        const st = fibRStats(real.length ? real.map(x => outcomeOf(x.pr)).filter(Boolean).map(o => o.r) : wi.filter(w => w.filled && typeof w.resultR === "number").map(wiR));
         const r1 = (real.length ? real.map(x => x.pr.signal.outcome) : wi.map(w => w.outcome)).filter(o => o === "+1R" || o === "+2R").length;
         const tip = k === "L4" ? ' title="At least: the scanner reports the stop (just past L4), not a touch of L4 that bounced."' : '';
         return '<tr class="border-t border-terminal-border/60" data-fiblevel="' + k + '"><td class="py-1.5 pr-3 font-bold text-amber-300">' + k + '</td><td class="pr-3 text-slate-400">' + FIB_ROLE[k] + '</td>'
@@ -8246,13 +8278,20 @@
           strip.appendChild(card);
         });
         // With an exit target picked, say so: these are what-if numbers, not the scanner's.
-        const tg = sigTgt();
+        const tg = sigTgt(), nf = sigNoFee();
+        if (nf && !tg) {
+          const line = document.createElement('div');
+          line.id = 'sigFeeNote';
+          line.className = 'col-span-full text-[11px] font-mono text-amber-300';
+          line.innerHTML = 'No fees: each result with the 0.08% round-trip fee added back (NSE 0.11%; stop slippage still counts) · <button type="button" class="underline" onclick="setSigNoFee(false)">with fees</button>';
+          strip.appendChild(line);
+        }
         if (tg) {
           const cv = tgtCoverNote(pairs);
           const line = document.createElement('div');
           line.id = 'sigTgtNote';
           line.className = 'col-span-full text-[11px] font-mono text-amber-300';
-          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (same stop, no breakeven) · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
+          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (same stop, no breakeven' + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
           strip.appendChild(line);
         }
         // Say why numbers are missing instead of leaving dashes unexplained.
@@ -10690,6 +10729,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-10-29.138', pr: 53, title: 'Results with or without fees', pts: ['Signals: Fees With / Without switch', 'Headline numbers, Exit targets compared and every breakdown follow it', 'Fee = 0.08% round trip (NSE 0.11%); stop slippage always counts'] },
       { v: '2026-10-28.137', pr: 52, title: 'Exit at a fixed target', pts: ['Signals: "Exit at" re-scores alerts at 1R, 1.5R, 2R, 3R or 1%, 2%, 3%', 'Same stop, no breakeven; read from Delta candles (crypto)', 'Edge & breakdowns: every target compared side by side'] },
       { v: '2026-10-27.136', pr: 50, title: 'Backtest rebuilt', pts: ['30m S/R zone alerts removed', 'Zone, fib and trendline alerts since Sep 1 re-run under today\'s rules', 'News-window fills left out'] },
       { v: '2026-10-25.135', pr: 49, title: '₹ and $ views agree', pts: ['% of capital goal: same % in ₹ and $', 'Today card on All accounts: max risk shows every book, not one picked by currency'] },
