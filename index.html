@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-29.138">
+  <meta name="app-version" content="2026-10-29.139">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -3642,7 +3642,7 @@
         }
       }
       sigView.pairs = skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs;
-      if (sigTgt()) { const ps = sigView.pairs; setTimeout(() => tgtLoad(ps), 0); }
+      if (sigTgt()) { const ps = sigView.pairs; setTimeout(() => { tgtLoad(ps); nseLoad(ps); }, 0); }
       renderSignalEdgeAnalysis(sigView.pairs);
       drawSigSec(sigCurSec());
 
@@ -7525,7 +7525,7 @@
     function tgtScore(sig, w, tg, noFee) {
       const entry = signalEntry(sig), riskPct = slPct(sig);
       if (!w || w.none || !(riskPct > 0)) return null;
-      const costR = noFee ? 0 : TGT_COST_PCT / riskPct;
+      const costR = noFee ? 0 : sigFeePct(sig) / riskPct;
       const tR = tg.r != null ? tg.r : tg.p / riskPct, d = tR * riskPct / 100;
       if (w.m >= d - 1e-12) return { r: tR - costR, label: "Target" };
       if (w.sl) return { r: -1 - (sig.stop / entry) * TGT_SLIP_PCT / riskPct - costR, label: "SL" };
@@ -7536,7 +7536,33 @@
       return tgtMem;
     }
     function tgtSave() { try { localStorage.setItem(TGT_KEY, JSON.stringify(tgtCache())); } catch (e) {} }
-    function tgtPath(sig) { const k = tgtKey(sig); return tgtCache()[k] || tgtLive[k] || null; }
+    function tgtPath(sig) {
+      if (isNseSig(sig)) return (nsePaths && nsePaths[nseKey(sig)]) || null;
+      const k = tgtKey(sig); return tgtCache()[k] || tgtLive[k] || null;
+    }
+    // NSE: Delta has no NSE stocks and Yahoo doesn't answer web pages, so a GitHub
+    // job in the sync repo (tools/nse-paths.mjs, twice a day) reads each graded NSE
+    // alert's candles from Yahoo, walks them like tgtWalk (20 NSE candles of the
+    // alert's timeframe) and writes the summaries to nse-paths.json. Read with the
+    // sync token, kept in memory only (storage is tight), at most every 30 min.
+    let nsePaths = null, nseAt = 0, nseBusy = false, nseErr = "";
+    const NSE_PATHS_FILE = "nse-paths.json";
+    function isNseSig(sig) { return /^nse$/i.test(sig.market || ""); }
+    function nseKey(sig) { return [sig.symbol, sig.side, sig.stop, sig.date + " " + sig.time].join("|"); }
+    async function nseLoad(pairs) {
+      if (nseBusy || !syncReady() || (nsePaths && Date.now() - nseAt < 30 * 60000)) return;
+      if (!pairs.some(pr => isNseSig(pr.signal) && outcomeBase(pr))) return;
+      nseBusy = true;
+      try {
+        const c = syncCfg();
+        const res = await syncApi("/contents/" + NSE_PATHS_FILE + "?ref=" + encodeURIComponent(c.branch || "main"), { headers: { Accept: "application/vnd.github.raw" } });
+        if (res.status === 404) { nsePaths = {}; nseErr = "the NSE price job hasn't run yet"; }
+        else if (!res.ok) { nseErr = "could not read NSE prices (GitHub " + res.status + ")"; }
+        else { const j = await res.json(); nsePaths = (j && j.paths && typeof j.paths === "object") ? j.paths : {}; nseErr = ""; }
+      } catch (e) { nseErr = "could not read NSE prices"; }
+      nseAt = Date.now(); nseBusy = false;
+      renderSignalsTable();
+    }
     async function tgtOne(sig) {
       const tfMin = tfMinutes(sig.timeframe), t0 = tgtAlertMs(sig), span = 2 * TGT_BARS * tfMin * 60000;
       const r = AI_RES.find(x => span / (x[0] * 60000) <= 1900) || AI_RES[AI_RES.length - 1];
@@ -7578,10 +7604,10 @@
     // One line on what the target covers, for the strip and the compare card.
     function tgtCoverNote(pairs) {
       const graded = pairs.filter(pr => outcomeBase(pr));
-      const nse = graded.filter(pr => tgtWhy(pr.signal) === "NSE").length;
+      const nse = graded.filter(pr => isNseSig(pr.signal) && !tgtPath(pr.signal)).length;
       const have = graded.filter(pr => { const w = tgtPath(pr.signal); return w && !w.none; }).length;
       const bits = [`${have} of ${graded.length} graded alerts have price data`];
-      if (nse) bits.push(`${nse} NSE (no candles on Delta)`);
+      if (nse) bits.push(`${nse} NSE ` + (!syncReady() ? "without prices: turn on GitHub sync in Settings to read them" : nseBusy ? "prices loading…" : nseErr ? "without prices: " + nseErr : "without prices yet (the NSE price job runs twice a day)"));
       if (tgtProg) bits.push(`reading prices ${tgtProg.done}/${tgtProg.total}…`);
       return { text: bits.join(" · "), fail: !tgtProg && tgtFail ? tgtFail : 0 };
     }
@@ -8317,7 +8343,7 @@
     // "Edge & breakdowns": best and worst setups, and R by score, channel, hour and more.
     function renderSigEdge(pairs) {
       renderTgtCompare(pairs);
-      setTimeout(() => tgtLoad(pairs), 0);
+      setTimeout(() => { tgtLoad(pairs); nseLoad(pairs); }, 0);
       renderSetups(pairs);
       const note = pairs.length ? "Only alerts with a result from the scanner (or an exit price you add) can be measured." : "Import some signals first.";
       sigPerfBars('sigByScore', groupPerf(pairs, scoreBand), [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map(v => "Score " + v).concat(["No score"]), note);
@@ -10729,6 +10755,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-10-29.139', pr: 54, title: 'Exit at works for NSE', pts: ['NSE alerts re-scored at 1R-3R and 1-3% too', 'Prices read from Yahoo by a GitHub job twice a day (needs GitHub sync)'] },
       { v: '2026-10-29.138', pr: 53, title: 'Results with or without fees', pts: ['Signals: Fees With / Without switch', 'Headline numbers, Exit targets compared and every breakdown follow it', 'Fee = 0.08% round trip (NSE 0.11%); stop slippage always counts'] },
       { v: '2026-10-28.137', pr: 52, title: 'Exit at a fixed target', pts: ['Signals: "Exit at" re-scores alerts at 1R, 1.5R, 2R, 3R or 1%, 2%, 3%', 'Same stop, no breakeven; read from Delta candles (crypto)', 'Edge & breakdowns: every target compared side by side'] },
       { v: '2026-10-27.136', pr: 50, title: 'Backtest rebuilt', pts: ['30m S/R zone alerts removed', 'Zone, fib and trendline alerts since Sep 1 re-run under today\'s rules', 'News-window fills left out'] },
