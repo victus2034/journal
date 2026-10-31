@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-31.141">
+  <meta name="app-version" content="2026-10-31.142">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1603,7 +1603,9 @@
           else parts.other += n;
         }
       } catch (e) { return null; }
-      return { total, parts, pct: total / STORAGE_LIMIT_CHARS * 100 };
+      // Alerts in IndexedDB do not count toward the ~5 MB localStorage limit.
+      const idbAlerts = parts.alerts ? 0 : signalsBytes;
+      return { total, parts, idbAlerts, pct: total / STORAGE_LIMIT_CHARS * 100 };
     }
     function renderStorageUsage() {
       const u = storageUsage();
@@ -1611,8 +1613,9 @@
       const warn = document.getElementById("storageWarn");
       if (!u) { if (line) line.innerText = ""; if (warn) warn.classList.add("hidden"); return; }
       const mb = n => (n / 1e6).toFixed(2);
-      const split = "journal " + mb(u.parts.journal) + ", alerts " + mb(u.parts.alerts) + ", BTC hourly cache " + mb(u.parts.btc) + ", other " + mb(u.parts.other);
-      if (line) line.innerText = "Browser storage used: " + mb(u.total) + " of about " + mb(STORAGE_LIMIT_CHARS) + " MB (" + Math.round(u.pct) + "%): " + split + ".";
+      const split = "journal " + mb(u.parts.journal) + (u.parts.alerts ? ", alerts " + mb(u.parts.alerts) : "") + ", BTC hourly cache " + mb(u.parts.btc) + ", other " + mb(u.parts.other);
+      if (line) line.innerText = "Browser storage used: " + mb(u.total) + " of about " + mb(STORAGE_LIMIT_CHARS) + " MB (" + Math.round(u.pct) + "%): " + split + "."
+        + (u.parts.alerts ? "" : " Alerts (" + mb(u.idbAlerts) + " MB) are kept in a separate, much larger store and do not count here.");
       if (!warn) return;
       // Once a save has actually failed, the red alert above says so; one banner is enough.
       if (u.pct < STORAGE_WARN_PCT || storageBroken) { warn.classList.add("hidden"); return; }
@@ -1853,20 +1856,110 @@
       return s;
     }
 
-    let savedSignalsRef = null, signalsStoreBroken = false;
-    function writeSignals() {
-      // Only rewritten when the list itself was replaced (every change to the
-      // signals builds a new array), not on every save.
-      if (state.signals === savedSignalsRef) return;
-      savedSignalsRef = state.signals;
+    // Alerts live in IndexedDB, not localStorage. localStorage holds about 5 MB
+    // for the whole site, and the scanner history alone reached that, which put
+    // trade saves at risk. IndexedDB gives a site hundreds of MB. localStorage is
+    // only the fallback for a browser without IndexedDB.
+    const SIG_DB = "tapeAndTarget", SIG_STORE = "kv";
+    let savedSignalsRef = null, signalsStoreBroken = false, signalsBytes = 0;
+    let sigDbPromise = null, sigIdbOk = typeof indexedDB !== "undefined";
+    let sigChannel = null, signalsLoaded = false, signalsReady = Promise.resolve();
+    try { sigChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(SIG_KEY) : null; } catch (e) { sigChannel = null; }
+    function sigDb() {
+      if (!sigIdbOk) return Promise.reject(new Error("no IndexedDB"));
+      if (!sigDbPromise) sigDbPromise = new Promise((res, rej) => {
+        let req;
+        try { req = indexedDB.open(SIG_DB, 1); } catch (e) { rej(e); return; }
+        req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains(SIG_STORE)) req.result.createObjectStore(SIG_STORE); };
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error || new Error("IndexedDB open failed"));
+        req.onblocked = () => rej(new Error("IndexedDB blocked"));
+      }).catch(e => { sigIdbOk = false; throw e; });
+      return sigDbPromise;
+    }
+    function idbGet(key) {
+      return sigDb().then(db => new Promise((res, rej) => {
+        const r = db.transaction(SIG_STORE, "readonly").objectStore(SIG_STORE).get(key);
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      }));
+    }
+    function idbPut(key, val) {
+      return sigDb().then(db => new Promise((res, rej) => {
+        const tx = db.transaction(SIG_STORE, "readwrite");
+        tx.objectStore(SIG_STORE).put(val, key);
+        tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error("aborted"));
+      }));
+    }
+    function signalsToLocal(json) {
       try {
-        localStorage.setItem(SIG_KEY, JSON.stringify(state.signals || []));
+        localStorage.setItem(SIG_KEY, json);
         signalsStoreBroken = false;
       } catch (e) {
         if (!signalsStoreBroken) toast("Too many alerts to keep on this device. They stay until you close the page; load a shorter range to keep them.");
         signalsStoreBroken = true;
       }
     }
+    function writeSignals() {
+      // Only rewritten when the list itself was replaced (every change to the
+      // signals builds a new array), not on every save.
+      if (state.signals === savedSignalsRef) return;
+      // Nothing is written until the stored list has been read, or an early save
+      // would replace the alerts on this device with an empty list.
+      if (!signalsLoaded) return;
+      savedSignalsRef = state.signals;
+      const json = JSON.stringify(state.signals || []);
+      signalsBytes = json.length;
+      if (!sigIdbOk) { signalsToLocal(json); return; }
+      // Writes on one store complete in the order they start, so the last list wins.
+      idbPut(SIG_KEY, json).then(() => {
+        signalsStoreBroken = false;
+        // The old localStorage copy is dropped only once IndexedDB holds the list.
+        try { localStorage.removeItem(SIG_KEY); } catch (e) {}
+        if (sigChannel) try { sigChannel.postMessage("saved"); } catch (e) {}
+        checkStorageSoon();
+      }).catch(() => { sigIdbOk = false; signalsToLocal(json); });
+    }
+    // Startup: load() already took any alerts left in localStorage by an older
+    // build. This fills in the IndexedDB copy, then moves the old copy across.
+    function loadSignalsStore() {
+      const legacy = (() => { try { return localStorage.getItem(SIG_KEY); } catch (e) { return null; } })();
+      const startRef = state.signals;
+      const done = () => { signalsLoaded = true; };
+      if (!sigIdbOk) { done(); savedSignalsRef = legacy != null ? state.signals : null; return Promise.resolve(); }
+      return idbGet(SIG_KEY).then(stored => {
+        done();
+        let list = null;
+        try { const v = typeof stored === "string" ? JSON.parse(stored) : null; list = Array.isArray(v) ? v : null; } catch (e) { list = null; }
+        if (legacy != null) {
+          // Old build's copy wins (it is what this device showed last), and moves to IndexedDB.
+          savedSignalsRef = null; writeSignals();
+          return;
+        }
+        if (!list) { savedSignalsRef = state.signals; return; }
+        signalsBytes = stored.length;
+        if (state.signals !== startRef) { savedSignalsRef = null; writeSignals(); return; } // changed while loading: keep what is on screen
+        state.signals = sanitizeState({ accounts: state.accounts, trades: [], signals: list }).signals;
+        savedSignalsRef = state.signals;
+        renderAll();
+      }, () => {
+        // IndexedDB would not open: keep using localStorage as before.
+        done(); sigIdbOk = false;
+        savedSignalsRef = state.signals === startRef && legacy != null ? state.signals : null;
+        writeSignals();
+      }).then(() => renderStorageUsage());
+    }
+    // Another tab saved alerts: read them back.
+    if (sigChannel) sigChannel.onmessage = () => {
+      if (!state) return;
+      idbGet(SIG_KEY).then(stored => {
+        const v = typeof stored === "string" ? JSON.parse(stored) : null;
+        if (!Array.isArray(v)) return;
+        signalsBytes = stored.length;
+        state.signals = sanitizeState({ accounts: state.accounts, trades: [], signals: v }).signals;
+        savedSignalsRef = state.signals;
+        renderAll();
+      }).catch(() => {});
+    };
     function save() {
       const ok = write(JSON.stringify(Object.assign({}, state, { signals: [] })));
       writeSignals();
@@ -10721,6 +10814,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-10-31.142', pr: 57, title: 'Alerts no longer fill browser storage', pts: ['Alerts moved to a much larger store (IndexedDB); trades keep the 5 MB space to themselves', 'Existing alerts move over by themselves on first open; nothing to delete'] },
       { v: '2026-10-31.141', pr: 56, title: 'Trendline Type filter', pts: ['Signals: Type filter on Trendline alerts: Support TL, Resistance TL, SP TL BR, RS TL BR', 'Every number on the tab follows it', 'Break types fill in once the scanner sends break alerts'] },
       { v: '2026-10-31.140', pr: 55, title: 'Fib Level filter', pts: ['Signals: Level filter (All, L1-L4) next to Fees, fib alerts only', 'Every number on the tab follows it; other levels use the scanner\'s what-if', 'Fib levels section removed'] },
       { v: '2026-10-29.139', pr: 54, title: 'Exit at works for NSE', pts: ['NSE alerts re-scored at 1R-3R and 1-3% too', 'Prices read from Yahoo by a GitHub job twice a day (needs GitHub sync)'] },
@@ -10796,6 +10890,7 @@
       const pill = document.getElementById('appVerPill');
       if (pill && ver) { pill.innerHTML = 'v<span class="vp-date">' + ver.slice(5, 11) + '</span>' + ver.slice(11); pill.title = 'This copy: ' + ver + '. Tap to see what\'s new.'; }
       state = load();
+      signalsReady = loadSignalsStore();
       migrateConfidence();
       // A balance Delta gave a past session survives a reload too — reopening the
       // tab is not itself a disconnect, and the last known figure should hold
@@ -10818,7 +10913,7 @@
       applyThemeButton();
       renderStorageUsage();
       setTimeout(syncPull, 1500);
-      setTimeout(() => autoRefreshAlerts(), 2500);
+      setTimeout(() => signalsReady.then(() => autoRefreshAlerts()), 2500);
       setTimeout(cdxKick, 4000);
       // A key saved by the earlier in-page CoinDCX import (CoinDCX never answered
       // it) is not kept on this device; the key belongs in GitHub's secrets.
