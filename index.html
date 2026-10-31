@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-31.144">
+  <meta name="app-version" content="2026-11-01.145">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1063,6 +1063,14 @@
       <div id="anSecBar" class="tabs"></div>
 
           <section data-ansec="report" class="space-y-4 hidden">
+            <!-- Journal books (Delta, All books): the same report a broker book gets, from your trades -->
+            <div id="anRepHead" class="hidden space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex items-center gap-2 text-xs"><span class="text-slate-500">Pair</span><span id="anPairBar" class="fsel"></span></div>
+                <span id="anRepSub" class="text-slate-500 text-[11px]"></span>
+              </div>
+              <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="anRepStrip"></section>
+            </div>
             <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
               <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
                 <h3 class="font-bold text-white uppercase tracking-wider">Equity curve</h3>
@@ -4013,7 +4021,7 @@
     function anTlType() { return anKind() === "trendline" ? SIG_TL_TYPES.find(x => x.k && x.k === state.ui.anTlType) || null : null; }
     function anNoFee() { return state.ui.anNoFee === true; }
     function anResetFilters() {
-      Object.assign(state.ui, { anKind: "", anChan: "", anLvl: "", anTlType: "", anNoFee: false, anPeriod: "all", mktFilter: "" });
+      Object.assign(state.ui, { anKind: "", anChan: "", anLvl: "", anTlType: "", anNoFee: false, anPeriod: "all", mktFilter: "", anPair: "" });
       anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis();
     }
     function anSet(k, v) { state.ui[k] = v; anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis(); }
@@ -4126,7 +4134,7 @@
       document.getElementById('anTlWrap').classList.toggle('hidden', kind !== 'trendline');
       dd('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.k ? x.label : "All types"]), anTlType() ? anTlType().k : "", k => anSet('anTlType', k), "Support / resistance bounce, or a break of the line");
       dd('anMktBar', [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]], mktFilter(), v => setMktFilter('mktCalAnalysis', v), "BTC's daily candle on the trade's day");
-      const anyOn = !!(anKind() || state.ui.anChan || anNoFee() || mktFilter() || anPeriodMode() !== "all");
+      const anyOn = !!(anKind() || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anNoFee() || mktFilter() || anPeriodMode() !== "all");
       document.getElementById('anReset').classList.toggle('hidden', !anyOn);
       const r = anRangeFull(), hint = [];
       hint.push(r.from || r.to ? (r.from || "start") + " → " + (r.to || "now") : "All history");
@@ -4453,6 +4461,74 @@
         const g = gs.find(x => x.k === el.getAttribute('data-bdk'));
         el.onclick = () => { const st = g && g.ex; if (!st) return; Object.assign(state.ui, { anKind: st.kind || "none", anLvl: st.kind === "fib" ? st.level : "", anTlType: st.kind === "trendline" ? st.level : "", anChan: "" }); anVisible = AN_PAGE; save(); renderAnalysis(); };
       });
+    }
+    // ---- Report for a journal book (Delta, All books) ----
+    // The broker report's numbers, equity curve, pairs and days, worked out from
+    // the trades the filters pick. Journal trades are closed trades: Open shows
+    // Average R instead.
+    function anRepTrade(t) {
+      const o = t.orig || t;
+      const endD = t.rep ? t.date : (t.exitDate || t.date), endT = t.rep ? (t.time || "00:00") : (t.exitTime || t.time || "00:00");
+      let held = t.rep ? (t.held != null ? t.held : null) : null;
+      if (!t.rep && t.time && t.exitTime) {
+        const a = new Date(t.date + "T" + String(t.time).slice(0, 5)), b = new Date(endD + "T" + String(endT).slice(0, 5));
+        if (!isNaN(a) && !isNaN(b) && b >= a) held = (b - a) / 60000;
+      }
+      return { closed: true, net: t.pnl || 0, sym: t.symbol, day: dayOf(t), end: endD + "T" + String(endT).slice(0, 5), fees: t.fees || 0, funding: t.funding || 0, held, id: t.id, orig: o };
+    }
+    function renderAnJournalReport(rows, cur, pool) {
+      const strip = document.getElementById('anRepStrip');
+      if (!strip) return;
+      const pos = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
+      // Pair dropdown: every pair in view, with its count.
+      const cnt = {}; (pool || rows).forEach(x => { cnt[x.t.symbol] = (cnt[x.t.symbol] || 0) + 1; });
+      const pick = state.ui.anPair || "";
+      const host = document.getElementById('anPairBar');
+      const sel = document.createElement('select'); sel.id = 'anPairSel';
+      [["", "All pairs (" + (pool || rows).length + ")"]].concat(Object.keys(cnt).sort().map(k => [k, btSym(k) + " (" + cnt[k] + ")"])).concat(pick && !cnt[pick] ? [[pick, btSym(pick) + " (0)"]] : []).forEach(([k, l]) => { const o = document.createElement('option'); o.value = k; o.innerText = l; if (k === pick) o.selected = true; sel.appendChild(o); });
+      if (pick) sel.className = 'set';
+      sel.onchange = () => { state.ui.anPair = sel.value; anVisible = AN_PAGE; save(); renderAnalysis(); };
+      host.innerHTML = ''; host.appendChild(sel);
+      const ts = rows.map(x => anRepTrade(x.t)).sort((a, b) => a.end < b.end ? -1 : a.end > b.end ? 1 : 0);
+      const s = btStats(ts), rs = rows.map(x => x.r).filter(r => r != null && isFinite(r));
+      document.getElementById('anRepSub').innerText = ts.length ? ts.length + " closed trade" + (ts.length === 1 ? "" : "s") + " · " + fmtDay(ts[0].day) + " to " + fmtDay(ts[ts.length - 1].day) + (anNoFee() ? " · before fees" : "") : "";
+      const cards = [
+        { label: "Net P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, 0)}`, color: pos(s.net) },
+        { label: "Win rate", val: s.n ? pct(s.winRate) : "—", sub: `${s.wins} won · ${s.losses} lost`, color: s.winRate >= 50 ? "text-emerald-400" : "text-amber-400" },
+        { label: "Profit factor", val: s.pf === Infinity ? "∞" : s.n ? s.pf.toFixed(2) : "—", sub: "won ÷ lost", color: s.pf >= 1 ? "text-emerald-400" : "text-rose-400" },
+        { label: "Avg win / loss", val: `${signedMoney(s.avgWin, cur, 0)} / ${signedMoney(s.avgLoss, cur, 0)}`, sub: "per trade", color: "text-slate-200" },
+        { label: "Best / worst", val: `${signedMoney(s.best, cur, 0)} / ${signedMoney(s.worst, cur, 0)}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
+        { label: "Max drawdown", val: money(-s.maxDD, cur), sub: "from a running peak", color: s.maxDD > 0 ? "text-rose-400" : "text-slate-200" },
+        { label: "Fees / funding", val: `${money(s.fees, cur, 0)} / ${signedMoney(s.funding, cur, 0)}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
+        { label: "Average R", val: rs.length ? rfmt(avg(rs)) : "—", sub: rs.length ? `${rs.length} with a stop · total ${rfmt(sum(rs))}` : "no stop known", color: !rs.length ? "text-slate-200" : pos(avg(rs)) }
+      ];
+      strip.innerHTML = cards.map(c => `<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors" data-repcard="${esc(c.label)}">
+          <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${esc(c.label)}</span>
+          <div class="my-0.5"><div class="${c.val.length > 11 ? "text-sm" : "text-base sm:text-lg"} font-bold ${c.color} mono-num whitespace-nowrap">${esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${esc(c.sub)}</div></div></div>`).join("");
+      renderBacktestChart(s.closed, cur);
+      // By pair: click one to filter the tab to it.
+      const byPair = {};
+      s.closed.forEach(t => { (byPair[t.sym] = byPair[t.sym] || []).push(t); });
+      const pairRows = Object.keys(byPair).map(k => ({ k, st: btStats(byPair[k]) })).sort((a, b) => b.st.net - a.st.net);
+      const maxP = Math.max(1e-9, ...pairRows.map(p => Math.abs(p.st.net)));
+      const bar = (v, max) => `<div class="h-1.5 bg-[#131C2D] rounded-full mt-1 overflow-hidden"><div class="h-full ${v >= 0 ? "bg-emerald-500" : "bg-rose-500"} rounded-full" style="width:${(Math.abs(v) / max * 100).toFixed(0)}%"></div></div>`;
+      document.getElementById("btPairs").innerHTML = pairRows.length ? pairRows.map(p => `
+        <button type="button" data-anpair="${esc(p.k)}" class="block w-full text-left hover:bg-white/5 rounded px-1 py-0.5">
+          <div class="flex justify-between items-baseline gap-2">
+            <span class="text-slate-200 font-bold">${esc(btSym(p.k))} <span class="text-slate-500 text-[10px] font-normal">${p.st.n} trade${p.st.n === 1 ? "" : "s"} · ${pct(p.st.winRate)} won · fees ${money(p.st.fees, cur, 0)}</span></span>
+            <span class="font-bold ${pos(p.st.net)}">${signedMoney(p.st.net, cur)}</span>
+          </div>${bar(p.st.net, maxP)}</button>`).join("") : `<div class="text-slate-500 text-center py-4">No closed trades here.</div>`;
+      document.querySelectorAll("#btPairs [data-anpair]").forEach(b => { b.onclick = () => { const k = b.getAttribute("data-anpair"); state.ui.anPair = state.ui.anPair === k ? "" : k; anVisible = AN_PAGE; save(); renderAnalysis(); }; });
+      const byDay = {};
+      s.closed.forEach(t => { (byDay[t.day] = byDay[t.day] || []).push(t); });
+      const days = Object.keys(byDay).sort().reverse(), DAY_MAX = 31;
+      const maxD = Math.max(1e-9, ...days.map(d => Math.abs(sum(byDay[d].map(t => t.net)))));
+      document.getElementById("btDays").innerHTML = days.length ? days.slice(0, DAY_MAX).map(d => {
+        const net = sum(byDay[d].map(t => t.net)), n = byDay[d].length, w = byDay[d].filter(t => t.net > 0).length;
+        return `<div><div class="flex justify-between items-baseline gap-2">
+            <span class="text-slate-300">${esc(fmtDay(d))} ${d.slice(0, 4)} <span class="text-slate-500 text-[10px]">${n} trade${n === 1 ? "" : "s"} · ${w} won</span></span>
+            <span class="font-bold ${pos(net)}">${signedMoney(net, cur)}</span></div>${bar(net, maxD)}</div>`;
+      }).join("") + (days.length > DAY_MAX ? `<p class="text-slate-500 text-[11px]">and ${days.length - DAY_MAX} earlier days; pick a shorter period above to see them.</p>` : "") : `<div class="text-slate-500 text-center py-4">No closed trades here.</div>`;
     }
     function anStats(rs) {
       const n = rs.length, wins = rs.filter(x => x.t.pnl > 0).length, net = sum(rs.map(x => x.t.pnl));
@@ -4931,13 +5007,16 @@
       if (rqHost) rqHost.innerHTML = reviewQueueHtml(cur);
       const from = anRg.from;
       // The report's pair filter narrows this too.
-      const pairPick = rep && state.ui.btPair && state.ui.btPair !== "all" ? btSym(state.ui.btPair) : null;
+      const pairPick = rep ? (state.ui.btPair && state.ui.btPair !== "all" ? btSym(state.ui.btPair) : null) : (state.ui.anPair || null);
       // Balances need every trade, so the filters apply after the analysis.
       const all = analyzeTrades(anFeeView(statScoped()));
       const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassSetup(anTradeSetup(x.t, anMap))).sort((a, b) => -byWhen(a.t, b.t));
       const mfAn = mktFilter();
       const rows = mfAn ? inPeriod.filter(x => mktBiasOn(x.t.date, x.t.time) === mfAn) : inPeriod;
       rows.anchored = all.anchored;
+      // Pair list for the report's dropdown: every pair before the pair filter.
+      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassSetup(anTradeSetup(x.t, anMap)) && (!mfAn || mktBiasOn(x.t.date, x.t.time) === mfAn)));
+      document.getElementById('anRepHead').classList.toggle('hidden', !!rep);
 
       const assume = document.getElementById('anAssumptions');
       const book = isAll() ? (state.accounts.find(a => a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {}) : acct(selected());
@@ -4955,6 +5034,7 @@
         document.getElementById('anBuckets').innerHTML = '<div class="text-slate-500 text-center py-4">No trades in this period.</div>';
         document.getElementById('anFlags').innerHTML = '';
         ['anInsights', 'anBreakdown'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+        if (!rep) { ['anRepStrip', 'btPairs', 'btDays'].forEach(id => { document.getElementById(id).innerHTML = ''; }); if (btChartInstance) { btChartInstance.destroy(); btChartInstance = null; } }
         document.getElementById('anBody').innerHTML = '';
         document.getElementById('anMoreBar').innerHTML = '';
         document.getElementById('anFilterChip').innerHTML = '';
@@ -8985,7 +9065,8 @@
     function anSecList() {
       const n = reviewQueue().length;
       const l = AN_SECS.map(x => x.k === 'review' && n ? Object.assign({}, x, { label: x.label + ' (' + n + ')' }) : x);
-      return anReportBook() ? [{ k: "report", label: "Report" }].concat(l) : l;
+      // Every book opens on its report (lakky, 2026-11-01: Delta and All books get CoinDCX's view).
+      return [{ k: "report", label: "Report" }].concat(l);
     }
     function anCurSec() { const l = anSecList(); return l.some(x => x.k === state.ui.anSec) ? state.ui.anSec : l[0].k; }
     // One row of big tabs; only the chosen section is shown. Everything still renders,
@@ -11108,6 +11189,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-01.145', pr: 60, title: 'Report for every book', pts: ['Analysis: Delta and All books open on a Report like CoinDCX', 'Net P&L, win rate, profit factor, avg win / loss, best / worst, drawdown, fees, average R', 'Equity curve, by pair (click to filter) and by day; follows every filter'] },
       { v: '2026-10-31.144', pr: 59, title: 'Cleaner Analysis that tells you what works', pts: ['Filters in two rows: books, setup, period; then small dropdowns and Clear filters', 'New: What the numbers say (keep, cut, fix first, costliest mistake)', 'New: Results by setup, side, timeframe, time of day or weekday; click a setup to filter'] },
       { v: '2026-10-31.143', pr: 58, title: 'Signals filters in Analysis', pts: ['Analysis: alert type (Zone / Fib / Trendline / No alert), 1 Day to Custom dates, channel, Level, Type and Fees', 'Every number follows them, Results by broker too', 'New Net P&L, Win rate and Average R cards'] },
       { v: '2026-10-31.142', pr: 57, title: 'Alerts no longer fill browser storage', pts: ['Alerts moved to a much larger store (IndexedDB); trades keep the 5 MB space to themselves', 'Existing alerts move over by themselves on first open; nothing to delete'] },
