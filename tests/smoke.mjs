@@ -2737,6 +2737,45 @@ async function nsePathsRun() {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'NSE exit at: Yahoo job + journal re-score, by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('nse paths: ' + e); });
 }
+// Alerts live in IndexedDB. An older build's alerts in localStorage (4.2 MB,
+// enough to trip the 80% warning) move across on first open, leave
+// localStorage, clear the warning and survive a reload and a new alert.
+async function sigStoreRun(seed) {
+  const errs = [];
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  const sigs = [];
+  for (let i = 0; i < 2600; i++) sigs.push({ id: 'old' + i, date: '2026-10-' + String(1 + i % 28).padStart(2, '0'), time: '10:00', side: i % 2 ? 'long' : 'short', symbol: 'BTC', price: 60000 + i, stop: 59000, channel: 'fib', kind: 'fib', note: 'x'.repeat(1500) });
+  await ctx.addInitScript(([s, g]) => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); localStorage.setItem('tapeAndTarget.signals', g); sessionStorage.setItem('seeded', '1'); } }, [JSON.stringify(seed), JSON.stringify(sigs)]);
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  page.on('dialog', d => d.dismiss());
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForTimeout(3500);
+  const idbCount = () => page.evaluate(() => idbGet(SIG_KEY).then(v => JSON.parse(v || '[]').length));
+  const a = await page.evaluate(() => ({ n: state.signals.length, ls: localStorage.getItem(SIG_KEY), warn: !document.getElementById('storageWarn').classList.contains('hidden'), line: document.getElementById('storageUsage').innerText, trades: state.trades.length }));
+  if (a.n !== sigs.length) errs.push('expected ' + sigs.length + ' alerts after migration, found ' + a.n);
+  if (a.ls !== null) errs.push('old localStorage alerts copy should be removed after the move');
+  if (a.warn) errs.push('storage warning should clear once alerts are in IndexedDB');
+  if (!/separate, much larger store/.test(a.line)) errs.push('storage line should say alerts are kept separately: ' + a.line);
+  if (a.trades !== seed.trades.length) errs.push('trades changed during the move: ' + a.trades);
+  if (await idbCount() !== sigs.length) errs.push('IndexedDB should hold every alert');
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForTimeout(1500);
+  const b = await page.evaluate(() => state.signals.length);
+  if (b !== sigs.length) errs.push('after reload expected ' + sigs.length + ' alerts, found ' + b);
+  await page.evaluate(() => { state.signals = state.signals.concat([{ id: 'new1', date: '2026-10-31', time: '11:00', side: 'long', symbol: 'ETH', price: 3000, stop: 2950, channel: 'fib', kind: 'fib' }]); save(); });
+  await page.waitForTimeout(800);
+  if (await idbCount() !== sigs.length + 1) errs.push('a new alert should be saved to IndexedDB');
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForTimeout(1500);
+  const c = await page.evaluate(() => ({ n: state.signals.length, has: state.signals.some(g => g.id === 'new1'), ls: localStorage.getItem(SIG_KEY) }));
+  if (c.n !== sigs.length + 1 || !c.has) errs.push('new alert lost after reload: ' + JSON.stringify({ n: c.n, has: c.has }));
+  if (c.ls !== null) errs.push('alerts were written back to localStorage');
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'alerts stored in IndexedDB');
+  errs.forEach(e => { console.log('     ' + e); failures.push('alert store: ' + e); });
+}
 function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
 
 const data = fixture();
@@ -2745,6 +2784,7 @@ for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', {
   await run(name + ', sample journal', vp, data);
 }
 await run('desktop, storage nearly full', { width: 1366, height: 900 }, data, 4300000);
+await sigStoreRun(data);
 await currencyRun(data);
 await backtestRun(data);
 await coindcxRun(data);
