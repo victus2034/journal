@@ -1909,6 +1909,17 @@ async function fibTlRun(seed) {
     check(wi.L4.length === 1 && Math.abs(wi.L4[0].r - l4r) < 1e-3 && wi.L4[0].f === true, 'L4 = what-if result: ' + JSON.stringify(wi.L4));
     check(wi.again, 'same copy on every redraw');
     check(wi.zone === 2, 'Level ignored outside Fib alerts: ' + wi.zone);
+    // Trendline Type: support = lower line (0), resistance = upper line (1); the line
+    // comes from the key, or the side when an old key has none.
+    const tt = await page.evaluate(() => {
+      const mk = (id, line, side) => ({ signal: { id, kind: 'trendline', key: line == null ? 'tl|X' : 'tl|BTCUSD|4h|' + line + '|1|2@' + id, side, entry: 100, stop: 99 }, trade: null });
+      const pairs = [mk('s1', 0, 'long'), mk('r1', 1, 'short'), mk('s2', 0, 'long'), mk('old', null, 'short'), mk('sb', 0, 'short'), mk('rb', 1, 'long')];
+      const ids = k => { state.ui.sigKind = 'trendline'; state.ui.sigTlType = k; return sigLvlPairs(pairs).map(p => p.signal.id).join(); };
+      const out = { all: ids(''), sup: ids('support'), res: ids('resistance'), spbr: ids('spbr'), rsbr: ids('rsbr') };
+      state.ui.sigKind = 'fib'; out.fib = sigLvlPairs(pairs).length; state.ui.sigTlType = '';
+      return out;
+    });
+    check(tt.all === 's1,r1,s2,old,sb,rb' && tt.sup === 's1,s2' && tt.res === 'r1,old' && tt.spbr === 'sb' && tt.rsbr === 'rb' && tt.fib === 6, 'trendline type filter: ' + JSON.stringify(tt));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }

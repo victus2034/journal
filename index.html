@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-31.140">
+  <meta name="app-version" content="2026-10-31.141">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -597,6 +597,7 @@
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Exit at</span><div id="sigTgtBar"></div></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Fees</span><div id="sigFeeBar"></div></div>
         <div id="sigLvlWrap" class="flex items-center gap-2"><span class="text-xs text-slate-500">Level</span><div id="sigLvlBar"></div></div>
+        <div id="sigTlWrap" class="flex items-center gap-2"><span class="text-xs text-slate-500">Type</span><div id="sigTlBar"></div></div>
         <span id="sigPeriodHint" class="text-xs text-slate-500 ml-auto"></span>
       </div>
 
@@ -3577,6 +3578,7 @@
       renderSigCalendar(state.ui.sigChan ? allPairs.filter(pr => chanKey(pr.signal) === state.ui.sigChan) : allPairs, range);
       if (hint && mktFilter()) hint.innerText += ` · BTC ${MKT_LABEL[mktFilter()].toLowerCase()} days only`;
       if (hint && sigLvl()) hint.innerText += ` · entered at ${sigLvl()}`;
+      if (hint && sigTlType()) hint.innerText += ` · ${sigTlType().label} only`;
 
       // --- signals scoped to the period, matched against trades ---
       let pairs = allPairs;
@@ -3617,6 +3619,7 @@
       renderSigTgtBar();
       renderSigFeeBar();
       renderSigLvlBar(kind);
+      renderSigTlBar(kind);
       renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
       if (mfSig) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig);
 
@@ -7664,7 +7667,38 @@
       if (!m[k] || m[k].ck !== ck) m[k] = { ck, sig: Object.assign({}, sig, { entry: w.entry, filled: w.filled, outcome: w.outcome === "not reached" ? "" : w.outcome, resultR: w.resultR, hasReportR: true, lvlWhatIf: k }) };
       return m[k].sig;
     }
+    // Type (trendline alerts only): the lower line's support alerts (longs) or the
+    // upper line's resistance alerts (shorts), and the breaks: a short through the
+    // lower line (SP TL BR) or a long through the upper line (RS TL BR). The scanner
+    // does not send break alerts yet (2026-10-31); they show here once it does.
+    const SIG_TL_TYPES = [{ k: "", label: "All" }, { k: "support", label: "Support TL", line: 0, side: "long" }, { k: "resistance", label: "Resistance TL", line: 1, side: "short" },
+      { k: "spbr", label: "SP TL BR", line: 0, side: "short" }, { k: "rsbr", label: "RS TL BR", line: 1, side: "long" }];
+    function sigTlType() { return sigKind() === 'trendline' ? SIG_TL_TYPES.find(x => x.k && x.k === state.ui.sigTlType) || null : null; }
+    function setSigTlType(k) { state.ui.sigTlType = k; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
+    function renderSigTlBar(kind) {
+      const wrap = document.getElementById('sigTlWrap'), bar = document.getElementById('sigTlBar');
+      if (!wrap || !bar) return;
+      wrap.classList.toggle('hidden', kind !== 'trendline');
+      const cur = sigTlType() ? sigTlType().k : "";
+      bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+      bar.title = "Support TL: longs at the lower line. Resistance TL: shorts at the upper line. SP TL BR: shorts on a break of the lower line. RS TL BR: longs on a break of the upper line (once the scanner sends breaks).";
+      bar.innerHTML = '';
+      SIG_TL_TYPES.forEach(x => {
+        const b = document.createElement('button'); b.type = 'button';
+        b.dataset.tltype = x.k;
+        b.className = 'px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
+        b.innerText = x.label;
+        b.onclick = () => setSigTlType(x.k);
+        bar.appendChild(b);
+      });
+    }
+    function sigTlLine(sig) {
+      const l = parseInt(String(sig.key || "").split("|")[3], 10);
+      return l === 0 || l === 1 ? l : sig.side === "short" ? 1 : 0;
+    }
     function sigLvlPairs(pairs) {
+      const tt = sigTlType();
+      if (tt) return pairs.filter(pr => pr.signal.kind === "trendline" && sigTlLine(pr.signal) === tt.line && (pr.signal.side === "short" ? "short" : "long") === tt.side);
       const k = sigLvl();
       if (!k) return pairs;
       return pairs.map(pr => { const s = sigAtLevel(pr.signal, k); return !s ? null : s === pr.signal ? pr : Object.assign({}, pr, { signal: s }); }).filter(Boolean);
@@ -10687,6 +10721,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-10-31.141', pr: 56, title: 'Trendline Type filter', pts: ['Signals: Type filter on Trendline alerts: Support TL, Resistance TL, SP TL BR, RS TL BR', 'Every number on the tab follows it', 'Break types fill in once the scanner sends break alerts'] },
       { v: '2026-10-31.140', pr: 55, title: 'Fib Level filter', pts: ['Signals: Level filter (All, L1-L4) next to Fees, fib alerts only', 'Every number on the tab follows it; other levels use the scanner\'s what-if', 'Fib levels section removed'] },
       { v: '2026-10-29.139', pr: 54, title: 'Exit at works for NSE', pts: ['NSE alerts re-scored at 1R-3R and 1-3% too', 'Prices read from Yahoo by a GitHub job twice a day (needs GitHub sync)'] },
       { v: '2026-10-29.138', pr: 53, title: 'Results with or without fees', pts: ['Signals: Fees With / Without switch', 'Headline numbers, Exit targets compared and every breakdown follow it', 'Fee = 0.08% round trip (NSE 0.11%); stop slippage always counts'] },
