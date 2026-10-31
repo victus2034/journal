@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-31.143">
+  <meta name="app-version" content="2026-10-31.144">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -215,6 +215,22 @@
     .seg button:hover{color:var(--txt)}
     .seg button.on{background:var(--surface);color:var(--txt);box-shadow:0 0 0 1px var(--line2)}
     .seg .cnt{margin-left:.3rem;color:var(--dim);font-size:11.5px}
+    /* Analysis: second filter row, small labelled dropdowns */
+    .fsel{display:inline-flex;align-items:center;gap:.45rem;font-size:12px;color:var(--dim)}
+    .fsel select{background:var(--inset);border:1px solid var(--line);border-radius:8px;padding:.32rem .55rem;color:var(--txt);font-size:12.5px;cursor:pointer}
+    .fsel select.set{border-color:color-mix(in srgb,var(--acc) 55%,transparent);color:var(--acc)}
+    .an-sub{margin-top:-.25rem}
+    .fsel.hidden{display:none}
+    @media (min-width:1024px){.lg\:grid-cols-6{grid-template-columns:repeat(6,minmax(0,1fr))}.lg\:grid-cols-5{grid-template-columns:repeat(5,minmax(0,1fr))}.lg\:col-span-3{grid-column:span 3/span 3}}
+    /* Analysis insights */
+    .ins-row{display:grid;grid-template-columns:22px minmax(0,1fr);gap:.5rem;padding:.55rem .25rem;border-top:1px solid var(--line);font-size:13px;color:var(--txt)}
+    .ins-row:first-child{border-top:0}
+    .ins-row .ins-ic{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+    .ins-row .ins-why{color:var(--dim);font-size:12px;margin-top:1px}
+    .bd-row{display:grid;grid-template-columns:minmax(0,1.4fr) 52px 64px 70px minmax(0,1fr) 96px;align-items:center;gap:.6rem;padding:.42rem .4rem;border-top:1px solid var(--line);font-size:12.5px}
+    .bd-row.hd{border-top:0;color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em}
+    .bd-row .num{text-align:right;font-variant-numeric:tabular-nums}
+    @media (max-width:639px){.bd-row{grid-template-columns:minmax(0,1fr) 40px 52px 84px}.bd-row .bd-bar,.bd-row .bd-r{display:none}}
     .chip-on{background:color-mix(in srgb,var(--acc) 16%,transparent)!important;color:var(--acc)!important;border:1px solid color-mix(in srgb,var(--acc) 45%,transparent)!important;font-weight:600}
     /* What's new: the version pill opens the update log */
     #appVerPill{cursor:pointer}
@@ -985,6 +1001,7 @@
         <button type="button" onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX" class="px-3 py-1.5 rounded-lg border border-terminal-border text-xs text-slate-300 hover:text-white hover:border-amber-500">+ Upload broker report</button>
         <input type="file" id="btFileInput" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" class="hidden" onchange="handleBacktestFile(this)">
       </div>
+      <!-- Filters: what to look at (book, setup, period), then narrow it down -->
       <div class="filters text-xs">
         <div id="anBrokerBar" class="flex flex-wrap gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
         <div id="anKindBar" class="seg"></div>
@@ -996,14 +1013,14 @@
             <input type="date" id="anCustomTo" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
           </div>
         </div>
-        <div id="anChanBar" class="flex items-center"></div>
-        <div id="anMktRow" class="flex flex-wrap items-center gap-2">
-          <span class="text-xs text-slate-500">BTC day</span>
-          <div id="anMktBar"></div>
-        </div>
-        <div id="anFeeRow" class="flex items-center gap-2"><span class="text-xs text-slate-500">Fees</span><div id="anFeeBar"></div></div>
-        <div id="anLvlWrap" class="hidden flex items-center gap-2"><span class="text-xs text-slate-500">Level</span><div id="anLvlBar"></div></div>
-        <div id="anTlWrap" class="hidden flex items-center gap-2"><span class="text-xs text-slate-500">Type</span><div id="anTlBar"></div></div>
+      </div>
+      <div class="filters an-sub text-xs">
+        <label class="fsel"><span>Channel</span><span id="anChanBar"></span></label>
+        <label id="anLvlWrap" class="fsel hidden"><span>Level</span><span id="anLvlBar"></span></label>
+        <label id="anTlWrap" class="fsel hidden"><span>Type</span><span id="anTlBar"></span></label>
+        <label id="anMktRow" class="fsel"><span>BTC day</span><span id="anMktBar"></span></label>
+        <label id="anFeeRow" class="fsel"><span>Fees</span><span id="anFeeBar"></span></label>
+        <button type="button" id="anReset" class="hidden text-[12px] text-amber-300 hover:text-amber-200 underline" onclick="anResetFilters()">Clear filters</button>
         <span id="anFilterHint" class="text-xs text-slate-500 ml-auto"></span>
         <details id="anHowLive" class="text-[11px] text-slate-500">
           <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How this is worked out</summary>
@@ -1068,9 +1085,12 @@
           </section>
 
       <section data-ansec="overview" class="space-y-4">
-        <!-- One line per broker: journal books and uploaded broker reports -->
-        <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
-        <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="anStrip"></section>
+        <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 statrow" id="anStrip"></section>
+        <!-- What the numbers say: what to keep, what to drop, what to change -->
+        <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+          <div id="anInsights" class="card p-4 lg:col-span-2"></div>
+          <div id="anBreakdown" class="card p-4 lg:col-span-3"></div>
+        </div>
         <div id="anRules" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
           <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
@@ -1084,6 +1104,8 @@
             <div id="anFlags" class="space-y-2"></div>
           </div>
         </div>
+        <!-- One line per broker: journal books and uploaded broker reports -->
+        <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
       </section>
 
       <section data-ansec="size" class="space-y-4 hidden">
@@ -3990,6 +4012,10 @@
     function anLvl() { return anKind() === "fib" && FIB_LEVEL_KEYS.indexOf(state.ui.anLvl) !== -1 ? state.ui.anLvl : ""; }
     function anTlType() { return anKind() === "trendline" ? SIG_TL_TYPES.find(x => x.k && x.k === state.ui.anTlType) || null : null; }
     function anNoFee() { return state.ui.anNoFee === true; }
+    function anResetFilters() {
+      Object.assign(state.ui, { anKind: "", anChan: "", anLvl: "", anTlType: "", anNoFee: false, anPeriod: "all", mktFilter: "" });
+      anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis();
+    }
     function anSet(k, v) { state.ui[k] = v; anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis(); }
     function anAlertMap() {
       const pair = {}, out = {};
@@ -4073,31 +4099,35 @@
         const keys = SIG_CHANNELS.concat(FIBTL_CHANNELS).concat(Object.keys(cnt)).filter((k, i, a) => a.indexOf(k) === i && (cnt[k] || k === chan));
         const sel = document.createElement('select');
         sel.id = 'anChanSel';
-        sel.className = 'border text-xs px-2.5 py-1.5 rounded-lg focus:outline-none';
+        sel.className = '';
         sel.title = "The alert's market and timeframe. A trade with no alert behind it has no channel.";
         const opt = (label, k, c) => { const o = document.createElement('option'); o.value = k; o.innerText = label + ' (' + c + ')'; if (chan === k) o.selected = true; sel.appendChild(o); };
         opt('All channels', "", pool.length);
         keys.forEach(k => opt(chanLabel(k), k, cnt[k] || 0));
         sel.onchange = () => anSet('anChan', sel.value);
+        if (chan) sel.className += ' set';
         cb.innerHTML = ''; cb.appendChild(sel);
       }
-      const seg = (id, items, cur, onPick, attr) => {
-        const bar = document.getElementById(id);
-        if (!bar) return;
-        bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
-        bar.innerHTML = '';
-        items.forEach(([k, l]) => {
-          const b = document.createElement('button'); b.type = 'button'; b.dataset[attr] = k;
-          b.className = 'px-2 py-1 rounded-md font-semibold ' + (k === cur ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
-          b.innerText = l; b.onclick = () => onPick(k);
-          bar.appendChild(b);
-        });
+      // Small dropdowns: one line, highlighted when set.
+      const dd = (id, items, cur, onPick, title) => {
+        const host = document.getElementById(id);
+        if (!host) return;
+        const sel = document.createElement('select');
+        sel.id = id.replace(/Bar$/, 'Sel');
+        if (title) sel.title = title;
+        items.forEach(([k, l]) => { const o = document.createElement('option'); o.value = k; o.innerText = l; if (k === cur) o.selected = true; sel.appendChild(o); });
+        if (cur !== items[0][0]) sel.className = 'set';
+        sel.onchange = () => onPick(sel.value);
+        host.innerHTML = ''; host.appendChild(sel);
       };
-      seg('anFeeBar', [["with", "With"], ["without", "Without"]], anNoFee() ? "without" : "with", k => anSet('anNoFee', k === "without"), 'anfee');
+      dd('anFeeBar', [["with", "With fees"], ["without", "Without fees"]], anNoFee() ? "without" : "with", k => anSet('anNoFee', k === "without"), "Without: each trade's fees added back");
       document.getElementById('anLvlWrap').classList.toggle('hidden', kind !== 'fib');
-      seg('anLvlBar', [["", "All"]].concat(FIB_LEVEL_KEYS.map(k => [k, k])), anLvl(), k => anSet('anLvl', k), 'anlvl');
+      dd('anLvlBar', [["", "All levels"]].concat(FIB_LEVEL_KEYS.map(k => [k, k])), anLvl(), k => anSet('anLvl', k), "The fib level the trade was taken at");
       document.getElementById('anTlWrap').classList.toggle('hidden', kind !== 'trendline');
-      seg('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.label]), anTlType() ? anTlType().k : "", k => anSet('anTlType', k), 'antl');
+      dd('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.k ? x.label : "All types"]), anTlType() ? anTlType().k : "", k => anSet('anTlType', k), "Support / resistance bounce, or a break of the line");
+      dd('anMktBar', [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]], mktFilter(), v => setMktFilter('mktCalAnalysis', v), "BTC's daily candle on the trade's day");
+      const anyOn = !!(anKind() || state.ui.anChan || anNoFee() || mktFilter() || anPeriodMode() !== "all");
+      document.getElementById('anReset').classList.toggle('hidden', !anyOn);
       const r = anRangeFull(), hint = [];
       hint.push(r.from || r.to ? (r.from || "start") + " → " + (r.to || "now") : "All history");
       if (state.ui.anChan) hint.push(chanLabel(state.ui.anChan));
@@ -4337,6 +4367,92 @@
           })() : ""}
         </table></div>`;
       host.querySelectorAll("tr[data-anbroker]").forEach(tr => { tr.onclick = () => anBrokerPick(tr.getAttribute("data-anbroker")); });
+    }
+    // ---- Overview insights (lakky, 2026-10-31: "make it add value") ----
+    // Your trades grouped a few ways; the best and worst groups, the rule that
+    // costs most, the costliest mistake, and the win / loss size, as short lines.
+    const AN_BD_DIMS = [{ k: "setup", label: "Setup" }, { k: "side", label: "Side" }, { k: "tf", label: "Timeframe" }, { k: "hour", label: "Time of day" }, { k: "dow", label: "Weekday" }];
+    function anSetupLabel(st) {
+      if (!st || !st.kind) return "No alert";
+      if (st.kind === "fib") return "Fib" + (st.level ? " " + st.level : "");
+      if (st.kind === "trendline") { const t = SIG_TL_TYPES.find(x => x.k && x.k === st.level); return t ? t.label : "Trendline"; }
+      return "Zone";
+    }
+    function anGroupKey(x, dim) {
+      if (dim === "setup") return anSetupLabel(x.s);
+      if (dim === "side") return tradeSide(x.t) === "short" ? "Short" : "Long";
+      if (dim === "tf") { const c = x.s && x.s.chan; return c ? chanLabel(c).replace(/^(CRYPTO|NSE) /, "") : "No alert"; }
+      if (dim === "hour") { const h = parseInt(String(x.t.time || "").slice(0, 2), 10); if (!isFinite(h)) return "No time"; const b = Math.floor(h / 4) * 4; return String(b).padStart(2, "0") + ":00-" + String(b + 4).padStart(2, "0") + ":00"; }
+      if (dim === "dow") { const d = parseDay(x.t.date); return isNaN(d) ? "?" : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]; }
+      return "";
+    }
+    function anGroups(rows, dim) {
+      const m = {};
+      rows.forEach(x => { const k = anGroupKey(x, dim); (m[k] = m[k] || []).push(x); });
+      return Object.keys(m).map(k => {
+        const g = m[k], st = anStats(g), rs = g.map(x => x.r).filter(r => r != null && isFinite(r));
+        return { k, g, n: g.length, net: st.net, win: st.winRate, avgR: rs.length ? avg(rs) : null, ex: g[0].s };
+      }).sort((a, b) => b.net - a.net);
+    }
+    function renderAnInsights(rows, cur) {
+      const host = document.getElementById('anInsights');
+      if (!host) return;
+      const out = [];
+      const say = (tone, head, why) => out.push({ tone, head, why });
+      const MIN = 3;
+      const grp = [];
+      ["setup", "side", "tf", "hour"].forEach(d => anGroups(rows, d).forEach(g => { if (g.n >= MIN) grp.push(Object.assign({ dim: d }, g)); }));
+      const name = g => (g.dim === "hour" ? "Trades at " : g.dim === "tf" && g.k !== "No alert" ? g.k + " " : "") + g.k + (g.dim === "side" ? " trades" : g.dim === "tf" && g.k !== "No alert" ? " alerts" : "");
+      // Setups first (what lakky trades by), then the strongest other pattern.
+      const line = g => signedMoney(g.net, cur) + " on " + g.n + " trades · " + pct(g.win) + " won" + (g.avgR != null ? " · " + rfmt(g.avgR) + " a trade" : "");
+      const pick = (list, up) => list.filter(g => up ? g.net > 0 : g.net < 0).sort((a, b) => up ? b.net - a.net : a.net - b.net)[0];
+      const setups = grp.filter(g => g.dim === "setup"), others = grp.filter(g => g.dim !== "setup");
+      const best = pick(setups, true), worst = pick(setups, false);
+      if (best) say("good", "Keep: " + name(best), line(best));
+      if (worst) say("bad", "Cut or size down: " + name(worst), line(worst));
+      const ob = pick(others, true), ow = pick(others, false);
+      const other = ob && ow ? (Math.abs(ow.net) > ob.net ? ow : ob) : ob || ow;
+      if (other) say(other.net > 0 ? "good" : "bad", (other.net > 0 ? "Works for you: " : "Costs you: ") + name(other), line(other));
+      // The rule whose breaks cost the most against keeping it.
+      let rule = null;
+      AN_RULES.forEach(r => {
+        const app = rows.filter(x => !r.applies || r.applies(x)), bad = app.filter(r.broke), ok = app.filter(x => !r.broke(x));
+        if (!bad.length) return;
+        const sb = anStats(bad), so = anStats(ok), cost = ok.length ? (so.avg - sb.avg) * bad.length : -sb.net;
+        if (cost > 0 && (!rule || cost > rule.cost)) rule = { r, bad, app, sb, so, ok, cost };
+      });
+      const FIX = { alert: "trade only from alerts", size: "keep size within your limit", stop: "keep each loss inside the plan", calm: "no revenge or size-up after a loss", limits: "stay inside your daily limits" };
+      if (rule) say("warn", "Fix first: " + (FIX[rule.r.k] || rule.r.label.toLowerCase()), "Broken on " + rule.bad.length + " of " + rule.app.length + " trades: " + signedMoney(rule.sb.avg, cur) + " a trade" + (rule.ok.length ? " vs " + signedMoney(rule.so.avg, cur) + " when kept" : "") + ".");
+      const flag = Object.keys(AN_FLAGS).filter(k => !AN_FLAGS[k].note).map(k => { const g = rows.filter(x => x.flags.indexOf(k) !== -1); return { k, g, st: anStats(g) }; }).filter(f => f.g.length && f.st.net < 0).sort((a, b) => a.st.net - b.st.net)[0];
+      if (flag) say("bad", "Costliest mistake: " + AN_FLAGS[flag.k].label.toLowerCase(), flag.g.length + " trade" + (flag.g.length === 1 ? "" : "s") + ", " + signedMoney(flag.st.net, cur) + ".");
+      const wins = rows.filter(x => x.t.pnl > 0), losses = rows.filter(x => x.t.pnl < 0);
+      if (wins.length && losses.length) {
+        const aw = avg(wins.map(x => x.t.pnl)), al = -avg(losses.map(x => x.t.pnl)), ratio = al > 0 ? aw / al : null;
+        if (ratio != null) say(ratio >= 1 ? "good" : "warn", ratio >= 1 ? "Winners bigger than losers" : "Losers bigger than winners", "Average win " + money(aw, cur) + " vs average loss " + money(al, cur) + " (" + ratio.toFixed(2) + "×)." + (ratio < 1 ? " You need over " + pct(100 / (1 + ratio)) + " wins to break even." : ""));
+      }
+      const fees = sum(rows.map(x => x.t.fees || 0)), gw = sum(wins.map(x => x.t.pnl));
+      if (!anNoFee() && fees > 0 && gw > 0 && fees / (gw + fees) > 0.15) say("warn", "Fees take " + pct(fees / (gw + fees) * 100) + " of your gross wins", money(fees, cur) + " in fees. Fewer, larger-R trades keep more.");
+      const tone = { good: ["✓", "background:rgba(16,185,129,.14);color:#34d399"], bad: ["✕", "background:rgba(244,63,94,.14);color:#fb7185"], warn: ["!", "background:rgba(245,165,36,.16);color:#f5a524"] };
+      host.innerHTML = '<div class="flex items-baseline justify-between gap-2 mb-2"><h3 class="text-sm font-semibold text-white">What the numbers say</h3><span class="text-[11px] text-slate-500">groups of ' + MIN + '+ trades</span></div>'
+        + (out.length ? out.slice(0, 6).map(i => '<div class="ins-row" data-ins="' + i.tone + '"><span class="ins-ic" style="' + tone[i.tone][1] + '">' + tone[i.tone][0] + '</span><div><div class="font-semibold">' + esc(i.head) + '</div><div class="ins-why">' + esc(i.why) + '</div></div></div>').join('')
+          : '<p class="text-slate-500 text-[12px]">Not enough trades here to say much yet. Widen the period or clear a filter.</p>');
+    }
+    function renderAnBreakdown(rows, cur) {
+      const host = document.getElementById('anBreakdown');
+      if (!host) return;
+      const dim = AN_BD_DIMS.some(d => d.k === state.ui.anBdDim) ? state.ui.anBdDim : "setup";
+      const gs = anGroups(rows, dim), maxAbs = Math.max(1e-9, ...gs.map(g => Math.abs(g.net)));
+      host.innerHTML = '<div class="flex flex-wrap items-center justify-between gap-2 mb-2"><h3 class="text-sm font-semibold text-white">Results by</h3><div class="seg" id="anBdDims">'
+        + AN_BD_DIMS.map(d => '<button type="button" data-bd="' + d.k + '" class="' + (d.k === dim ? 'on' : '') + '">' + esc(d.label) + '</button>').join('') + '</div></div>'
+        + '<div class="bd-row hd"><span>' + esc(AN_BD_DIMS.find(d => d.k === dim).label) + '</span><span class="num">Trades</span><span class="num">Won</span><span class="num bd-r">Avg R</span><span class="bd-bar"></span><span class="num">Net</span></div>'
+        + gs.map(g => '<div class="bd-row' + (dim === "setup" ? ' cursor-pointer hover:bg-white/5' : '') + '" data-bdk="' + esc(g.k) + '"><span class="truncate text-slate-200">' + esc(g.k) + '</span><span class="num">' + g.n + '</span><span class="num">' + pct(g.win) + '</span><span class="num bd-r ' + (g.avgR == null ? 'text-slate-500' : g.avgR >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.avgR == null ? '—' : rfmt(g.avgR)) + '</span>'
+          + '<span class="hbar bd-bar"><i style="width:' + (Math.abs(g.net) / maxAbs * 100).toFixed(0) + '%;background:' + (g.net >= 0 ? '#10b981' : '#f43f5e') + '"></i></span><span class="num font-semibold ' + (g.net >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + signedMoney(g.net, cur) + '</span></div>').join('')
+        + (dim === "setup" ? '<p class="text-[11px] text-slate-500 mt-2">Click a setup to filter the whole tab to it.</p>' : '');
+      host.querySelectorAll('[data-bd]').forEach(b => { b.onclick = () => { state.ui.anBdDim = b.getAttribute('data-bd'); save(); renderAnBreakdown(rows, cur); }; });
+      if (dim === "setup") host.querySelectorAll('[data-bdk]').forEach(el => {
+        const g = gs.find(x => x.k === el.getAttribute('data-bdk'));
+        el.onclick = () => { const st = g && g.ex; if (!st) return; Object.assign(state.ui, { anKind: st.kind || "none", anLvl: st.kind === "fib" ? st.level : "", anTlType: st.kind === "trendline" ? st.level : "", anChan: "" }); anVisible = AN_PAGE; save(); renderAnalysis(); };
+      });
     }
     function anStats(rs) {
       const n = rs.length, wins = rs.filter(x => x.t.pnl > 0).length, net = sum(rs.map(x => x.t.pnl));
@@ -4833,12 +4949,12 @@
       renderJournalArchive();
       renderMarketCalendar('mktCalAnalysis', { pairs: matchSignals().filter(pr => anInRange(pr.signal.date, anRg)), trades: inPeriod.map(x => x.t), cur, rerender: renderAnalysis, scope: from || anRg.to ? (from || 'start') + ' to ' + (anRg.to || 'now') : 'all history' });
       if (mfAn) assume.innerText += ` Showing trades on BTC ${MKT_LABEL[mfAn].toLowerCase()} days only.`;
-      renderMktFilterBar('anMktBar', 'mktCalAnalysis');
       if (!rows.length) {
         if (anChartInstance) { anChartInstance.destroy(); anChartInstance = null; }
         strip.innerHTML = '';
         document.getElementById('anBuckets').innerHTML = '<div class="text-slate-500 text-center py-4">No trades in this period.</div>';
         document.getElementById('anFlags').innerHTML = '';
+        ['anInsights', 'anBreakdown'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
         document.getElementById('anBody').innerHTML = '';
         document.getElementById('anMoreBar').innerHTML = '';
         document.getElementById('anFilterChip').innerHTML = '';
@@ -4859,11 +4975,9 @@
         { label: "Net P&L" + (anNoFee() ? " (no fees)" : ""), val: signedMoney(res.net, cur), sub: `${res.wins}W / ${res.losses}L` + (anNoFee() ? " · before fees" : " · fees " + money(sum(rows.map(x => x.t.fees || 0)), cur)), color: res.net >= 0 ? "text-emerald-400" : "text-rose-400", id: "net" },
         { label: "Win rate", val: pct(res.winRate), sub: `${rows.length} trade${rows.length === 1 ? "" : "s"}`, color: res.winRate >= 50 ? "text-emerald-400" : "text-amber-400", id: "win" },
         { label: "Average R", val: rsAn.length ? rfmt(avg(rsAn)) : "—", sub: rsAn.length ? `${rsAn.length} with a stop · total ${rfmt(sum(rsAn))}` : "no stop known", color: !rsAn.length ? "text-slate-200" : avg(rsAn) >= 0 ? "text-emerald-400" : "text-rose-400", id: "avgr" },
+        { label: "Profit factor", val: !res.n ? "—" : res.pf === Infinity ? "∞" : res.pf.toFixed(2), sub: "won ÷ lost · above 1 makes money", color: res.pf >= 1 ? "text-emerald-400" : "text-rose-400", id: "pf" },
         { label: "Trades checked", val: String(rows.length), sub: `${brokeOne.length} (${pct(brokeOne.length / rows.length * 100)}) broke a rule`, color: "text-slate-200" },
-        { label: "Oversized", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} of trades`, color: over.length ? "text-rose-400" : "text-emerald-400" },
-        { label: "Avg size", val: xs.length ? avg(xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-slate-200" },
-        { label: "Biggest", val: xs.length ? Math.max(...xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-amber-400" },
-        { label: "Loss over limit", val: String(rows.filter(x => x.flags.indexOf("lossOver") !== -1).length), sub: "lost more than max risk", color: "text-rose-400" }
+        { label: "Oversized", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} of trades · biggest ${xs.length ? Math.max(...xs).toFixed(1) + "×" : "—"}`, color: over.length ? "text-rose-400" : "text-emerald-400" }
       ];
       strip.innerHTML = '';
       cards.forEach(c => {
@@ -4876,6 +4990,9 @@
       });
 
       renderRuleScorecard(rows, cur);
+      rows.forEach(x => { x.s = anTradeSetup(x.t, anMap); });
+      renderAnInsights(rows, cur);
+      renderAnBreakdown(rows, cur);
       renderAnSizeChart(rows);
 
       // ---- size buckets ----
@@ -4883,6 +5000,7 @@
       const bHost = document.getElementById('anBuckets');
       bHost.innerHTML = '';
       const maxN = Math.max(1, ...BUCKETS.map(b => rows.filter(x => x.xBal != null && x.xBal >= b.lo && x.xBal < b.hi).length));
+      { const nLoss = rows.filter(x => x.flags.indexOf("lossOver") !== -1).length, d = document.createElement('div'); d.className = 'text-[11px] text-slate-400 pb-1'; d.innerText = `Average ${xs.length ? avg(xs).toFixed(1) + "×" : "—"} · biggest ${xs.length ? Math.max(...xs).toFixed(1) + "×" : "—"} · ${nLoss} lost more than max risk`; bHost.appendChild(d); }
       BUCKETS.forEach(b => {
         const g = rows.filter(x => x.xBal != null && x.xBal >= b.lo && x.xBal < b.hi), s = anStats(g);
         const row = document.createElement('div');
@@ -10990,6 +11108,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-10-31.144', pr: 59, title: 'Cleaner Analysis that tells you what works', pts: ['Filters in two rows: books, setup, period; then small dropdowns and Clear filters', 'New: What the numbers say (keep, cut, fix first, costliest mistake)', 'New: Results by setup, side, timeframe, time of day or weekday; click a setup to filter'] },
       { v: '2026-10-31.143', pr: 58, title: 'Signals filters in Analysis', pts: ['Analysis: alert type (Zone / Fib / Trendline / No alert), 1 Day to Custom dates, channel, Level, Type and Fees', 'Every number follows them, Results by broker too', 'New Net P&L, Win rate and Average R cards'] },
       { v: '2026-10-31.142', pr: 57, title: 'Alerts no longer fill browser storage', pts: ['Alerts moved to a much larger store (IndexedDB); trades keep the 5 MB space to themselves', 'Existing alerts move over by themselves on first open; nothing to delete'] },
       { v: '2026-10-31.141', pr: 56, title: 'Trendline Type filter', pts: ['Signals: Type filter on Trendline alerts: Support TL, Resistance TL, SP TL BR, RS TL BR', 'Every number on the tab follows it', 'Break types fill in once the scanner sends break alerts'] },
