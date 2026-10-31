@@ -2246,8 +2246,10 @@ async function analysisFiltersRun(seed) {
     const cust = await read({ anPeriod: 'custom', anCustom: { from: d, to: d } });
     const swap = await read({ anPeriod: 'custom', anCustom: { from: d, to: '2000-01-01' } });
     check(day1.cnt.all === 0, '1 day: ' + JSON.stringify(day1.cnt));
-    check(cust.cnt.all === 9 && cust.n === 9 && cust.hint.indexOf(d + ' → ' + d) === 0, 'custom range: ' + JSON.stringify([cust.cnt, cust.n, cust.hint]));
-    check(swap.cnt.all > 9, 'custom range given backwards still reads from 2000 to the day: ' + JSON.stringify(swap.cnt));
+    // The sample journal's own crypto trades can land on that day too (it depends on the clock).
+    const own = await page.evaluate(day => state.trades.filter(t => t.accountId === 'acc_cry' && /^tr\d/.test(t.id) && dayOf(t) === day).length, d);
+    check(cust.cnt.all === 9 + own && cust.n === 9 + own && cust.hint.indexOf(d + ' → ' + d) === 0, 'custom range: ' + JSON.stringify([cust.cnt, cust.n, cust.hint]));
+    check(swap.cnt.all > 9 + own, 'custom range given backwards still reads from 2000 to the day: ' + JSON.stringify(swap.cnt));
     // Clicking through the bar works too.
     await page.evaluate(() => { Object.assign(state.ui, { anKind: '', anPeriod: 'all' }); renderAnalysis(); });
     await page.click('#anKindBar button[data-ankind="fib"]');
@@ -2264,6 +2266,15 @@ async function analysisFiltersRun(seed) {
     await page.click('#anBreakdown [data-bdk="Support TL"]');
     const after = await page.evaluate(() => [state.ui.anKind, state.ui.anTlType, document.querySelector('#anStrip [data-ancard="win"] .mono-num').innerText]);
     check(after[0] === 'trendline' && after[1] === 'support', 'clicking a setup filters to it: ' + JSON.stringify(after));
+    // Delta / All books get the broker report's view: 8 numbers, equity, pairs, days.
+    // Support TL is a1 (+0.60 after a 0.10 fee) and z1 (+0.80), both on TLAUSD.
+    const rep = await page.evaluate(() => { state.ui.anSec = 'report'; renderAnalysis();
+      const card = l => (document.querySelector('#anRepStrip [data-repcard="' + l + '"] .mono-num') || {}).innerText;
+      return { head: !document.getElementById('anRepHead').classList.contains('hidden'), net: card('Net P&L'), win: card('Win rate'), fees: card('Fees / funding'), bw: card('Best / worst'), n: document.querySelectorAll('#anRepStrip > div').length,
+        pairs: [...document.querySelectorAll('#btPairs [data-anpair]')].map(b => b.getAttribute('data-anpair')), days: document.querySelectorAll('#btDays > div').length, sel: [...document.querySelectorAll('#anPairSel option')].map(o => o.value) }; });
+    check(rep.head && rep.n === 8 && /\+\$1\.40/.test(rep.net) && rep.win === '100%' && /\$0/.test(rep.fees) && /\+\$1 \/ \+\$1/.test(rep.bw) && rep.pairs.join() === 'TLAUSD' && rep.days === 1 && rep.sel.indexOf('TLAUSD') !== -1, 'journal report: ' + JSON.stringify(rep));
+    const onePair = await page.evaluate(() => { state.ui.anKind = ''; state.ui.anTlType = ''; state.ui.anPair = 'ZZUSD'; renderAnalysis(); const n = +[...document.querySelectorAll('#anStrip > div')].find(x => /Trades checked/i.test(x.innerText)).querySelector('.mono-num').innerText; state.ui.anPair = ''; return n; });
+    check(onePair === 1, 'pair filter on a journal book: ' + onePair);
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
@@ -2496,7 +2507,7 @@ async function layoutRun(seed) {
     });
     check(JSON.stringify(v.order) === '[0,0,1,2,3]' && v.today === 'goal|today', 'dashboard order (goal + today, month, numbers, sections): ' + JSON.stringify([v.order, v.today]));
     check(v.dash === "Equity & calendar|Day's trades|Week & grade|Time & habits", 'dashboard sections: ' + v.dash);
-    check(/^Overview\|Review(\s*\d+)?\|Position size\|Trades\|Market days\|AI review$/.test(v.anSecs), 'analysis sections: ' + v.anSecs);
+    check(/^Report\|Overview\|Review(\s*\d+)?\|Position size\|Trades\|Market days\|AI review$/.test(v.anSecs), 'analysis sections: ' + v.anSecs);
     check(v.bar === 'All books|Test NSE|Test Crypto' && v.lines.join(',') === 'Test 8,Test 8', 'empty book left out of Analysis: ' + JSON.stringify([v.bar, v.lines]));
     check(v.total[0] === 'Total' && v.total[1] === v.want.net && v.total[2] === v.want.n, 'results by broker total: ' + JSON.stringify([v.total, v.want]));
     check(v.brokersShown && !v.aiShown && v.aiOnly, 'AI review has its own section: ' + JSON.stringify([v.brokersShown, v.aiShown, v.aiOnly]));
@@ -2580,7 +2591,7 @@ async function cleanRun(seed) {
     });
     check(v.bar === '40%' && /bg-emerald-500/.test(v.barCls) && v.barTxt === '40% of $2.50' && v.pnl === '-$1.00', 'loss bar at 40%: ' + JSON.stringify([v.bar, v.barCls, v.barTxt, v.pnl]));
     check(v.bar2[0] === '80%' && /bg-amber-500/.test(v.bar2[1]), 'loss bar at 80% turns amber: ' + JSON.stringify(v.bar2));
-    check(/^\*Equity & calendar\|Day's trades\|Week & grade\|Time & habits$/.test(v.tabs) && /^Overview\|Review\(\d+\)\|Position size/.test(v.anTabs), 'dashboard and analysis tabs: ' + v.tabs + ' / ' + v.anTabs);
+    check(/^\*Equity & calendar\|Day's trades\|Week & grade\|Time & habits$/.test(v.tabs) && /^Report\|Overview\|Review\(\d+\)\|Position size/.test(v.anTabs), 'dashboard and analysis tabs: ' + v.tabs + ' / ' + v.anTabs);
     check(v.opts === 'All channels (3)|CRYPTO 4h (1)|CRYPTO 1D (2)' && v.chipsLeft === 0, 'channel dropdown: ' + JSON.stringify([v.opts, v.chipsLeft]));
     check(v.chan === 'CRYPTO 4H' && v.picked === 'CRYPTO 4H', 'channel picked from the dropdown: ' + JSON.stringify([v.chan, v.picked]));
     check(/^\*Zone alerts 3\|Fib alerts 0\|Trendline alerts 0$/.test(v.kind), 'scanner switch: ' + v.kind);
