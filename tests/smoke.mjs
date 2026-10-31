@@ -1445,6 +1445,9 @@ async function goalPlannerRun(seed) {
     await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
     const page = await ctx.newPage();
     page.on('pageerror', e => errs.push(vp.width + 'px page error: ' + (e.stack || e.message)));
+    // A goal needs trading days left: near a month's end there are none, so run
+    // as of the 20th at the latest.
+    { const d = new Date(); if (d.getDate() > 20) { d.setDate(20); await page.clock.setFixedTime(d); } }
     try {
       await page.goto(base, { waitUntil: 'load' });
       await page.waitForTimeout(300);
@@ -1870,38 +1873,42 @@ async function fibTlRun(seed) {
     const w = await page.evaluate(() => { const g = state.signals.find(s => s.key === 'w'); return g && g.resultR; });
     check(typeof w === 'number' && w > 1.9, '1W result never arrived: ' + w);
     // Fib levels: L1-L4 come back from the alert's key and entry (the scanner's own
-    // levels for this XAUT alert), and the Fib levels section counts by level.
+    // levels for this XAUT alert).
     const lv = await page.evaluate(() => {
-      const mk = (id, entry, sl, price, filled, outcome, resultR) => ({ id, kind: 'fib', key: 'fib|XAUTUSD|4h|1|1791374400|4215.9|2@' + id, side: 'long', entry, stop: sl, price, filled, outcome, resultR, date: '2026-10-12', time: '10:00', symbol: 'XAUTUSD' });
-      const a = mk('1', 4142.134, 4123.6925, 4170.83, true, '+2R', 1.9), b = mk('2', 4142.134, 4123.6925, 4150, true, 'SL', -1.05), c = mk('3', 4142.134, 4123.6925, 4160, false, '', null);
+      const a = { id: '1', kind: 'fib', key: 'fib|XAUTUSD|4h|1|1791374400|4215.9|2@1', side: 'long', entry: 4142.134, stop: 4123.6925, price: 4170.83, filled: true, outcome: '+2R', resultR: 1.9, date: '2026-10-12', time: '10:00', symbol: 'XAUTUSD' };
       const g = fibGeom(a);
-      const t = { id: 'tx', entry: 4127.4, direction: 'long', symbol: 'XAUTUSD', date: '2026-10-12', time: '11:00', exit: 4123.6925, qty: 1, stop: 4123.6925 };
-      renderFibLevels([{ signal: a, trade: null }, { signal: b, trade: t }, { signal: c, trade: null }]);
-      const row = k => (document.querySelector('[data-fiblevel="' + k + '"]') || {}).innerText || '';
-      return { lv: g && g.levels, entry: g && g.entryLevel, mine: [...document.querySelectorAll('[data-mylevel]')].map(e => e.dataset.mylevel), l3: row('L3'), l4: row('L4'), noKey: fibGeom({ kind: 'fib', key: 'a', entry: 1, stop: 0.9 }) };
+      return { lv: g && g.levels, entry: g && g.entryLevel, noKey: fibGeom({ kind: 'fib', key: 'a', entry: 1, stop: 0.9 }) };
     });
     const wantLv = { L1: 4170.2992, L2: 4155.546, L3: 4142.134, L4: 4127.3808 };
     Object.keys(wantLv).forEach(k => check(lv.lv && Math.abs(lv.lv[k] - wantLv[k]) < 1e-6, `fib ${k}: ${lv.lv && lv.lv[k]} want ${wantLv[k]}`));
     check(lv.entry === 'L3', 'zone 2 should enter at L3: ' + lv.entry);
-    check(/^L3/.test(lv.l3) && /2 of 3/.test(lv.l3) && /1W \/ 1L/.test(lv.l3) && /\+0\.85R/.test(lv.l3), 'L3 row: ' + JSON.stringify(lv.l3));
-    check(/1 of 3/.test(lv.l4), 'L4 reached only by the stopped alert: ' + JSON.stringify(lv.l4));
-    check(lv.mine.join() === 'L4', 'entry at 4127.4 is nearest L4: ' + lv.mine.join());
     check(lv.noKey === null, 'an alert without a fib key has no levels');
-    // What-ifs at L1 / L2 / L4 from the scanner: priced like the real result, shown on rows no alert entered at.
+    // What-ifs at L1 / L2 / L4 from the scanner, priced like the real result. The
+    // Level filter scores each alert at the picked level: its own result where it
+    // entered, the what-if elsewhere, and leaves out alerts with neither.
     const wi = await page.evaluate(() => {
       const rec = JSON.stringify({ id: 'fib|XAUTUSD|4h|1|1791374400|4215.9|2@1', kind: 'fib', market: 'crypto', tf: '4h', symbol: 'XAUTUSD', price: 4150, sent_ts: 1791806036, plan: { entry: 4142.134, sl: 4123.6925, side: 'long' } });
       const lvr = { 'fib|XAUTUSD|4h|1|1791374400|4215.9|2@1': { L1: { entry: 4170.2992, filled: true, resolved: true, outcome: 'SL', sl: true }, L2: { entry: 4155.546, outcome: 'not reached', filled: false, resolved: true }, L4: { entry: 4127.3808, filled: true, resolved: true, outcome: '2R', r1: true, r2: true } } };
       const g = parseFibTl(rec + '\n', '{}', JSON.stringify(lvr)).records[0];
-      renderFibLevels([{ signal: g, trade: null }]);
-      const row = k => (document.querySelector('[data-fiblevel="' + k + '"]') || {}).innerText || '';
-      return { w: g.fibWhatIf, l4: row('L4'), l2: row('L2'), l1: row('L1') };
+      g.filled = true; g.outcome = '+1R'; g.resultR = 0.9;
+      const l1 = { id: 'z1', kind: 'fib', key: 'fib|BTCUSD|4h|1|1791374400|100|1@z1', side: 'long', entry: 99, stop: 96, filled: true, outcome: 'SL', resultR: -1.05, date: '2026-10-12', time: '10:00', symbol: 'BTCUSD' };
+      const pairs = [{ signal: g, trade: null }, { signal: l1, trade: null }];
+      const at = k => { state.ui.sigKind = 'fib'; state.ui.sigLvl = k; return sigLvlPairs(pairs).map(p => ({ e: p.signal.entry, r: p.signal.resultR, f: p.signal.filled, wi: p.signal.lvlWhatIf || '', same: p.signal === g || p.signal === l1 })); };
+      const out = { w: g.fibWhatIf, all: at(''), L1: at('L1'), L2: at('L2'), L3: at('L3'), L4: at('L4'), again: sigLvlPairs(pairs)[0].signal === sigLvlPairs(pairs)[0].signal };
+      state.ui.sigKind = 'zone'; out.zone = sigLvlPairs(pairs).length; state.ui.sigLvl = '';
+      return out;
     });
     // L4: risk 3.6883 on 4127.38 = 0.08936%; 2R less 0.0826% / 0.08936% = 2 - 0.9243
-    check(wi.w && wi.w.L4 && Math.abs(wi.w.L4.resultR - (2 - 0.0826 / (Math.abs(4127.3808 - 4123.6925) / 4127.3808 * 100))) < 1e-3, 'L4 what-if R: ' + JSON.stringify(wi.w && wi.w.L4));
+    const l4r = 2 - 0.0826 / (Math.abs(4127.3808 - 4123.6925) / 4127.3808 * 100);
+    check(wi.w && wi.w.L4 && Math.abs(wi.w.L4.resultR - l4r) < 1e-3, 'L4 what-if R: ' + JSON.stringify(wi.w && wi.w.L4));
     check(wi.w && wi.w.L2 && wi.w.L2.outcome === 'not reached' && wi.w.L2.resultR === null, 'L2 not reached: ' + JSON.stringify(wi.w && wi.w.L2));
-    check(/what-if/.test(wi.l4) && /1W \/ 0L/.test(wi.l4), 'L4 row shows the what-if: ' + JSON.stringify(wi.l4));
-    check(/what-if/.test(wi.l1) && /0W \/ 1L/.test(wi.l1), 'L1 row shows the what-if: ' + JSON.stringify(wi.l1));
-    check(!/what-if/.test(wi.l2), 'L2 never reached shows no what-if: ' + JSON.stringify(wi.l2));
+    check(wi.all.length === 2 && wi.all.every(x => x.same), 'All levels keeps every alert as is: ' + JSON.stringify(wi.all));
+    check(wi.L3.length === 1 && wi.L3[0].same && wi.L3[0].r === 0.9, 'L3 = the alert that entered at L3: ' + JSON.stringify(wi.L3));
+    check(wi.L1.length === 2 && wi.L1[0].wi === 'L1' && wi.L1[0].r < 0 && Math.abs(wi.L1[0].e - 4170.2992) < 1e-6 && wi.L1[1].same, 'L1 = what-if + the L1 alert: ' + JSON.stringify(wi.L1));
+    check(wi.L2.length === 1 && wi.L2[0].f === false && wi.L2[0].wi === 'L2', 'L2 never reached = no fill: ' + JSON.stringify(wi.L2));
+    check(wi.L4.length === 1 && Math.abs(wi.L4[0].r - l4r) < 1e-3 && wi.L4[0].f === true, 'L4 = what-if result: ' + JSON.stringify(wi.L4));
+    check(wi.again, 'same copy on every redraw');
+    check(wi.zone === 2, 'Level ignored outside Fib alerts: ' + wi.zone);
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
