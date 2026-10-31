@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-10-31.142">
+  <meta name="app-version" content="2026-10-31.143">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -987,11 +987,24 @@
       </div>
       <div class="filters text-xs">
         <div id="anBrokerBar" class="flex flex-wrap gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
-        <div id="anPeriodBar" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
+        <div id="anKindBar" class="seg"></div>
+        <div class="flex flex-wrap items-center gap-2">
+          <div id="anPeriodBar" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
+          <div id="anCustomRange" class="hidden flex flex-wrap items-center gap-1.5">
+            <input type="date" id="anCustomFrom" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
+            <span class="text-slate-500 text-xs">to</span>
+            <input type="date" id="anCustomTo" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
+          </div>
+        </div>
+        <div id="anChanBar" class="flex items-center"></div>
         <div id="anMktRow" class="flex flex-wrap items-center gap-2">
           <span class="text-xs text-slate-500">BTC day</span>
           <div id="anMktBar"></div>
         </div>
+        <div id="anFeeRow" class="flex items-center gap-2"><span class="text-xs text-slate-500">Fees</span><div id="anFeeBar"></div></div>
+        <div id="anLvlWrap" class="hidden flex items-center gap-2"><span class="text-xs text-slate-500">Level</span><div id="anLvlBar"></div></div>
+        <div id="anTlWrap" class="hidden flex items-center gap-2"><span class="text-xs text-slate-500">Type</span><div id="anTlBar"></div></div>
+        <span id="anFilterHint" class="text-xs text-slate-500 ml-auto"></span>
         <details id="anHowLive" class="text-[11px] text-slate-500">
           <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How this is worked out</summary>
           <p class="leading-relaxed mt-1.5" id="anAssumptions"></p>
@@ -1057,7 +1070,7 @@
       <section data-ansec="overview" class="space-y-4">
         <!-- One line per broker: journal books and uploaded broker reports -->
         <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
-        <section class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 statrow" id="anStrip"></section>
+        <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="anStrip"></section>
         <div id="anRules" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 font-mono text-xs">
           <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
@@ -3936,14 +3949,163 @@
     const REVENGE_SIZE_X = 1.25;
     // Size-ups and quick re-entries after a loss: the "calm" rule, the no-revenge goal.
     function calmBroken(x) { return x.flags.indexOf("revenge") !== -1 || x.flags.indexOf("sizeUp") !== -1 || x.flags.indexOf("revengeSize") !== -1; }
-    const AN_PERIODS = [{ k: "7d", label: "7 Days" }, { k: "1m", label: "1 Month" }, { k: "all", label: "All" }];
+    // Same periods as the Signals tab (lakky, 2026-10-31).
+    const AN_PERIODS = [{ k: "1d", label: "1 Day" }, { k: "7d", label: "7 Days" }, { k: "1m", label: "1 Month" }, { k: "all", label: "All" }, { k: "custom", label: "Custom" }];
     const AN_PAGE = 10;
     let anVisible = AN_PAGE, anFilter = null;
-    function anRange() {
-      const m = (state.ui.anPeriod || "all"), d = parseDay(todayDay());
-      if (m === "7d") { d.setDate(d.getDate() - 6); return iso(d); }
-      if (m === "1m") { d.setMonth(d.getMonth() - 1); return iso(d); }
+    function anPeriodMode() { return AN_PERIODS.some(p => p.k === state.ui.anPeriod) ? state.ui.anPeriod : "all"; }
+    // First and last trading day in view ("" = open ended).
+    function anRangeFull() {
+      const m = anPeriodMode(), t = todayDay(), d = parseDay(t);
+      if (m === "1d") return { from: t, to: t };
+      if (m === "7d") { d.setDate(d.getDate() - 6); return { from: iso(d), to: "" }; }
+      if (m === "1m") { d.setMonth(d.getMonth() - 1); return { from: iso(d), to: "" }; }
+      if (m === "custom") {
+        const c = state.ui.anCustom || {}, ok = v => /^\d{4}-\d{2}-\d{2}$/.test(v || "") ? v : "";
+        let from = ok(c.from), to = ok(c.to);
+        if (from && to && from > to) { const x = from; from = to; to = x; }
+        return { from, to };
+      }
+      return { from: "", to: "" };
+    }
+    function anRange() { return anRangeFull().from; }
+    function anInRange(day, r) { r = r || anRangeFull(); return (!r.from || day >= r.from) && (!r.to || day <= r.to); }
+    function setAnPeriod(k) {
+      if (k === "custom") {
+        const f = document.getElementById('anCustomFrom'), t = document.getElementById('anCustomTo');
+        const c = state.ui.anCustom || {};
+        state.ui.anCustom = { from: f && f.value ? f.value : c.from || todayDay(), to: t && t.value ? t.value : c.to || todayDay() };
+      }
+      state.ui.anPeriod = k; anVisible = AN_PAGE; btVisible = BT_PAGE; save(); renderAnalysis();
+    }
+
+    // ---- Signals-style filters on your own trades (lakky, 2026-10-31) ----
+    // Each trade gets the alert behind it: the fib or trendline alert its entry fits
+    // (classifyTrade), else the alert it was matched to (same symbol, side and day).
+    // Its alert type and level follow its setup tag when that is one of the scanner's
+    // (FIB / TRENDLINE / ZONE, so a level you ticked by hand counts); a setup of your
+    // own, or "None", means no alert type. The channel comes from the alert itself.
+    const AN_KINDS = [{ k: "", label: "All trades" }, { k: "zone", label: "Zone" }, { k: "fib", label: "Fib" }, { k: "trendline", label: "Trendline" }, { k: "none", label: "No alert" }];
+    function anKind() { return AN_KINDS.some(x => x.k === state.ui.anKind) ? state.ui.anKind : ""; }
+    function anLvl() { return anKind() === "fib" && FIB_LEVEL_KEYS.indexOf(state.ui.anLvl) !== -1 ? state.ui.anLvl : ""; }
+    function anTlType() { return anKind() === "trendline" ? SIG_TL_TYPES.find(x => x.k && x.k === state.ui.anTlType) || null : null; }
+    function anNoFee() { return state.ui.anNoFee === true; }
+    function anSet(k, v) { state.ui[k] = v; anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis(); }
+    function anAlertMap() {
+      const pair = {}, out = {};
+      Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind).forEach(p => { if (p.trade && !pair[p.trade.id]) pair[p.trade.id] = { kind, sig: p.signal }; }));
+      const idx = setupAlertIndex();
+      signalTrades().forEach(t => {
+        const p = pair[t.id], c = classifyTrade(t, idx) || (p ? pairClass(p.kind, p.sig) : null);
+        if (c) out[t.id] = c;
+      });
+      return out;
+    }
+    function anLevelKey(kind, rule) {
+      const r = String(rule || "").toUpperCase();
+      if (kind === "fib") { const m = r.match(/L([1-4])/); return m ? "L" + m[1] : ""; }
+      if (kind === "trendline") return /^SP/.test(r) && /BR/.test(r) ? "spbr" : /^(RT|RS)/.test(r) && /BR/.test(r) ? "rsbr" : /SUPPORT/.test(r) ? "support" : /RESIST/.test(r) ? "resistance" : "";
       return "";
+    }
+    // { kind: zone|fib|trendline|null, level: L1-L4 / support / ... / "", chan, sig }
+    function anTradeSetup(t, map) {
+      const c = map[t.id] || null, name = String(t.setup || "").trim().toUpperCase();
+      let kind = null, rule = "";
+      if (name) {
+        kind = Object.keys(KIND_SETUP).find(k => alertSetupName(k).toUpperCase() === name || KIND_SETUP[k] === name) || null;
+        const pr = t.playRules || {}, ticked = Object.keys(pr).filter(k => pr[k]);
+        if (kind && ticked.length === 1) rule = ticked[0];
+      } else if (!t.noSetup && c) kind = c.kind;
+      if (kind && !rule && c && c.kind === kind) rule = c.rule;
+      const own = c && c.sig && c.kind === kind ? c : null; // an alert of another type is not this trade's channel
+      return { kind, level: anLevelKey(kind, rule), chan: own ? chanKey(own.sig) : "", sig: own ? own.sig : null };
+    }
+    function anPassSetup(s, skipChan) {
+      const k = anKind();
+      if (k === "none" && s.kind) return false;
+      if (k && k !== "none" && s.kind !== k) return false;
+      if (anLvl() && s.level !== anLvl()) return false;
+      const tt = anTlType();
+      if (tt && s.level !== tt.k) return false;
+      if (!skipChan && state.ui.anChan && s.chan !== state.ui.anChan) return false;
+      return true;
+    }
+    // "Without" fees: each trade's P&L with its fees added back (and no fees), so
+    // every figure below shows what you made before fees.
+    function anFeeView(ts) {
+      if (!anNoFee()) return ts;
+      return ts.map(t => {
+        const o = t.orig || t, of = o.fees || 0;
+        const o2 = Object.assign({}, o, { pnl: (o.pnl || 0) + of, fees: 0, noFee: true });
+        if (o2.gross != null) o2.gross = o.gross;
+        if (!t.orig) return o2;
+        return Object.assign({}, t, { pnl: (t.pnl || 0) + (t.fees || 0), fees: 0, noFee: true, orig: o2 });
+      });
+    }
+    function renderAnFilters(map, base) {
+      // base: trades in the period (before the type / channel / level filters), with their setup.
+      const kind = anKind();
+      const kb = document.getElementById('anKindBar');
+      if (kb) {
+        const n = { "": base.length }; base.forEach(x => { const k = x.s.kind || "none"; n[k] = (n[k] || 0) + 1; });
+        kb.innerHTML = '';
+        AN_KINDS.forEach(x => {
+          const b = document.createElement('button'); b.type = 'button'; b.dataset.ankind = x.k;
+          b.className = x.k === kind ? 'on' : '';
+          b.innerHTML = esc(x.label) + ' <span class="cnt">' + (n[x.k] || 0) + '</span>';
+          b.onclick = () => { if (x.k === kind) return; state.ui.anChan = ""; anSet('anKind', x.k); };
+          kb.appendChild(b);
+        });
+      }
+      const mode = anPeriodMode();
+      document.getElementById('anCustomRange').classList.toggle('hidden', mode !== 'custom');
+      if (mode === 'custom') {
+        const c = state.ui.anCustom || {}, f = document.getElementById('anCustomFrom'), t = document.getElementById('anCustomTo');
+        if (f && !f.value) f.value = c.from || todayDay();
+        if (t && !t.value) t.value = c.to || todayDay();
+      }
+      // Channel: the alerts behind the trades of this alert type.
+      const cb = document.getElementById('anChanBar');
+      if (cb) {
+        const pool = base.filter(x => anPassSetup(x.s, true)), cnt = {};
+        pool.forEach(x => { if (x.s.chan) cnt[x.s.chan] = (cnt[x.s.chan] || 0) + 1; });
+        const chan = state.ui.anChan || "";
+        const keys = SIG_CHANNELS.concat(FIBTL_CHANNELS).concat(Object.keys(cnt)).filter((k, i, a) => a.indexOf(k) === i && (cnt[k] || k === chan));
+        const sel = document.createElement('select');
+        sel.id = 'anChanSel';
+        sel.className = 'border text-xs px-2.5 py-1.5 rounded-lg focus:outline-none';
+        sel.title = "The alert's market and timeframe. A trade with no alert behind it has no channel.";
+        const opt = (label, k, c) => { const o = document.createElement('option'); o.value = k; o.innerText = label + ' (' + c + ')'; if (chan === k) o.selected = true; sel.appendChild(o); };
+        opt('All channels', "", pool.length);
+        keys.forEach(k => opt(chanLabel(k), k, cnt[k] || 0));
+        sel.onchange = () => anSet('anChan', sel.value);
+        cb.innerHTML = ''; cb.appendChild(sel);
+      }
+      const seg = (id, items, cur, onPick, attr) => {
+        const bar = document.getElementById(id);
+        if (!bar) return;
+        bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+        bar.innerHTML = '';
+        items.forEach(([k, l]) => {
+          const b = document.createElement('button'); b.type = 'button'; b.dataset[attr] = k;
+          b.className = 'px-2 py-1 rounded-md font-semibold ' + (k === cur ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
+          b.innerText = l; b.onclick = () => onPick(k);
+          bar.appendChild(b);
+        });
+      };
+      seg('anFeeBar', [["with", "With"], ["without", "Without"]], anNoFee() ? "without" : "with", k => anSet('anNoFee', k === "without"), 'anfee');
+      document.getElementById('anLvlWrap').classList.toggle('hidden', kind !== 'fib');
+      seg('anLvlBar', [["", "All"]].concat(FIB_LEVEL_KEYS.map(k => [k, k])), anLvl(), k => anSet('anLvl', k), 'anlvl');
+      document.getElementById('anTlWrap').classList.toggle('hidden', kind !== 'trendline');
+      seg('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.label]), anTlType() ? anTlType().k : "", k => anSet('anTlType', k), 'antl');
+      const r = anRangeFull(), hint = [];
+      hint.push(r.from || r.to ? (r.from || "start") + " → " + (r.to || "now") : "All history");
+      if (state.ui.anChan) hint.push(chanLabel(state.ui.anChan));
+      if (anLvl()) hint.push("fib " + anLvl());
+      if (anTlType()) hint.push(anTlType().label);
+      if (mktFilter()) hint.push("BTC " + MKT_LABEL[mktFilter()].toLowerCase() + " days");
+      if (anNoFee()) hint.push("before fees");
+      const h = document.getElementById('anFilterHint'); if (h) h.innerText = hint.join(" · ");
     }
     // Every trade, in order, with the balance you had when you entered it. Past
     // balances are rebuilt from the trades and anchored to the balance the broker
@@ -4093,9 +4255,10 @@
       bar.innerHTML = '';
       AN_PERIODS.forEach(p => {
         const b = document.createElement('button');
-        b.className = 'px-2.5 py-1 rounded-md font-semibold transition-all ' + (p.k === (state.ui.anPeriod || "all") ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
+        b.dataset.anperiod = p.k;
+        b.className = 'px-2.5 py-1 rounded-md font-semibold transition-all ' + (p.k === anPeriodMode() ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
         b.innerText = p.label;
-        b.onclick = () => { state.ui.anPeriod = p.k; anVisible = AN_PAGE; btVisible = BT_PAGE; save(); renderAnalysis(); };
+        b.onclick = () => setAnPeriod(p.k);
         bar.appendChild(b);
       });
     }
@@ -4118,8 +4281,9 @@
       anVisible = AN_PAGE; btVisible = BT_PAGE; btOpenTrade = null;
       save(); renderAll();
     }
-    function renderAnBrokers() {
-      const from = anRange();
+    function renderAnBrokers(map) {
+      const rg = anRangeFull(), mfB = mktFilter();
+      map = map || anAlertMap();
       const current = isAll() ? "all" : "acct:" + selected();
       // An empty book (an unused Dhan) stays off here too, as on the header's bar.
       const empty = emptyBooks(), books = state.accounts.filter(a => !empty[a.id] || a.id === selected());
@@ -4131,20 +4295,21 @@
 
       // ---- results by broker, each converted into the currency on screen ----
       const vc = viewCur();
-      const live = allTrades().filter(t => !from || dayOf(t) >= from).map(t => toView(t, vc)), open = reportBooks().open;
+      // The filters at the top narrow this table too.
+      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktBiasOn(t.date, t.time) === mfB) && anPassSetup(anTradeSetup(t, map))).map(t => toView(t, vc))), open = reportBooks().open;
       const lines = books.map(a => {
         const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
         const files = a.reportBroker ? btState().files.filter(f => f.broker === a.reportBroker) : [];
         const api = files.some(f => f.id === CDX_FILE), rep = files.some(f => f.id !== CDX_FILE);
         return { k: "acct:" + a.id, name: a.name, report: !!a.reportBroker, from: !a.reportBroker ? "Journal" : api && rep ? "Report + API" : api ? "CoinDCX API" : "Uploaded report", cur: vc, own: a.currency, rate: fxRate(a), n: s.n, wins: s.wins, losses: s.losses, net: s.net, pf: s.pf, fees: sum(ts.map(t => t.fees || 0)),
-          open: open.filter(t => t.accountId === a.id && (!from || t.day >= from)).length };
+          open: open.filter(t => t.accountId === a.id && anInRange(t.day, rg)).length };
       });
-      const period = (AN_PERIODS.find(p => p.k === (state.ui.anPeriod || "all")) || {}).label || "All";
+      const period = document.getElementById('anFilterHint') ? document.getElementById('anFilterHint').innerText : "All history";
       const pos = v => v > 0 ? "text-emerald-400" : v < 0 ? "text-rose-400" : "text-slate-400";
       const host = document.getElementById("anBrokers");
       host.innerHTML = `<div class="flex flex-wrap items-baseline justify-between gap-2 p-3 border-b border-terminal-border">
           <h3 class="font-bold text-white uppercase tracking-wider">Results by broker</h3>
-          <span class="text-slate-500 text-[11px]">Closed trades · ${esc(period.toLowerCase() === "all" ? "all time" : "last " + period.toLowerCase())} · in ${esc(curSym(vc) + " " + vc)}, each broker at its own rate. Click one to open it.</span>
+          <span class="text-slate-500 text-[11px]">Closed trades · ${esc(period)} · in ${esc(curSym(vc) + " " + vc)}, each broker at its own rate. Click one to open it.</span>
         </div>
         <div class="overflow-x-auto"><table class="w-full text-left text-xs font-mono">
           <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border"><tr>
@@ -4626,7 +4791,12 @@
       const strip = document.getElementById('anStrip');
       if (!strip) return;
       renderAnPeriodBar();
-      renderAnBrokers();
+      const anMap = anAlertMap();
+      const anRg = anRangeFull();
+      // Trades in the period with their alert setup; the filters bar counts these.
+      const anBase = statScoped().filter(t => anInRange(dayOf(t), anRg)).map(t => ({ t, s: anTradeSetup(t, anMap) }));
+      renderAnFilters(anMap, anBase);
+      renderAnBrokers(anMap);
       // A broker from an uploaded report shows its report; its Size & mistakes
       // section is the journal analysis below, run on the report's trades.
       const rep = anReportBook();
@@ -4643,11 +4813,12 @@
       const cur = viewCur();
       const rqHost = document.getElementById('reviewQueuePanel');
       if (rqHost) rqHost.innerHTML = reviewQueueHtml(cur);
-      const from = anRange();
+      const from = anRg.from;
       // The report's pair filter narrows this too.
       const pairPick = rep && state.ui.btPair && state.ui.btPair !== "all" ? btSym(state.ui.btPair) : null;
-      const all = analyzeTrades(statScoped());
-      const inPeriod = all.filter(x => (!from || dayOf(x.t) >= from) && (!pairPick || x.t.symbol === pairPick)).sort((a, b) => -byWhen(a.t, b.t));
+      // Balances need every trade, so the filters apply after the analysis.
+      const all = analyzeTrades(anFeeView(statScoped()));
+      const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassSetup(anTradeSetup(x.t, anMap))).sort((a, b) => -byWhen(a.t, b.t));
       const mfAn = mktFilter();
       const rows = mfAn ? inPeriod.filter(x => mktBiasOn(x.t.date, x.t.time) === mfAn) : inPeriod;
       rows.anchored = all.anchored;
@@ -4660,7 +4831,7 @@
         + (state.accounts.some(a => a.reportBroker) ? " A broker-report trade (CoinDCX) has no stop or prices of its own: its side and position value are worked out from its fees (or fills), its balance from the broker's wallet, and a trade whose fees don't add up shows — for size." : "");
 
       renderJournalArchive();
-      renderMarketCalendar('mktCalAnalysis', { pairs: matchSignals().filter(pr => !from || pr.signal.date >= from), trades: inPeriod.map(x => x.t), cur, rerender: renderAnalysis, scope: from ? 'from ' + from : 'all history' });
+      renderMarketCalendar('mktCalAnalysis', { pairs: matchSignals().filter(pr => anInRange(pr.signal.date, anRg)), trades: inPeriod.map(x => x.t), cur, rerender: renderAnalysis, scope: from || anRg.to ? (from || 'start') + ' to ' + (anRg.to || 'now') : 'all history' });
       if (mfAn) assume.innerText += ` Showing trades on BTC ${MKT_LABEL[mfAn].toLowerCase()} days only.`;
       renderMktFilterBar('anMktBar', 'mktCalAnalysis');
       if (!rows.length) {
@@ -4682,7 +4853,12 @@
       const brokeOne = rows.filter(x => AN_RULES.some(r => (!r.applies || r.applies(x)) && r.broke(x)));
       const over = rows.filter(x => x.flags.indexOf("oversize") !== -1);
       const xs = rows.map(x => x.xBal).filter(v => v != null);
+      // Results of the trades the filters picked: how you trade this setup.
+      const res = computeStats(rows.map(x => x.t)), rsAn = rows.map(x => x.r).filter(r => r != null && isFinite(r));
       const cards = [
+        { label: "Net P&L" + (anNoFee() ? " (no fees)" : ""), val: signedMoney(res.net, cur), sub: `${res.wins}W / ${res.losses}L` + (anNoFee() ? " · before fees" : " · fees " + money(sum(rows.map(x => x.t.fees || 0)), cur)), color: res.net >= 0 ? "text-emerald-400" : "text-rose-400", id: "net" },
+        { label: "Win rate", val: pct(res.winRate), sub: `${rows.length} trade${rows.length === 1 ? "" : "s"}`, color: res.winRate >= 50 ? "text-emerald-400" : "text-amber-400", id: "win" },
+        { label: "Average R", val: rsAn.length ? rfmt(avg(rsAn)) : "—", sub: rsAn.length ? `${rsAn.length} with a stop · total ${rfmt(sum(rsAn))}` : "no stop known", color: !rsAn.length ? "text-slate-200" : avg(rsAn) >= 0 ? "text-emerald-400" : "text-rose-400", id: "avgr" },
         { label: "Trades checked", val: String(rows.length), sub: `${brokeOne.length} (${pct(brokeOne.length / rows.length * 100)}) broke a rule`, color: "text-slate-200" },
         { label: "Oversized", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} of trades`, color: over.length ? "text-rose-400" : "text-emerald-400" },
         { label: "Avg size", val: xs.length ? avg(xs).toFixed(1) + "×" : "—", sub: "position ÷ balance", color: "text-slate-200" },
@@ -4693,7 +4869,8 @@
       cards.forEach(c => {
         const d = document.createElement('div');
         d.className = 'bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors';
-        d.innerHTML = `<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${c.label}</span>
+        if (c.id) d.dataset.ancard = c.id;
+        d.innerHTML = `<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${esc(c.label)}</span>
           <div class="my-0.5"><div class="text-base sm:text-lg font-bold ${c.color} mono-num">${esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${esc(c.sub)}</div></div>`;
         strip.appendChild(d);
       });
@@ -10248,8 +10425,7 @@
     // From the dashboard: the trade's own report rows, in Analysis under its book.
     function openReportTrade(trade) {
       state.ui.account = trade.accountId; state.ui.anSec = "trades"; state.ui.btPair = "all";
-      const from = anRange();
-      if (from && dayOf(trade) < from) state.ui.anPeriod = "all";
+      if (!anInRange(dayOf(trade))) state.ui.anPeriod = "all";
       btOpenTrade = null; btVisible = BT_PAGE;
       save(); switchTab("analysis"); renderAccountsBar();
       const list = btShown.slice().reverse(), i = list.findIndex(x => x.legs[0].id === trade.firstLeg);
@@ -10306,7 +10482,7 @@
       const pairs = uniq(inCur.map(t => t.sym)).sort();
       const pair = pairs.indexOf(state.ui.btPair) !== -1 ? state.ui.btPair : "all";
       // The Analysis period applies here too, by the day a trade closed (or opened, if still open).
-      const shown = inCur.filter(t => (pair === "all" || t.sym === pair) && (!from || t.day >= from));
+      const shown = inCur.filter(t => (pair === "all" || t.sym === pair) && anInRange(t.day));
       btShown = shown; btCurShown = cur;
 
       // ---- filters ----
@@ -10814,6 +10990,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-10-31.143', pr: 58, title: 'Signals filters in Analysis', pts: ['Analysis: alert type (Zone / Fib / Trendline / No alert), 1 Day to Custom dates, channel, Level, Type and Fees', 'Every number follows them, Results by broker too', 'New Net P&L, Win rate and Average R cards'] },
       { v: '2026-10-31.142', pr: 57, title: 'Alerts no longer fill browser storage', pts: ['Alerts moved to a much larger store (IndexedDB); trades keep the 5 MB space to themselves', 'Existing alerts move over by themselves on first open; nothing to delete'] },
       { v: '2026-10-31.141', pr: 56, title: 'Trendline Type filter', pts: ['Signals: Type filter on Trendline alerts: Support TL, Resistance TL, SP TL BR, RS TL BR', 'Every number on the tab follows it', 'Break types fill in once the scanner sends break alerts'] },
       { v: '2026-10-31.140', pr: 55, title: 'Fib Level filter', pts: ['Signals: Level filter (All, L1-L4) next to Fees, fib alerts only', 'Every number on the tab follows it; other levels use the scanner\'s what-if', 'Fib levels section removed'] },
