@@ -2251,9 +2251,19 @@ async function analysisFiltersRun(seed) {
     // Clicking through the bar works too.
     await page.evaluate(() => { Object.assign(state.ui, { anKind: '', anPeriod: 'all' }); renderAnalysis(); });
     await page.click('#anKindBar button[data-ankind="fib"]');
-    await page.click('#anLvlBar button[data-anlvl="L2"]');
-    const clicked = await page.evaluate(() => [state.ui.anKind, state.ui.anLvl, document.getElementById('anFilterHint').innerText]);
-    check(clicked[0] === 'fib' && clicked[1] === 'L2' && /fib L2/.test(clicked[2]), 'clicking the bars: ' + JSON.stringify(clicked));
+    await page.selectOption('#anLvlSel', 'L2');
+    const clicked = await page.evaluate(() => [state.ui.anKind, state.ui.anLvl, document.getElementById('anFilterHint').innerText, !document.getElementById('anReset').classList.contains('hidden')]);
+    check(clicked[0] === 'fib' && clicked[1] === 'L2' && /fib L2/.test(clicked[2]) && clicked[3], 'clicking the bars: ' + JSON.stringify(clicked));
+    // Overview insights: setups by result, and a click on one filters the tab to it.
+    await page.click('#anReset');
+    const bd = await page.evaluate(() => { state.ui.anBdDim = 'setup'; renderAnalysis();
+      const rows = [...document.querySelectorAll('#anBreakdown [data-bdk]')].map(r => r.getAttribute('data-bdk') + ':' + r.children[1].innerText);
+      return { rows, ins: [...document.querySelectorAll('#anInsights .ins-row')].map(r => r.innerText.replace(/\s+/g, ' ')), kind: state.ui.anKind }; });
+    check(bd.kind === '' && bd.rows.indexOf('Support TL:2') !== -1 && bd.rows.indexOf('Fib L2:1') !== -1 && bd.rows.indexOf('Zone:1') !== -1 && bd.rows.indexOf('No alert:11') !== -1, 'results by setup: ' + JSON.stringify(bd.rows));
+    check(bd.ins.length >= 2 && bd.ins.some(t => /^. Keep: /.test(t)), 'insights: ' + JSON.stringify(bd.ins));
+    await page.click('#anBreakdown [data-bdk="Support TL"]');
+    const after = await page.evaluate(() => [state.ui.anKind, state.ui.anTlType, document.querySelector('#anStrip [data-ancard="win"] .mono-num').innerText]);
+    check(after[0] === 'trendline' && after[1] === 'support', 'clicking a setup filters to it: ' + JSON.stringify(after));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
