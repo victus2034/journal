@@ -1299,7 +1299,7 @@ async function cdxSizeRun(seed) {
     const line = id => v.table.find(r => r[1] === id + 'X/USDT') || [];
     check(line('L')[2] === 'LONG' && line('S')[2] === 'SHORT' && line('U')[2] === 'REPORT', 'side column: ' + JSON.stringify(v.table.map(r => r.slice(1, 3))));
     check(line('L')[4] === '₹10,000.00' && line('U')[4] === '—' && line('U')[5] === '—', 'position column: ' + JSON.stringify(v.table.map(r => r.slice(1, 6))));
-    check(/^TRADES CHECKED 4 \|/i.test(v.strip), 'headline: ' + v.strip);
+    check(/(^| \| )TRADES CHECKED 4 \|/i.test(v.strip), 'headline: ' + v.strip);
     check(v.onePair === 1, 'pair filter in the analysis: ' + v.onePair + ' rows');
     check(JSON.stringify(v.sigT) === JSON.stringify({ O: ['long', '2024-12-10', '10:00'], L: ['long', '2026-09-10', '10:00'], S: ['short', '2026-09-11', '09:00'] }), 'report trades on Signals, side from fees: ' + JSON.stringify(v.sigT));
   } catch (e) {
@@ -2179,6 +2179,89 @@ async function setupLevelRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('setup level: ' + e); });
 }
 
+// Analysis filters (lakky, 2026-10-31): the Signals tab's filter set on your own
+// trades. Expected counts are worked out by hand from the trades seeded here.
+async function analysisFiltersRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const d = await page.evaluate(() => {
+      const d = iso(new Date(Date.now() - 2 * 864e5)), later = iso(new Date(Date.now() + 3 * 864e5));
+      const at = istMs(d, '09:00') / 1000;
+      state.playbook = [{ id: 'pbf', name: 'FIB', rules: ['L1', 'L2', 'L3', 'L4'] }, { id: 'pbt', name: 'TRENDLINE', rules: ['SUPPORT', 'RESISTANCE', 'SP BROKEN', 'RT BROKEN'] }, { id: 'pbc', name: 'Checklist', rules: ['A', 'B'] }];
+      const sig = (id, sym, ln, side, entry, stop, tl) => ({ id, kind: 'trendline', channel: 'CRYPTO 4H', key: `tl|${sym}|4h|${ln}|${at - 86400}|${at}@${at}`, date: d, time: '09:00', symbol: sym, side, entry, stop, tl, timeframe: '4H', filled: true, scoredDaily: true });
+      state.signals = [sig('sga', 'TLA', 0, 'long', 102, 101, [100, 102]), sig('sgb', 'TLB', 1, 'short', 120, 121, [120, 120]),
+        { id: 'zz', date: d, time: '09:00', symbol: 'ZZ', side: 'long', entry: 50, stop: 49, channel: 'CRYPTO 1D', filled: true }];
+      const tr = (id, sym, dir, entry, exit, extra) => Object.assign({ id, accountId: 'acc_cry', date: d, time: '10:00', symbol: sym + 'USD', direction: dir, entry, exit, qty: 1, fees: 0, stop: 0, setup: '', rules: [], notes: '' }, extra || {});
+      state.trades = state.trades.concat([
+        tr('a1', 'TLA', 'long', 102.3, 103, { fees: 0.1 }), tr('a2', 'TLA', 'short', 100.5, 100), tr('b1', 'TLB', 'short', 120.2, 119), tr('b2', 'TLB', 'long', 121.5, 121),
+        tr('old', 'TLA', 'long', 102.3, 103, { date: later }),
+        tr('h1', 'TLA', 'long', 102.3, 102, { setup: 'FIB', playRules: { L1: false, L2: true, L3: false, L4: false } }),
+        tr('z1', 'TLA', 'long', 102.2, 103, { setup: 'ZONE', setupAuto: true }),
+        tr('n1', 'TLA', 'long', 102.3, 103, { noSetup: true }),
+        tr('c1', 'TLB', 'short', 120.1, 119, { setup: 'Checklist', playRules: { A: true, B: false } }),
+        tr('zz1', 'ZZ', 'long', 50.2, 51)
+      ]);
+      state.ui.account = 'acc_cry'; state.ui.allCur = 'USD'; state.ui.anSec = 'overview';
+      save(); renderAll(); switchTab('analysis');
+      return d;
+    });
+    const read = (ui) => page.evaluate(u => {
+      Object.assign(state.ui, { anKind: '', anLvl: '', anTlType: '', anChan: '', anNoFee: false, anPeriod: 'all' }, u);
+      renderAnalysis();
+      const card = k => { const c = document.querySelector('#anStrip [data-ancard="' + k + '"]'); return c ? c.innerText.replace(/\s+/g, ' ') : ''; };
+      const checked = [...document.querySelectorAll('#anStrip > div')].find(x => /Trades checked/i.test(x.innerText));
+      const cnt = {}; document.querySelectorAll('#anKindBar button').forEach(b => { cnt[b.dataset.ankind || 'all'] = +b.querySelector('.cnt').innerText; });
+      const brk = document.querySelector('#anBrokers tr[data-anbroker="acct:acc_cry"]');
+      return { n: checked ? +checked.querySelector('.mono-num').innerText : 0, net: card('net'), cnt, brk: brk ? brk.children[2].innerText.trim() : '',
+        lvl: !document.getElementById('anLvlWrap').classList.contains('hidden'), tl: !document.getElementById('anTlWrap').classList.contains('hidden'),
+        chans: [...document.querySelectorAll('#anChanSel option')].map(o => o.innerText), hint: document.getElementById('anFilterHint').innerText };
+    }, ui);
+    const all = await read({});
+    check(JSON.stringify(all.cnt) === JSON.stringify({ all: 18, zone: 1, fib: 1, trendline: 5, none: 11 }), 'alert type counts: ' + JSON.stringify(all.cnt));
+    check(all.n === 18 && !all.lvl && !all.tl, 'all trades: ' + JSON.stringify(all));
+    check(all.chans.length === 3 && /\(18\)$/.test(all.chans[0]) && /4h \(5\)$/i.test(all.chans[1]) && /1D \(1\)$/i.test(all.chans[2]), 'channel list: ' + all.chans.join());
+    const tl = await read({ anKind: 'trendline' });
+    check(tl.n === 5 && tl.tl && !tl.lvl && tl.brk === '5', 'trendline trades (and the broker table): ' + JSON.stringify(tl));
+    const types = {};
+    for (const k of ['support', 'resistance', 'spbr', 'rsbr']) types[k] = (await read({ anKind: 'trendline', anTlType: k })).n;
+    check(JSON.stringify(types) === '{"support":2,"resistance":1,"spbr":1,"rsbr":1}', 'trendline types: ' + JSON.stringify(types));
+    const fib = await read({ anKind: 'fib' }), l2 = await read({ anKind: 'fib', anLvl: 'L2' }), l1 = await read({ anKind: 'fib', anLvl: 'L1' });
+    check(fib.n === 1 && fib.lvl && !fib.tl && l2.n === 1 && l1.n === 0, 'fib levels: ' + JSON.stringify([fib.n, fib.lvl, l2.n, l1.n]));
+    const none = await read({ anKind: 'none' });
+    check(none.n === 11, 'no-alert trades: ' + none.n);
+    const c4 = await read({ anChan: 'CRYPTO 4H' }), c1 = await read({ anChan: 'CRYPTO 1D' });
+    check(c4.n === 5 && c1.n === 1, 'channels: ' + JSON.stringify([c4.n, c1.n]));
+    // a1 made 0.70 before a 0.10 fee, z1 made 0.80: 1.40 with fees, 1.50 without.
+    const w = await read({ anKind: 'trendline', anTlType: 'support' }), wo = await read({ anKind: 'trendline', anTlType: 'support', anNoFee: true });
+    check(/\+\$1\.40/.test(w.net) && /\+\$1\.50/.test(wo.net) && /before fees/.test(wo.hint), 'fees with / without: ' + JSON.stringify([w.net, wo.net, wo.hint]));
+    const day1 = await read({ anPeriod: '1d' });
+    const cust = await read({ anPeriod: 'custom', anCustom: { from: d, to: d } });
+    const swap = await read({ anPeriod: 'custom', anCustom: { from: d, to: '2000-01-01' } });
+    check(day1.cnt.all === 0, '1 day: ' + JSON.stringify(day1.cnt));
+    check(cust.cnt.all === 9 && cust.n === 9 && cust.hint.indexOf(d + ' → ' + d) === 0, 'custom range: ' + JSON.stringify([cust.cnt, cust.n, cust.hint]));
+    check(swap.cnt.all > 9, 'custom range given backwards still reads from 2000 to the day: ' + JSON.stringify(swap.cnt));
+    // Clicking through the bar works too.
+    await page.evaluate(() => { Object.assign(state.ui, { anKind: '', anPeriod: 'all' }); renderAnalysis(); });
+    await page.click('#anKindBar button[data-ankind="fib"]');
+    await page.click('#anLvlBar button[data-anlvl="L2"]');
+    const clicked = await page.evaluate(() => [state.ui.anKind, state.ui.anLvl, document.getElementById('anFilterHint').innerText]);
+    check(clicked[0] === 'fib' && clicked[1] === 'L2' && /fib L2/.test(clicked[2]), 'clicking the bars: ' + JSON.stringify(clicked));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Analysis filters: alert type, period, channel, level, trendline type, fees');
+  errs.forEach(e => { console.log('     ' + e); failures.push('analysis filters: ' + e); });
+}
+
 // AI review: the key stays out of the synced file and backups, the period's trades
 // go to (a fake) Gemini with the key, and its pros / cons / improve show in Analysis.
 async function aiReviewRun(seed) {
@@ -2371,7 +2454,7 @@ async function layoutRun(seed) {
       out.aiShown = shown(document.getElementById('aiReviewCard'));
       out.brokersShown = shown(document.getElementById('anBrokers'));
       // The strip's "broke a rule" is the scorecard's count.
-      out.strip = document.querySelector('#anStrip > div').textContent.replace(/\s+/g, ' ');
+      out.strip = [...document.querySelectorAll('#anStrip > div')].find(d => /Trades checked/i.test(d.textContent)).textContent.replace(/\s+/g, ' ');
       out.score = (document.getElementById('anRules').textContent.match(/Broke at least one\S*\s*[^·]*·\s*(\d+) trades/) || [])[1];
       setAnSec('ai'); out.aiOnly = shown(document.getElementById('aiReviewCard')) && !shown(document.getElementById('anBrokers'));
       setAnSec('trades'); out.allTrades = { here: shown(document.getElementById('anAllTrades')), closed: !document.getElementById('anAllTrades').open };
@@ -2804,6 +2887,7 @@ await sigBacktestRun(data);
 await cleanupRun(data);
 await behaviourRun(data);
 await setupLevelRun(data);
+await analysisFiltersRun(data);
 await aiReviewRun(data);
 await layoutRun(data);
 await cleanRun(data);
