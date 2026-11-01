@@ -1445,9 +1445,9 @@ async function goalPlannerRun(seed) {
     await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
     const page = await ctx.newPage();
     page.on('pageerror', e => errs.push(vp.width + 'px page error: ' + (e.stack || e.message)));
-    // A goal needs trading days left: near a month's end there are none, so run
-    // as of the 20th at the latest.
-    { const d = new Date(); if (d.getDate() > 20) { d.setDate(20); await page.clock.setFixedTime(d); } }
+    // A goal needs trading days left: near a month's end there are none, and before the
+    // day's cutoff on the 1st the trading day is still last month's. Run as of the 15th, noon.
+    { const d = new Date(); d.setDate(15); d.setHours(12, 0, 0, 0); await page.clock.setFixedTime(d); }
     try {
       await page.goto(base, { waitUntil: 'load' });
       await page.waitForTimeout(300);
@@ -1530,7 +1530,7 @@ async function withdrawRun(seed) {
     const before = await page.evaluate(() => {
       state.goals.push({ id: 'gw', title: 'Bank it', target: 1000, metric: 'withdraw', targets: { withdraw: 1000, net_pnl: 50 }, period: 'month', accountId: 'acc_nse' });
       state.ui.goalIdx = state.goals.length - 1; state.ui.account = 'acc_nse'; save(); switchTab('dashboard'); renderAll();
-      return { bal: bookBalance(acct('acc_nse')), start: balanceAtStart(acct('acc_nse'), iso(new Date())) };
+      return { bal: bookBalance(acct('acc_nse')), start: balanceAtStart(acct('acc_nse'), todayDay()) };
     });
     await page.click('button:has-text("Withdraw")');
     await page.waitForSelector('#modalSheet:not(.hidden)');
@@ -1541,7 +1541,7 @@ async function withdrawRun(seed) {
     const after = await page.evaluate(() => {
       const g = state.goals.find(x => x.id === 'gw'); state.ui.goalFocus = { gw: 'withdraw' }; updateGoalDisplays();
       const sp = syncPayload(state), back = sanitizeState(JSON.parse(JSON.stringify(sp)));
-      return { bal: bookBalance(acct('acc_nse')), start: balanceAtStart(acct('acc_nse'), iso(new Date())), got: goalWithdrawn(g, 'INR'), card: document.getElementById('goalCurrent').innerText,
+      return { bal: bookBalance(acct('acc_nse')), start: balanceAtStart(acct('acc_nse'), todayDay()), got: goalWithdrawn(g, 'INR'), card: document.getElementById('goalCurrent').innerText,
         chip: document.getElementById('goalChips').innerText.replace(/\s+/g, ' '), synced: (sp.withdrawals || []).length, back: back.withdrawals.length, note: (state.withdrawals[0] || {}).note };
     });
     check(Math.abs(after.bal - (before.bal - 400)) < 1e-6 && Math.abs(after.start - before.start) < 1e-6 && after.got === 400 && after.card.includes('400') && /withdrawn/i.test(after.chip)
@@ -2272,7 +2272,7 @@ async function analysisFiltersRun(seed) {
       const card = l => (document.querySelector('#anRepStrip [data-repcard="' + l + '"] .mono-num') || {}).innerText;
       return { head: !document.getElementById('anRepHead').classList.contains('hidden'), net: card('Net P&L'), win: card('Win rate'), fees: card('Fees / funding'), bw: card('Best / worst'), n: document.querySelectorAll('#anRepStrip > div').length,
         pairs: [...document.querySelectorAll('#btPairs [data-anpair]')].map(b => b.getAttribute('data-anpair')), days: document.querySelectorAll('#btDays > div').length, sel: [...document.querySelectorAll('#anPairSel option')].map(o => o.value) }; });
-    check(rep.head && rep.n === 8 && /\+\$1\.40/.test(rep.net) && rep.win === '100%' && /\$0/.test(rep.fees) && /\+\$1 \/ \+\$1/.test(rep.bw) && rep.pairs.join() === 'TLAUSD' && rep.days === 1 && rep.sel.indexOf('TLAUSD') !== -1, 'journal report: ' + JSON.stringify(rep));
+    check(rep.head && rep.n === 8 && /\+\$1\.40/.test(rep.net) && rep.win === '100%' && /\$0/.test(rep.fees) && /\+\$0\.80 \/ \+\$0\.60/.test(rep.bw) && rep.pairs.join() === 'TLAUSD' && rep.days === 1 && rep.sel.indexOf('TLAUSD') !== -1, 'journal report: ' + JSON.stringify(rep));
     const onePair = await page.evaluate(() => { state.ui.anKind = ''; state.ui.anTlType = ''; state.ui.anPair = 'ZZUSD'; renderAnalysis(); const n = +[...document.querySelectorAll('#anStrip > div')].find(x => /Trades checked/i.test(x.innerText)).querySelector('.mono-num').innerText; state.ui.anPair = ''; return n; });
     check(onePair === 1, 'pair filter on a journal book: ' + onePair);
   } catch (e) {
@@ -2882,6 +2882,88 @@ async function sigStoreRun(seed) {
 }
 function thinkingShown(s) { return /(^|\n)thinking/.test(s); }
 
+// Weekly audit, 2026-11-01: typos and odd input are turned away with a reason
+// instead of breaking totals, the layout or the goal.
+async function badInputRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  let confirms = 0;
+  page.on('dialog', d => { confirms++; d.dismiss(); });
+  const lastToast = () => page.evaluate(() => { const c = document.getElementById('toastContainer'); return c && c.lastElementChild ? c.lastElementChild.innerText : ''; });
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => state.accounts.forEach(a => { a.maxTradesPerDay = 0; a.dailyLossLimit = 0; }));
+    const log = async f => {
+      await page.evaluate(() => openTrade(null));
+      await page.waitForSelector('#modalSheet:not(.hidden)');
+      for (const [k, v] of Object.entries(f)) await page.fill('#' + k, v);
+      const n0 = await page.evaluate(() => state.trades.length);
+      await page.click('#modalSheetSaveBtn'); await page.waitForTimeout(100);
+      const r = { saved: await page.evaluate(n0 => state.trades.length > n0, n0), toast: await lastToast() };
+      await page.evaluate(() => closeModalSheet());
+      return r;
+    };
+    const huge = await log({ mSymbol: 'ETHUSD', mEntry: '1e300', mExit: '1e301', mQty: '1e10' });
+    check(!huge.saved && /too big/.test(huge.toast), 'huge numbers saved: ' + JSON.stringify(huge));
+    const future = await log({ mSymbol: 'ETHUSD', mDate: '2099-01-01', mEntry: '100', mExit: '110', mQty: '1' });
+    check(!future.saved && /between 2000 and today/.test(future.toast), '2099 trade saved: ' + JSON.stringify(future));
+    const old = await log({ mSymbol: 'ETHUSD', mDate: '1970-01-01', mEntry: '100', mExit: '110', mQty: '1' });
+    check(!old.saved, '1970 trade saved');
+    const long = await log({ mSymbol: 'X'.repeat(500), mEntry: '100', mExit: '110', mQty: '1' });
+    const sym = await page.evaluate(() => Math.max(...state.trades.map(t => t.symbol.length)));
+    check(long.saved && sym <= 30, 'long symbol: ' + JSON.stringify({ long, sym }));
+    await page.evaluate(() => { switchTab('analysis'); renderAnalysis(); });
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    check(wide <= 1, 'long symbol widens Analysis by ' + wide);
+    // A record from a backup or GitHub that would overflow is dropped on load.
+    const dropped = await page.evaluate(() => sanitizeState({ trades: [{ id: 'big', date: '2026-10-01', direction: 'long', entry: 1e300, exit: 1e301, qty: 1e10 }] }).trades.length);
+    check(dropped === 0, 'overflowing trade kept by the loader');
+    // Withdrawals: dated today's trading day, no future dates, more than the balance asks first.
+    await page.evaluate(() => { switchTab('dashboard'); openWithdraw(); });
+    const def = await page.evaluate(() => [document.getElementById('wdDate').value, todayDay()]);
+    check(def[0] === def[1], 'withdrawal date not the trading day: ' + def);
+    await page.selectOption('#wdAcc', 'acc_cry'); await page.fill('#wdAmt', '10'); await page.fill('#wdDate', '2099-05-05');
+    await page.click('#modalSheetSaveBtn'); await page.waitForTimeout(100);
+    check(await page.evaluate(() => (state.withdrawals || []).length) === 0 && /between 2000 and today/.test(await lastToast()), 'future withdrawal saved');
+    await page.fill('#wdDate', def[1]); await page.fill('#wdAmt', '99999999');
+    await page.click('#modalSheetSaveBtn'); await page.waitForTimeout(100);
+    check(confirms === 1 && await page.evaluate(() => (state.withdrawals || []).length) === 0, 'withdrawal over the balance not questioned: ' + confirms);
+    await page.evaluate(() => closeModalSheet());
+    // Signals: a custom range picked backwards shows the same alerts as forwards.
+    const rng = await page.evaluate(() => { state.ui.sigPeriod = { mode: 'custom', from: '2026-10-30', to: '2026-10-01' }; const a = sigPeriodRange(); state.ui.sigPeriod = { mode: 'custom', from: '2026-10-01', to: '2026-10-30' }; return [a, sigPeriodRange()]; });
+    check(JSON.stringify(rng[0]) === JSON.stringify(rng[1]), 'backwards custom range: ' + JSON.stringify(rng));
+    // Goal: a ticked target left empty is pointed out, not silently dropped.
+    await page.evaluate(() => openGoal('new'));
+    await page.waitForSelector('#modalSheet:not(.hidden)');
+    await page.fill('#gv_net_pnl', '');
+    const g0 = await page.evaluate(() => state.goals.length);
+    await page.click('#modalSheetSaveBtn'); await page.waitForTimeout(100);
+    check(await page.evaluate(() => state.goals.length) === g0 && /Profit: enter a number above 0/.test(await lastToast()), 'empty goal target accepted');
+    await page.evaluate(() => closeModalSheet());
+    // Book rules: risk is a % of the balance, so 500% is a typo.
+    await page.evaluate(() => { switchTab('data'); openBookEditor('acc_cry'); });
+    await page.waitForSelector('#modalSheet:not(.hidden)');
+    await page.fill('#bkRisk', '500');
+    await page.click('#modalSheetSaveBtn'); await page.waitForTimeout(100);
+    check(await page.evaluate(() => acct('acc_cry').maxRiskPct) === 1.5 && /100 at most/.test(await lastToast()), 'risk 500% saved');
+    await page.fill('#bkRisk', '2'); await page.fill('#bkTrades', '0.4');
+    await page.click('#modalSheetSaveBtn'); await page.waitForTimeout(100);
+    check(await page.evaluate(() => acct('acc_cry').maxTradesPerDay) === 0 && /1 or more/.test(await lastToast()), '0.4 trades a day saved');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'bad input: huge numbers, odd dates, long symbols, withdrawals, ranges, goals, book rules';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -2915,6 +2997,7 @@ await cleanRun(data);
 await whatsNewRun(data);
 await exitTargetRun(data);
 await nsePathsRun();
+await badInputRun(data);
 
 await browser.close();
 server.close();
