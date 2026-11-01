@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-01.145">
+  <meta name="app-version" content="2026-11-01.146">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1752,6 +1752,10 @@
     // when drawn); everything numeric is a real number or the record is dropped.
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, TIME_RE = /^\d{2}:\d{2}$/;
     function cText(v, n) { return String(v == null ? "" : v).slice(0, n || 200); }
+    // Biggest position value a trade may have (price × quantity); past it the sums overflow.
+    const MAX_TRADE_VALUE = 1e15;
+    // A trade or withdrawal date typed by hand: from 2000 up to today (a day ahead for time zones).
+    function tradeDateOk(d) { const max = new Date(); max.setDate(max.getDate() + 1); return DATE_RE.test(d) && d >= "2000-01-01" && d <= iso(max); }
     function cNum(v) { const n = Number(v); return isFinite(n) ? n : NaN; }
     function cleanTrade(t) {
       if (!t || typeof t !== "object" || !t.id || !DATE_RE.test(String(t.date))) return null;
@@ -1760,6 +1764,7 @@
       o.id = cText(t.id, 40); o.accountId = cText(t.accountId, 40);
       o.entry = cNum(t.entry); o.exit = cNum(t.exit); o.qty = cNum(t.qty);
       if (!(o.entry > 0 && o.exit > 0 && o.qty > 0)) return null;
+      if (!(o.entry * o.qty < MAX_TRADE_VALUE && o.exit * o.qty < MAX_TRADE_VALUE)) return null; // would overflow every total
       o.fees = cNum(t.fees) >= 0 ? cNum(t.fees) : 0;
       o.stop = cNum(t.stop) > 0 ? cNum(t.stop) : 0;
       o.time = TIME_RE.test(String(t.time || "")) ? t.time : "";
@@ -2034,6 +2039,9 @@
       if (Math.abs(v) < 0.5 * Math.pow(10, -dp)) v = 0; // -0.001 reads ₹0.00, not -₹0.00
       return (v < 0 ? "-" : "") + curSym(cur) + Math.abs(v).toLocaleString(curLocale(cur), { minimumFractionDigits: dp, maximumFractionDigits: dp });
     }
+    // Report cards round rupees to whole ones; dollar books are small, so they keep cents
+    // (a +$0.60 trade read "+$1", fees of $0.40 read "$0").
+    function repDp(cur) { return cur === "INR" ? 0 : 2; }
     function signedMoney(v, cur = "USD", dp = 2) {
       if (v == null || !isFinite(v)) return "—";
       if (Math.abs(v) < 0.5 * Math.pow(10, -dp)) v = 0;
@@ -2652,7 +2660,7 @@
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="text-slate-400 block mb-1">Date</label>
-              <input type="date" id="wdDate" value="${iso(new Date())}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+              <input type="date" id="wdDate" value="${todayDay()}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
             </div>
             <div>
               <label class="text-slate-400 block mb-1">Amount <span class="text-slate-600">(book's currency)</span></label>
@@ -2679,8 +2687,13 @@
       }, () => {
         const amount = parseFloat(document.getElementById('wdAmt').value);
         if (!(amount > 0)) { toast("Enter the amount you withdrew"); return false; }
+        // Today is the trading day (it rolls over at the cutoff), so a 1 AM payout counts toward the goal on screen.
+        const date = document.getElementById('wdDate').value || todayDay(), accId = document.getElementById('wdAcc').value;
+        if (!tradeDateOk(date)) { toast("Pick a date between 2000 and today"); return false; }
+        const bal = bookBalance(acct(accId));
+        if (amount > bal && !confirm("That is more than " + acct(accId).name + "'s balance (" + money(bal, acct(accId).currency) + "). Log it anyway?")) return false;
         state.withdrawals = state.withdrawals || [];
-        state.withdrawals.push(stamp({ id: uid(), accountId: document.getElementById('wdAcc').value, date: document.getElementById('wdDate').value || iso(new Date()), amount, note: document.getElementById('wdNote').value.trim().slice(0, 120) }));
+        state.withdrawals.push(stamp({ id: uid(), accountId: accId, date, amount, note: document.getElementById('wdNote').value.trim().slice(0, 120) }));
         save();
         renderAll();
         toast("Withdrawal logged");
@@ -4493,13 +4506,13 @@
       const s = btStats(ts), rs = rows.map(x => x.r).filter(r => r != null && isFinite(r));
       document.getElementById('anRepSub').innerText = ts.length ? ts.length + " closed trade" + (ts.length === 1 ? "" : "s") + " · " + fmtDay(ts[0].day) + " to " + fmtDay(ts[ts.length - 1].day) + (anNoFee() ? " · before fees" : "") : "";
       const cards = [
-        { label: "Net P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, 0)}`, color: pos(s.net) },
+        { label: "Net P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, repDp(cur))}`, color: pos(s.net) },
         { label: "Win rate", val: s.n ? pct(s.winRate) : "—", sub: `${s.wins} won · ${s.losses} lost`, color: s.winRate >= 50 ? "text-emerald-400" : "text-amber-400" },
         { label: "Profit factor", val: s.pf === Infinity ? "∞" : s.n ? s.pf.toFixed(2) : "—", sub: "won ÷ lost", color: s.pf >= 1 ? "text-emerald-400" : "text-rose-400" },
-        { label: "Avg win / loss", val: `${signedMoney(s.avgWin, cur, 0)} / ${signedMoney(s.avgLoss, cur, 0)}`, sub: "per trade", color: "text-slate-200" },
-        { label: "Best / worst", val: `${signedMoney(s.best, cur, 0)} / ${signedMoney(s.worst, cur, 0)}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
+        { label: "Avg win / loss", val: `${signedMoney(s.avgWin, cur, repDp(cur))} / ${signedMoney(s.avgLoss, cur, repDp(cur))}`, sub: "per trade", color: "text-slate-200" },
+        { label: "Best / worst", val: `${signedMoney(s.best, cur, repDp(cur))} / ${signedMoney(s.worst, cur, repDp(cur))}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
         { label: "Max drawdown", val: money(-s.maxDD, cur), sub: "from a running peak", color: s.maxDD > 0 ? "text-rose-400" : "text-slate-200" },
-        { label: "Fees / funding", val: `${money(s.fees, cur, 0)} / ${signedMoney(s.funding, cur, 0)}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
+        { label: "Fees / funding", val: `${money(s.fees, cur, repDp(cur))} / ${signedMoney(s.funding, cur, repDp(cur))}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
         { label: "Average R", val: rs.length ? rfmt(avg(rs)) : "—", sub: rs.length ? `${rs.length} with a stop · total ${rfmt(sum(rs))}` : "no stop known", color: !rs.length ? "text-slate-200" : pos(avg(rs)) }
       ];
       strip.innerHTML = cards.map(c => `<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors" data-repcard="${esc(c.label)}">
@@ -5247,6 +5260,8 @@
         if (!isFinite(bal) || bal < 0) { toast("Enter your balance (0 or more)"); return false; }
         if (!isFinite(lim) || lim < 0) { toast("Daily loss limit must be 0 or more"); return false; }
         if (!(risk > 0) || !(cnt > 0) || !(lev > 0) || !(notionalX > 0)) { toast("Risk %, trades a day, leverage and biggest position must be above 0"); return false; }
+        if (risk > 100) { toast("Max risk per trade is a % of the balance: 100 at most"); return false; }
+        if (Math.round(cnt) < 1) { toast("Max trades a day must be 1 or more"); return false; }
         a.startBalance = +(bal - net).toFixed(2);
         a.dailyLossLimit = lim; a.maxRiskPct = risk; a.maxTradesPerDay = Math.round(cnt); a.defaultLeverage = lev; a.maxNotionalX = notionalX;
         if (fx !== fxRate(a)) a.fxRate = fx; // only a changed rate is stored, so defaults can still improve later
@@ -5875,7 +5890,7 @@
           <div class="grid grid-cols-2 gap-2">
             <div>
               <label class="text-slate-400 block mb-1">Symbol / Ticker</label>
-              <input type="text" id="mSymbol" value="${esc(v.symbol)}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white uppercase">
+              <input type="text" id="mSymbol" maxlength="30" value="${esc(v.symbol)}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white uppercase">
             </div>
             <div>
               <label class="text-slate-400 block mb-1">Order Side</label>
@@ -5951,13 +5966,17 @@
         `;
         renderPlayRules(v.playRules || {});
       }, () => {
-        const sym = document.getElementById('mSymbol').value.trim().toUpperCase();
+        const sym = document.getElementById('mSymbol').value.trim().toUpperCase().slice(0, 30); // the loader keeps 30
         if (!sym) { toast("Enter a ticker symbol"); return false; }
         const entry = parseFloat(document.getElementById('mEntry').value);
         const exit = parseFloat(document.getElementById('mExit').value);
         const qty = parseFloat(document.getElementById('mQty').value);
         // Must match what the loader accepts, or the trade vanishes on the next reload.
         if (!(entry > 0) || !(exit > 0) || !(qty > 0)) { toast("Entry, exit and quantity must be numbers above 0"); return false; }
+        // Typo-sized numbers (1e300) overflow the P&L to Infinity and blank every total.
+        if (!(entry * qty < MAX_TRADE_VALUE) || !(exit * qty < MAX_TRADE_VALUE)) { toast("Entry, exit or quantity is too big. Check for a typo"); return false; }
+        const dateIn = document.getElementById('mDate').value;
+        if (dateIn && !tradeDateOk(dateIn)) { toast("Pick a date between 2000 and today"); return false; }
         const stopIn = parseFloat(document.getElementById('mStop').value), feesIn = parseFloat(document.getElementById('mFees').value);
         if (stopIn < 0 || feesIn < 0) { toast("Stop loss and fees can't be negative"); return false; }
         // A stop on the wrong side of the entry would be dropped silently on the next load.
@@ -6198,14 +6217,17 @@
       }, () => {
         const title = document.getElementById('gTitle').value.trim() || "Milestone Target";
         const targets = {};
+        let bad = "";
         GOAL_ORDER.forEach(k => {
           if (!document.getElementById('gk_' + k).checked) return;
           let v = parseFloat(document.getElementById('gv_' + k).value);
-          if (!(v > 0)) return;
+          if (!(v > 0) || !isFinite(v)) { bad = bad || GOAL_KINDS[k]; return; }
           if (k === "win_rate" || k === "rule_follow") v = Math.min(100, v);
           if (k === "win_days" || k === "trade_cap" || k === "no_revenge") v = Math.max(1, Math.round(v));
           targets[k] = v;
         });
+        // A ticked target left empty or below 0 used to vanish without a word.
+        if (bad) { toast(bad + ": enter a number above 0, or untick it"); return false; }
         if (!Object.keys(targets).length) targets.net_pnl = 20;
         const pnlPct = targets.net_pnl != null && document.getElementById('gu_net_pnl').value === "pct" ? Math.min(1000, targets.net_pnl) : 0;
         const first = GOAL_ORDER.filter(k => targets[k] != null)[0];
@@ -9140,7 +9162,7 @@
       if (p.mode === "1d") return { from: today, to: today };
       if (p.mode === "7d") { const d = new Date(); d.setDate(d.getDate() - 6); return { from: iso(d), to: today }; }
       if (p.mode === "1m") { const d = new Date(); d.setMonth(d.getMonth() - 1); return { from: iso(d), to: today }; }
-      if (p.mode === "custom") return { from: p.from || "", to: p.to || "" };
+      if (p.mode === "custom") { const f = p.from || "", t = p.to || ""; return f && t && f > t ? { from: t, to: f } : { from: f, to: t }; } // picked backwards: same days
       return { from: "", to: "" };
     }
     const TINY_STOP_PCT = 0.2;
@@ -10696,13 +10718,13 @@
       const s = btStats(shown);
       const pos = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
       const cards = [
-        { label: "Net P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, 0)}`, color: pos(s.net) },
+        { label: "Net P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, repDp(cur))}`, color: pos(s.net) },
         { label: "Win rate", val: s.n ? pct(s.winRate) : "—", sub: `${s.wins} won · ${s.losses} lost`, color: s.winRate >= 50 ? "text-emerald-400" : "text-amber-400" },
         { label: "Profit factor", val: s.pf === Infinity ? "∞" : s.n ? s.pf.toFixed(2) : "—", sub: "won ÷ lost", color: s.pf >= 1 ? "text-emerald-400" : "text-rose-400" },
-        { label: "Avg win / loss", val: `${signedMoney(s.avgWin, cur, 0)} / ${signedMoney(s.avgLoss, cur, 0)}`, sub: "per trade", color: "text-slate-200" },
-        { label: "Best / worst", val: `${signedMoney(s.best, cur, 0)} / ${signedMoney(s.worst, cur, 0)}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
+        { label: "Avg win / loss", val: `${signedMoney(s.avgWin, cur, repDp(cur))} / ${signedMoney(s.avgLoss, cur, repDp(cur))}`, sub: "per trade", color: "text-slate-200" },
+        { label: "Best / worst", val: `${signedMoney(s.best, cur, repDp(cur))} / ${signedMoney(s.worst, cur, repDp(cur))}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
         { label: "Max drawdown", val: money(-s.maxDD, cur), sub: "from a running peak", color: s.maxDD > 0 ? "text-rose-400" : "text-slate-200" },
-        { label: "Fees / funding", val: `${money(s.fees, cur, 0)} / ${signedMoney(s.funding, cur, 0)}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
+        { label: "Fees / funding", val: `${money(s.fees, cur, repDp(cur))} / ${signedMoney(s.funding, cur, repDp(cur))}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
         { label: "Open", val: String(s.open.length), sub: s.open.length ? `${signedMoney(s.openNet, cur)} so far` : "none open", color: s.open.length ? "text-sky-300" : "text-slate-200" }
       ];
       document.getElementById("btStrip").innerHTML = cards.map(c => `<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors">
@@ -11189,6 +11211,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-01.146', pr: 61, title: 'Weekly check: typos caught', pts: ['Huge numbers, dates before 2000 or in the future and 500-letter symbols are turned away with a reason', 'Withdrawals: dated by trading day, more than the balance asks first; Signals Custom dates work picked backwards', 'Dollar reports show cents (a +$0.60 trade no longer reads +$1)'] },
       { v: '2026-11-01.145', pr: 60, title: 'Report for every book', pts: ['Analysis: Delta and All books open on a Report like CoinDCX', 'Net P&L, win rate, profit factor, avg win / loss, best / worst, drawdown, fees, average R', 'Equity curve, by pair (click to filter) and by day; follows every filter'] },
       { v: '2026-10-31.144', pr: 59, title: 'Cleaner Analysis that tells you what works', pts: ['Filters in two rows: books, setup, period; then small dropdowns and Clear filters', 'New: What the numbers say (keep, cut, fix first, costliest mistake)', 'New: Results by setup, side, timeframe, time of day or weekday; click a setup to filter'] },
       { v: '2026-10-31.143', pr: 58, title: 'Signals filters in Analysis', pts: ['Analysis: alert type (Zone / Fib / Trendline / No alert), 1 Day to Custom dates, channel, Level, Type and Fees', 'Every number follows them, Results by broker too', 'New Net P&L, Win rate and Average R cards'] },
