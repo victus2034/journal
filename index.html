@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-01.146">
+  <meta name="app-version" content="2026-11-01.147">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1323,17 +1323,14 @@
             </p>
 
             <div class="space-y-2.5">
+              <!-- Both fields stay masked, with neutral hints, so the screen never shows the repo or token. Branch is always main. -->
               <div>
-                <label class="text-slate-400 block mb-1">Repository Name</label>
-                <input type="text" id="syncRepoInput" placeholder="victus2034/trading-journal" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+                <label for="syncRepoInput" class="text-slate-400 block mb-1">Repository Name</label>
+                <input type="password" id="syncRepoInput" placeholder="owner/repo" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
               </div>
               <div>
-                <label class="text-slate-400 block mb-1">Branch</label>
-                <input type="text" id="syncBranchInput" value="main" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-              </div>
-              <div>
-                <label class="text-slate-400 block mb-1">Fine-Grained Personal Access Token (PAT)</label>
-                <input type="password" id="syncTokenInput" placeholder="github_pat_..." class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+                <label for="syncTokenInput" class="text-slate-400 block mb-1">Access Token</label>
+                <input type="password" id="syncTokenInput" placeholder="Paste token" autocomplete="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
               </div>
               <label class="flex items-center gap-2 text-slate-300 cursor-pointer pt-1">
                 <input type="checkbox" id="syncAutoCheckbox" class="rounded accent-amber-500">
@@ -5290,7 +5287,6 @@
       const delta = state.delta || {};
 
       if (document.getElementById('syncRepoInput')) document.getElementById('syncRepoInput').value = sync.repo || '';
-      if (document.getElementById('syncBranchInput')) document.getElementById('syncBranchInput').value = sync.branch || 'main';
       if (document.getElementById('syncTokenInput')) document.getElementById('syncTokenInput').value = sync.token || '';
       if (document.getElementById('syncAutoCheckbox')) document.getElementById('syncAutoCheckbox').checked = sync.token ? !!sync.auto : true; // on by default for a new connection
 
@@ -6671,7 +6667,7 @@
     function saveSyncSettings() {
       state.sync = state.sync || {};
       state.sync.repo = document.getElementById('syncRepoInput').value.trim();
-      state.sync.branch = document.getElementById('syncBranchInput').value.trim() || 'main';
+      state.sync.branch = state.sync.branch || 'main'; // no Branch field: main, or the branch an older setup saved
       state.sync.token = document.getElementById('syncTokenInput').value.trim();
       state.sync.auto = document.getElementById('syncAutoCheckbox').checked;
       save();
@@ -11211,6 +11207,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-01.147', pr: 62, title: 'GitHub sync details hidden', pts: ['Settings → Connections: Branch field removed; sync always uses main', 'Repository and token show as dots, with plain hints instead of the repo name', 'A saved connection keeps syncing as before'] },
       { v: '2026-11-01.146', pr: 61, title: 'Weekly check: typos caught', pts: ['Huge numbers, dates before 2000 or in the future and 500-letter symbols are turned away with a reason', 'Withdrawals: dated by trading day, more than the balance asks first; Signals Custom dates work picked backwards', 'Dollar reports show cents (a +$0.60 trade no longer reads +$1)'] },
       { v: '2026-11-01.145', pr: 60, title: 'Report for every book', pts: ['Analysis: Delta and All books open on a Report like CoinDCX', 'Net P&L, win rate, profit factor, avg win / loss, best / worst, drawdown, fees, average R', 'Equity curve, by pair (click to filter) and by day; follows every filter'] },
       { v: '2026-10-31.144', pr: 59, title: 'Cleaner Analysis that tells you what works', pts: ['Filters in two rows: books, setup, period; then small dropdowns and Clear filters', 'New: What the numbers say (keep, cut, fix first, costliest mistake)', 'New: Results by setup, side, timeframe, time of day or weekday; click a setup to filter'] },

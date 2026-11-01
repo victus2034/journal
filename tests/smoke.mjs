@@ -2667,6 +2667,92 @@ async function whatsNewRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
+// GitHub sync card: no Branch field (always main), repo and token masked with
+// neutral hints, and a connection saved by an older build keeps syncing.
+async function syncSettingsRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const REPO = 'someone/private-sync', TOKEN = 'secret-token-123';
+  const gh = { gets: [], puts: [], files: {} };
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
+  await ctx.route('https://api.github.com/**', async route => {
+    const req = route.request(), u = new URL(req.url()), h = await req.allHeaders();
+    const m = u.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/contents\/journal\.json$/);
+    const reply = (status, data) => route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+    if (!m || h.authorization !== 'Bearer ' + TOKEN) return reply(404, { message: 'Not Found' });
+    if (req.method() === 'GET') {
+      gh.gets.push(m[1] + '@' + u.searchParams.get('ref'));
+      const f = gh.files[m[1] + '@' + u.searchParams.get('ref')];
+      return f ? reply(200, { sha: f.sha, size: f.text.length, encoding: 'base64', content: Buffer.from(f.text).toString('base64') }) : reply(404, { message: 'Not Found' });
+    }
+    if (req.method() === 'PUT') {
+      const p = JSON.parse(req.postData() || '{}'), key = m[1] + '@' + p.branch, cur = gh.files[key];
+      if (cur ? p.sha !== cur.sha : !!p.sha) return reply(409, { message: 'conflict' });
+      const text = Buffer.from(String(p.content || ''), 'base64').toString('utf8'), sha = crypto.createHash('sha1').update(text).digest('hex');
+      gh.files[key] = { text, sha };
+      gh.puts.push(key);
+      return reply(cur ? 200 : 201, { content: { sha } });
+    }
+    return reply(405, { message: 'no' });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  page.on('dialog', d => d.accept());
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForTimeout(300);
+  const card = () => page.evaluate(() => {
+    openSettings('connect'); renderDataView();
+    const repo = document.getElementById('syncRepoInput'), tok = document.getElementById('syncTokenInput');
+    const box = repo.closest('.bg-terminal-card');
+    return { branch: !!document.getElementById('syncBranchInput'), text: box.innerText, html: box.innerHTML,
+      repo: [repo.type, repo.value, repo.placeholder], tok: [tok.type, tok.value, tok.placeholder] };
+  });
+  const settle = async () => { for (let i = 0; i < 50 && await page.evaluate(() => syncBusy); i++) await page.waitForTimeout(100); };
+  try {
+    // A new device: empty, masked fields with plain hints; nothing names GitHub's repo or token format.
+    let c = await card();
+    check(!c.branch && !/\bBranch\b/.test(c.text), 'Branch field gone: ' + JSON.stringify(c.text));
+    check(c.repo[0] === 'password' && c.tok[0] === 'password', 'repo and token masked: ' + JSON.stringify([c.repo, c.tok]));
+    check(!/victus2034|trading-journal|github_pat/i.test(c.html), 'card shows no repo name or token hint');
+    check(c.repo[2] === 'owner/repo' && c.tok[2] === 'Paste token', 'neutral hints: ' + JSON.stringify([c.repo[2], c.tok[2]]));
+    // Typed in and saved: branch is main, the sync goes to main.
+    await page.fill('#syncRepoInput', REPO);
+    await page.fill('#syncTokenInput', TOKEN);
+    await page.click('button:has-text("Save & Connect")');
+    await page.waitForTimeout(300); await settle();
+    let st = await page.evaluate(() => Object.assign({}, state.sync));
+    check(st.repo === REPO && st.token === TOKEN && st.branch === 'main', 'saved: ' + JSON.stringify([st.repo, st.branch]));
+    check(gh.puts.length === 1 && gh.puts[0] === REPO + '@main' && gh.gets.every(g => g === REPO + '@main'), 'first sync to main: ' + JSON.stringify(gh));
+    // Saved values come back into the masked fields (still there, still hidden).
+    c = await card();
+    check(c.repo[1] === REPO && c.tok[1] === TOKEN && c.repo[0] === 'password' && !c.text.includes(REPO) && !c.text.includes(TOKEN), 'saved values kept, hidden: ' + JSON.stringify([c.repo, c.tok[0]]));
+    // A connection an older build saved with no branch at all keeps syncing to main.
+    await page.evaluate(([r, t]) => { const s = state.sync; state.sync = { token: t, repo: r, auto: false, lastAt: s.lastAt, lastSha: s.lastSha }; save(); }, [REPO, TOKEN]);
+    await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(300); await settle();
+    const getsBefore = gh.gets.length;
+    await page.evaluate(() => { state.trades.push(Object.assign({}, state.trades[0], { id: 'tr-after-reload', notes: 'logged after reload', updatedAt: new Date().toISOString() })); save(); });
+    let r = await page.evaluate(() => syncNow({ quiet: true }));
+    const sent = JSON.parse(gh.files[REPO + '@main'].text).trades.some(t => t.id === 'tr-after-reload');
+    check(r.ok && r.changed !== false && sent && gh.puts[gh.puts.length - 1] === REPO + '@main' && gh.gets.slice(getsBefore).every(g => g === REPO + '@main'), 'old config (no branch) syncs to main: ' + JSON.stringify([r, sent, gh.puts]));
+    // Save & Connect on it fills in main; one saved on another branch keeps it, since there is no field to change it.
+    await page.evaluate(() => { openSettings('connect'); renderDataView(); saveSyncSettings(); });
+    await page.waitForTimeout(300); await settle();
+    st = await page.evaluate(() => state.sync.branch);
+    check(st === 'main', 'save fills in main: ' + st);
+    await page.evaluate(() => { state.sync.branch = 'dev'; state.sync.lastSha = ''; save(); openSettings('connect'); renderDataView(); saveSyncSettings(); });
+    await page.waitForTimeout(300); await settle();
+    st = await page.evaluate(() => state.sync.branch);
+    check(st === 'dev' && gh.gets[gh.gets.length - 1] === REPO + '@dev', 'older non-main branch kept: ' + JSON.stringify([st, gh.gets.slice(-2)]));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'GitHub sync card: no branch field, repo and token hidden, old setups keep syncing';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
 // Signals "Exit at": alerts re-scored at fixed targets from (fake) Delta candles,
 // every number worked out by hand.
 async function exitTargetRun(seed) {
@@ -2995,6 +3081,7 @@ await aiReviewRun(data);
 await layoutRun(data);
 await cleanRun(data);
 await whatsNewRun(data);
+await syncSettingsRun(data);
 await exitTargetRun(data);
 await nsePathsRun();
 await badInputRun(data);
