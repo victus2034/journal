@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-03.148">
+  <meta name="app-version" content="2026-11-03.149">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -590,7 +590,7 @@
               <summary class="px-2.5 py-1 text-xs font-mono bg-terminal-surface border border-terminal-border rounded hover:border-amber-500 cursor-pointer select-none text-slate-300">More ▾</summary>
               <div class="absolute right-0 z-40 mt-1 w-44 bg-terminal-card border border-terminal-border rounded-lg p-1 flex flex-col gap-1 shadow-subtle">
                 <button onclick="this.closest('details').open=false;openSignalImport()" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Paste signals</button>
-                <button onclick="this.closest('details').open=false;cdxRunNow()" title="Run the CoinDCX import now (it runs on your PC)" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Import CoinDCX now</button>
+                <button onclick="this.closest('details').open=false;pcImportNow()" title="Run the CoinDCX and Delta imports now (they run on your PC)" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Import CoinDCX + Delta</button>
                 <button onclick="this.closest('details').open=false;deleteAllSignals()" class="px-2.5 py-1.5 text-xs font-mono text-left text-rose-400 rounded hover:bg-rose-500/10">Delete all signals</button>
               </div>
             </details>
@@ -1356,7 +1356,7 @@
               <span id="deltaStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Disconnected</span>
             </div>
             <p class="text-slate-400 text-[11px] leading-relaxed">
-              Pulls live crypto fills automatically using cryptographic HMAC-SHA256 signatures directly on your device.
+              Pulls live crypto fills automatically using cryptographic HMAC-SHA256 signatures directly on your device. Delta only answers a key from the IPs whitelisted on it, so on a phone (its IP keeps changing) let your PC import instead: see Through your PC below.
             </p>
 
             <div class="space-y-2.5">
@@ -1376,6 +1376,18 @@
               <button onclick="deltaFullReimport()" title="Fetch all available Delta history again. Trades already in the journal are skipped, not duplicated." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Full History</button>
               <button onclick="undoDeltaFills()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Undo Delta Trades</button>
             </div>
+
+            <!-- Delta through the PC: a GitHub job on the PC (whose IP the key is whitelisted for) imports for every device. -->
+            <div id="dxPcBox" class="space-y-2 pt-2 border-t border-terminal-border">
+              <div class="font-bold text-slate-200">Through your PC (for the phone)</div>
+              <p id="dxPcStatus" class="text-slate-300 text-[11px] leading-relaxed"></p>
+              <div class="flex flex-wrap items-center gap-2">
+                <button type="button" id="dxRunBtn" onclick="pcImportNow()" title="Ask GitHub to run the Delta and CoinDCX imports now. They run on your PC, so the PC must be on." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
+                <a id="dxRunLink" href="#" target="_blank" rel="noopener" class="hidden text-[11px] text-sky-400 hover:underline">Open on GitHub</a>
+                <p id="dxRunStatus" class="w-full text-[11px] leading-relaxed text-slate-400"></p>
+              </div>
+              <div id="dxPcSteps" class="space-y-2 text-[11px] leading-relaxed text-slate-300"></div>
+            </div>
           </div>
 
           <!-- CoinDCX Futures Import -->
@@ -1390,7 +1402,7 @@
             <p id="cdxStatus" class="text-slate-300 text-[11px] leading-relaxed"></p>
             <!-- Start the import now, from any device: GitHub queues it and your PC runs it. -->
             <div id="cdxRunRow" class="flex flex-wrap items-center gap-2">
-              <button type="button" id="cdxRunBtn" onclick="cdxRunNow()" title="Ask GitHub to run the CoinDCX import now. It runs on your PC, so the PC must be on." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
+              <button type="button" id="cdxRunBtn" onclick="pcImportNow()" title="Ask GitHub to run the CoinDCX and Delta imports now. They run on your PC, so the PC must be on." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
               <a id="cdxRunLink" href="#" target="_blank" rel="noopener" class="hidden text-[11px] text-sky-400 hover:underline">Open on GitHub</a>
               <p id="cdxRunStatus" class="w-full text-[11px] leading-relaxed text-slate-400"></p>
             </div>
@@ -1890,6 +1902,8 @@
       s.backtest = cleanBacktest(s.backtest);
       s.repReviews = cleanRepReviews(s.repReviews);
       s.tombstones = cleanTombstones(s.tombstones);
+      // Where the PC's Delta import left off (tools/delta-import.mjs writes it).
+      if (s.deltaImport !== undefined) { const di = cleanDeltaImport(s.deltaImport); if (di) s.deltaImport = di; else delete s.deltaImport; }
       s.aliases = (s.aliases && typeof s.aliases === "object" && !Array.isArray(s.aliases)) ? s.aliases : {};
       if (s.reviews && typeof s.reviews === "object" && !Array.isArray(s.reviews)) {
         const r = {}; Object.keys(s.reviews).forEach(k => { if (DATE_RE.test(k)) r[k] = cText(s.reviews[k], 6000); }); s.reviews = r;
@@ -5305,6 +5319,7 @@
       
 
       renderCdxCard();
+      renderDxPc();
 
       if (!deltaBusy) {
         setDeltaStatus(deltaReady()
@@ -6443,12 +6458,27 @@
       }, mergeReviews(local, remote, tombs));
       if (!merged.accounts.length) merged.accounts = local.accounts || remote.accounts || [];
       mergeDeltaBalance(merged, local, remote);
+      const di = newerDeltaImport(local.deltaImport, remote.deltaImport);
+      if (di) merged.deltaImport = di; else delete merged.deltaImport;
       ensureReportBooks(merged);
       return merged;
     }
     // The newest Delta wallet figure any device fetched wins. It replaces this
     // device's own figure only when newer, and is marked synced so a device
     // without the key can still show it.
+    // The PC's Delta import record: the newest fill read, the positions still
+    // open then, why the last run failed. Kept in the order the job writes it,
+    // so a sync finds nothing to rewrite; the newer copy wins a merge.
+    function cleanDeltaImport(d) {
+      if (!d || typeof d !== "object" || Array.isArray(d)) return null;
+      const o = { lastFillTime: Number(d.lastFillTime) > 0 ? Number(d.lastFillTime) : 0, openPositions: {} };
+      const op = d.openPositions && typeof d.openPositions === "object" && !Array.isArray(d.openPositions) ? d.openPositions : {};
+      Object.keys(op).slice(0, 500).forEach(k => { const v = Number(op[k]); if (v > 0) o.openPositions[cText(k, 40)] = v; });
+      if (d.note) o.note = cText(d.note, 300);
+      if (typeof d.updatedAt === "string" && d.updatedAt) o.updatedAt = cText(d.updatedAt, 40);
+      return o;
+    }
+    function newerDeltaImport(a, b) { return !a ? b || null : !b ? a : (b.updatedAt || "") > (a.updatedAt || "") ? b : a; }
     function cleanDeltaBalance(b) {
       return b && typeof b.value === "number" && isFinite(b.value) && typeof b.at === "number" && isFinite(b.at)
         ? { value: b.value, field: String(b.field || "wallet balance").slice(0, 40), at: b.at } : null;
@@ -6481,6 +6511,8 @@
       if (st.withdrawals && st.withdrawals.length) p.withdrawals = st.withdrawals;
       // Delta's own wallet figure, never the key that fetched it.
       if (st.delta && st.delta.shared) p.deltaBalance = st.delta.shared;
+      // The PC's Delta import record travels as it came, or the next push would undo it.
+      if (st.deltaImport) p.deltaImport = st.deltaImport;
       return p;
     }
     let syncBusy = false, syncTimer = null;
@@ -6959,7 +6991,7 @@
         deltaBusy = false;
         const code = r && r.body && r.body.error && r.body.error.code;
         const why = code === "invalid_api_key" ? "That key was refused. Check it was copied in full."
-          : code === "ip_not_whitelisted_for_api_key" ? "Delta is asking for this device's IP to be whitelisted on the key."
+          : code === "ip_not_whitelisted_for_api_key" ? "Delta is asking for this device's IP to be whitelisted on the key. On the phone, let your PC import instead (Through your PC, below)."
           : code === "insufficient_permissions" ? "This key does not have Read Data permission."
           : code ? `Delta refused the request (${code}).`
           : /contract sizes/.test(String(r && r.message)) ? "Delta's contract sizes could not be read, so nothing was imported (quantities would have been wrong). Try again in a moment."
@@ -7146,29 +7178,46 @@
     // import is set up, it starts the run itself once the last one is an hour old,
     // then syncs to pick up the new balance. The token needs Actions: Read and write
     // for that; without it the card says so and GitHub's own schedule still runs.
-    const CDX_KICK_MS = 60 * 60e3, CDX_WORKFLOW = "/actions/workflows/coindcx.yml";
+    const CDX_KICK_MS = 60 * 60e3, CDX_WORKFLOW = "/actions/workflows/coindcx.yml", DX_WORKFLOW = "/actions/workflows/delta.yml";
+    // The imports that run on the PC (a self-hosted runner): CoinDCX and Delta.
+    // Both exchanges lock a key to IP addresses, and the PC's is the one the keys
+    // name, so these run there and write into the sync repo's journal.json.
+    // Delta's is on once its job has written to the file (`deltaImport`).
+    const PC_JOBS = {
+      cdx: { name: "CoinDCX", wf: CDX_WORKFLOW, unit: "row",
+        on: () => btState().files.some(x => x.id === CDX_FILE),
+        count: () => btState().rows.filter(r => r.file === CDX_FILE).length,
+        note: () => { const f = btState().files.find(x => x.id === CDX_FILE); return (f && f.note) || ""; } },
+      dx: { name: "Delta", wf: DX_WORKFLOW, unit: "trade",
+        on: () => !!state.deltaImport,
+        count: () => (state.trades || []).filter(t => t.src && t.src.indexOf("delta:") === 0).length,
+        note: () => (state.deltaImport && state.deltaImport.note) || "" }
+    };
     let cdxKickBusy = false;
     async function cdxKick() {
       if (cdxKickBusy || !state || document.hidden || !syncReady()) return;
-      if (!btState().files.some(x => x.id === CDX_FILE)) return;
-      if (Date.now() - (state.ui.cdxKickAt || 0) < CDX_KICK_MS) return;
       cdxKickBusy = true;
+      try { for (const k of Object.keys(PC_JOBS)) if (PC_JOBS[k].on()) await pcKickOne(k); }
+      finally { cdxKickBusy = false; renderCdxCard(); renderDxPc(); }
+    }
+    async function pcKickOne(k) {
+      const job = PC_JOBS[k];
+      if (Date.now() - (state.ui[k + "KickAt"] || 0) < CDX_KICK_MS) return;
       try {
         // The newest run, whoever started it (GitHub's schedule, another device, you).
         let last = 0;
         try {
-          const r = await syncApi(CDX_WORKFLOW + "/runs?per_page=1");
-          if (r.ok) { const run = ((await r.json()).workflow_runs || [])[0]; if (run) { last = Date.parse(run.created_at) || 0; state.ui.cdxLastRun = cdxRunInfo(run); } }
+          const r = await syncApi(job.wf + "/runs?per_page=1");
+          if (r.ok) { const run = ((await r.json()).workflow_runs || [])[0]; if (run) { last = Date.parse(run.created_at) || 0; state.ui[k + "LastRun"] = cdxRunInfo(run); } }
         } catch (e) {}
-        if (Date.now() - last < CDX_KICK_MS) { state.ui.cdxKickAt = last; state.ui.cdxKickErr = ""; save(); return; }
-        const r = await syncApi(CDX_WORKFLOW + "/dispatches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: syncCfg().branch || "main" }) });
-        state.ui.cdxKickAt = Date.now();
-        state.ui.cdxKickErr = r.ok ? "" : String(r.status);
+        if (Date.now() - last < CDX_KICK_MS) { state.ui[k + "KickAt"] = last; state.ui[k + "KickErr"] = ""; save(); return; }
+        const r = await syncApi(job.wf + "/dispatches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: syncCfg().branch || "main" }) });
+        state.ui[k + "KickAt"] = Date.now();
+        state.ui[k + "KickErr"] = r.ok ? "" : String(r.status);
         save();
         // A run takes about 20 seconds once GitHub starts it.
         if (r.ok) { setTimeout(syncPull, 60e3); setTimeout(syncPull, 150e3); }
       } catch (e) { /* offline: tried again on the next check */ }
-      finally { cdxKickBusy = false; renderCdxCard(); }
     }
     // GitHub's run, kept short: when it was made, where it is, how it ended, its page.
     function cdxRunInfo(run) {
@@ -7176,75 +7225,81 @@
       return { at: Date.parse(run.created_at) || 0, status: String(run.status || ""), conclusion: String(run.conclusion || ""), url: /^https:\/\/github\.com\//.test(url) ? url : "" };
     }
     // Not started or not finished. A run that waits is waiting for the PC: the
-    // import runs there (a self-hosted runner), and GitHub holds it until the PC
-    // and its runner are on, for up to a day, one run at a time.
+    // imports run there, and GitHub holds a run until the PC and its runner are
+    // on, for up to a day, one at a time.
     function cdxRunWaiting(st) { return /^(queued|pending|waiting|requested)$/.test(st || ""); }
 
-    // "Import now": runs the import from any device, the phone too. GitHub queues
-    // it and the PC runs it, so this device then watches the run (every 10 s, for
-    // 15 minutes) to say whether it waits for the PC, runs or is done, and syncs
-    // once it is done to bring the new trades in.
+    // "Import now": runs both imports from any device, the phone too. GitHub
+    // queues them and the PC runs them, so this device then watches the runs
+    // (every 10 s, for 15 minutes) to say whether each waits for the PC, runs or
+    // is done, and syncs as each one finishes to bring its trades in. Delta's
+    // job not in the sync repo yet (404) just means it isn't set up.
     const CDX_POLL_MS = 10e3, CDX_WATCH_MS = 15 * 60e3;
-    let cdxRun = null;
-    async function cdxRunNow() {
+    let pcRuns = {};
+    function pcLive() { return Object.keys(pcRuns).some(k => pcRuns[k].live); }
+    async function pcImportNow() {
       if (!state) return;
-      if (!syncReady()) { toast("Connect GitHub Sync first (Settings → Connections): the import writes into that repo."); return; }
-      if (cdxRun && cdxRun.live) { toast(cdxRunText(cdxRun)); return; }
-      const run = cdxRun = { asked: Date.now(), live: true, step: "asking", rows: btState().rows.filter(r => r.file === CDX_FILE).length };
-      renderCdxRun();
-      let r = null;
-      try {
-        r = await syncApi(CDX_WORKFLOW + "/dispatches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: syncCfg().branch || "main" }) });
-      } catch (e) {}
-      if (!r || !r.ok) {
+      if (!syncReady()) { toast("Connect GitHub Sync first (Settings → Connections): the imports write into that repo."); return; }
+      if (pcLive()) { toast(pcSummary()); return; }
+      const asked = Date.now(), runs = {};
+      Object.keys(PC_JOBS).forEach(k => { runs[k] = { key: k, asked, live: true, step: "asking", rows: PC_JOBS[k].count() }; });
+      pcRuns = runs;
+      renderPcRuns();
+      await Promise.all(Object.keys(runs).map(async k => {
+        const run = runs[k];
+        let r = null;
+        try { r = await syncApi(PC_JOBS[k].wf + "/dispatches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: syncCfg().branch || "main" }) }); } catch (e) {}
+        if (r && r.ok) { run.step = "asked"; state.ui[k + "KickAt"] = Date.now(); state.ui[k + "KickErr"] = ""; return; }
+        if (k === "dx" && r && r.status === 404 && !PC_JOBS.dx.on()) { Object.assign(run, { live: false, step: "none" }); return; }
         Object.assign(run, { live: false, step: r ? "refused" : "offline", code: r ? r.status : 0 });
-        if (r && (r.status === 401 || r.status === 403 || r.status === 404)) { state.ui.cdxKickErr = String(r.status); save(); }
-        renderCdxRun(); renderCdxCard();
-        toast(cdxRunText(run));
-        return;
-      }
-      state.ui.cdxKickAt = Date.now(); state.ui.cdxKickErr = ""; save();
-      run.step = "asked";
-      renderCdxRun();
-      toast("CoinDCX import asked for: it runs on your PC. A note pops up here when it's done.");
-      setTimeout(() => cdxWatch(run), 4e3);
+        if (r && (r.status === 401 || r.status === 403 || r.status === 404)) state.ui[k + "KickErr"] = String(r.status);
+      }));
+      save();
+      renderCdxCard(); renderDxPc();
+      if (pcLive()) { toast("Import asked for: it runs on your PC. A note pops up here when it's done."); setTimeout(() => pcWatch(runs), 4e3); }
+      else toast(pcSummary());
     }
-    async function cdxWatch(run) {
-      if (run !== cdxRun || !run.live) return;
-      try {
-        // The newest run made since the press (a newer scheduled one replaces a
-        // waiting one, and then does the work). Two minutes' slack for the clock.
-        const r = await syncApi(CDX_WORKFLOW + "/runs?per_page=1", { cache: "no-store" });
-        if (r.ok) {
-          const w = ((await r.json()).workflow_runs || [])[0];
-          if (w && (Date.parse(w.created_at) || 0) >= run.asked - 120e3) { Object.assign(run, cdxRunInfo(w), { step: "run" }); state.ui.cdxLastRun = cdxRunInfo(w); }
-        }
-      } catch (e) {}
-      if (run.status === "completed") {
-        run.live = false;
-        run.step = "syncing";
-        renderCdxRun();
-        // Its rows, wallet and any reason it failed come in with the sync.
+    async function pcWatch(runs) {
+      if (runs !== pcRuns) return;
+      const live = Object.keys(runs).filter(k => runs[k].live);
+      if (!live.length) return;
+      await Promise.all(live.map(async k => {
+        const run = runs[k];
+        try {
+          // The newest run made since the press (a newer scheduled one replaces a
+          // waiting one, and then does the work). Two minutes' slack for the clock.
+          const r = await syncApi(PC_JOBS[k].wf + "/runs?per_page=1", { cache: "no-store" });
+          if (r.ok) {
+            const w = ((await r.json()).workflow_runs || [])[0];
+            if (w && (Date.parse(w.created_at) || 0) >= run.asked - 120e3) { Object.assign(run, cdxRunInfo(w), { step: "run" }); state.ui[k + "LastRun"] = cdxRunInfo(w); }
+          }
+        } catch (e) {}
+      }));
+      // Each finished run's trades, wallet and any reason it failed come in with one sync.
+      const done = live.filter(k => runs[k].status === "completed");
+      if (done.length) {
+        done.forEach(k => { runs[k].step = "syncing"; });
+        renderPcRuns();
         let res = null;
         for (let i = 0; i < 5; i++) {
           res = await syncNow({ quiet: true });
           if (!res || res.why !== "busy") break;
           await new Promise(ok => setTimeout(ok, 3e3));
         }
-        const f = btState().files.find(x => x.id === CDX_FILE);
-        Object.assign(run, { step: "done", synced: !!(res && res.ok), added: btState().rows.filter(x => x.file === CDX_FILE).length - run.rows, note: f && f.note || "" });
+        done.forEach(k => Object.assign(runs[k], { live: false, step: "done", synced: !!(res && res.ok), added: PC_JOBS[k].count() - runs[k].rows, note: PC_JOBS[k].note() }));
         renderAll();
-        toast(cdxRunText(run));
-      } else if (Date.now() - run.asked >= CDX_WATCH_MS) {
-        run.live = false;
-        renderCdxCard();
-        toast(cdxRunText(run));
-      } else setTimeout(() => cdxWatch(run), CDX_POLL_MS);
-      renderCdxRun();
+      }
+      const open = live.filter(k => runs[k].live);
+      if (open.length && Date.now() - runs[open[0]].asked < CDX_WATCH_MS) { renderPcRuns(); setTimeout(() => pcWatch(runs), CDX_POLL_MS); return; }
+      open.forEach(k => { runs[k].live = false; });
+      renderCdxCard(); renderDxPc();
+      toast(pcSummary());
     }
-    function cdxRunText(run) {
-      const hm = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      if (run.step === "asking") return "Asking GitHub to run the CoinDCX import…";
+    // One import's run in a sentence, for its own card.
+    function pcRunText(run) {
+      const job = PC_JOBS[run.key], hm = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      if (run.step === "asking") return "Asking GitHub to run the " + job.name + " import…";
+      if (run.step === "none") return "";
       if (run.step === "offline") return "Couldn't reach GitHub. Check the internet and press Import now again.";
       if (run.step === "refused") return run.code === 401 || run.code === 403 || run.code === 404
         ? `GitHub refused (${run.code}): give the sync token Actions: Read and write, then press Import now again.`
@@ -7254,22 +7309,68 @@
       if (run.step === "done") return run.conclusion !== "success"
         ? (run.conclusion === "cancelled" ? "GitHub cancelled the run: the PC was off for a day, or a newer run took its place. Press Import now again." : "The run failed on your PC (" + (run.conclusion || "no result") + "). Open it on GitHub to see why.")
         : !run.synced ? "Done on your PC. This device couldn't sync just now; the trades come in with the next sync."
-        : run.note ? "Ran at " + hm(run.at) + ", but CoinDCX said no: " + run.note
-        : "CoinDCX import done · " + (run.added > 0 ? run.added + " new row" + (run.added === 1 ? "" : "s") : "nothing new") + ".";
+        : run.note ? "Ran at " + hm(run.at) + ", but " + job.name + " said no: " + run.note
+        : job.name + " import done · " + (run.added > 0 ? run.added + " new " + job.unit + (run.added === 1 ? "" : "s") : "nothing new") + ".";
       if (run.status === "in_progress") return "Running on your PC…";
       if (cdxRunWaiting(run.status)) return (run.live ? "Waiting" : "Still waiting") + " for your PC since " + hm(run.asked) + ": the import runs there. Turn the PC on (with internet); it starts by itself." + (run.live ? "" : " New trades come in with the next sync.");
       return run.live ? "Waiting for GitHub…" : "No word from GitHub yet. New trades come in with the next sync once it has run.";
     }
-    function renderCdxRun() {
-      const el = document.getElementById("cdxRunStatus"), btn = document.getElementById("cdxRunBtn"), a = document.getElementById("cdxRunLink");
-      if (!el || !btn) return;
-      const run = cdxRun, bad = run && (run.step === "refused" || run.step === "offline" || (run.step === "done" && (run.conclusion !== "success" || run.note)));
-      el.innerText = run ? cdxRunText(run) : "";
-      el.className = "w-full text-[11px] leading-relaxed " + (bad ? "text-rose-300" : run && run.step === "done" ? "text-emerald-300" : "text-slate-400");
-      btn.disabled = !!(run && run.live);
-      btn.style.opacity = btn.disabled ? "0.5" : "";
-      btn.innerText = run && run.live ? "Importing…" : "Import now";
-      if (a) { const url = run && run.url; a.classList.toggle("hidden", !url); if (url) a.href = url; }
+    // Every import in a line, for the toast: one says it in full, two in short.
+    function pcSummary() {
+      const ks = Object.keys(pcRuns).filter(k => pcRuns[k].step !== "none");
+      if (!ks.length) return "";
+      const first = pcRuns[ks[0]];
+      if (ks.length === 1 || ks.every(k => pcRuns[k].step === first.step && pcRuns[k].code === first.code && /^(refused|offline)$/.test(first.step))) return pcRunText(first);
+      return ks.map(k => PC_JOBS[k].name + ": " + pcShort(pcRuns[k])).join(" · ");
+    }
+    function pcShort(run) {
+      const job = PC_JOBS[run.key];
+      if (run.step === "offline") return "couldn't reach GitHub";
+      if (run.step === "refused") return "GitHub refused (" + run.code + ")";
+      if (run.step === "syncing") return "bringing it in";
+      if (run.step === "done") return run.conclusion !== "success" ? (run.conclusion === "cancelled" ? "cancelled by GitHub" : "run failed")
+        : !run.synced ? "done, comes in with the next sync" : run.note ? "refused, see its card"
+        : run.added > 0 ? run.added + " new " + job.unit + (run.added === 1 ? "" : "s") : "nothing new";
+      if (run.status === "in_progress") return "running on your PC";
+      if (cdxRunWaiting(run.status)) return (run.live ? "" : "still ") + "waiting for your PC";
+      return run.live ? "asked" : "no word yet";
+    }
+    function renderPcRuns() {
+      const live = pcLive();
+      [["cdx", "cdxRunStatus", "cdxRunBtn", "cdxRunLink"], ["dx", "dxRunStatus", "dxRunBtn", "dxRunLink"]].forEach(([k, sid, bid, lid]) => {
+        const el = document.getElementById(sid), btn = document.getElementById(bid), a = document.getElementById(lid);
+        if (!el || !btn) return;
+        const run = pcRuns[k], bad = run && (run.step === "refused" || run.step === "offline" || (run.step === "done" && (run.conclusion !== "success" || run.note)));
+        el.innerText = run ? pcRunText(run) : "";
+        el.className = "w-full text-[11px] leading-relaxed " + (bad ? "text-rose-300" : run && run.step === "done" ? "text-emerald-300" : "text-slate-400");
+        btn.disabled = live;
+        btn.style.opacity = live ? "0.5" : "";
+        btn.innerText = live ? "Importing…" : "Import now";
+        if (a) { const url = run && run.url; a.classList.toggle("hidden", !url); if (url) a.href = url; }
+      });
+    }
+    // Delta through the PC, on the Delta card: set up or not, its last change or
+    // why its last run failed, and the steps when it isn't working.
+    function renderDxPc() {
+      const status = document.getElementById("dxPcStatus"), steps = document.getElementById("dxPcSteps");
+      if (!status || !steps) return;
+      const d = state.deltaImport, repo = syncCfg().repo, hm = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const lastRun = state.ui.dxLastRun, waiting = !!(d && lastRun && lastRun.at && cdxRunWaiting(lastRun.status) && !pcLive());
+      const n = PC_JOBS.dx.count();
+      status.className = "text-[11px] leading-relaxed " + (d && d.note ? "text-rose-300" : "text-slate-300");
+      status.innerText = !repo ? "Connect GitHub Sync above first: your PC writes the trades into that repo's journal file."
+        : !d ? "Not set up yet. With it, your PC imports Delta every 30 minutes and every device (this phone too) gets the trades with its sync, no key needed here."
+        : (d.note ? "GitHub's last Delta run failed: " + d.note + " " : "Your PC imports Delta every 30 minutes while it's on; trades arrive with the sync. ")
+          + `${n} Delta trade${n === 1 ? "" : "s"} in the journal` + (d.updatedAt ? ", last change " + new Date(d.updatedAt).toLocaleString() : "") + "."
+          + (state.ui.dxKickErr ? " This device can't start it (GitHub said " + state.ui.dxKickErr + "): give the sync token Actions: Read and write."
+            : waiting ? " The run from " + hm(lastRun.at) + " is waiting for your PC: it has to be on (with internet)." : "");
+      const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">${esc(text)}</a>`;
+      const gh = "https://github.com/" + repo;
+      steps.innerHTML = !repo || (d && !d.note) ? ""
+        : `<p>1. On Delta, make an API key with <b>Read Data</b> only, whitelisted for your PC's public IP (open <span class="text-amber-300">api.ipify.org</span> on the PC).</p>
+          <p>2. Open ${link(gh + "/settings/secrets/actions", "Settings → Secrets → Actions")} and add <code class="text-amber-300">DELTA_API_KEY</code> and <code class="text-amber-300">DELTA_API_SECRET</code>.</p>
+          <p>3. Press <b>Import now</b> (or ${link(gh + "/actions/workflows/delta.yml", "Actions → Delta import")} → Run workflow). When the PC's IP changes, the reason above names the new one to whitelist.</p>`;
+      renderPcRuns();
     }
     function cdxWalletTitle(w) { return "CoinDCX futures wallet, read by GitHub's hourly import" + (w.at ? "; last changed " + new Date(w.at).toLocaleString() : ""); }
     function renderCdxCard() {
@@ -7279,7 +7380,7 @@
       const n = bt.rows.filter(r => r.file === CDX_FILE).length;
       const hm = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       // GitHub's newest run, as this device last saw it, still waiting for the PC (not while Import now watches it).
-      const lastRun = state.ui.cdxLastRun, waiting = !!(lastRun && lastRun.at && cdxRunWaiting(lastRun.status) && !(cdxRun && cdxRun.live));
+      const lastRun = state.ui.cdxLastRun, waiting = !!(lastRun && lastRun.at && cdxRunWaiting(lastRun.status) && !pcLive());
       badge.innerText = !f ? "Not set up" : f.note ? "Last run failed" : "Importing";
       badge.className = "text-[10px] px-2 py-0.5 rounded " + (f && f.note ? "bg-rose-950/60 text-rose-300" : f ? "bg-slate-800 text-emerald-300" : "bg-slate-800 text-slate-300");
       status.className = "text-[11px] leading-relaxed " + (f && f.note ? "text-rose-300" : "text-slate-300");
@@ -7289,7 +7390,7 @@
           + (f && state.ui.cdxKickErr ? " This device can't start the hourly import itself (GitHub said " + state.ui.cdxKickErr + "): give the sync token Actions: Read and write, or GitHub's own schedule runs it when it can."
             : f && waiting ? " The run from " + hm(lastRun.at) + " is waiting for your PC: the import runs there, so the PC has to be on (with internet)."
             : f && state.ui.cdxKickAt ? " Import last run " + hm(state.ui.cdxKickAt) + "; this journal starts it every hour while open." : "");
-      renderCdxRun();
+      renderPcRuns();
       const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">${esc(text)}</a>`;
       const gh = "https://github.com/" + repo;
       steps.innerHTML = !repo
@@ -11321,6 +11422,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-03.149', pr: 64, title: 'Delta through your PC', pts: ['Delta imports on your PC too (GitHub job), so the phone gets trades without its IP on the key', 'Import now (CoinDCX card, Delta card, Signals → More) runs both imports', "Delta card: the PC import's status, or why it failed and the PC's IP to whitelist"] },
       { v: '2026-11-03.148', pr: 63, title: 'CoinDCX import from your phone', pts: ['Import now on the CoinDCX card (and Signals → More) starts the import from any device', 'Shows if it waits for your PC, runs or is done, then syncs the new trades', 'A refused key now names the PC\'s new IP to make the CoinDCX key for'] },
       { v: '2026-11-01.147', pr: 62, title: 'GitHub sync details hidden', pts: ['Settings → Connections: Branch field removed; sync always uses main', 'Repository and token show as dots, with plain hints instead of the repo name', 'A saved connection keeps syncing as before'] },
       { v: '2026-11-01.146', pr: 61, title: 'Weekly check: typos caught', pts: ['Huge numbers, dates before 2000 or in the future and 500-letter symbols are turned away with a reason', 'Withdrawals: dated by trading day, more than the balance asks first; Signals Custom dates work picked backwards', 'Dollar reports show cents (a +$0.60 trade no longer reads +$1)'] },

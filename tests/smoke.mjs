@@ -1832,6 +1832,196 @@ async function autoKeepRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('auto keep: ' + e); });
 }
 
+// tools/delta-import.mjs, the Delta import that runs on lakky's PC (Delta only
+// answers a key from its whitelisted IPs, and the phone's keeps changing). It
+// runs here against a fake Delta, which checks every signature the way Delta
+// documents it (HMAC-SHA256 hex of GET + timestamp + path + query), and a fake
+// GitHub holding journal.json. The trades it builds must be the ones the
+// journal's own in-page import builds from the same fills, each order once.
+async function deltaImportRun(seed) {
+  const KEY = 'dx-key-1', SECRET = 'dx-secret-2', REPO = 'victus/sync';
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const mock = { fills: [], calls: [], bad: [], refuse: null, ip: '203.0.113.9', ipReads: 0, equity: '512.25', products: true };
+  const fill = (id, sym, side, size, price, at, order, fee = 0.05) => ({ id, product_symbol: sym, side, size, price: String(price), commission: String(fee), created_at: at, order_id: order });
+  const CV = { BTCUSD: 0.001, ETHUSD: 0.01, SOLUSD: 1 };
+  function delta(req) {
+    const u = new URL(req.url, 'http://x'), path = u.pathname.replace(/^\/dx/, ''), h = req.headers;
+    mock.calls.push(path + u.search);
+    if (path === '/v2/products') return mock.products ? [200, { result: Object.keys(CV).map(k => ({ symbol: k, contract_value: String(CV[k]) })) }] : [503, { raw: 'down' }];
+    const sig = crypto.createHmac('sha256', SECRET).update('GET' + h.timestamp + path + u.search).digest('hex');
+    if (h['api-key'] !== KEY || h.signature !== sig || !/^\d{10}$/.test(h.timestamp || '')) { mock.bad.push(path + ' signature'); return [401, { success: false, error: { code: 'invalid_api_key' } }]; }
+    if (mock.refuse === 'ip') return [401, { success: false, error: { code: 'ip_not_whitelisted_for_api_key', context: { client_ip: '198.51.100.4' } } }];
+    if (mock.refuse === 'ipBare') return [401, { success: false, error: { code: 'ip_not_whitelisted_for_api_key' } }];
+    if (path === '/v2/wallet/balances') return [200, { meta: { net_equity: mock.equity }, result: [] }];
+    if (path === '/v2/fills') {
+      const start = Number(u.searchParams.get('start_time') || 0), after = Number(u.searchParams.get('after') || 0), size = Number(u.searchParams.get('page_size'));
+      const all = mock.fills.filter(f => Date.parse(f.created_at.replace(/(\.\d{3})\d+/, '$1')) * 1000 >= start).sort((a, b) => a.created_at < b.created_at ? 1 : -1);
+      const page = all.slice(after, after + 2); // two a page, so paging is used
+      if (size !== 200) mock.bad.push('page_size ' + size);
+      return [200, { result: page, meta: { after: after + 2 < all.length ? String(after + 2) : null } }];
+    }
+    return [404, { error: { code: 'not_found' } }];
+  }
+  const gh = { files: {}, puts: [] };
+  function github(method, url, headers, body) {
+    const u = new URL(url), m = u.pathname.match(/^(?:\/gh)?\/repos\/([^/]+\/[^/]+)\/contents\/journal\.json$/);
+    if (!m || headers.authorization !== 'Bearer gh-token') return [404, { message: 'Not Found' }];
+    const f = gh.files[m[1]];
+    if (method === 'GET') return f ? [200, { sha: f.sha, size: f.text.length, encoding: 'base64', content: Buffer.from(f.text).toString('base64') }] : [404, { message: 'Not Found' }];
+    if (method === 'PUT') {
+      const p = JSON.parse(body || '{}');
+      if (f ? p.sha !== f.sha : !!p.sha) return [409, { message: 'conflict' }];
+      const text = Buffer.from(String(p.content || ''), 'base64').toString('utf8'), sha = crypto.createHash('sha1').update(text).digest('hex');
+      gh.files[m[1]] = { text, sha }; gh.puts.push(p.message);
+      return [f ? 200 : 201, { content: { sha } }];
+    }
+    return [405, {}];
+  }
+  const fake = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      if (req.url === '/ip') { mock.ipReads++; res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end(mock.ip); }
+      const [status, data] = req.url.startsWith('/dx/') ? delta(req) : github(req.method, 'http://x' + req.url, req.headers, body);
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    });
+  });
+  await new Promise(r => fake.listen(0, '127.0.0.1', r));
+  const fakeBase = 'http://127.0.0.1:' + fake.address().port;
+  const runImport = (extra = {}) => new Promise(resolve => {
+    const before = gh.puts.length;
+    mock.calls = [];
+    execFile(process.execPath, [path.join(ROOT, 'tools', 'delta-import.mjs')], {
+      env: Object.assign({ PATH: process.env.PATH, TZ: 'UTC', DELTA_API_KEY: KEY, DELTA_API_SECRET: SECRET, GITHUB_TOKEN: 'gh-token', GITHUB_REPOSITORY: REPO,
+        GITHUB_API_URL: fakeBase + '/gh', DELTA_BASE: fakeBase + '/dx', IP_URL: fakeBase + '/ip' }, extra),
+      timeout: 60000
+    }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, out: (stdout + stderr).trim(), puts: gh.puts.slice(before) }));
+  });
+  const stored = () => JSON.parse(gh.files[REPO].text);
+  const dTrades = j => (j.trades || []).filter(t => t.src && t.src.startsWith('delta:'));
+
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
+  await ctx.route('https://api.github.com/**', async route => {
+    const req = route.request(), u = req.url();
+    if (/\/actions\//.test(u)) return route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' }, body: '{}' });
+    const [status, data] = github(req.method(), u, await req.allHeaders(), req.postData() || '');
+    return route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  });
+  const seeded = Object.assign({}, seed, { sync: { token: 'gh-token', repo: REPO, branch: 'main', auto: false, lastAt: '', lastSha: '' } });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  page.on('dialog', d => d.accept());
+  const sync = () => page.evaluate(() => syncNow({ quiet: true }));
+  const card = () => page.evaluate(() => { openSettings('connect'); renderDataView(); return { status: document.getElementById('dxPcStatus').innerText, bad: document.getElementById('dxPcStatus').className.includes('rose'), steps: document.getElementById('dxPcSteps').innerText }; });
+  const strip = t => { const o = Object.assign({}, t); delete o.id; delete o.updatedAt; return o; };
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    // A trade logged by hand that Delta will bring in too: matched, not doubled.
+    await page.evaluate(() => { state.trades.push(stamp({ id: 'hand1', accountId: 'acc_cry', date: '2026-10-20', time: '15:30', exitTime: '16:00', exitDate: '2026-10-20', symbol: 'SOLUSD', direction: 'short', entry: 150, exit: 148, stop: 0, qty: 2, fees: 0.1, leverage: 10, setup: '', rules: [], notes: 'by hand' })); save(); });
+    // The journal goes up first, with a field another feature keeps there.
+    let s = await sync();
+    const j0 = stored(); j0.keysLock = { v: 1, data: 'kept-as-is' }; const t0 = JSON.stringify(j0); gh.files[REPO] = { text: t0, sha: crypto.createHash('sha1').update(t0).digest('hex') };
+    let c = await card();
+    check(s.ok && /^Not set up yet/.test(c.status) && /DELTA_API_KEY/.test(c.steps) && /api\.ipify\.org/.test(c.steps), 'card before: ' + JSON.stringify(c));
+
+    // No secrets: says what to add and touches nothing.
+    let r = await runImport({ DELTA_API_KEY: '' });
+    check(r.code === 1 && /Add the DELTA_API_KEY and DELTA_API_SECRET secrets/.test(r.out) && !r.puts.length && !mock.calls.length, 'no secrets: ' + JSON.stringify(r));
+
+    // First run: the whole history. BTC long closed (two entry fills), ETH short
+    // still open, SOL short matching the hand-logged trade, XRP with no contract size.
+    mock.fills = [
+      fill(1, 'BTCUSD', 'buy', 10, 60000, '2026-10-20T04:00:00.123456Z', 'o1'), fill(2, 'BTCUSD', 'buy', 10, 60200, '2026-10-20T04:05:00.000001Z', 'o2'),
+      fill(3, 'BTCUSD', 'sell', 20, 61000, '2026-10-20T20:00:00.5Z', 'o3', 0.1),
+      fill(4, 'ETHUSD', 'sell', 100, 2500, '2026-10-21T09:00:00Z', 'o4'),
+      fill(5, 'SOLUSD', 'sell', 2, 150, '2026-10-20T10:00:10Z', 'o5'), fill(6, 'SOLUSD', 'buy', 2, 148, '2026-10-20T10:30:10Z', 'o6'),
+      fill(7, 'XRPUSD', 'buy', 5, 2, '2026-10-21T10:00:00Z', 'o7'), fill(8, 'XRPUSD', 'sell', 5, 2.1, '2026-10-21T11:00:00Z', 'o8')
+    ];
+    r = await runImport();
+    let j = stored(), dt = dTrades(j);
+    const btc = dt.find(t => t.src === 'delta:o3');
+    check(r.code === 0 && /^Imported 1 new trade from Delta · 8 fills read · skipped XRPUSD \(Delta gave no contract size\) · balance 512\.25 \(net equity\)$/.test(r.out) && JSON.stringify(r.puts) === '["Delta: 1 new trade"]', 'first run: ' + JSON.stringify(r));
+    check(mock.bad.length === 0, 'requests Delta would refuse: ' + mock.bad.join(' | '));
+    check(btc && btc.accountId === 'acc_cry' && btc.date === '2026-10-20' && btc.time === '09:30' && btc.exitDate === '2026-10-21' && btc.exitTime === '01:30' && btc.direction === 'long' && btc.entry === 60100 && btc.exit === 61000 && btc.qty === 0.02 && Math.abs(btc.fees - 0.2) < 1e-9 && btc.leverage === 10 && btc.rules.length === 5 && btc.updatedAt, 'BTC trade: ' + JSON.stringify(btc));
+    check(j.trades.find(t => t.id === 'hand1').src === 'delta:o6' && dt.length === 2, 'hand-logged SOL not matched: ' + JSON.stringify(dt.map(t => t.src)));
+    check(j.deltaImport && j.deltaImport.lastFillTime === Date.parse('2026-10-21T11:00:00Z') * 1000 && JSON.stringify(j.deltaImport.openPositions) === JSON.stringify({ ETHUSD: Date.parse('2026-10-21T09:00:00Z') * 1000 }) && !('note' in j.deltaImport), 'resume point: ' + JSON.stringify(j.deltaImport));
+    check(j.deltaBalance && j.deltaBalance.value === 512.25 && j.deltaBalance.field === 'net equity' && JSON.stringify(j.keysLock) === '{"v":1,"data":"kept-as-is"}', 'balance / other fields: ' + JSON.stringify({ b: j.deltaBalance, k: j.keysLock }));
+    check(mock.calls.some(x => x.startsWith('/v2/fills?page_size=200&after=')) && !mock.calls.some(x => /start_time/.test(x)), 'first run paging: ' + mock.calls.join(','));
+    // The same fills through the journal's own import give the same trades.
+    const mine = await page.evaluate(([fills, cv]) => {
+      const seen = { 'delta:o6': true }, made = deltaFillsToTrades(fills, 'acc_cry', seen, {}, cv, null);
+      return { trades: made.map(t => Object.assign({}, t)), open: made.open };
+    }, [mock.fills, CV]);
+    check(JSON.stringify(mine.trades.map(strip)) === JSON.stringify([btc].map(strip)) && JSON.stringify(mine.open) === JSON.stringify(j.deltaImport.openPositions), 'in-page import differs: ' + JSON.stringify(mine.trades.map(strip)) + ' vs ' + JSON.stringify(strip(btc)));
+
+    // The phone syncs: the trade and the balance arrive, the card says it works, nothing to push back.
+    s = await sync();
+    let p = await page.evaluate(() => ({ n: state.trades.filter(t => t.src === 'delta:o3').length, bal: state.delta && state.delta.liveBalance && state.delta.liveBalance.value, di: !!state.deltaImport }));
+    c = await card();
+    check(s.ok && p.n === 1 && p.bal === 512.25 && p.di && /^Your PC imports Delta every 30 minutes/.test(c.status) && /2 Delta trades in the journal/.test(c.status) && !c.bad && c.steps === '', 'phone after the run: ' + JSON.stringify({ s, p, c }));
+    s = await sync();
+    check(s.ok && s.changed === false, 'second sync rewrote the file: ' + JSON.stringify(s));
+
+    // Second run: ETH closes; only fills from the open ETH position on are read.
+    mock.fills.push(fill(9, 'ETHUSD', 'buy', 100, 2400, '2026-10-22T09:00:00Z', 'o9'));
+    r = await runImport();
+    j = stored();
+    check(r.code === 0 && /^Imported 1 new trade from Delta/.test(r.out) && dTrades(j).length === 3 && JSON.stringify(j.deltaImport.openPositions) === '{}' && dTrades(j).find(t => t.src === 'delta:o9').direction === 'short', 'ETH closed: ' + JSON.stringify(r) + ' ' + JSON.stringify(j.deltaImport));
+    check(mock.calls.some(x => x.includes('start_time=' + Date.parse('2026-10-21T09:00:00Z') * 1000)), 'resume start: ' + mock.calls.join(','));
+    // Nothing new: no commit.
+    r = await runImport();
+    check(r.code === 0 && r.out.startsWith('Up to date, no new Delta trades') && !r.puts.length, 'nothing new: ' + JSON.stringify(r));
+
+    // The PC's IP moved: Delta names it, the run says so, the phone shows it in red with the steps.
+    mock.refuse = 'ip';
+    r = await runImport();
+    const why = "Delta refused this PC's IP 198.51.100.4: it isn't whitelisted on the key. On Delta, add 198.51.100.4 to the key's IPs (or make a Read Data key for it and update the two secrets).";
+    check(r.code === 1 && r.out === '::error::' + why && JSON.stringify(r.puts) === '["Delta import failed"]' && stored().deltaImport.note === why && stored().deltaImport.lastFillTime === j.deltaImport.lastFillTime, 'IP refused: ' + JSON.stringify(r));
+    await sync();
+    c = await card();
+    check(c.bad && c.status.startsWith("GitHub's last Delta run failed: " + why) && /DELTA_API_KEY/.test(c.steps), 'card after the refusal: ' + JSON.stringify(c));
+    // Without Delta naming it, the PC asks api.ipify.org.
+    mock.refuse = 'ipBare';
+    const ips = mock.ipReads;
+    r = await runImport();
+    check(r.code === 1 && r.out.includes("Delta refused this PC's IP 203.0.113.9") && mock.ipReads === ips + 1, 'IP from ipify: ' + JSON.stringify(r));
+    mock.refuse = null;
+    r = await runImport();
+    check(r.code === 0 && JSON.stringify(r.puts) === '["Delta import working again"]' && !('note' in stored().deltaImport), 'working again: ' + JSON.stringify(r));
+
+    // A trade deleted on the phone stays deleted, even when the record is lost and the whole history is read again.
+    await sync();
+    await page.evaluate(() => { const t = state.trades.find(x => x.src === 'delta:o3'); noteDeleted('trades', t.id, t.src); state.trades = state.trades.filter(x => x !== t); save(); });
+    await sync();
+    const lost = stored(); delete lost.deltaImport; const lt = JSON.stringify(lost); gh.files[REPO] = { text: lt, sha: crypto.createHash('sha1').update(lt).digest('hex') };
+    r = await runImport();
+    j = stored();
+    check(r.code === 0 && !r.out.startsWith('Imported') && !dTrades(j).some(t => t.src === 'delta:o3') && new Set(dTrades(j).map(t => t.src)).size === dTrades(j).length && j.deltaImport.lastFillTime > 0, 'full re-read after a delete: ' + JSON.stringify(r) + ' ' + JSON.stringify(dTrades(j).map(t => t.src)));
+    // Contract sizes unreadable: nothing imported, the reason kept.
+    mock.products = false;
+    r = await runImport();
+    check(r.code === 1 && /contract sizes could not be read/.test(stored().deltaImport.note || ''), 'no contract sizes: ' + JSON.stringify(r));
+    mock.products = true;
+    // No crypto book in the file: says so.
+    const nb = stored(); nb.accounts = nb.accounts.filter(a => a.market !== 'crypto'); const nt = JSON.stringify(nb); gh.files['victus/nobook'] = { text: nt, sha: 'nb' };
+    r = await runImport({ GITHUB_REPOSITORY: 'victus/nobook' });
+    check(r.code === 1 && /no crypto book/.test(r.out), 'no crypto book: ' + JSON.stringify(r));
+    check(!r.out.includes(KEY) && !r.out.includes(SECRET), 'the run printed the key');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  fake.close();
+  const label = 'Delta import on the PC: signed calls, same trades as in-page, resume, IP named, deletes kept';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 // "Import now" on the phone: the CoinDCX import runs on lakky's PC (CoinDCX locks
 // each key to one IP), so a run waits in GitHub's queue while the PC is off. The
 // button asks GitHub for a run, says whether it waits for the PC, runs or is done,
@@ -1842,13 +2032,20 @@ async function importNowRun(seed) {
   const errs = [];
   const check = (ok, what) => { if (!ok) errs.push(what); };
   const REPO = 'victus/sync', TOKEN = 'gh-token', RUN_URL = 'https://github.com/victus/sync/actions/runs/';
-  const gh = { files: {}, puts: 0, dispatched: [], dispatchStatus: 204, runs: [], runReads: 0 };
+  const gh = { files: {}, puts: 0, dispatched: [], dispatchStatus: 204, runs: [], runReads: 0, dx: null };
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Kolkata' });
   await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
   await ctx.route('https://api.github.com/**', async route => {
     const req = route.request(), u = new URL(req.url()), h = await req.allHeaders();
     const reply = (status, data) => route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: data === null ? '' : JSON.stringify(data) });
     if (h.authorization !== 'Bearer ' + TOKEN) return reply(401, { message: 'Bad credentials' });
+    // Delta's job: missing (404) until the test adds it.
+    const dx = u.pathname.match(/^\/repos\/[^/]+\/[^/]+\/actions\/workflows\/delta\.yml\/(dispatches|runs)$/);
+    if (dx) {
+      if (!gh.dx) return reply(404, { message: 'Not Found' });
+      if (dx[1] === 'dispatches') { gh.dx.dispatched.push(JSON.parse(req.postData() || '{}')); return reply(204, null); }
+      return reply(200, { workflow_runs: gh.dx.runs.slice(0, 1) });
+    }
     if (u.pathname === '/repos/' + REPO + '/actions/workflows/coindcx.yml/dispatches' && req.method() === 'POST') {
       gh.dispatched.push(JSON.parse(req.postData() || '{}'));
       return gh.dispatchStatus === 204 ? reply(204, null) : reply(gh.dispatchStatus, { message: 'Resource not accessible by personal access token' });
@@ -1882,7 +2079,8 @@ async function importNowRun(seed) {
   const view = () => page.evaluate(() => ({ text: document.getElementById('cdxRunStatus').innerText, cls: document.getElementById('cdxRunStatus').className,
     btn: document.getElementById('cdxRunBtn').innerText, off: document.getElementById('cdxRunBtn').disabled,
     link: document.getElementById('cdxRunLink').classList.contains('hidden') ? '' : document.getElementById('cdxRunLink').href,
-    card: document.getElementById('cdxStatus').innerText, rows: state.backtest.rows.filter(r => r.file === 'cdx-api').length, toasts: window.__toasts.slice() }));
+    card: document.getElementById('cdxStatus').innerText, rows: state.backtest.rows.filter(r => r.file === 'cdx-api').length, toasts: window.__toasts.slice(),
+    dx: document.getElementById('dxRunStatus').innerText, dxCard: document.getElementById('dxPcStatus').innerText, dxBtn: document.getElementById('dxRunBtn').disabled }));
   // What the PC's run leaves in the sync repo: this device's journal plus its rows.
   const pcRun = async (rows, note) => {
     const j = await page.evaluate(() => syncPayload(state));
@@ -1916,7 +2114,7 @@ async function importNowRun(seed) {
     v = await view();
     check(/^Waiting for your PC since \d\d:\d\d( [AP]M)?: the import runs there\. Turn the PC on/.test(v.text) && v.link === RUN_URL + run1.id && v.off, 'queued: ' + JSON.stringify(v));
     // A second press while it watches only says where it is.
-    await page.evaluate(() => cdxRunNow());
+    await page.evaluate(() => pcImportNow());
     await page.waitForTimeout(200);
     check(gh.dispatched.length === 1 && (await view()).toasts.pop().startsWith('Waiting for your PC'), 'second press started another run: ' + gh.dispatched.length);
     // The PC comes on: running, then done; the sync brings its two rows.
@@ -1938,7 +2136,7 @@ async function importNowRun(seed) {
     // 2. From Signals → More, the key refused (the hotspot's IP moved): the reason the run left shows.
     await page.evaluate(() => switchTab('signals'));
     await page.click('#view-signals details.menu summary');
-    await page.click('#view-signals details.menu >> text=Import CoinDCX now');
+    await page.click('#view-signals details.menu >> text=Import CoinDCX + Delta');
     await page.waitForTimeout(300);
     check(gh.dispatched.length === 2, 'Signals → More did not start it: ' + gh.dispatched.length);
     const why = "CoinDCX refused the key (401) from this PC's IP 203.0.113.7. The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets. Or a secret was copied short.";
@@ -1972,11 +2170,43 @@ async function importNowRun(seed) {
     await page.waitForTimeout(400);
     v = await view();
     check(v.text === 'GitHub refused (403): give the sync token Actions: Read and write, then press Import now again.' && !v.off && /GitHub said 403/.test(v.card), 'refused token: ' + JSON.stringify(v));
+    // 6. Delta through the PC too: one press (on the Delta card) runs both jobs, each
+    // card says how its own went, and one note says both.
+    gh.dispatchStatus = 204;
+    gh.dx = { dispatched: [], runs: [] };
+    const nd = gh.dispatched.length;
+    await page.evaluate(() => { openSettings('connect'); renderDataView(); });
+    v = await view();
+    check(/^Not set up yet/.test(v.dxCard), 'Delta card before: ' + JSON.stringify(v.dxCard));
+    await page.click('#dxRunBtn');
+    await page.waitForTimeout(300);
+    v = await view();
+    check(gh.dispatched.length === nd + 1 && gh.dx.dispatched.length === 1 && gh.dx.dispatched[0].ref === 'main' && v.off && v.dxBtn, 'both not started: ' + JSON.stringify({ cdx: gh.dispatched.length - nd, dx: gh.dx.dispatched, v }));
+    const t6 = await page.evaluate(() => Date.now());
+    gh.runs.unshift({ id: 50, created_at: new Date(t6).toISOString(), status: 'completed', conclusion: 'success', html_url: RUN_URL + 50 });
+    gh.dx.runs.unshift({ id: 51, created_at: new Date(t6).toISOString(), status: 'in_progress', conclusion: null, html_url: RUN_URL + 51 });
+    // What the PC's two runs leave: the CoinDCX rows as they were, one new Delta trade and Delta's record.
+    const j6 = await page.evaluate(() => syncPayload(state)), later = new Date(now + 2 * 3600e3).toISOString();
+    j6.trades.push({ id: 'dxnew', accountId: 'acc_cry', date: '2026-11-02', time: '19:00', exitTime: '19:30', exitDate: '2026-11-02', symbol: 'BTCUSD', direction: 'long', entry: 60000, exit: 61000, stop: 0, qty: 0.01, fees: 0.1, leverage: 10, setup: '', rules: [false, false, false, false, false], notes: '', src: 'delta:o100', updatedAt: later });
+    j6.deltaImport = { lastFillTime: 1, openPositions: {}, updatedAt: later };
+    j6.backtest.files.forEach(f => { if (f.id === 'cdx-api') { delete f.note; f.updatedAt = later; } }); // the key works again
+    const text6 = JSON.stringify(j6, null, 2);
+    gh.files[REPO] = { text: text6, sha: crypto.createHash('sha1').update(text6).digest('hex') };
+    await settle(5000);
+    await page.waitForTimeout(600);
+    v = await view();
+    check(v.text === 'CoinDCX import done · nothing new.' && v.dx === 'Running on your PC…' && v.off, 'CoinDCX done, Delta running: ' + JSON.stringify(v));
+    gh.dx.runs[0].status = 'completed'; gh.dx.runs[0].conclusion = 'success';
+    await settle(10000);
+    await page.waitForTimeout(600);
+    v = await view();
+    check(v.dx === 'Delta import done · 1 new trade.' && !v.dxBtn && /^Your PC imports Delta every 30 minutes/.test(v.dxCard) && v.toasts.includes('CoinDCX: nothing new · Delta: 1 new trade'), 'both done: ' + JSON.stringify(v));
+
     // 5. No GitHub Sync on this device: nothing is asked, it says what to connect.
     gh.dispatchStatus = 204;
     const n = gh.dispatched.length;
     await page.evaluate(() => { state.sync = { token: '', repo: '', branch: 'main', auto: false, lastAt: '', lastSha: '' }; renderDataView(); });
-    await page.evaluate(() => cdxRunNow());
+    await page.evaluate(() => pcImportNow());
     await page.waitForTimeout(200);
     v = await view();
     check(gh.dispatched.length === n && /^Connect GitHub Sync first/.test(v.toasts.pop()), 'no sync: ' + JSON.stringify(v));
@@ -3240,6 +3470,7 @@ await alertRefreshRun(data);
 await zoneRebuildRun(data);
 await autoKeepRun(data);
 await importNowRun(data);
+await deltaImportRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
 await cleanupRun(data);
