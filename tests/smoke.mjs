@@ -11,6 +11,8 @@
 // call is signed as CoinDCX documents) into a fake GitHub's journal.json; the
 // journal syncs it, and trades the report already has must count only once.
 // Last, the journal loads the scanner's alerts by itself and a fresh trade matches one.
+// Delta and Gemini keys travel locked in journal.json between several devices, and a
+// setup link / code / QR connects a new one (the QR is read back with jsQR).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,6 +21,8 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { EXPECTED, REPORT_ROWS, backtestXlsx, backtestCsv } from './backtest-fixture.mjs';
+import { createRequire } from 'node:module';
+const jsQR = createRequire(import.meta.url)('jsqr');
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const TABS = ['dashboard', 'signals', 'analysis', 'calculator', 'data'];
@@ -3151,6 +3155,259 @@ async function syncSettingsRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
+// Keys on your other devices: Delta and Gemini keys locked into journal.json with a
+// passphrase, unlocked once on a new device, then kept in step; setup codes and links.
+// Several browsers (devices) share one fake GitHub. The lock is also opened by hand
+// here in Node (PBKDF2 + AES-GCM), so it is the standard cipher, not something only
+// the page itself can read.
+async function keysLockRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const REPO = 'someone/private-sync', TOKEN = 'github_pat_sync-token-456', PASS = 'blue tiger seven', PASS2 = 'green lamp river';
+  const DKEY = 'delta-key-AAA111', DSEC = 'delta-secret-BBB222', GKEY = 'AIza-gemini-CCC333';
+  const gh = { files: {}, puts: 0 };
+  const ghFile = () => { const f = gh.files[REPO + '@main']; return f ? JSON.parse(f.text) : null; };
+  const ghText = () => (gh.files[REPO + '@main'] || {}).text || '';
+  const devices = [];
+  async function device(name, opts = {}) {
+    const ctx = await browser.newContext({ viewport: opts.phone ? { width: 390, height: 844 } : { width: 1366, height: 900 } });
+    await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
+    await ctx.route('https://api.github.com/**', async route => {
+      const req = route.request(), u = new URL(req.url()), h = await req.allHeaders();
+      const m = u.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/contents\/journal\.json$/);
+      const reply = (status, data) => route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      if (!m || h.authorization !== 'Bearer ' + TOKEN) return reply(404, { message: 'Not Found' });
+      const key = m[1] + '@' + (req.method() === 'GET' ? u.searchParams.get('ref') : JSON.parse(req.postData() || '{}').branch);
+      if (req.method() === 'GET') {
+        const f = gh.files[key];
+        return f ? reply(200, { sha: f.sha, size: f.text.length, encoding: 'base64', content: Buffer.from(f.text).toString('base64') }) : reply(404, { message: 'Not Found' });
+      }
+      if (req.method() === 'PUT') {
+        const p = JSON.parse(req.postData() || '{}'), cur = gh.files[key];
+        if (cur ? p.sha !== cur.sha : !!p.sha) return reply(409, { message: 'conflict' });
+        const text = Buffer.from(String(p.content || ''), 'base64').toString('utf8'), sha = crypto.createHash('sha1').update(text).digest('hex');
+        gh.files[key] = { text, sha }; gh.puts++;
+        return reply(cur ? 200 : 201, { content: { sha } });
+      }
+      return reply(405, { message: 'no' });
+    });
+    if (opts.seed) await ctx.addInitScript(([s, g]) => {
+      if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); if (g) localStorage.setItem('tapeAndTarget.gemini', g); sessionStorage.setItem('seeded', '1'); }
+    }, [JSON.stringify(opts.seed), opts.gemini ? JSON.stringify({ key: opts.gemini, model: '' }) : '']);
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push(name + ' page error: ' + (e.stack || e.message)));
+    page.on('dialog', d => d.accept());
+    await page.goto(base + (opts.hash || ''), { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const dev = { ctx, page, name };
+    devices.push(dev);
+    return dev;
+  }
+  const until = async (page, fn, arg, ms = 8000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await page.evaluate(fn, arg)) return true; await page.waitForTimeout(100); } return false; };
+  const settle = page => until(page, () => !syncBusy && !keysBusy);
+  const card = page => page.evaluate(() => { openSettings('connect'); renderDataView(); const b = document.getElementById('keysBox'); return { text: b.innerText, badge: (document.getElementById('keysBadge') || {}).innerText || '' }; });
+  const modal = page => page.evaluate(() => ({ open: !document.getElementById('modalSheet').classList.contains('hidden'), title: document.getElementById('modalSheetTitle').innerText, body: document.getElementById('modalSheetBody').innerText }));
+  const keysOf = page => page.evaluate(() => ({ dk: (state.delta || {}).key || '', ds: (state.delta || {}).secret || '', gk: aiCfg().key }));
+  const connect = async page => {
+    await page.evaluate(() => { openSettings('connect'); renderDataView(); });
+    await page.fill('#syncRepoInput', REPO); await page.fill('#syncTokenInput', TOKEN);
+    await page.click('button:has-text("Save & Connect")');
+    await page.waitForTimeout(300); await settle(page);
+  };
+  try {
+    // ---- Device A (the PC): has the keys, turns it on ----
+    const A = await device('A', { seed: Object.assign({}, seed, { delta: { key: DKEY, secret: DSEC, lastAt: '', lastFillTime: 0 } }), gemini: GKEY });
+    await connect(A.page);
+    let c = await card(A.page);
+    check(c.badge === 'Off' && /Save keys to GitHub/.test(c.text) && /CoinDCX needs nothing/.test(c.text), 'A starts Off: ' + JSON.stringify(c));
+    check(!/keysLock/.test(ghText()) && !ghText().includes(DKEY), 'nothing about keys on GitHub before it is on');
+    await A.page.click('#keysBox button:has-text("Save keys to GitHub")');
+    let mo = await modal(A.page);
+    check(mo.open && /Delta key and Gemini key are locked/.test(mo.body), 'create dialog names the keys: ' + JSON.stringify(mo));
+    await A.page.fill('#mKeysNew', 'short'); await A.page.fill('#mKeysNew2', 'short'); await A.page.click('#modalSheetSaveBtn');
+    let err = await A.page.evaluate(() => document.getElementById('mKeysErr').innerText);
+    check(/at least 8/.test(err) && !(await A.page.evaluate(() => state.keysLock)), 'short passphrase refused: ' + err);
+    await A.page.fill('#mKeysNew', PASS); await A.page.fill('#mKeysNew2', PASS + 'x'); await A.page.click('#modalSheetSaveBtn');
+    err = await A.page.evaluate(() => document.getElementById('mKeysErr').innerText);
+    check(/don't match/.test(err), 'mismatch refused: ' + err);
+    await A.page.fill('#mKeysNew2', PASS); await A.page.click('#modalSheetSaveBtn');
+    check(await until(A.page, () => !!state.keysLock && document.getElementById('modalSheet').classList.contains('hidden')), 'lock made, dialog closed');
+    await A.page.waitForTimeout(200); await settle(A.page);
+    let f = ghFile();
+    const text = ghText();
+    check(f && f.keysLock && f.keysLock.s && f.keysLock.c && f.keysLock.n === 600000 && JSON.stringify(f.keysLock.has) === '["delta","ai"]', 'keysLock on GitHub: ' + JSON.stringify(f && f.keysLock));
+    check(![DKEY, DSEC, GKEY, PASS, TOKEN].some(x => text.includes(x)), 'no key, secret, passphrase or token in journal.json in plain text');
+    // Opened by hand: PBKDF2-SHA256 600k over the passphrase, AES-256-GCM with its AAD.
+    const open = (lock, pass) => {
+      const u = s => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+      const k = crypto.pbkdf2Sync(pass, u(lock.s), lock.n, 32, 'sha256'), ct = u(lock.c);
+      const d = crypto.createDecipheriv('aes-256-gcm', k, u(lock.i)); d.setAAD(Buffer.from('victus-keys-1')); d.setAuthTag(ct.subarray(ct.length - 16));
+      return JSON.parse(Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]).toString('utf8'));
+    };
+    let plain = null; try { plain = open(f.keysLock, PASS); } catch (e) { errs.push('Node could not open the lock: ' + e.message); }
+    check(plain && plain.delta.key === DKEY && plain.delta.secret === DSEC && plain.ai.key === GKEY, 'lock holds exactly the keys: ' + JSON.stringify(plain));
+    let wrongOpens = true; try { open(f.keysLock, PASS2); } catch (e) { wrongOpens = false; }
+    check(!wrongOpens, 'a wrong passphrase does not open it in Node either');
+    const bk = await A.page.evaluate(() => [!!syncPayload(state).keysLock, 'keysLock' in backupPayload(state), JSON.stringify(state.sync).includes('"vault"')]);
+    check(bk[0] && !bk[1] && bk[2], 'synced, left out of backup files, vault kept on the device: ' + JSON.stringify(bk));
+    c = await card(A.page);
+    check(c.badge === 'On' && /Delta key and Gemini key follow you/.test(c.text), 'A shows On: ' + JSON.stringify(c));
+
+    // ---- Device B (the iPhone home-screen app): empty, connects with repo + token ----
+    const B = await device('B', { phone: true });
+    c = await card(B.page);
+    check(c.badge === 'New device?' && /Use setup code/.test(c.text), 'B starts as a new device: ' + JSON.stringify(c));
+    await connect(B.page);
+    mo = await modal(B.page);
+    check(mo.open && mo.title === 'Unlock your keys' && /Delta key and Gemini key/.test(mo.body), 'B is asked for the passphrase after connecting: ' + JSON.stringify(mo));
+    check((await B.page.evaluate(() => state.trades.length)) === seed.trades.length, 'B pulled the journal');
+    await B.page.fill('#mKeysPass', PASS2); await B.page.click('#modalSheetSaveBtn');
+    await until(B.page, () => /Wrong/.test(document.getElementById('mKeysErr').innerText));
+    let k = await keysOf(B.page);
+    check(!k.dk && !k.gk && (await modal(B.page)).open, 'wrong passphrase fills nothing: ' + JSON.stringify(k));
+    await B.page.fill('#mKeysPass', PASS); await B.page.click('#modalSheetSaveBtn');
+    await until(B.page, () => document.getElementById('modalSheet').classList.contains('hidden'));
+    await settle(B.page);
+    k = await keysOf(B.page);
+    check(k.dk === DKEY && k.ds === DSEC && k.gk === GKEY, 'B got the Delta key, secret and Gemini key: ' + JSON.stringify(k));
+    check((await B.page.evaluate(() => document.getElementById('deltaKeyInput').value)) === DKEY, 'Delta card shows the filled key');
+    c = await card(B.page);
+    check(c.badge === 'On', 'B shows On: ' + c.badge);
+    // Reload: B keeps the keys and needs no passphrase again.
+    await B.page.reload({ waitUntil: 'load' }); await B.page.waitForTimeout(300);
+    await B.page.evaluate(() => syncNow()); await settle(B.page);
+    check(!(await modal(B.page)).open && (await keysOf(B.page)).dk === DKEY, 'after a reload: no passphrase asked, keys kept');
+
+    // ---- A changes its Delta key: B picks it up on its next sync, no passphrase ----
+    const lockAt = f.keysLock.at;
+    await A.page.evaluate(() => { openSettings('connect'); renderDataView(); });
+    await A.page.fill('#deltaKeyInput', 'delta-key-NEW1'); await A.page.fill('#deltaSecretInput', 'delta-secret-NEW1');
+    await A.page.click('button:has-text("Test & Connect")');
+    check(await until(A.page, at => state.keysLock.at !== at && !syncBusy, lockAt), 'A wrote a new lock');
+    await settle(A.page);
+    check(ghFile().keysLock.at !== lockAt, 'new lock pushed to GitHub');
+    await B.page.evaluate(() => syncNow({ quiet: true })); await settle(B.page);
+    k = await keysOf(B.page);
+    check(k.dk === 'delta-key-NEW1' && k.ds === 'delta-secret-NEW1' && k.gk === GKEY, 'B followed the new Delta key: ' + JSON.stringify(k));
+    // A key removed on B stays removed there; the next change elsewhere doesn't bring it back.
+    await B.page.evaluate(() => removeAiKey());
+    await A.page.evaluate(() => { openSettings('connect'); renderDataView(); });
+    await A.page.fill('#deltaKeyInput', 'delta-key-NEW2'); await A.page.fill('#deltaSecretInput', 'delta-secret-NEW2');
+    await A.page.click('button:has-text("Test & Connect")');
+    await until(A.page, () => !syncBusy && !keysBusy); await A.page.waitForTimeout(300); await settle(A.page);
+    await B.page.evaluate(() => syncNow({ quiet: true })); await settle(B.page);
+    k = await keysOf(B.page);
+    check(k.dk === 'delta-key-NEW2' && !k.gk, 'B: Delta followed, removed Gemini key stayed removed: ' + JSON.stringify(k));
+    plain = open(ghFile().keysLock, PASS);
+    check(plain.ai && plain.ai.key === GKEY, 'removing on B did not remove it from GitHub or A');
+    // B saves its own Gemini key: A gets it.
+    await B.page.evaluate(() => { openSettings('connect'); renderDataView(); });
+    await B.page.fill('#aiKeyInput', 'AIza-from-phone'); await B.page.click('button:has-text("Save & Test")');
+    await until(B.page, () => !!state.keysLock && !syncBusy && !keysBusy); await B.page.waitForTimeout(500); await settle(B.page);
+    await A.page.evaluate(() => syncNow({ quiet: true })); await settle(A.page);
+    k = await keysOf(A.page);
+    check(k.gk === 'AIza-from-phone' && k.dk === 'delta-key-NEW2', 'A followed B\'s Gemini key and kept its Delta key: ' + JSON.stringify(k));
+
+    // ---- Setup link: device C opens it, types the passphrase once ----
+    await A.page.evaluate(() => { openSettings('connect'); renderDataView(); });
+    await A.page.click('#keysBox button:has-text("Set up another device")');
+    await until(A.page, () => !!document.getElementById('mShareCode'));
+    const share = await A.page.evaluate(() => ({ code: document.getElementById('mShareCode').value, link: document.getElementById('mShareLink').value,
+      qr: !!document.getElementById('setupQr'), body: document.getElementById('modalSheetBody').innerText,
+      dark: (document.querySelector('#setupQr path').getAttribute('d').match(/M/g) || []).length }));
+    check(/^VJ1\./.test(share.code) && share.link === base + '#vjsetup=' + share.code && share.qr && /home-screen app/.test(share.body), 'setup code, link and QR shown: ' + JSON.stringify(share).slice(0, 200));
+    check(![TOKEN, REPO, PASS].some(x => share.code.includes(x)), 'setup code holds no plain token or repo');
+    // The QR decodes back to the link (jsQR, a separate decoder).
+    const qr = await A.page.evaluate(l => qrMatrix(l), share.link);
+    const n = qr.length + 8, S = 4, W = n * S, px = new Uint8ClampedArray(W * W * 4);
+    for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) { const my = Math.floor(y / S) - 4, mx = Math.floor(x / S) - 4, on = my >= 0 && mx >= 0 && my < qr.length && mx < qr.length && qr[my][mx], i = (y * W + x) * 4; px[i] = px[i + 1] = px[i + 2] = on ? 0 : 255; px[i + 3] = 255; }
+    const dec = jsQR(px, W, W);
+    check(dec && dec.data === share.link, 'QR decodes to the link: ' + (dec ? dec.data.slice(0, 60) : 'no read'));
+    check(share.dark === qr.flat().filter(Boolean).length, 'SVG draws every dark module');
+    await A.page.click('#modalSheetSaveBtn');
+    const C = await device('C', { phone: true, hash: '#vjsetup=' + share.code });
+    mo = await modal(C.page);
+    check(mo.open && mo.title === 'Set up this device' && !C.page.url().includes('vjsetup'), 'link opens the setup dialog and leaves the address bar: ' + C.page.url());
+    check((await C.page.evaluate(() => document.getElementById('mSetupCode').value)) === share.code, 'code prefilled');
+    await C.page.fill('#mSetupPass', PASS2); await C.page.click('#modalSheetSaveBtn');
+    await until(C.page, () => /Wrong passphrase/.test(document.getElementById('mSetupErr').innerText));
+    check(!(await C.page.evaluate(() => syncReady())), 'wrong passphrase: nothing connected');
+    await C.page.fill('#mSetupPass', PASS); await C.page.click('#modalSheetSaveBtn');
+    await until(C.page, () => document.getElementById('modalSheet').classList.contains('hidden')); await settle(C.page);
+    const cs = await C.page.evaluate(() => ({ repo: state.sync.repo, token: state.sync.token, auto: state.sync.auto, trades: state.trades.length }));
+    k = await keysOf(C.page);
+    check(cs.repo === REPO && cs.token === TOKEN && cs.auto && cs.trades === seed.trades.length, 'C connected from the link: ' + JSON.stringify(Object.assign({}, cs, { token: cs.token === TOKEN })));
+    check(k.dk === 'delta-key-NEW2' && k.gk === 'AIza-from-phone' && (await card(C.page)).badge === 'On', 'C got the keys with the same passphrase: ' + JSON.stringify(k));
+    // ---- Device D: the code pasted into Repository Name works too ----
+    const D = await device('D', { phone: true });
+    // D already has a Gemini key of its own: it keeps it, and GitHub's stays as it was.
+    await D.page.evaluate(() => { aiSetCfg({ key: 'AIza-D-own', model: '' }); openSettings('connect'); renderDataView(); });
+    await D.page.fill('#syncRepoInput', share.code); await D.page.click('button:has-text("Save & Connect")');
+    mo = await modal(D.page);
+    check(mo.open && mo.title === 'Set up this device' && !(await D.page.evaluate(() => state.sync && state.sync.repo)), 'code in the repo box opens setup, not saved as a repo name');
+    await D.page.fill('#mSetupPass', PASS); await D.page.click('#modalSheetSaveBtn');
+    await until(D.page, () => document.getElementById('modalSheet').classList.contains('hidden')); await settle(D.page);
+    k = await keysOf(D.page);
+    check(k.dk === 'delta-key-NEW2' && (await D.page.evaluate(() => state.sync.repo)) === REPO, 'D set up from a pasted code');
+    check(k.gk === 'AIza-D-own' && open(ghFile().keysLock, PASS).ai.key === 'AIza-from-phone', 'D kept its own Gemini key, GitHub kept its: ' + k.gk);
+    // A damaged or cut code is turned away with a reason.
+    const E = await device('E', { phone: true });
+    const flip = share.code.slice(0, -5) + (share.code.slice(-5, -4) === 'A' ? 'B' : 'A') + share.code.slice(-4);
+    for (const [bad, why] of [[flip, /Wrong passphrase, or the code was cut/], [share.code.slice(0, 40), /isn't a whole setup code/]]) {
+      await E.page.evaluate(code => openSetupCode(code), bad);
+      await E.page.fill('#mSetupPass', PASS); await E.page.click('#modalSheetSaveBtn');
+      await until(E.page, () => !document.getElementById('mSetupErr').classList.contains('hidden'));
+      const m2 = await E.page.evaluate(() => document.getElementById('mSetupErr').innerText);
+      check(why.test(m2) && !(await E.page.evaluate(() => syncReady())), 'bad code refused: ' + m2);
+      await E.page.evaluate(() => closeModalSheet());
+    }
+
+    // ---- Start over with a new passphrase on A: C asks for the new one ----
+    await A.page.evaluate(() => { delete state.sync.vault; save(); renderKeysCard(); });
+    c = await card(A.page);
+    check(c.badge === 'Locked' && /Forgot it/.test(c.text), 'A without its saved key shows Locked: ' + JSON.stringify(c));
+    // Inline unlock with a wrong passphrase, then start over.
+    await A.page.fill('#keysPassInput', PASS2); await A.page.click('#keysBox button:has-text("Unlock")');
+    await until(A.page, () => /Wrong/.test(document.getElementById('keysErr').innerText));
+    await A.page.click('#keysBox button:has-text("Forgot it?")');
+    await A.page.fill('#mKeysNew', PASS2); await A.page.fill('#mKeysNew2', PASS2); await A.page.click('#modalSheetSaveBtn');
+    await until(A.page, () => document.getElementById('modalSheet').classList.contains('hidden')); await A.page.waitForTimeout(200); await settle(A.page);
+    plain = open(ghFile().keysLock, PASS2);
+    check(plain.delta.key === 'delta-key-NEW2' && plain.ai.key === 'AIza-from-phone', 'new lock under the new passphrase');
+    await C.page.evaluate(() => syncNow({ quiet: true })); await settle(C.page);
+    c = await card(C.page);
+    check(c.badge === 'Locked' && (await keysOf(C.page)).dk === 'delta-key-NEW2', 'C keeps its keys and asks for the new passphrase: ' + JSON.stringify(c));
+    await C.page.fill('#keysPassInput', PASS2); await C.page.click('#keysBox button:has-text("Unlock")');
+    await until(C.page, () => (document.getElementById('keysBadge') || {}).innerText === 'On');
+    check((await card(C.page)).badge === 'On', 'C unlocked inline with the new passphrase');
+
+    // ---- Taken off GitHub: every device keeps its keys, nothing new arrives ----
+    await A.page.evaluate(() => { openSettings('connect'); renderDataView(); });
+    await A.page.click('#keysBox button:has-text("Take keys off GitHub")');
+    await A.page.waitForTimeout(200); await settle(A.page);
+    f = ghFile();
+    check(f.keysLock && f.keysLock.off && !f.keysLock.c, 'GitHub holds only the "off" marker: ' + JSON.stringify(f.keysLock));
+    await C.page.evaluate(() => syncNow({ quiet: true })); await settle(C.page);
+    const cv = await C.page.evaluate(() => !!state.sync.vault);
+    c = await card(C.page);
+    check(!cv && c.badge === 'Off' && (await keysOf(C.page)).dk === 'delta-key-NEW2', 'C forgot the passphrase key, kept its keys: ' + JSON.stringify(c));
+    // The newer of two locks wins a merge, whichever side it is on.
+    const mg = await A.page.evaluate(() => {
+      const L = at => ({ v: 1, s: 'c2FsdHNhbHRzYWx0c2FsdA', i: 'aXZpdml2aXZpdml2', c: 'Y2lwaGVydGV4dGNpcGhlcnRleHQ', n: 600000, at, has: ['delta'] });
+      const a = mergeState(Object.assign({}, state, { keysLock: L('2026-11-02T10:00:00.000Z') }), { accounts: state.accounts, trades: [], keysLock: L('2026-11-02T09:00:00.000Z') });
+      const b = mergeState(Object.assign({}, state, { keysLock: L('2026-11-02T08:00:00.000Z') }), { accounts: state.accounts, trades: [], keysLock: L('2026-11-02T09:00:00.000Z') });
+      const bad = mergeState(Object.assign({}, state, { keysLock: undefined }), { accounts: state.accounts, trades: [], keysLock: { v: 1, at: 'x', s: '<script>', i: 'a', c: 'b' } });
+      return [a.keysLock.at, b.keysLock.at, 'keysLock' in bad];
+    });
+    check(mg[0] === '2026-11-02T10:00:00.000Z' && mg[1] === '2026-11-02T09:00:00.000Z' && !mg[2], 'merge keeps the newer lock, drops a bad one: ' + JSON.stringify(mg));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  for (const d of devices) await d.ctx.close();
+  const label = 'keys on other devices: locked in journal.json, unlocked once, kept in step; setup link, code and QR';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
 // Signals "Exit at": alerts re-scored at fixed targets from (fake) Delta candles,
 // every number worked out by hand.
 async function exitTargetRun(seed) {
@@ -3482,6 +3739,7 @@ await layoutRun(data);
 await cleanRun(data);
 await whatsNewRun(data);
 await syncSettingsRun(data);
+await keysLockRun(data);
 await exitTargetRun(data);
 await nsePathsRun();
 await badInputRun(data);
