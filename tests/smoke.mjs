@@ -645,7 +645,7 @@ async function coindcxRun(seed) {
 
   // ---- the fake CoinDCX ----
   // Futures wallets: rupees 8000.5 free + 144.28 locked; USDT 80 + 0.02 + 2 in cross margin.
-  const mock = { mode: 'ok', calls: [], bad: [], wallets: [
+  const mock = { mode: 'ok', calls: [], bad: [], ip: '203.0.113.7', ipReads: 0, wallets: [
     { id: 'w-inr', currency_short_name: 'INR', balance: '8000.5', locked_balance: '144.28', cross_order_margin: '0.0', cross_user_margin: '0.0' },
     { id: 'w-usdt', currency_short_name: 'USDT', balance: '80', locked_balance: '0.0', cross_order_margin: '0.02', cross_user_margin: '2' }] };
   const W = ' · wallet INR 8144.78, USDT 82.02';
@@ -745,6 +745,8 @@ async function coindcxRun(seed) {
     req.on('data', c => { body += c; });
     req.on('end', () => {
       if (req.url.startsWith('/cdx/') && mock.mode === 'blocked') return req.socket.destroy();
+      // api.ipify.org: the PC's public IP, read only when CoinDCX refuses the key.
+      if (req.url === '/ip') { mock.ipReads++; res.writeHead(mock.ip ? 200 : 500, { 'Content-Type': 'text/plain' }); return res.end(mock.ip || '<html>busy</html>'); }
       const [status, data, type] = req.url.startsWith('/cdx/') ? coindcx(req, body) : github(req.method, 'http://x' + req.url, req.headers, body);
       res.writeHead(status, { 'Content-Type': type || 'application/json' });
       res.end(typeof data === 'string' ? data : JSON.stringify(data));
@@ -760,7 +762,7 @@ async function coindcxRun(seed) {
     try { fs.writeFileSync(summary, ''); } catch (e) {}
     execFile(process.execPath, [path.join(ROOT, 'tools', 'coindcx-import.mjs')], {
       env: Object.assign({ PATH: process.env.PATH, TZ: 'UTC', COINDCX_API_KEY: KEY, COINDCX_API_SECRET: SECRET, GITHUB_TOKEN: 'gh-token', GITHUB_REPOSITORY: REPO,
-        GITHUB_API_URL: fakeBase + '/gh', COINDCX_BASE: fakeBase + '/cdx', GITHUB_STEP_SUMMARY: summary }, extra),
+        GITHUB_API_URL: fakeBase + '/gh', COINDCX_BASE: fakeBase + '/cdx', IP_URL: fakeBase + '/ip', GITHUB_STEP_SUMMARY: summary }, extra),
       timeout: 60000
     }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, out: (stdout + stderr).trim(), puts: gh.puts.slice(before).map(p => p.message), summary: fs.readFileSync(summary, 'utf8').trim() }));
   });
@@ -814,8 +816,15 @@ async function coindcxRun(seed) {
     let r = await runImport({ COINDCX_API_KEY: '' });
     check(r.code === 1 && /Add the COINDCX_API_KEY and COINDCX_API_SECRET secrets/.test(r.out) && mock.calls.length === 0 && !r.puts.length, 'no secrets: ' + JSON.stringify(r));
     // A wrong secret is refused on the first call; with nothing imported yet there is nothing to write.
+    // The key is locked to the PC's IP (CoinDCX, since 2026-10-29): the reason names the IP the PC has now.
+    let ips = mock.ipReads;
     r = await runImport({ COINDCX_API_SECRET: 'wrong-secret' });
-    check(r.code === 1 && /^::error::CoinDCX refused the key \(401\)/.test(r.out) && mock.calls.length === 1 && !r.puts.length, 'wrong secret: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
+    check(r.code === 1 && r.out === "::error::CoinDCX refused the key (401) from this PC's IP 203.0.113.7. The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets. Or a secret was copied short." && mock.calls.length === 1 && !r.puts.length && mock.ipReads === ips + 1, 'wrong secret: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
+    // The IP can't be read (or comes back as a page): the reason says how to find it instead.
+    mock.ip = '';
+    r = await runImport({ COINDCX_API_SECRET: 'wrong-secret' });
+    check(r.code === 1 && r.out === "::error::CoinDCX refused the key (401). The key is locked to one IP: if the PC's IP changed (open api.ipify.org on it), make a CoinDCX key for the new IP and put it in the two secrets. Or a secret was copied short.", 'wrong secret, no IP: ' + JSON.stringify(r));
+    mock.ip = '203.0.113.7';
     check(!r.out.includes(KEY) && !r.out.includes('wrong-secret'), 'the run printed the key');
 
     // The right one: two pages of rupee futures and one of USDT, the wallets and
@@ -1006,10 +1015,11 @@ async function coindcxRun(seed) {
     // No journal file in the repo yet: says so.
     r = await runImport({ GITHUB_REPOSITORY: 'victus/empty' });
     check(r.code === 1 && /journal\.json isn't in victus\/empty \(branch main\) yet\. Turn on GitHub Sync/.test(r.out) && mock.calls.length === 0, 'no journal file: ' + JSON.stringify(r));
-    // CoinDCX not answering (or refusing GitHub's servers) is said plainly.
+    // CoinDCX not answering is said plainly (no IP read: the key wasn't refused).
     mock.mode = 'blocked';
+    ips = mock.ipReads;
     r = await runImport();
-    check(r.code === 1 && /^::error::Could not reach CoinDCX \(.+\)\. If this keeps happening, CoinDCX may not accept GitHub's servers\.$/.test(r.out), 'blocked: ' + JSON.stringify(r));
+    check(r.code === 1 && /^::error::Could not reach CoinDCX \(.+\)\. If this keeps happening, check the PC's internet\.$/.test(r.out) && mock.ipReads === ips, 'blocked: ' + JSON.stringify(r) + ', IP read ' + (mock.ipReads - ips) + ' times');
     mock.mode = 'ok';
     r = await runImport();
     check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX import working again"]', 'after blocked: ' + JSON.stringify(r));
@@ -1050,12 +1060,13 @@ async function coindcxRun(seed) {
     const nj = JSON.parse(gh.files['victus/none'].text);
     check(r.code === 0 && r.out === `Imported ${all} new rows from CoinDCX · 1 unreadable transaction skipped` + W + F1 && nj.backtest && nj.backtest.rows.length === all && Object.keys(nj).pop() === 'backtest', 'journal with no uploads: ' + JSON.stringify(r) + ' ' + JSON.stringify(Object.keys(nj)));
 
-    // CoinDCX turning GitHub's servers away stops at the first call and says so,
+    // CoinDCX turning the PC away stops at the first call and says so, with its IP,
     // without the page's HTML. The reason is long: the journal keeps 300
     // characters of it, and so does the file, so neither keeps rewriting it.
     mock.mode = 'forbidden';
     r = await runImport();
-    const said = ("CoinDCX refused the request (403: 403 Forbidden Access denied " + 'Request blocked. '.repeat(12)).slice(0, 160 + 34) + "). Either the key is bound to an IP address, or CoinDCX doesn't accept GitHub's servers, which are outside India.";
+    const pre = 'CoinDCX refused the request (403, PC IP 203.0.113.7: ';
+    const said = (pre + '403 Forbidden Access denied ' + 'Request blocked. '.repeat(12)).slice(0, pre.length + 160) + "). The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets.";
     check(r.code === 1 && r.out === '::error::' + said && mock.calls.length === 1 && JSON.stringify(r.puts) === '["CoinDCX import failed"]', 'refused by CoinDCX: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
     check(said.length > 300 && stored().backtest.files.find(f => f.id === 'cdx-api').note === said.slice(0, 300), 'long reason on the file: ' + said.length);
     s = await sync();
@@ -1819,6 +1830,163 @@ async function autoKeepRun(seed) {
   await ctx.close();
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Alerts and the CoinDCX import keep refreshing while the journal stays open');
   errs.forEach(e => { console.log('     ' + e); failures.push('auto keep: ' + e); });
+}
+
+// "Import now" on the phone: the CoinDCX import runs on lakky's PC (CoinDCX locks
+// each key to one IP), so a run waits in GitHub's queue while the PC is off. The
+// button asks GitHub for a run, says whether it waits for the PC, runs or is done,
+// then syncs the rows the PC's run added. A refused key shows the reason the run
+// left, a run the PC never picks up says so after 15 minutes, and a token without
+// Actions access is told what it needs.
+async function importNowRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const REPO = 'victus/sync', TOKEN = 'gh-token', RUN_URL = 'https://github.com/victus/sync/actions/runs/';
+  const gh = { files: {}, puts: 0, dispatched: [], dispatchStatus: 204, runs: [], runReads: 0 };
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
+  await ctx.route('https://api.github.com/**', async route => {
+    const req = route.request(), u = new URL(req.url()), h = await req.allHeaders();
+    const reply = (status, data) => route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: data === null ? '' : JSON.stringify(data) });
+    if (h.authorization !== 'Bearer ' + TOKEN) return reply(401, { message: 'Bad credentials' });
+    if (u.pathname === '/repos/' + REPO + '/actions/workflows/coindcx.yml/dispatches' && req.method() === 'POST') {
+      gh.dispatched.push(JSON.parse(req.postData() || '{}'));
+      return gh.dispatchStatus === 204 ? reply(204, null) : reply(gh.dispatchStatus, { message: 'Resource not accessible by personal access token' });
+    }
+    if (u.pathname === '/repos/' + REPO + '/actions/workflows/coindcx.yml/runs' && req.method() === 'GET') {
+      gh.runReads++;
+      return reply(200, { total_count: gh.runs.length, workflow_runs: gh.runs.slice(0, Number(u.searchParams.get('per_page')) || 30) });
+    }
+    if (u.pathname !== '/repos/' + REPO + '/contents/journal.json') return reply(404, { message: 'Not Found' });
+    const f = gh.files[REPO];
+    if (req.method() === 'GET') return f ? reply(200, { sha: f.sha, size: f.text.length, encoding: 'base64', content: Buffer.from(f.text).toString('base64') }) : reply(404, { message: 'Not Found' });
+    if (req.method() === 'PUT') {
+      const p = JSON.parse(req.postData() || '{}');
+      if (f ? p.sha !== f.sha : !!p.sha) return reply(409, { message: 'conflict' });
+      const text = Buffer.from(String(p.content || ''), 'base64').toString('utf8'), sha = crypto.createHash('sha1').update(text).digest('hex');
+      gh.files[REPO] = { text, sha }; gh.puts++;
+      return reply(f ? 200 : 201, { content: { sha } });
+    }
+    return reply(405, { message: 'no' });
+  });
+  const now = Date.parse('2026-11-02T14:00:00Z');
+  const cdxFile = { id: 'cdx-api', name: 'CoinDCX API', broker: 'CoinDCX', importedAt: new Date(now - 864e5).toISOString(), updatedAt: new Date(now - 864e5).toISOString(), cur: 'INR', wallet: { at: new Date(now - 864e5).toISOString(), INR: 5000 } };
+  const seeded = Object.assign({}, seed, { backtest: { files: [cdxFile], rows: [] }, sync: { token: TOKEN, repo: REPO, branch: 'main', auto: false, lastAt: '', lastSha: '' } });
+  // GitHub's schedule ran it 20 minutes ago, so the hourly start leaves it alone.
+  gh.runs = [{ id: 1, created_at: new Date(now - 20 * 60e3).toISOString(), status: 'completed', conclusion: 'success', html_url: RUN_URL + 1 }];
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  await page.clock.install({ time: now });
+  const settle = async (ms) => { await page.clock.runFor(ms); await page.waitForTimeout(400); };
+  const view = () => page.evaluate(() => ({ text: document.getElementById('cdxRunStatus').innerText, cls: document.getElementById('cdxRunStatus').className,
+    btn: document.getElementById('cdxRunBtn').innerText, off: document.getElementById('cdxRunBtn').disabled,
+    link: document.getElementById('cdxRunLink').classList.contains('hidden') ? '' : document.getElementById('cdxRunLink').href,
+    card: document.getElementById('cdxStatus').innerText, rows: state.backtest.rows.filter(r => r.file === 'cdx-api').length, toasts: window.__toasts.slice() }));
+  // What the PC's run leaves in the sync repo: this device's journal plus its rows.
+  const pcRun = async (rows, note) => {
+    const j = await page.evaluate(() => syncPayload(state));
+    const at = new Date(now + 60 * 60e3).toISOString();
+    const row = (id, gross, fee) => ({ id, file: 'cdx-api', sym: 'B-ETH_USDT', at: '2026-11-02 19:00:00', kind: 'order', type: 'By Order', gross, settle: 0, fee, net: gross - fee, cur: 'INR' });
+    j.backtest = { files: [Object.assign({}, cdxFile, { updatedAt: at }, note ? { note } : {})], rows: rows.map((r, i) => row('px' + i + r, r, 1)) };
+    const text = JSON.stringify(j, null, 2);
+    gh.files[REPO] = { text, sha: crypto.createHash('sha1').update(text).digest('hex') };
+  };
+  const newRun = async (status) => {
+    const t = await page.evaluate(() => Date.now());
+    gh.runs.unshift({ id: gh.runs.length + 1, created_at: new Date(t).toISOString(), status, conclusion: null, html_url: RUN_URL + (gh.runs.length + 1) });
+    return gh.runs[0];
+  };
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await settle(5000);
+    await page.evaluate(() => { window.__toasts = []; const real = toast; toast = m => { window.__toasts.push(String(m)); real(m); }; openSettings('connect'); renderDataView(); });
+    check(gh.dispatched.length === 0 && gh.runReads === 1, 'started on opening though GitHub ran it 20 min ago: ' + JSON.stringify(gh));
+    let v = await view();
+    check(v.btn === 'Import now' && !v.off && v.text === '' && !v.link, 'button before: ' + JSON.stringify(v));
+
+    // 1. Pressed on the phone while the PC is off: asked, then waiting for the PC.
+    await page.click('#cdxRunBtn');
+    await page.waitForTimeout(300);
+    v = await view();
+    check(gh.dispatched.length === 1 && gh.dispatched[0].ref === 'main', 'dispatch: ' + JSON.stringify(gh.dispatched));
+    check(/^Asked GitHub at /.test(v.text) && v.off && v.btn === 'Importing…' && v.toasts.some(t => /asked for: it runs on your PC\. A note pops up here when it's done\./.test(t)), 'after the press: ' + JSON.stringify(v));
+    const run1 = await newRun('queued');
+    await settle(5000);
+    v = await view();
+    check(/^Waiting for your PC since \d\d:\d\d( [AP]M)?: the import runs there\. Turn the PC on/.test(v.text) && v.link === RUN_URL + run1.id && v.off, 'queued: ' + JSON.stringify(v));
+    // A second press while it watches only says where it is.
+    await page.evaluate(() => cdxRunNow());
+    await page.waitForTimeout(200);
+    check(gh.dispatched.length === 1 && (await view()).toasts.pop().startsWith('Waiting for your PC'), 'second press started another run: ' + gh.dispatched.length);
+    // The PC comes on: running, then done; the sync brings its two rows.
+    run1.status = 'in_progress';
+    await settle(10000);
+    v = await view();
+    check(v.text === 'Running on your PC…' && v.rows === 0, 'running: ' + JSON.stringify(v));
+    await pcRun([40, -15]);
+    Object.assign(run1, { status: 'completed', conclusion: 'success' });
+    await settle(10000);
+    await page.waitForTimeout(600);
+    v = await view();
+    check(v.text === 'CoinDCX import done · 2 new rows.' && v.rows === 2 && !v.off && v.btn === 'Import now' && /text-emerald-300/.test(v.cls), 'done: ' + JSON.stringify(v));
+    check(v.toasts.includes('CoinDCX import done · 2 new rows.'), 'no toast when done: ' + JSON.stringify(v.toasts));
+    const polls = gh.runReads;
+    await settle(60000);
+    check(gh.runReads === polls, 'still watching after it was done: ' + (gh.runReads - polls));
+
+    // 2. From Signals → More, the key refused (the hotspot's IP moved): the reason the run left shows.
+    await page.evaluate(() => switchTab('signals'));
+    await page.click('#view-signals details.menu summary');
+    await page.click('#view-signals details.menu >> text=Import CoinDCX now');
+    await page.waitForTimeout(300);
+    check(gh.dispatched.length === 2, 'Signals → More did not start it: ' + gh.dispatched.length);
+    const why = "CoinDCX refused the key (401) from this PC's IP 203.0.113.7. The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets. Or a secret was copied short.";
+    await pcRun([40, -15], why);
+    const run2 = await newRun('completed');
+    run2.conclusion = 'success';
+    await settle(5000);
+    await page.waitForTimeout(600);
+    await page.evaluate(() => openSettings('connect'));
+    v = await view();
+    check(v.text.endsWith('but CoinDCX said no: ' + why) && /text-rose-300/.test(v.cls) && v.card.startsWith("GitHub's last run failed: " + why), 'refused key: ' + JSON.stringify(v));
+
+    // 3. The PC never picks it up: after 15 minutes it stops watching and says so.
+    await page.click('#cdxRunBtn');
+    await page.waitForTimeout(300);
+    await newRun('pending');
+    await settle(5000);
+    v = await view();
+    check(/^Waiting for your PC/.test(v.text) && v.off, 'pending: ' + JSON.stringify(v));
+    await settle(15 * 60e3);
+    v = await view();
+    check(/^Still waiting for your PC since \d\d:\d\d( [AP]M)?: .*New trades come in with the next sync\.$/.test(v.text) && !v.off && v.btn === 'Import now', 'gave up: ' + JSON.stringify(v));
+    check(/The run from \d\d:\d\d( [AP]M)? is waiting for your PC: the import runs there/.test(v.card) && !/Import last run/.test(v.card), 'card does not say the run waits for the PC: ' + JSON.stringify(v.card));
+    const reads = gh.runReads;
+    await settle(60000);
+    check(gh.runReads === reads, 'kept watching after 15 minutes: ' + (gh.runReads - reads));
+
+    // 4. A token without Actions access: says what to give it.
+    gh.dispatchStatus = 403;
+    await page.click('#cdxRunBtn');
+    await page.waitForTimeout(400);
+    v = await view();
+    check(v.text === 'GitHub refused (403): give the sync token Actions: Read and write, then press Import now again.' && !v.off && /GitHub said 403/.test(v.card), 'refused token: ' + JSON.stringify(v));
+    // 5. No GitHub Sync on this device: nothing is asked, it says what to connect.
+    gh.dispatchStatus = 204;
+    const n = gh.dispatched.length;
+    await page.evaluate(() => { state.sync = { token: '', repo: '', branch: 'main', auto: false, lastAt: '', lastSha: '' }; renderDataView(); });
+    await page.evaluate(() => cdxRunNow());
+    await page.waitForTimeout(200);
+    v = await view();
+    check(gh.dispatched.length === n && /^Connect GitHub Sync first/.test(v.toasts.pop()), 'no sync: ' + JSON.stringify(v));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'CoinDCX Import now from the phone: waits for the PC, runs, syncs, says why not';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
 // Fib / trendline / 1D+ zone results priced as the scanner prices them (its
@@ -3071,6 +3239,7 @@ await deltaShareRun(data);
 await alertRefreshRun(data);
 await zoneRebuildRun(data);
 await autoKeepRun(data);
+await importNowRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
 await cleanupRun(data);
