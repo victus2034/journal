@@ -17,6 +17,7 @@
 //   JOURNAL_BRANCH                        its branch (main)
 //   JOURNAL_TZ                            the clock CoinDCX's reports use (Asia/Kolkata)
 //   COINDCX_BASE                          tests point this at a fake CoinDCX
+//   IP_URL                                where this PC's public IP is read (api.ipify.org)
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -27,6 +28,7 @@ const CDX_BASE = (env.COINDCX_BASE || 'https://api.coindcx.com').replace(/\/+$/,
 const GH_API = (env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
 const REPO = env.GITHUB_REPOSITORY || '', BRANCH = env.JOURNAL_BRANCH || 'main', SYNC_PATH = 'journal.json';
 const TZ = env.JOURNAL_TZ || 'Asia/Kolkata';
+const IP_URL = env.IP_URL || 'https://api.ipify.org';
 const CDX_FILE = 'cdx-api', CDX_BROKER = 'CoinDCX';
 const CDX_PAGE = 100, CDX_MAX_PAGES = 100;
 const TX_PATH = '/exchange/v1/derivatives/futures/positions/transactions', POS_PATH = '/exchange/v1/derivatives/futures/positions';
@@ -156,12 +158,25 @@ function cdxRow(tx, mc) {
   };
 }
 function oneLine(v) { return String(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160); }
-function cdxWhy(r) {
-  if (r && r.network) return `Could not reach CoinDCX (${oneLine(r.network)}). If this keeps happening, CoinDCX may not accept GitHub's servers.`;
+// Since 2026-10-29 CoinDCX locks every key to one IP address, so the import runs
+// on lakky's PC (a self-hosted runner) and the key is locked to its public IP. A
+// phone hotspot's IP changes; a refused key then names the IP the PC has now,
+// which the journal's CoinDCX card shows, so a new key can be made for it.
+async function publicIp() {
+  try {
+    const r = await fetch(IP_URL, { signal: AbortSignal.timeout(8000) });
+    const t = r.ok ? (await r.text()).trim() : '';
+    return /^(\d{1,3}\.){3}\d{1,3}$|^[0-9a-f:]{3,39}$/i.test(t) ? t : '';
+  } catch (e) { return ''; }
+}
+function cdxWhy(r, ip) {
+  if (r && r.network) return `Could not reach CoinDCX (${oneLine(r.network)}). If this keeps happening, check the PC's internet.`;
   const said = r && r.body && (r.body.message || r.body.error || r.body.raw);
   const text = said ? oneLine(typeof said === 'string' ? said : JSON.stringify(said)) : '';
-  if (r && r.status === 401) return "CoinDCX refused the key (401). Check both secrets were copied in full, and that the key isn't bound to an IP address (GitHub's servers change address).";
-  if (r && r.status === 403) return `CoinDCX refused the request (403${text ? ': ' + text : ''}). Either the key is bound to an IP address, or CoinDCX doesn't accept GitHub's servers, which are outside India.`;
+  const fix = ip ? `The key is locked to one IP: if it isn't ${ip}, make a CoinDCX key for ${ip} and put it in the two secrets.`
+    : "The key is locked to one IP: if the PC's IP changed (open api.ipify.org on it), make a CoinDCX key for the new IP and put it in the two secrets.";
+  if (r && r.status === 401) return `CoinDCX refused the key (401)${ip ? ` from this PC's IP ${ip}` : ''}. ${fix} Or a secret was copied short.`;
+  if (r && r.status === 403) return `CoinDCX refused the request (403${ip ? `, PC IP ${ip}` : ''}${text ? ': ' + text : ''}). ${fix}`;
   if (r && r.status === 429) return 'CoinDCX says too many requests. The next run tries again.';
   if (r && r.status >= 500) return `CoinDCX is having trouble (it answered ${r.status}). The next run tries again.`;
   if (r && r.status) return `CoinDCX answered ${r.status}${text ? ': ' + text : ''}.`;
@@ -403,7 +418,7 @@ async function main() {
 
   let { data, sha } = await readJournal();
   let got = null, failed = null;
-  try { got = await readCoindcx(); } catch (r) { failed = cdxWhy(r); }
+  try { got = await readCoindcx(); } catch (r) { failed = cdxWhy(r, r && (r.status === 401 || r.status === 403) ? await publicIp() : ''); }
   const rows = got ? got.rows : [];
   // The balance is a bonus: a wallet CoinDCX won't show doesn't stop the import.
   let wallet = null, walletWhy = '';

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-01.147">
+  <meta name="app-version" content="2026-11-03.148">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -590,6 +590,7 @@
               <summary class="px-2.5 py-1 text-xs font-mono bg-terminal-surface border border-terminal-border rounded hover:border-amber-500 cursor-pointer select-none text-slate-300">More ▾</summary>
               <div class="absolute right-0 z-40 mt-1 w-44 bg-terminal-card border border-terminal-border rounded-lg p-1 flex flex-col gap-1 shadow-subtle">
                 <button onclick="this.closest('details').open=false;openSignalImport()" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Paste signals</button>
+                <button onclick="this.closest('details').open=false;cdxRunNow()" title="Run the CoinDCX import now (it runs on your PC)" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Import CoinDCX now</button>
                 <button onclick="this.closest('details').open=false;deleteAllSignals()" class="px-2.5 py-1.5 text-xs font-mono text-left text-rose-400 rounded hover:bg-rose-500/10">Delete all signals</button>
               </div>
             </details>
@@ -1387,12 +1388,18 @@
               <span id="cdxStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Not set up</span>
             </div>
             <p id="cdxStatus" class="text-slate-300 text-[11px] leading-relaxed"></p>
+            <!-- Start the import now, from any device: GitHub queues it and your PC runs it. -->
+            <div id="cdxRunRow" class="flex flex-wrap items-center gap-2">
+              <button type="button" id="cdxRunBtn" onclick="cdxRunNow()" title="Ask GitHub to run the CoinDCX import now. It runs on your PC, so the PC must be on." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
+              <a id="cdxRunLink" href="#" target="_blank" rel="noopener" class="hidden text-[11px] text-sky-400 hover:underline">Open on GitHub</a>
+              <p id="cdxRunStatus" class="w-full text-[11px] leading-relaxed text-slate-400"></p>
+            </div>
             <p class="text-slate-400 text-[11px] leading-relaxed">
-              CoinDCX doesn't answer web pages, so GitHub reads it for you: every hour a job in your sync repo signs in with your key and adds new futures transactions (INR and USDT margined) to the journal file. They arrive with the next sync, in the CoinDCX book an uploaded report fills; rows a report already has count once.
+              CoinDCX doesn't answer web pages, so GitHub reads it for you: every hour a job in your sync repo, run on your PC, signs in with your key and adds new futures transactions (INR and USDT margined) to the journal file. They arrive with the next sync, in the CoinDCX book an uploaded report fills; rows a report already has count once.
             </p>
             <div id="cdxSteps" class="space-y-2 text-[11px] leading-relaxed text-slate-300"></div>
             <p class="text-amber-300 text-[11px] leading-relaxed">
-              CoinDCX has no read-only keys, so this key can also place orders. Make a separate key just for the journal, keep it only in GitHub's secrets, and don't bind it to an IP address: GitHub's servers change address.
+              CoinDCX has no read-only keys, so this key can also place orders. Make a separate key just for the journal and keep it only in GitHub's secrets. CoinDCX locks every key to one IP address: make it for your PC's public IP (open api.ipify.org on the PC). When that IP changes, the card above names the new one.
             </p>
           </div>
 
@@ -7151,7 +7158,7 @@
         let last = 0;
         try {
           const r = await syncApi(CDX_WORKFLOW + "/runs?per_page=1");
-          if (r.ok) { const run = ((await r.json()).workflow_runs || [])[0]; if (run) last = Date.parse(run.created_at) || 0; }
+          if (r.ok) { const run = ((await r.json()).workflow_runs || [])[0]; if (run) { last = Date.parse(run.created_at) || 0; state.ui.cdxLastRun = cdxRunInfo(run); } }
         } catch (e) {}
         if (Date.now() - last < CDX_KICK_MS) { state.ui.cdxKickAt = last; state.ui.cdxKickErr = ""; save(); return; }
         const r = await syncApi(CDX_WORKFLOW + "/dispatches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: syncCfg().branch || "main" }) });
@@ -7163,19 +7170,126 @@
       } catch (e) { /* offline: tried again on the next check */ }
       finally { cdxKickBusy = false; renderCdxCard(); }
     }
+    // GitHub's run, kept short: when it was made, where it is, how it ended, its page.
+    function cdxRunInfo(run) {
+      const url = String(run.html_url || "");
+      return { at: Date.parse(run.created_at) || 0, status: String(run.status || ""), conclusion: String(run.conclusion || ""), url: /^https:\/\/github\.com\//.test(url) ? url : "" };
+    }
+    // Not started or not finished. A run that waits is waiting for the PC: the
+    // import runs there (a self-hosted runner), and GitHub holds it until the PC
+    // and its runner are on, for up to a day, one run at a time.
+    function cdxRunWaiting(st) { return /^(queued|pending|waiting|requested)$/.test(st || ""); }
+
+    // "Import now": runs the import from any device, the phone too. GitHub queues
+    // it and the PC runs it, so this device then watches the run (every 10 s, for
+    // 15 minutes) to say whether it waits for the PC, runs or is done, and syncs
+    // once it is done to bring the new trades in.
+    const CDX_POLL_MS = 10e3, CDX_WATCH_MS = 15 * 60e3;
+    let cdxRun = null;
+    async function cdxRunNow() {
+      if (!state) return;
+      if (!syncReady()) { toast("Connect GitHub Sync first (Settings → Connections): the import writes into that repo."); return; }
+      if (cdxRun && cdxRun.live) { toast(cdxRunText(cdxRun)); return; }
+      const run = cdxRun = { asked: Date.now(), live: true, step: "asking", rows: btState().rows.filter(r => r.file === CDX_FILE).length };
+      renderCdxRun();
+      let r = null;
+      try {
+        r = await syncApi(CDX_WORKFLOW + "/dispatches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: syncCfg().branch || "main" }) });
+      } catch (e) {}
+      if (!r || !r.ok) {
+        Object.assign(run, { live: false, step: r ? "refused" : "offline", code: r ? r.status : 0 });
+        if (r && (r.status === 401 || r.status === 403 || r.status === 404)) { state.ui.cdxKickErr = String(r.status); save(); }
+        renderCdxRun(); renderCdxCard();
+        toast(cdxRunText(run));
+        return;
+      }
+      state.ui.cdxKickAt = Date.now(); state.ui.cdxKickErr = ""; save();
+      run.step = "asked";
+      renderCdxRun();
+      toast("CoinDCX import asked for: it runs on your PC. A note pops up here when it's done.");
+      setTimeout(() => cdxWatch(run), 4e3);
+    }
+    async function cdxWatch(run) {
+      if (run !== cdxRun || !run.live) return;
+      try {
+        // The newest run made since the press (a newer scheduled one replaces a
+        // waiting one, and then does the work). Two minutes' slack for the clock.
+        const r = await syncApi(CDX_WORKFLOW + "/runs?per_page=1", { cache: "no-store" });
+        if (r.ok) {
+          const w = ((await r.json()).workflow_runs || [])[0];
+          if (w && (Date.parse(w.created_at) || 0) >= run.asked - 120e3) { Object.assign(run, cdxRunInfo(w), { step: "run" }); state.ui.cdxLastRun = cdxRunInfo(w); }
+        }
+      } catch (e) {}
+      if (run.status === "completed") {
+        run.live = false;
+        run.step = "syncing";
+        renderCdxRun();
+        // Its rows, wallet and any reason it failed come in with the sync.
+        let res = null;
+        for (let i = 0; i < 5; i++) {
+          res = await syncNow({ quiet: true });
+          if (!res || res.why !== "busy") break;
+          await new Promise(ok => setTimeout(ok, 3e3));
+        }
+        const f = btState().files.find(x => x.id === CDX_FILE);
+        Object.assign(run, { step: "done", synced: !!(res && res.ok), added: btState().rows.filter(x => x.file === CDX_FILE).length - run.rows, note: f && f.note || "" });
+        renderAll();
+        toast(cdxRunText(run));
+      } else if (Date.now() - run.asked >= CDX_WATCH_MS) {
+        run.live = false;
+        renderCdxCard();
+        toast(cdxRunText(run));
+      } else setTimeout(() => cdxWatch(run), CDX_POLL_MS);
+      renderCdxRun();
+    }
+    function cdxRunText(run) {
+      const hm = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      if (run.step === "asking") return "Asking GitHub to run the CoinDCX import…";
+      if (run.step === "offline") return "Couldn't reach GitHub. Check the internet and press Import now again.";
+      if (run.step === "refused") return run.code === 401 || run.code === 403 || run.code === 404
+        ? `GitHub refused (${run.code}): give the sync token Actions: Read and write, then press Import now again.`
+        : `GitHub couldn't start it (it answered ${run.code}). Try again in a minute.`;
+      if (run.step === "asked") return "Asked GitHub at " + hm(run.asked) + "; waiting for the run to show up…";
+      if (run.step === "syncing") return "Done on your PC; bringing the trades in…";
+      if (run.step === "done") return run.conclusion !== "success"
+        ? (run.conclusion === "cancelled" ? "GitHub cancelled the run: the PC was off for a day, or a newer run took its place. Press Import now again." : "The run failed on your PC (" + (run.conclusion || "no result") + "). Open it on GitHub to see why.")
+        : !run.synced ? "Done on your PC. This device couldn't sync just now; the trades come in with the next sync."
+        : run.note ? "Ran at " + hm(run.at) + ", but CoinDCX said no: " + run.note
+        : "CoinDCX import done · " + (run.added > 0 ? run.added + " new row" + (run.added === 1 ? "" : "s") : "nothing new") + ".";
+      if (run.status === "in_progress") return "Running on your PC…";
+      if (cdxRunWaiting(run.status)) return (run.live ? "Waiting" : "Still waiting") + " for your PC since " + hm(run.asked) + ": the import runs there. Turn the PC on (with internet); it starts by itself." + (run.live ? "" : " New trades come in with the next sync.");
+      return run.live ? "Waiting for GitHub…" : "No word from GitHub yet. New trades come in with the next sync once it has run.";
+    }
+    function renderCdxRun() {
+      const el = document.getElementById("cdxRunStatus"), btn = document.getElementById("cdxRunBtn"), a = document.getElementById("cdxRunLink");
+      if (!el || !btn) return;
+      const run = cdxRun, bad = run && (run.step === "refused" || run.step === "offline" || (run.step === "done" && (run.conclusion !== "success" || run.note)));
+      el.innerText = run ? cdxRunText(run) : "";
+      el.className = "w-full text-[11px] leading-relaxed " + (bad ? "text-rose-300" : run && run.step === "done" ? "text-emerald-300" : "text-slate-400");
+      btn.disabled = !!(run && run.live);
+      btn.style.opacity = btn.disabled ? "0.5" : "";
+      btn.innerText = run && run.live ? "Importing…" : "Import now";
+      if (a) { const url = run && run.url; a.classList.toggle("hidden", !url); if (url) a.href = url; }
+    }
     function cdxWalletTitle(w) { return "CoinDCX futures wallet, read by GitHub's hourly import" + (w.at ? "; last changed " + new Date(w.at).toLocaleString() : ""); }
     function renderCdxCard() {
       const badge = document.getElementById("cdxStatusBadge"), status = document.getElementById("cdxStatus"), steps = document.getElementById("cdxSteps");
       if (!badge || !status || !steps) return;
       const bt = btState(), f = bt.files.find(x => x.id === CDX_FILE), repo = syncCfg().repo;
       const n = bt.rows.filter(r => r.file === CDX_FILE).length;
+      const hm = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      // GitHub's newest run, as this device last saw it, still waiting for the PC (not while Import now watches it).
+      const lastRun = state.ui.cdxLastRun, waiting = !!(lastRun && lastRun.at && cdxRunWaiting(lastRun.status) && !(cdxRun && cdxRun.live));
       badge.innerText = !f ? "Not set up" : f.note ? "Last run failed" : "Importing";
       badge.className = "text-[10px] px-2 py-0.5 rounded " + (f && f.note ? "bg-rose-950/60 text-rose-300" : f ? "bg-slate-800 text-emerald-300" : "bg-slate-800 text-slate-300");
       status.className = "text-[11px] leading-relaxed " + (f && f.note ? "text-rose-300" : "text-slate-300");
       status.innerText = !f ? "Nothing from CoinDCX yet. After the steps below, its trades show up here once GitHub has run and this device has synced."
         : (f.note ? "GitHub's last run failed: " + f.note + " " : "") + `${n} CoinDCX row${n === 1 ? "" : "s"} in the journal, last changed ${new Date(f.updatedAt).toLocaleString()}.`
           + (f.wallet ? " Wallet: " + [["INR", "INR futures"], ["USD", "USDT futures"]].filter(([k]) => k in f.wallet).map(([k, label]) => money(f.wallet[k], k) + " " + label).join(" · ") + "." : "")
-          + (f && state.ui.cdxKickErr ? " This device can't start the hourly import itself (GitHub said " + state.ui.cdxKickErr + "): give the sync token Actions: Read and write, or GitHub's own schedule runs it when it can." : f && state.ui.cdxKickAt ? " Import last run " + new Date(state.ui.cdxKickAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + "; this journal starts it every hour while open." : "");
+          + (f && state.ui.cdxKickErr ? " This device can't start the hourly import itself (GitHub said " + state.ui.cdxKickErr + "): give the sync token Actions: Read and write, or GitHub's own schedule runs it when it can."
+            : f && waiting ? " The run from " + hm(lastRun.at) + " is waiting for your PC: the import runs there, so the PC has to be on (with internet)."
+            : f && state.ui.cdxKickAt ? " Import last run " + hm(state.ui.cdxKickAt) + "; this journal starts it every hour while open." : "");
+      renderCdxRun();
       const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">${esc(text)}</a>`;
       const gh = "https://github.com/" + repo;
       steps.innerHTML = !repo
@@ -11207,6 +11321,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-03.148', pr: 63, title: 'CoinDCX import from your phone', pts: ['Import now on the CoinDCX card (and Signals → More) starts the import from any device', 'Shows if it waits for your PC, runs or is done, then syncs the new trades', 'A refused key now names the PC\'s new IP to make the CoinDCX key for'] },
       { v: '2026-11-01.147', pr: 62, title: 'GitHub sync details hidden', pts: ['Settings → Connections: Branch field removed; sync always uses main', 'Repository and token show as dots, with plain hints instead of the repo name', 'A saved connection keeps syncing as before'] },
       { v: '2026-11-01.146', pr: 61, title: 'Weekly check: typos caught', pts: ['Huge numbers, dates before 2000 or in the future and 500-letter symbols are turned away with a reason', 'Withdrawals: dated by trading day, more than the balance asks first; Signals Custom dates work picked backwards', 'Dollar reports show cents (a +$0.60 trade no longer reads +$1)'] },
       { v: '2026-11-01.145', pr: 60, title: 'Report for every book', pts: ['Analysis: Delta and All books open on a Report like CoinDCX', 'Net P&L, win rate, profit factor, avg win / loss, best / worst, drawdown, fees, average R', 'Equity curve, by pair (click to filter) and by day; follows every filter'] },
