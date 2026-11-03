@@ -993,13 +993,23 @@ async function coindcxRun(seed) {
     check(c.badge === 'Last run failed' && c.bad && c.status.startsWith("GitHub's last run failed: CoinDCX answered 400: Invalid margin. " + NEW_ROWS + ' CoinDCX rows'), 'card after a failed run: ' + JSON.stringify(c));
     b = await books();
     check(b.inr.n === API_CLOSED && near(b.inr.net, API_NET), 'book after a failed run: ' + JSON.stringify(b));
+    // While it fails, the wallet is the last one read, not today's: the header, Trading Books
+    // and the card say so (lakky's ₹3,704.85 vs CoinDCX's ₹6,705.82 on 3 Nov, a refused key).
+    check(/Last known wallet \(from before the failure/.test(c.status), 'card wallet while failing: ' + c.status);
+    bal = await balances();
+    check(bal.inr === 8144.78 && bal.cdx.top === bal.want && bal.cdx.tag === 'LAST KNOWN' && /GitHub's import is failing/.test(bal.cdx.title) && /Why: CoinDCX answered 400: Invalid margin\. Journal-computed balance: /.test(bal.cdx.title)
+      && (bal.books.match(/· CoinDCX wallet, last known \(import failing\)/g) || []).length === 2, 'wallet while the import fails: ' + JSON.stringify(bal));
+    check(await page.evaluate(() => document.getElementById('topBalLive').className.includes('amber')), 'last known wallet tag is not amber');
     // Working again clears it.
     mock.mode = 'ok';
     r = await runImport();
     check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX import working again"]' && !('note' in stored().backtest.files.find(f => f.id === 'cdx-api')), 'recovered: ' + JSON.stringify(r));
     await sync();
     c = await card();
-    check(c.badge === 'Importing' && !c.bad, 'card after recovering: ' + JSON.stringify(c));
+    check(c.badge === 'Importing' && !c.bad && / Wallet: ₹8,144\.78 INR futures/.test(c.status), 'card after recovering: ' + JSON.stringify(c));
+    bal = await balances();
+    check(bal.cdx.tag === 'WALLET' && !/failing/.test(bal.cdx.title) && !/import failing/.test(bal.books) && (bal.books.match(/· CoinDCX wallet/g) || []).length === 2, 'wallet after recovering: ' + JSON.stringify(bal));
+    check(await page.evaluate(() => { state.ui.account = 'rep-coindcx-inr'; renderAll(); const on = document.getElementById('topBalLive').className.includes('emerald'); state.ui.account = 'all'; renderAll(); return on; }), 'wallet tag is not green again');
 
     // A device saves between the import's read and write: read again, merge, nothing lost.
     inr.push(tx('B-HHH_USDT', '2026-09-20 10:00:00', 'default', 0, 1), tx('B-HHH_USDT', '2026-09-20 12:00:00', 'default', 11, 1));
