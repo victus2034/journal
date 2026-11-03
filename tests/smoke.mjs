@@ -2871,6 +2871,13 @@ async function aiReviewRun(seed) {
     if (mode === 'busy404') return route.fulfill({ status: req.url().includes('lite') ? 404 : 503, headers: cors, body: JSON.stringify({ error: { message: 'x' } }) });
     if (mode === 'allbusy') return route.fulfill({ status: 503, headers: cors, body: JSON.stringify({ error: { code: 503, message: 'high demand' } }) });
     if (mode === 'nomodel' && req.url().includes('gemini-2.5-flash')) return route.fulfill({ status: 404, headers: cors, body: JSON.stringify({ error: { code: 404, message: 'not found' } }) });
+    // The connection drops ("Failed to fetch"): once, on every review call, or
+    // everywhere (the reachability check too). 'slow' hangs past the time limit.
+    const post = req.method() === 'POST';
+    if ((mode === 'drop1' && post && calls.filter(c => c.post).length === 0) || (mode === 'dropall' && post) || mode === 'down') { calls[calls.length - 1].post = post; return route.abort('failed'); }
+    if (post) calls[calls.length - 1].post = true;
+    if (mode === 'slow' && post && req.url().includes('gemini-2.5-flash:')) { await new Promise(r => setTimeout(r, 1500)); return route.abort('failed').catch(() => {}); }
+    if (!post && mode !== 'ok') return route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ name: 'models/x' }) });
     const answer = { verdict: 'You cut winners early.', wrong: [{ point: 'Pullback shorts lose', proof: '-3R total' }, { point: '<b>x</b>', proof: '' }], right: [{ point: 'Breakout longs win', proof: '6 of 8 won' }], trailing: [{ point: 'Trail starts too tight', proof: 'XAIUSD went 3% on' }], vas: [{ point: 'Fib 1h shorts lose', proof: 'avg -1R' }], setup: [{ point: 'Enter at L3 only', proof: 'L3 won 4 of 5' }], rules: [{ point: 'Skip pullback shorts', proof: 'They lost most' }] };
     route.fulfill({ status: 200, headers: cors, body: JSON.stringify({ candidates: [{ content: { parts: [{ text: 'thinking', thought: true }, { text: JSON.stringify(answer) }] } }] }) });
   });
@@ -2969,6 +2976,33 @@ async function aiReviewRun(seed) {
     await page.click('#aiRunBtn');
     await page.waitForFunction(() => !aiBusy, null, { timeout: 8000 });
     check(calls.length === 8 && /overloaded/.test(await page.innerText('#aiStatus')), 'busy + missing lite: ' + calls.length + ' ' + await page.innerText('#aiStatus'));
+    // "Failed to fetch" (lakky, 3 Nov, desktop Chrome): one dropped connection used to
+    // end the review. Now a quick check that Gemini is reachable, the same model again, and it answers.
+    const seq = () => JSON.stringify(calls.map(c => (c.post ? 'POST ' : 'GET ') + c.url.replace(/^.*models\//, '')));
+    const runAi = async () => { calls.length = 0; await page.evaluate(() => { localStorage.removeItem('tapeAndTarget.aiReview'); renderAiResult(null); }); await page.click('#aiRunBtn'); await page.waitForFunction(() => !aiBusy, null, { timeout: 8000 }); };
+    mode = 'drop1'; await runAi();
+    check(seq() === JSON.stringify(['POST gemini-2.5-flash:generateContent', 'GET gemini-2.5-flash', 'POST gemini-2.5-flash:generateContent'])
+      && (await page.innerText('#aiResult')).includes('Breakout longs win') && !(await page.innerText('#aiStatus')), 'one dropped connection should be retried: ' + seq() + ' ' + await page.innerText('#aiStatus'));
+    // Every review call drops but Gemini answers the check: three tries in all, then "kept dropping".
+    mode = 'dropall'; await runAi();
+    let st = await page.innerText('#aiStatus');
+    check(seq() === JSON.stringify(['POST gemini-2.5-flash:generateContent', 'GET gemini-2.5-flash', 'POST gemini-2.5-flash:generateContent', 'POST gemini-flash-latest:generateContent'])
+      && /kept dropping \(Failed to fetch\)/.test(st) && !(await page.$('#aiResult [data-ai-sec]')), 'every call dropped: ' + seq() + ' ' + st);
+    // Gemini can't be reached at all (blocked network): stop at once and say what to do.
+    mode = 'down'; await runAi();
+    st = await page.innerText('#aiStatus');
+    check(seq() === JSON.stringify(['POST gemini-2.5-flash:generateContent', 'GET gemini-2.5-flash']) && /can't reach Gemini \(Failed to fetch\)/.test(st) && /VPN, ad-blocker/.test(st) && /Copy for Gemini app/.test(st), 'Gemini unreachable: ' + seq() + ' ' + st);
+    // Offline: no calls wasted, and the message says so.
+    // (Routed requests skip Playwright's offline switch, so the route drops them too.)
+    await ctx.setOffline(true); mode = 'down'; await runAi(); await ctx.setOffline(false);
+    st = await page.innerText('#aiStatus');
+    check(seq() === JSON.stringify(['POST gemini-2.5-flash:generateContent']) && /You're offline/.test(st), 'offline: ' + seq() + ' ' + st);
+    // A call that hangs past the limit moves to the next model instead of waiting forever.
+    await page.evaluate(() => { aiTimeoutMs = 300; });
+    mode = 'slow'; await runAi();
+    await page.evaluate(() => { aiTimeoutMs = 150000; });
+    check(seq() === JSON.stringify(['POST gemini-2.5-flash:generateContent', 'GET gemini-2.5-flash', 'POST gemini-flash-latest:generateContent'])
+      && (await page.innerText('#aiResult')).includes('gemini-flash-latest'), 'hung call should time out to the next model: ' + seq() + ' ' + await page.innerText('#aiStatus'));
     // Remove.
     await page.evaluate(() => { switchTab('data'); removeAiKey(); });
     check(await page.evaluate(() => !aiCfg().key && !localStorage.getItem('tapeAndTarget.gemini')), 'key should be removed');
