@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-03.153">
+  <meta name="app-version" content="2026-11-03.154">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -4869,19 +4869,39 @@
     };
     // Gemini answers 503 when a model is overloaded (often for a minute or two). Each
     // model is tried again after a short wait, then the next model takes over.
-    let aiRetryMs = [3000, 8000];
-    const AI_MODEL_LITE = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite"];
+    // A dropped connection ("Failed to fetch") or a call that hangs past aiTimeoutMs
+    // is tried once more, then the next model; after AI_NET_MAX of them it stops.
+    // On the first one a quick read checks Gemini can be reached at all: if not
+    // (offline, VPN, ad-blocker, a network that blocks Google's API) it stops at once.
+    let aiRetryMs = [3000, 8000], aiTimeoutMs = 150000;
+    const AI_MODEL_LITE = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite"], AI_NET_MAX = 3;
     async function aiCallRetry(cfg, body) {
       const models = [cfg.model || AI_MODEL_DEFAULT, AI_MODEL_FALLBACK].concat(AI_MODEL_LITE).filter((m, i, a) => a.indexOf(m) === i);
-      // The reply that explains a failure best: busy beats the free limit beats "no such model".
-      let res = null, model = models[0], worst = null;
-      const rank = r => [500, 502, 503, 504].indexOf(r.status) !== -1 ? 3 : r.status === 429 ? 2 : 1;
-      for (const m of models) {
+      // The reply that explains a failure best: busy beats the free limit beats a
+      // dropped connection beats "no such model".
+      let res = null, model = models[0], worst = null, reach = null, netFails = 0;
+      const isBusy = s => [500, 502, 503, 504].indexOf(s) !== -1;
+      const rank = r => isBusy(r.status) ? 4 : r.status === 429 ? 3 : r.net ? 2 : 1;
+      outer: for (const m of models) {
         model = m;
         for (let i = 0; i <= aiRetryMs.length; i++) {
           res = await aiCall(m, cfg.key, body);
           if (res.ok) return { res, model };
-          const busy = [500, 502, 503, 504].indexOf(res.status) !== -1;
+          if (res.net) {
+            netFails++;
+            if (reach === null) { aiStatus("Lost the connection to Gemini, checking it…"); reach = await aiReachable(cfg.key, m); }
+            res.reach = reach;
+            if (!reach) return { res, model };
+            if (!worst || rank(res) > rank(worst.res)) worst = { res, model: m };
+            if (netFails >= AI_NET_MAX) break outer;
+            if (res.net !== "timeout" && i === 0) {
+              aiStatus("The connection to Gemini dropped, trying again in " + Math.round(aiRetryMs[0] / 1000) + " s…");
+              await new Promise(r => setTimeout(r, aiRetryMs[0]));
+              continue;
+            }
+            break;
+          }
+          const busy = isBusy(res.status);
           if (busy && i < aiRetryMs.length) {
             aiStatus("Gemini (" + m + ") is busy, trying again in " + Math.round(aiRetryMs[i] / 1000) + " s…");
             await new Promise(r => setTimeout(r, aiRetryMs[i]));
@@ -4895,14 +4915,33 @@
       }
       return worst || { res, model };
     }
+    // Never throws: a network failure comes back as status 0 with net = what the
+    // browser said ("Failed to fetch"), or "timeout".
     async function aiCall(model, key, body) {
-      const r = await fetch(AI_BASE + encodeURIComponent(model) + ":generateContent", {
-        method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body)
-      });
-      let j = null; try { j = await r.json(); } catch (e) {}
-      return { status: r.status, ok: r.ok, j };
+      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), aiTimeoutMs);
+      try {
+        const r = await fetch(AI_BASE + encodeURIComponent(model) + ":generateContent", {
+          method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key }, body: JSON.stringify(body), signal: ctl.signal
+        });
+        let j = null; try { j = await r.json(); } catch (e) {}
+        return { status: r.status, ok: r.ok && !!j, j, net: r.ok && !j ? (ctl.signal.aborted ? "timeout" : "the answer was cut off") : "" };
+      } catch (e) {
+        return { status: 0, ok: false, j: null, net: ctl.signal.aborted ? "timeout" : String((e && e.message) || e || "network error").slice(0, 80) };
+      } finally { clearTimeout(timer); }
+    }
+    // Any answer from Google, even an error, means this browser can reach Gemini.
+    async function aiReachable(key, model) {
+      if (navigator.onLine === false) return false;
+      const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 15000);
+      try { await fetch(AI_BASE + encodeURIComponent(model), { headers: { "x-goog-api-key": key }, signal: ctl.signal }); return true; }
+      catch (e) { return false; } finally { clearTimeout(timer); }
     }
     function aiErrText(res, model) {
+      if (res.net) {
+        if (res.reach !== false) return "The connection to Gemini kept dropping (" + res.net + "). Press Review my trades again; if it keeps happening, try 7 days or Copy for Gemini app.";
+        if (navigator.onLine === false) return "You're offline. Connect to the internet and press Review my trades again.";
+        return "This browser can't reach Gemini (" + res.net + "). Turn off any VPN, ad-blocker or DNS filter for this site, or switch network (Wi-Fi / hotspot), then press Review my trades again. Copy for Gemini app works meanwhile.";
+      }
       const m = res.j && res.j.error && res.j.error.message ? String(res.j.error.message).slice(0, 200) : "";
       if (res.status === 400 && /api key/i.test(m)) return "Gemini refused the key. Check it in Settings → Connections → AI Review.";
       if (res.status === 403) return "This key can't use Gemini (" + (m || "forbidden") + "). Make a new key at aistudio.google.com.";
@@ -4952,7 +4991,7 @@
         aiStatus("");
         renderAiResult(saved);
       } catch (e) {
-        aiStatus("Could not reach Gemini: " + String((e && e.message) || e).slice(0, 160), true);
+        aiStatus("The review stopped: " + String((e && e.message) || e).slice(0, 160), true);
       } finally {
         aiBusy = false; if (btn) btn.disabled = false;
       }
@@ -11658,6 +11697,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-03.154', pr: 69, title: 'AI review: no more "Failed to fetch" dead end', pts: ['A dropped connection no longer ends the review: it checks Gemini is reachable, tries again, then the next model', 'If this network can\'t reach Gemini at all, it says so and what to do (VPN, ad-blocker, other network, or Copy for Gemini app)', 'A call stuck for 2.5 min moves on to the next model'] },
       { v: '2026-11-03.153', pr: 68, title: 'Trades go to the closest alert', pts: ['When several alerts fit a trade, the one whose entry is closest to yours wins (BTC 30 Oct: 1M L2, not 1W)', 'Alerts Discord sent that the rebuilt history dropped still match your trades', 'Fib L1 / L2 / L4 alerts place your level right; all trades re-matched'] },
       { v: '2026-11-03.152', pr: 67, title: 'Old CoinDCX wallet is marked', pts: ['While the CoinDCX import fails, the header says LAST KNOWN (amber), not WALLET', 'Trading Books and the CoinDCX card say the balance is from before the failure', 'It updates by itself on the first import that works'] },
       { v: '2026-11-03.151', pr: 66, title: 'Delta from your PC only, keys out of sight', pts: ['Delta card: no key boxes. Your PC brings the trades and balance to every device; Copy key / Copy secret help set it up', 'Gemini card shows Key saved with a Change key link', 'Set up another device shows before keys are saved; Delta says when the PC import is not set up'] },
