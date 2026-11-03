@@ -949,7 +949,8 @@ async function coindcxRun(seed) {
     check(JSON.stringify(v.t) === JSON.stringify([true, 'LNK/USDT', 'long', 12, 12.1, 100, D, '10:05']) && near(v.r, 991 / 99.3 / 10) && !v.orf, 'alert matched to a CoinDCX trade: ' + JSON.stringify(v));
     check(v.strip.includes('1 taken by you') && /LNK\/USDT LONG .*\+1\.00R \(\+0\.83%\)/.test(v.vs) && !v.orphans.includes('ORF') && JSON.stringify(v.refused) === '[null,null]', 'Signals tab: ' + JSON.stringify(v));
     // Matched trades took their alert's setup on their own (stops too, for journal trades): send that, so the run below starts level.
-    check((await page.evaluate(() => reportTrades().find(t => t.symbol === 'LNK/USDT' || /LNK/.test(t.symbol)) || {})).setup === 'TRENDLINE', 'setup from the alert on a CoinDCX trade');
+    // Both LNK alerts paired with it; the zone alert's 12.00 is its entry exactly, the trendline's 12.11 is not.
+    check((await page.evaluate(() => reportTrades().find(t => t.symbol === 'LNK/USDT' || /LNK/.test(t.symbol)) || {})).setup === 'ZONE', 'setup from the alert on a CoinDCX trade (the closest price)');
     await sync();
 
     // Analysis, results by broker and Files say where the rows came from.
@@ -2714,6 +2715,117 @@ async function analysisFiltersRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('analysis filters: ' + e); });
 }
 
+// A trade goes to the alert whose entry is closest to its own (lakky, 2026-11-03).
+// The real case: a BTC long at 76,449 on 31 Oct went to the 1W fib (L1 77,313) because
+// the rebuilt history had replaced the live 1M fib alert he took (L2 76,355). The live
+// alerts the rebuild hides are kept aside for matching, survive a reload, and stay off
+// the Signals tab. Fib alerts at L1 / L2 / L4 get their own level's geometry.
+async function alertPriceMatchRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  // Noon IST two days ago; the trade at 18:00 IST the same day.
+  const at = Math.floor((Date.now() + 5.5 * 3600e3) / 864e5) * 864e5 - 5.5 * 3600e3 + 12 * 3600e3 - 2 * 864e5;
+  const ist = ms => new Date(ms + 5.5 * 3600e3).toISOString();
+  const s = ms => Math.floor(ms / 1000), tradeAt = at + 6 * 3600e3;
+  const rec = (key, tf, sentMs, entry, sl, extra) => Object.assign({ market: 'crypto', symbol: 'BTCUSD', tf, price: entry + 500, kind: 'fib', plan: { side: 'long', entry, sl },
+    id: key + '@' + s(sentMs), key, sent_ts: s(sentMs) }, extra || {});
+  const w1L1 = 'fib|BTCUSD|1w|1|1782691200|87378.8|1|L1', m1L2 = 'fib|BTCUSD|1M|1|1667260800|126192.6|1|L2', w1L2 = 'fib|BTCUSD|1w|1|1782691200|87378.8|1|L2';
+  const live = [rec(w1L1, '1w', at - 6 * 864e5, 77312.828, 67024.8125), rec(m1L2, '1M', at, 76355.37, 71362.9), rec(w1L2, '1w', tradeAt - 10 * 60e3, 74056.19, 70281.4505)];
+  // The rebuild keeps the 1W L1 (at its candle's close) and has no 1M alert at all.
+  const rebuilt = [Object.assign(rec(w1L1, '1w', at - 6 * 864e5 - 15 * 3600e3, 77312.828, 73242.0305), { id: w1L1 + '@' + s(at - 6 * 864e5 - 15 * 3600e3) + '|rb', rebuild: true })];
+  const files = {
+    'fib_trendline_alert_records.jsonl': live.map(r => JSON.stringify(r)).join('\n') + '\n',
+    'fibtl_rebuild_records.jsonl': rebuilt.map(r => JSON.stringify(r)).join('\n') + '\n',
+    'fibtl_rebuild_meta.json': JSON.stringify({ since: new Date(at - 30 * 864e5).toISOString(), cutoff: new Date(at + 864e5).toISOString(), built_at: new Date(at + 864e5).toISOString() })
+  };
+  let serve = true, hits = 0;
+  await ctx.route(url => !url.href.startsWith(base), r => {
+    const u = r.request().url();
+    if (!serve || !u.includes('/scanner-runtime-state/')) return r.abort();
+    hits++;
+    const f = u.split('/').pop().split('?')[0];
+    return r.fulfill({ status: 200, body: files[f] != null ? files[f] : f.endsWith('.json') ? '{}' : '' });
+  });
+  const T = ist(tradeAt);
+  const trade = { id: 'trBtc', accountId: 'acc_cry', date: T.slice(0, 10), exitDate: T.slice(0, 10), time: T.slice(11, 16), exitTime: '23:30',
+    symbol: 'BTCUSD', direction: 'long', entry: 76449, exit: 77986.2, stop: 0, qty: 0.005, fees: 0, leverage: 10, setup: '', rules: [], notes: '', updatedAt: new Date().toISOString() };
+  const seeded = Object.assign({}, seed, { trades: seed.trades.concat([trade]),
+    playbook: [{ id: 'pbf', name: 'FIB', rules: ['L1', 'L2', 'L3', 'L4'] }, { id: 'pbt', name: 'TRENDLINE', rules: ['SUPPORT', 'RESISTANCE', 'SP BROKEN', 'RT BROKEN'] }] });
+  await ctx.addInitScript(x => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', x); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  const look = () => page.evaluate(() => {
+    const t = state.trades.find(x => x.id === 'trBtc'), c = tradeAlertMap().trBtc, a = anTradeSetup(t, anAlertMap());
+    const row = analyzeTrades(statScoped()).find(x => x.t.id === 'trBtc');
+    return { fibSignals: state.signals.filter(g => g.kind === 'fib').map(g => g.key), sent: sentSigs.map(g => g.key.split('@')[0]).sort(),
+      tf: c && c.sig.timeframe, rule: c && c.rule, chan: a.chan, level: a.level, setup: t.setup, ticked: Object.keys(t.playRules || {}).filter(k => t.playRules[k]).join(),
+      stop: t.stop, stopSrc: t.stopSrc || '', flags: row ? row.flags : null };
+  });
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => sentSigs.length > 0 && state.trades.some(t => t.id === 'trBtc' && t.setup), null, { timeout: 8000 });
+    const v = await look();
+    check(JSON.stringify(v.fibSignals) === JSON.stringify([rebuilt[0].id]), 'Signals keep the rebuilt history only: ' + JSON.stringify(v.fibSignals));
+    check(JSON.stringify(v.sent) === JSON.stringify([m1L2, w1L1, w1L2].sort()), 'live alerts the rebuild replaced are kept aside: ' + JSON.stringify(v.sent));
+    check(v.tf === '1MO' && v.rule === 'L2' && v.chan === 'CRYPTO 1MO' && v.level === 'L2', 'BTC trade goes to the 1M L2 alert (closest entry): ' + JSON.stringify(v));
+    check(v.setup === 'FIB' && v.ticked === 'L2', 'setup and level filled in: ' + JSON.stringify(v));
+    check(v.stop === 71362.9 && v.stopSrc === 'alert' && v.flags && v.flags.indexOf('noAlert') === -1, "the matched alert's stop, and it counts as traded from an alert: " + JSON.stringify(v));
+    // A reload with the scanner out of reach: the kept alerts come back from the device.
+    serve = false; const before = hits;
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => sentSigs.length === 3, null, { timeout: 8000 });
+    await page.waitForTimeout(2800);
+    const r = await look();
+    check(r.tf === '1MO' && r.chan === 'CRYPTO 1MO' && r.ticked === 'L2' && hits === before, 'after a reload, offline: ' + JSON.stringify(r) + ' reads ' + (hits - before));
+
+    const u = await page.evaluate(() => {
+      const out = {};
+      // L1 / L2 / L4 alerts: geometry from their own level (the scanner's 1M levels).
+      const g = fibGeom({ kind: 'fib', key: 'fib|BTCUSD|1M|1|1667260800|126192.6|1|L2@1793327605', entry: 76355.37, stop: 71362.9 });
+      out.lv = g && FIB_LEVEL_KEYS.map(k => Math.round(g.levels[k]));
+      out.old = fibGeom({ kind: 'fib', key: 'fib|ZECUSD|4h|1|1792339200|1367.83|2@1792810800', entry: 1192.039, stop: 1100 }).entryLevel;
+      const l4 = fibGeom({ kind: 'fib', key: 'fib|ZECUSD|4h|1|1792339200|1367.83|2|L4@1792812168|rb', entry: 1156.8808, stop: 1112.93 });
+      out.l4 = [l4.entryLevel, Math.round(l4.levels.L3 * 1000) / 1000, fibNearest(l4, 1158)];
+      // Trendlines: a long near a short break alert is not that alert's; a touch of a line
+      // that broke before the trade does not count; a live alert beats its rebuilt twin.
+      const d = iso(new Date(Date.now() - 864e5)), ms = istMs(d, '09:00') / 1000;
+      const tl = (id, line, side, entry, stop, time, extra) => Object.assign({ id, kind: 'trendline', key: `tl|TLX|4h|${line}|${ms - 86400}|${ms}${extra || ''}@${ms}`, date: d, time,
+        symbol: 'TLX', side, entry, stop, tl: [entry, entry], timeframe: '4H', channel: 'CRYPTO 4H' });
+      const idxOf = list => { const keep = state.signals; state.signals = list; try { return setupAlertIndex(); } finally { state.signals = keep; } };
+      const tr = (entry, time, dir) => ({ id: 'x', symbol: 'TLXUSD', direction: dir || 'long', entry, date: d, time });
+      const brk = Object.assign(tl('b', 0, 'short', 100.05, 101, '10:00', '|br'), { key: `tl|TLX|4h|0|${ms - 86400}|${ms + 1}|br@${ms}` });
+      const far = tl('far', 0, 'long', 100.6, 99.6, '10:30'); far.key = far.key.replace(`|${ms - 86400}|`, `|${ms - 80000}|`);
+      const c1 = classifyTrade(tr(100, '11:00'), idxOf([brk, far]));
+      out.brk = c1 && c1.sig.id;
+      const touch = tl('t', 0, 'long', 100.02, 99, '08:00'), broke = Object.assign(tl('b2', 0, 'short', 99.5, 100.5, '09:30', '|br')), other = tl('o', 0, 'long', 100.6, 99.6, '08:30');
+      other.key = other.key.replace(`|${ms - 86400}|`, `|${ms - 90000}|`);
+      out.broken = (classifyTrade(tr(100, '10:00'), idxOf([touch, broke, other])) || {}).sig;
+      out.broken = out.broken && out.broken.id;
+      out.beforeBreak = (classifyTrade(tr(100, '09:00'), idxOf([touch, broke, other])) || {}).sig;
+      out.beforeBreak = out.beforeBreak && out.beforeBreak.id;
+      const twin = Object.assign({}, touch, { id: 'rb', rb: true, time: '08:50' });
+      out.twin = classifyTrade(tr(100, '10:00'), idxOf([touch, twin])).sig.id;
+      // The broker's name can be longer than the scanner's: Delta MRVLBUSD, scanner MRVL.
+      const mr = Object.assign(tl('m', 0, 'long', 250, 245, '08:00'), { symbol: 'MRVL', key: `tl|MRVL/USDT:USDT|4h|0|${ms - 86400}|${ms}@${ms}` });
+      const cm = classifyTrade({ symbol: 'MRVLBUSD', direction: 'long', entry: 250.5, date: d, time: '09:00' }, idxOf([mr]));
+      out.mrvl = cm && cm.sig.id;
+      return out;
+    });
+    check(JSON.stringify(u.lv) === JSON.stringify([88538, 76355, 65280, 53098]), "an L2 alert's levels: " + JSON.stringify(u.lv));
+    check(u.old === 'L3' && JSON.stringify(u.l4) === JSON.stringify(['L4', 1192.039, 'L4']), 'older keys and L4 keys: ' + JSON.stringify([u.old, u.l4]));
+    check(u.brk === 'far', 'a long is not matched to a short break alert: ' + u.brk);
+    check(u.broken === 'o' && u.beforeBreak === 't', 'a broken line no longer counts after its break: ' + JSON.stringify([u.broken, u.beforeBreak]));
+    check(u.twin === 't', 'a live alert beats its rebuilt twin at the same price: ' + u.twin);
+    check(u.mrvl === 'm', 'MRVLBUSD matches the scanner MRVL: ' + u.mrvl);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'trades match the alert with the closest entry, live alerts the rebuild replaced included');
+  errs.forEach(e => { console.log('     ' + e); failures.push('alert price match: ' + e); });
+}
+
 // AI review: the key stays out of the synced file and backups, the period's trades
 // go to (a fake) Gemini with the key, and its pros / cons / improve show in Analysis.
 async function aiReviewRun(seed) {
@@ -3808,6 +3920,7 @@ await cleanupRun(data);
 await behaviourRun(data);
 await setupLevelRun(data);
 await analysisFiltersRun(data);
+await alertPriceMatchRun(data);
 await aiReviewRun(data);
 await layoutRun(data);
 await cleanRun(data);

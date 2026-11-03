@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-03.152">
+  <meta name="app-version" content="2026-11-03.153">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1924,6 +1924,36 @@
     let sigDbPromise = null, sigIdbOk = typeof indexedDB !== "undefined";
     let sigChannel = null, signalsLoaded = false, signalsReady = Promise.resolve();
     try { sigChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(SIG_KEY) : null; } catch (e) { sigChannel = null; }
+    // Fib and trendline alerts Discord sent that the scanner's rebuilt history replaced
+    // (it re-draws Sep 1 to its cutoff under today's rules, and some live alerts are not
+    // in it, like BTC's 1M L2 of 30 Oct). They are not shown or scored on the Signals tab;
+    // they are kept only so your trades still match the alert you took (lakky,
+    // 2026-11-03). Rebuilt from the scanner's live file on every read, kept in IndexedDB.
+    const SENT_KEY = "tapeAndTarget.sentSigs";
+    let sentSigs = [], sentJson = "[]", sentVer = 0, sentStored = false;
+    // Returns true when the list changed.
+    function setSentSigs(list) {
+      const json = JSON.stringify(list || []), changed = json !== sentJson;
+      if (!changed && sentStored) return false;
+      if (changed) { sentSigs = list || []; sentJson = json; sentVer++; }
+      sentStored = true;
+      if (sigIdbOk) idbPut(SENT_KEY, json).then(() => { if (changed && sigChannel) try { sigChannel.postMessage("saved"); } catch (e) {} }).catch(() => {});
+      return changed;
+    }
+    function readSentStored(stored) {
+      try {
+        const v = typeof stored === "string" ? JSON.parse(stored) : null;
+        if (!Array.isArray(v)) return;
+        sentSigs = v.map(cleanSignal).filter(g => g && g.kind && g.key);
+        sentJson = stored; sentVer++; sentStored = true;
+      } catch (e) {}
+    }
+    // One alert from the live file, cut down to what matching a trade needs.
+    function sentCopy(r) {
+      const o = { id: "sent:" + r.key, key: r.key, kind: r.kind, sent: true };
+      ["date", "time", "symbol", "side", "entry", "stop", "price", "market", "timeframe", "channel", "tl"].forEach(k => { if (r[k] !== undefined) o[k] = r[k]; });
+      return o;
+    }
     function sigDb() {
       if (!sigIdbOk) return Promise.reject(new Error("no IndexedDB"));
       if (!sigDbPromise) sigDbPromise = new Promise((res, rej) => {
@@ -1985,8 +2015,9 @@
       const startRef = state.signals;
       const done = () => { signalsLoaded = true; };
       if (!sigIdbOk) { done(); savedSignalsRef = legacy != null ? state.signals : null; return Promise.resolve(); }
-      return idbGet(SIG_KEY).then(stored => {
+      return Promise.all([idbGet(SIG_KEY), idbGet(SENT_KEY).catch(() => null)]).then(([stored, sent]) => {
         done();
+        readSentStored(sent);
         let list = null;
         try { const v = typeof stored === "string" ? JSON.parse(stored) : null; list = Array.isArray(v) ? v : null; } catch (e) { list = null; }
         if (legacy != null) {
@@ -2010,7 +2041,8 @@
     // Another tab saved alerts: read them back.
     if (sigChannel) sigChannel.onmessage = () => {
       if (!state) return;
-      idbGet(SIG_KEY).then(stored => {
+      Promise.all([idbGet(SIG_KEY), idbGet(SENT_KEY).catch(() => null)]).then(([stored, sent]) => {
+        readSentStored(sent);
         const v = typeof stored === "string" ? JSON.parse(stored) : null;
         if (!Array.isArray(v)) return;
         signalsBytes = stored.length;
@@ -3998,7 +4030,7 @@
       overtrade: { label: "Over the daily trade limit", note: false, why: "More trades that day than your 'max trades a day' setting." },
       pastLimit: { label: "Traded past the daily loss limit", note: false, why: "Opened after the day had already lost your daily loss limit." },
       feesAte:   { label: "Fees turned a win into a loss", note: false, why: "The price move was in your favour, but fees were bigger than the gain." },
-      noAlert:   { label: "No alert behind it", note: true, why: "No alert on the same symbol, direction and day (only checked once alerts are loaded). Not a mistake by itself." }
+      noAlert:   { label: "No alert behind it", note: true, why: "No alert on the same symbol and direction that day, and no fib or trendline alert whose level or line it was taken at (only checked once alerts are loaded). Not a mistake by itself." }
     };
     const REVENGE_SIZE_X = 1.25;
     // Size-ups and quick re-entries after a loss: the "calm" rule, the no-revenge goal.
@@ -4049,16 +4081,7 @@
       anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis();
     }
     function anSet(k, v) { state.ui[k] = v; anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis(); }
-    function anAlertMap() {
-      const pair = {}, out = {};
-      Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind).forEach(p => { if (p.trade && !pair[p.trade.id]) pair[p.trade.id] = { kind, sig: p.signal }; }));
-      const idx = setupAlertIndex();
-      signalTrades().forEach(t => {
-        const p = pair[t.id], c = classifyTrade(t, idx) || (p ? pairClass(p.kind, p.sig) : null);
-        if (c) out[t.id] = c;
-      });
-      return out;
-    }
+    function anAlertMap() { return tradeAlertMap(); }
     function anLevelKey(kind, rule) {
       const r = String(rule || "").toUpperCase();
       if (kind === "fib") { const m = r.match(/L([1-4])/); return m ? "L" + m[1] : ""; }
@@ -4179,7 +4202,8 @@
     function analyzeTrades(ts) {
       const byAcc = {};
       ts.forEach(t => { (byAcc[t.accountId] = byAcc[t.accountId] || []).push(t); });
-      const sigOf = {}; ["trendline", "fib", "zone"].forEach(k => matchSignals(k).forEach(p => { if (p.trade) sigOf[p.trade.id] = p.signal; }));
+      // The alert behind each trade, the same one Analysis files it under (its stop, or "no alert").
+      const am = tradeAlertMap(), sigOf = {}; Object.keys(am).forEach(id => { sigOf[id] = am[id].sig; });
       const firstSig = (state.signals || []).map(g => g.date).sort()[0] || null;
       // A report trade is dated by its close; it opened its hold before that.
       const entryMs = t => new Date(t.date + "T" + (t.time || "00:00") + ":00").getTime() - (t.rep ? (t.held || 0) * 60000 : 0);
@@ -5616,42 +5640,68 @@
       }
       return null;
     }
-    // Fib and trendline alerts by symbol, for classifyTrade.
+    // A trendline break alert: its key ends "|br" (tl|SYM|tf|line|t1|t2|br@sent).
+    function isTlBreak(g) { return /\|br$/.test(String(g.key || "").split("@")[0]); }
+    // Fib and trendline alerts by symbol, for classifyTrade: the loaded ones, and the
+    // ones Discord sent that the scanner's rebuilt history replaced (sentSigs).
     function setupAlertIndex() {
       const idx = {};
-      (state.signals || []).forEach(g => {
+      (state.signals || []).concat(sentSigs).forEach(g => {
         if (g.kind !== "fib" && g.kind !== "trendline") return;
         const ms = istMs(g.date, g.time);
         if (!isFinite(ms)) return;
         const k = normSym(g.symbol);
         (idx[k] || (idx[k] = [])).push({ g, ms });
       });
+      // When each line broke (its first break alert): a touch of it after that is no touch.
+      const lineOf = g => String(g.key || "").split("@")[0].split("|").slice(0, 6).join("|");
+      const broke = {};
+      Object.keys(idx).forEach(k => idx[k].forEach(x => { if (x.g.kind === "trendline" && isTlBreak(x.g)) { const l = lineOf(x.g); if (!(broke[l] <= x.ms)) broke[l] = x.ms; } }));
+      Object.keys(idx).forEach(k => idx[k].forEach(x => { if (x.g.kind === "trendline" && !isTlBreak(x.g) && broke[lineOf(x.g)] != null) x.broke = broke[lineOf(x.g)]; }));
       return idx;
     }
-    // The fib or trendline alert a trade fits best: nearest its level, then freshest.
+    // The fib or trendline alert behind a trade. Of the alerts it fits, the one whose
+    // entry price (the one Discord printed) is closest to the trade's entry (lakky,
+    // 2026-11-03: a BTC long at 76,449 went to the 1W fib alert at 77,313, but the alert
+    // taken was the 1M fib's L2 at 76,355). Prices within 0.1% of the entry count as the
+    // same: then an alert Discord sent beats one only in the rebuilt history, then the
+    // freshest wins. The trade's level is where its entry sits on that alert.
     function classifyTrade(t, idx) {
       const entry = Number(t.entry), side = t.direction, ms = istMs(t.date, t.time);
       if (!(entry > 0) || (side !== "long" && side !== "short") || !isFinite(ms)) return null;
       let best = null;
-      (idx[normSym(t.symbol)] || []).forEach(({ g, ms: sm }) => {
+      // The broker's name can be longer than the scanner's (Delta MRVLBUSD, scanner MRVL).
+      const lists = Object.keys(idx).filter(k => symbolsAgree(t.symbol, k)).map(k => idx[k]);
+      [].concat(...lists).forEach(({ g, ms: sm, broke }) => {
         if (!symbolsAgree(t.symbol, g.symbol)) return;
         const span = (ALERT_LOOK_DAYS[g.timeframe] || 4) * 864e5;
         if (sm > ms + 5 * 60e3 || ms - sm > span) return; // sent after the entry, or too long before
-        let hit = null;
+        if (broke != null && broke < ms) return; // its line broke before the trade
+        let rule;
         if (g.kind === "fib") {
           if (g.side !== side) return;
           const fg = fibGeom(g), lv = fg ? fibNearest(fg, entry) : null;
           if (!lv || FIB_RATIOS[lv] == null) return;
-          hit = { rule: lv, fit: Math.abs(fg.at(entry) - FIB_RATIOS[lv]) / (FIB_RATIOS.L2 - FIB_RATIOS.L1) };
+          rule = lv;
         } else {
-          const tg = tlGeom(g);
-          hit = tg ? tlLevel(tg, side, entry, ms) : null;
+          // A break alert said which way to trade; a touch alert counts either way.
+          if (isTlBreak(g) && g.side !== side) return;
+          const tg = tlGeom(g), hit = tg ? tlLevel(tg, side, entry, ms) : null;
           if (!hit) return;
+          rule = hit.rule;
         }
-        const score = hit.fit + Math.max(0, ms - sm) / span;
-        if (!best || score < best.score) best = { kind: g.kind, rule: hit.rule, sig: g, score };
+        const c = { kind: g.kind, rule, sig: g, gap: priceGap(entry, signalEntry(g)), live: g.rb ? 0 : 1, age: Math.max(0, ms - sm) };
+        if (!best || closerAlert(c, best)) best = c;
       });
       return best;
+    }
+    // How far a price is from a trade's entry, as a share of the entry.
+    function priceGap(entry, price) { const e = Number(entry), p = Number(price); return e > 0 && isFinite(p) ? Math.abs(e - p) / e : Infinity; }
+    // Is alert a a better match than b? See classifyTrade.
+    function closerAlert(a, b) {
+      if (Math.abs(a.gap - b.gap) > 0.001) return a.gap < b.gap;
+      if (a.live !== b.live) return a.live > b.live;
+      return a.age < b.age;
     }
     // A matched alert whose level could not be placed: its setup, and for a trendline
     // the side of the line it alerted on.
@@ -5676,7 +5726,26 @@
       if (JSON.stringify(o) !== JSON.stringify(r.playRules || null) || !r.playAuto) { r.playRules = o; r.playAuto = true; ch = true; }
       return ch;
     }
-    function fillTradeFromAlert(t, c, pairSig) {
+    // Every trade's alert, { trade id: { kind, rule, sig } }: the fib or trendline alert
+    // it fits (classifyTrade), else the alert it was paired with on its day, the one
+    // closest to its entry when several alert types paired it.
+    function tradeAlertMap() {
+      const pair = {};
+      Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind).forEach(p => {
+        if (!p.trade) return;
+        const gap = priceGap(p.trade.entry, signalEntry(p.signal)), cur = pair[p.trade.id];
+        if (!cur || gap < cur.gap) pair[p.trade.id] = { kind, sig: p.signal, gap };
+      }));
+      const idx = setupAlertIndex(), out = {};
+      signalTrades().forEach(t => {
+        const p = pair[t.id], c = classifyTrade(t, idx) || (p ? pairClass(p.kind, p.sig) : null);
+        if (c) out[t.id] = c;
+      });
+      return out;
+    }
+    // A journal trade with no stop of its own takes its alert's stop (once: a stop it
+    // already has, yours or an alert's, is never replaced).
+    function fillTradeFromAlert(t, c) {
       if (t.rep) {
         state.repReviews = state.repReviews || {};
         const r = Object.assign({ rules: RULES.map(() => false), tagsPositives: [], tagsMistakes: [], notes: "", setup: "", confidence: null }, state.repReviews[t.id] || {});
@@ -5686,7 +5755,7 @@
       const own = state.trades.find(x => x.id === t.id);
       if (!own) return false;
       let ch = false;
-      const sig = pairSig;
+      const sig = c && c.sig;
       if (sig && !stopOk(own) && isFinite(sig.stop) && sig.stop > 0 && stopOk(Object.assign({}, own, { stop: sig.stop }))) { own.stop = +sig.stop; own.stopSrc = "alert"; ch = true; }
       if (c && applySetupClass(own, c)) ch = true;
       if (ch) { stamp(own); hydrate(own); }
@@ -5694,21 +5763,15 @@
     }
     function fillFromAlerts() {
       const sigs = state.signals || [];
-      if (!sigs.length) return 0;
+      if (!sigs.length && !sentSigs.length) return 0;
       const bt = state.backtest || {};
-      const key = [sigs.length, (state.trades || []).length, (bt.rows || []).length, JSON.stringify(bt.files || []), JSON.stringify((state.playbook || []).map(p => [p.name, p.rules]))].join("|");
+      const key = [sigs.length, sentVer, (state.trades || []).length, (bt.rows || []).length, JSON.stringify(bt.files || []), JSON.stringify((state.playbook || []).map(p => [p.name, p.rules]))].join("|");
       if (key === alertFillKey) return 0;
       alertFillKey = key;
       let n = 0;
       try {
-        // The alert each trade was matched to; fib and trendline before zone.
-        const pair = {};
-        Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind).forEach(p => { if (p.trade && !pair[p.trade.id]) pair[p.trade.id] = { kind, sig: p.signal }; }));
-        const idx = setupAlertIndex();
-        signalTrades().forEach(t => {
-          const p = pair[t.id], c = classifyTrade(t, idx) || (p ? pairClass(p.kind, p.sig) : null);
-          if ((c || p) && fillTradeFromAlert(t, c, p && p.sig)) n++;
-        });
+        const map = tradeAlertMap();
+        signalTrades().forEach(t => { const c = map[t.id]; if (c && fillTradeFromAlert(t, c)) n++; });
       } catch (e) { console.warn("alert fill", e); }
       if (n) save();
       return n;
@@ -9040,7 +9103,10 @@
       const parts = String(sig.key || "").split("|");
       if (parts[0] !== "fib" || parts.length < 7) return null;
       const top = parseFloat(parts[5]), zone = parseInt(parts[6], 10), entry = signalEntry(sig);
-      const entryLevel = zone === 1 ? "L1" : zone === 2 ? "L3" : null;
+      // Since 2026-10-20 every level alerts on its own entry, and its key ends with
+      // that level ("...|1|L2"). Older keys: zone 1 entered at L1, zone 2 at L3.
+      const tag = String(parts[7] || "").split("@")[0];
+      const entryLevel = FIB_RATIOS[tag] != null ? tag : zone === 1 ? "L1" : zone === 2 ? "L3" : null;
       if (!entryLevel || !isFinite(top) || !isFinite(entry)) return null;
       const span = (entry - top) / FIB_RATIOS[entryLevel]; // base - top
       if (!isFinite(span) || span === 0) return null;
@@ -9944,9 +10010,14 @@
         : (fr && !r.rb && whenKey(r) < fr.cutoff);
 
       // one record per alert: the most resolved version wins
-      const best = new Map();
+      const best = new Map(), sent = new Map();
       all.forEach(r => {
-        if (oldZone(r)) return;
+        if (oldZone(r)) {
+          // A fib or trendline alert Discord sent before the rebuild's cutoff: kept aside
+          // (whatever the date window) only to match your trades.
+          if (r.kind && (!r.market || marketOk(r))) sent.set(r.key, sentCopy(r));
+          return;
+        }
         // rebuilt rows the device does not have yet come in whatever the date window
         if (cutoff && r.date < cutoff && !(rebuildAll && r.rb)) return;
         if (r.market && !marketOk(r)) return;
@@ -9990,7 +10061,7 @@
           // a trendline's anchors, for alerts saved before they were kept
           || (r.tl && !ex.tl)) upgrades.push({ ex, r });
       });
-      return { incoming, fresh, upgrades, staleIds, zrBuiltAt: rebuildStamp(zr, fr) };
+      return { incoming, fresh, upgrades, staleIds, zrBuiltAt: rebuildStamp(zr, fr), sent: [...sent.values()] };
     }
     function applyScannerPlan(plan) {
       plan.upgrades.forEach(({ ex, r }) => {
@@ -9999,6 +10070,7 @@
       });
       state.signals = (state.signals || []).filter(g => !(plan.staleIds && plan.staleIds.has(g.id))).concat(plan.fresh.map(stamp));
       sortSignals();
+      if (plan.sent) setSentSigs(plan.sent);
     }
     // Alerts live on each device, and used to arrive only when you pressed "Load
     // scanner alerts". A device that had not pressed it lately had no alerts for its
@@ -10047,8 +10119,9 @@
         const rb = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta));
         const plan = buildScannerPlan(got, iso(d), marketOk, !!(rb && state.ui.zoneRebuildAt !== rb));
         if (rb) state.ui.zoneRebuildAt = rb;
-        const n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
+        let n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
         if (n) applyScannerPlan(plan);
+        else if (setSentSigs(plan.sent)) n = 1;
         state.ui.sigAutoAt = Date.now();
         sigAutoFailAt = 0;
         save();
@@ -10191,6 +10264,7 @@
       if (!n) { toast("There are no signals to delete"); return; }
       if (!confirm(`Delete all ${n} signals? Your trades are not touched. Signals are not synced between devices, so this only clears this device; Load scanner alerts brings them back.`)) return;
       state.signals = [];
+      setSentSigs([]);
       save(); renderAll();
       toast(`Deleted ${n} signals`);
     }
@@ -11584,6 +11658,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-03.153', pr: 68, title: 'Trades go to the closest alert', pts: ['When several alerts fit a trade, the one whose entry is closest to yours wins (BTC 30 Oct: 1M L2, not 1W)', 'Alerts Discord sent that the rebuilt history dropped still match your trades', 'Fib L1 / L2 / L4 alerts place your level right; all trades re-matched'] },
       { v: '2026-11-03.152', pr: 67, title: 'Old CoinDCX wallet is marked', pts: ['While the CoinDCX import fails, the header says LAST KNOWN (amber), not WALLET', 'Trading Books and the CoinDCX card say the balance is from before the failure', 'It updates by itself on the first import that works'] },
       { v: '2026-11-03.151', pr: 66, title: 'Delta from your PC only, keys out of sight', pts: ['Delta card: no key boxes. Your PC brings the trades and balance to every device; Copy key / Copy secret help set it up', 'Gemini card shows Key saved with a Change key link', 'Set up another device shows before keys are saved; Delta says when the PC import is not set up'] },
       { v: '2026-11-03.150', pr: 65, title: 'Keys come with GitHub sync', pts: ['Delta and Gemini keys saved in your sync repo, locked with a passphrase you pick', 'A new device (like the iPhone home-screen app) types it once and the keys fill in; later changes follow by themselves', 'Set up another device: one setup code, link or QR connects GitHub and the keys'] },
@@ -11689,7 +11764,8 @@
       applyThemeButton();
       renderStorageUsage();
       setTimeout(syncPull, 1500);
-      setTimeout(() => signalsReady.then(() => autoRefreshAlerts()), 2500);
+      // A device that never kept the alerts Discord sent reads the scanner now, not in 10 minutes.
+      setTimeout(() => signalsReady.then(() => autoRefreshAlerts(!sentStored && sigIdbOk)), 2500);
       setTimeout(cdxKick, 4000);
       // A key saved by the earlier in-page CoinDCX import (CoinDCX never answered
       // it) is not kept on this device; the key belongs in GitHub's secrets.
