@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-03.151">
+  <meta name="app-version" content="2026-11-03.152">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -5212,12 +5212,14 @@
     function deltaLiveFresh() { return liveDeltaBalance && liveDeltaBalance.value != null && Date.now() - liveDeltaBalance.at < DELTA_FRESH_MS; }
     // A CoinDCX book's balance is CoinDCX's own futures wallet (rupee or USDT),
     // as GitHub's hourly import last read it: deposits, withdrawals and fees are
-    // in it, which a balance worked out from the trades can't know.
+    // in it, which a balance worked out from the trades can't know. While the
+    // import fails (`note` on the file) it is the last figure read, not today's:
+    // `old` marks it so the header and Trading Books say so.
     function cdxWallet(a) {
       if (!a || !a.reportBroker) return null;
       const f = btState().files.find(x => x.id === CDX_FILE && x.broker === a.reportBroker);
       const v = f && f.wallet ? f.wallet[a.currency === "INR" ? "INR" : "USD"] : undefined;
-      return typeof v === "number" && isFinite(v) ? { value: v, at: f.wallet.at } : null;
+      return typeof v === "number" && isFinite(v) ? { value: v, at: f.wallet.at, old: !!f.note, note: f.note || "" } : null;
     }
     function bookBalance(a) {
       if (a.id === deltaAccountId() && deltaLiveKnown()) return liveDeltaBalance.value;
@@ -5244,7 +5246,7 @@
         row.innerHTML = `
           <div>
             <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${empty[a.id] ? ' <span class="text-[10px] font-normal text-slate-500" title="Not on the book bar until it has a trade or a starting balance">· hidden from the bar (empty)</span>' : ''}${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Delta wallet, from your PC\'s import' : 'Last known Delta wallet — nothing newer from your PC\'s import'}"></span>` : ''}</div>
-            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'Delta wallet' : 'last known'}</span>` : wallet ? ` <span class="text-emerald-400">· CoinDCX wallet</span>` : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
+            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'Delta wallet' : 'last known'}</span>` : wallet ? (wallet.old ? ` <span class="text-amber-400">· CoinDCX wallet, last known (import failing)</span>` : ` <span class="text-emerald-400">· CoinDCX wallet</span>`) : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
           </div>
           <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
         host.appendChild(row);
@@ -7277,12 +7279,14 @@
       if (inScope) {
         valEl.innerText = money(liveTotal, cur);
         tag.classList.remove('hidden');
-        const ok = !deltaIn || fresh;
-        tag.innerText = deltaIn && !fresh ? 'LAST KNOWN' : 'WALLET';
+        // A CoinDCX wallet from before the import started failing is not today's figure either.
+        const cdxOld = wallets.some(w => w.old);
+        const ok = (!deltaIn || fresh) && !cdxOld;
+        tag.innerText = ok ? 'WALLET' : 'LAST KNOWN';
         tag.className = 'text-[9px] font-bold px-1 py-0.5 rounded border align-middle '
           + (ok ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40');
         const since = deltaIn ? "Delta " + liveDeltaBalance.field + ", " + deltaFetchedText() : "";
-        const cdx = wallets.length ? cdxWalletTitle(wallets[0]) : "";
+        const cdx = wallets.length ? cdxWalletTitle(wallets.find(w => w.old) || wallets[0]) : "";
         tag.title = [since + (deltaIn && !fresh ? " — nothing newer since (is the PC on?); holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
           + ". Journal-computed balance: " + money(lastComputedBalance.value, cur);
         if (chartEl) { chartEl.innerText = money(liveTotal, cur); chartEl.title = tag.title; }
@@ -7525,7 +7529,12 @@
           <p>3. Press <b>Import now</b> (or ${link(gh + "/actions/workflows/delta.yml", "Actions → Delta import")} → Run workflow). When the PC's IP changes, the reason above names the new one to whitelist.</p>`;
       renderPcRuns();
     }
-    function cdxWalletTitle(w) { return "CoinDCX futures wallet, read by GitHub's hourly import" + (w.at ? "; last changed " + new Date(w.at).toLocaleString() : ""); }
+    function cdxWalletTitle(w) {
+      const when = w.at ? new Date(w.at).toLocaleString() : "";
+      return w.old
+        ? "Last known CoinDCX futures wallet" + (when ? " (last changed " + when + ")" : "") + ". GitHub's import is failing, so deposits, transfers and trades since then are not in it; it updates on the first run that works. Why: " + w.note.replace(/\.?\s*$/, "")
+        : "CoinDCX futures wallet, read by GitHub's hourly import" + (when ? "; last changed " + when : "");
+    }
     function renderCdxCard() {
       const badge = document.getElementById("cdxStatusBadge"), status = document.getElementById("cdxStatus"), steps = document.getElementById("cdxSteps");
       if (!badge || !status || !steps) return;
@@ -7539,7 +7548,7 @@
       status.className = "text-[11px] leading-relaxed " + (f && f.note ? "text-rose-300" : "text-slate-300");
       status.innerText = !f ? "Nothing from CoinDCX yet. After the steps below, its trades show up here once GitHub has run and this device has synced."
         : (f.note ? "GitHub's last run failed: " + f.note + " " : "") + `${n} CoinDCX row${n === 1 ? "" : "s"} in the journal, last changed ${new Date(f.updatedAt).toLocaleString()}.`
-          + (f.wallet ? " Wallet: " + [["INR", "INR futures"], ["USD", "USDT futures"]].filter(([k]) => k in f.wallet).map(([k, label]) => money(f.wallet[k], k) + " " + label).join(" · ") + "." : "")
+          + (f.wallet ? (f.note ? " Last known wallet (from before the failure, so newer deposits and trades are missing): " : " Wallet: ") + [["INR", "INR futures"], ["USD", "USDT futures"]].filter(([k]) => k in f.wallet).map(([k, label]) => money(f.wallet[k], k) + " " + label).join(" · ") + "." : "")
           + (f && state.ui.cdxKickErr ? " This device can't start the hourly import itself (GitHub said " + state.ui.cdxKickErr + "): give the sync token Actions: Read and write, or GitHub's own schedule runs it when it can."
             : f && waiting ? " The run from " + hm(lastRun.at) + " is waiting for your PC: the import runs there, so the PC has to be on (with internet)."
             : f && state.ui.cdxKickAt ? " Import last run " + hm(state.ui.cdxKickAt) + "; this journal starts it every hour while open." : "");
@@ -11575,6 +11584,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-03.152', pr: 67, title: 'Old CoinDCX wallet is marked', pts: ['While the CoinDCX import fails, the header says LAST KNOWN (amber), not WALLET', 'Trading Books and the CoinDCX card say the balance is from before the failure', 'It updates by itself on the first import that works'] },
       { v: '2026-11-03.151', pr: 66, title: 'Delta from your PC only, keys out of sight', pts: ['Delta card: no key boxes. Your PC brings the trades and balance to every device; Copy key / Copy secret help set it up', 'Gemini card shows Key saved with a Change key link', 'Set up another device shows before keys are saved; Delta says when the PC import is not set up'] },
       { v: '2026-11-03.150', pr: 65, title: 'Keys come with GitHub sync', pts: ['Delta and Gemini keys saved in your sync repo, locked with a passphrase you pick', 'A new device (like the iPhone home-screen app) types it once and the keys fill in; later changes follow by themselves', 'Set up another device: one setup code, link or QR connects GitHub and the keys'] },
       { v: '2026-11-03.149', pr: 64, title: 'Delta through your PC', pts: ['Delta imports on your PC too (GitHub job), so the phone gets trades without its IP on the key', 'Import now (CoinDCX card, Delta card, Signals → More) runs both imports', "Delta card: the PC import's status, or why it failed and the PC's IP to whitelist"] },
