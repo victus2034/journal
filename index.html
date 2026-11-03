@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-03.150">
+  <meta name="app-version" content="2026-11-03.151">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -1344,52 +1344,32 @@
               <button onclick="syncNow()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-amber-500">Sync Now</button>
               <button onclick="disconnectSync()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Disconnect</button>
             </div>
-            <!-- Keys on your other devices: a locked copy of the Delta and Gemini keys in journal.json, and setup codes. Filled by renderKeysCard. -->
+            <!-- Keys on your other devices: a locked copy of the Gemini key in journal.json, and setup codes. Filled by renderKeysCard. -->
             <div id="keysBox" class="pt-2 border-t border-terminal-border space-y-2"></div>
           </div>
 
-          <!-- Delta Exchange Auto-Import -->
+          <!-- Delta Exchange Import: a GitHub job on your PC (the IP the key is whitelisted for) imports for every device. No Delta key in the journal. -->
           <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
             <div class="flex items-center justify-between border-b border-terminal-border pb-2">
               <div class="flex items-center gap-2">
                 <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
-                <h3 class="font-bold text-white uppercase tracking-wider">Delta Exchange Auto-Import</h3>
+                <h3 class="font-bold text-white uppercase tracking-wider">Delta Exchange Import</h3>
               </div>
-              <span id="deltaStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Disconnected</span>
+              <span id="deltaStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Not set up</span>
             </div>
-            <p class="text-slate-400 text-[11px] leading-relaxed">
-              Pulls live crypto fills automatically using cryptographic HMAC-SHA256 signatures directly on your device. Delta only answers a key from the IPs whitelisted on it, so on a phone (its IP keeps changing) let your PC import instead: see Through your PC below.
-            </p>
-
-            <div class="space-y-2.5">
-              <div>
-                <label class="text-slate-400 block mb-1">API Key (Read Data only)</label>
-                <input type="text" id="deltaKeyInput" autocomplete="off" spellcheck="false" placeholder="Paste Delta API Key" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-              </div>
-              <div>
-                <label class="text-slate-400 block mb-1">API Secret</label>
-                <input type="password" id="deltaSecretInput" autocomplete="off" placeholder="Paste Delta API Secret" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-              </div>
-            </div>
-
-            <div class="flex gap-2 pt-2 border-t border-terminal-border">
-              <button onclick="saveDeltaSettings()" class="px-3 py-1.5 bg-cyan-500 text-black font-bold rounded hover:bg-cyan-400">Test &amp; Connect</button>
-              <button onclick="deltaSyncNow()" class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Now</button>
-              <button onclick="deltaFullReimport()" title="Fetch all available Delta history again. Trades already in the journal are skipped, not duplicated." class="px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-cyan-500">Import Full History</button>
-              <button onclick="undoDeltaFills()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Undo Delta Trades</button>
-            </div>
-
-            <!-- Delta through the PC: a GitHub job on the PC (whose IP the key is whitelisted for) imports for every device. -->
-            <div id="dxPcBox" class="space-y-2 pt-2 border-t border-terminal-border">
-              <div class="font-bold text-slate-200">Through your PC (for the phone)</div>
+            <div id="dxPcBox" class="space-y-2">
               <p id="dxPcStatus" class="text-slate-300 text-[11px] leading-relaxed"></p>
               <div class="flex flex-wrap items-center gap-2">
                 <button type="button" id="dxRunBtn" onclick="pcImportNow()" title="Ask GitHub to run the Delta and CoinDCX imports now. They run on your PC, so the PC must be on." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
                 <a id="dxRunLink" href="#" target="_blank" rel="noopener" class="hidden text-[11px] text-sky-400 hover:underline">Open on GitHub</a>
+                <button type="button" onclick="undoDeltaFills()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Undo Delta Trades</button>
                 <p id="dxRunStatus" class="w-full text-[11px] leading-relaxed text-slate-400"></p>
               </div>
               <div id="dxPcSteps" class="space-y-2 text-[11px] leading-relaxed text-slate-300"></div>
             </div>
+            <p class="text-slate-400 text-[11px] leading-relaxed">
+              Delta only answers a key from the IPs whitelisted on it, so your PC imports for every device: a job in your sync repo, run on the PC, reads Delta every 30 minutes and adds new trades and the wallet balance to the journal file. They arrive with each device's sync. The key lives only in GitHub's secrets, never in the journal.
+            </p>
           </div>
 
           <!-- CoinDCX Futures Import -->
@@ -1427,21 +1407,29 @@
               <span id="aiKeyBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">No key</span>
             </div>
             <p class="text-slate-400 text-[11px] leading-relaxed">
-              Get a free API key at <span class="text-amber-300">aistudio.google.com</span> → Get API key. It stays in this browser, unless Keys on your other devices is on in the GitHub card: then a copy locked with your passphrase goes to your sync repo. Never in backups. A review sends that period's trades (not your keys) to Google.
+              Get a free API key at <span class="text-amber-300">aistudio.google.com</span> → Get API key. It stays in this browser, unless Keys on your other devices is on in the GitHub card: then a copy locked with your passphrase goes to your sync repo. Never in backups. A review sends that period's trades (not your key) to Google.
             </p>
-            <div class="space-y-2.5">
-              <div>
-                <label class="text-slate-400 block mb-1">Gemini API key</label>
-                <input type="password" id="aiKeyInput" autocomplete="off" spellcheck="false" placeholder="AIza..." class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-              </div>
-              <div>
-                <label class="text-slate-400 block mb-1">Model</label>
-                <input type="text" id="aiModelInput" autocomplete="off" spellcheck="false" placeholder="gemini-2.5-flash" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
-              </div>
-            </div>
-            <div class="flex gap-2 pt-2 border-t border-terminal-border">
-              <button type="button" onclick="saveAiKey()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Save &amp; Test</button>
+            <!-- A saved key stays out of sight: Change key opens the boxes again. -->
+            <div id="aiKeySaved" class="hidden flex flex-wrap items-center gap-2 pt-2 border-t border-terminal-border">
+              <span id="aiKeySavedText" class="text-slate-300 text-[11px]"></span>
+              <button type="button" onclick="editAiKey()" class="text-[11px] text-sky-400 hover:underline">Change key</button>
               <button type="button" onclick="removeAiKey()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Remove key</button>
+            </div>
+            <div id="aiKeyForm" class="space-y-3">
+              <div class="space-y-2.5">
+                <div>
+                  <label class="text-slate-400 block mb-1">Gemini API key</label>
+                  <input type="password" id="aiKeyInput" autocomplete="off" spellcheck="false" placeholder="AIza..." class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+                </div>
+                <div>
+                  <label class="text-slate-400 block mb-1">Model</label>
+                  <input type="text" id="aiModelInput" autocomplete="off" spellcheck="false" placeholder="gemini-2.5-flash" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">
+                </div>
+              </div>
+              <div class="flex gap-2 pt-2 border-t border-terminal-border">
+                <button type="button" onclick="saveAiKey()" class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Save &amp; Test</button>
+                <button type="button" id="aiKeyCancel" onclick="cancelAiKey()" class="hidden px-3 py-1.5 bg-terminal-surface border border-terminal-border text-slate-200 rounded hover:border-amber-500">Cancel</button>
+              </div>
             </div>
           </div>
 
@@ -2820,7 +2808,7 @@
         if (rem <= 0) { $('goalToGo').innerText = 'Balance reached'; $('goalRunRate').innerText = '—'; }
         else if (!left) { $('goalToGo').innerText = money(rem, cur) + ' short'; $('goalRunRate').innerText = '—'; }
         else { $('goalToGo').innerText = perDay(left); $('goalRunRate').innerText = left > 1 ? perDay(left - 1) : 'Last day'; }
-        $('goalToGo').title = 'Balance at the start of the window: ' + money(start, cur) + (deltaLiveKnown() ? '. Delta balance is live.' : '.');
+        $('goalToGo').title = 'Balance at the start of the window: ' + money(start, cur) + (deltaLiveKnown() ? '. Delta balance is its own wallet figure.' : '.');
       } else if (g.metric === 'withdraw') {
         // Real money taken out, not just a number on screen: what was withdrawn from the goal's books in its window.
         const cur = gp.cur, w = goalWithdrawn(g, cur), rem = Math.max(0, t - w), pd = Math.min(100, Math.round(w / t * 100));
@@ -4989,19 +4977,30 @@
       let last = null; try { last = JSON.parse(localStorage.getItem(AI_LAST) || "null"); } catch (e) {}
       if (!aiBusy) renderAiResult(last);
     }
+    // A saved key stays out of sight (not even in a hidden box): "Key saved" and
+    // Change key, which opens empty boxes for a new one.
+    let aiKeyEditing = false;
     function renderAiKeyCard() {
       const c = aiCfg(), badge = document.getElementById("aiKeyBadge");
       if (!badge) return;
       const ki = document.getElementById("aiKeyInput"), mi = document.getElementById("aiModelInput");
-      if (document.activeElement !== ki) ki.value = c.key;
+      const form = !c.key || aiKeyEditing;
+      document.getElementById("aiKeyForm").classList.toggle("hidden", !form);
+      document.getElementById("aiKeySaved").classList.toggle("hidden", form);
+      document.getElementById("aiKeyCancel").classList.toggle("hidden", !c.key);
+      document.getElementById("aiKeySavedText").innerText = "Key saved · model " + (c.model || AI_MODEL_DEFAULT);
+      if (!form) ki.value = "";
       if (document.activeElement !== mi) mi.value = c.model;
       badge.innerText = c.key ? "Key saved" : "No key";
       badge.className = "text-[10px] px-2 py-0.5 rounded " + (c.key ? "bg-emerald-500/15 text-emerald-400" : "bg-slate-800 text-slate-300");
     }
+    function editAiKey() { aiKeyEditing = true; renderAiKeyCard(); document.getElementById("aiKeyInput").focus(); }
+    function cancelAiKey() { aiKeyEditing = false; renderAiKeyCard(); }
     async function saveAiKey() {
       const key = document.getElementById("aiKeyInput").value.trim(), model = document.getElementById("aiModelInput").value.trim();
       if (!key) { toast("Paste your Gemini API key first"); return; }
       if (!aiSetCfg({ key, model })) { toast("This browser would not save the key"); return; }
+      aiKeyEditing = false;
       renderAiKeyCard();
       refreshKeysLock({ part: "ai" }).catch(() => {});
       try {
@@ -5012,6 +5011,7 @@
     }
     function removeAiKey() {
       aiSetCfg(null);
+      aiKeyEditing = false;
       document.getElementById("aiKeyInput").value = "";
       renderAiKeyCard();
       toast("Gemini key removed from this browser");
@@ -5057,7 +5057,7 @@
 
       const assume = document.getElementById('anAssumptions');
       const book = isAll() ? (state.accounts.find(a => a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {}) : acct(selected());
-      assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's live balance, CoinDCX's wallet). " : "Balances before each trade are your starting balance plus the trades before it; connect Delta to anchor them to its live balance. ")
+      assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's and CoinDCX's wallets, read by your PC's imports). " : "Balances before each trade are your starting balance plus the trades before it; once your PC imports Delta, they're anchored to its wallet. ")
         + "Deposits, withdrawals and funding can't be seen, so older balances are estimates. "
         + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Settings → Books & rules → Trading Books.`
         + (state.accounts.some(a => a.reportBroker) ? " A broker-report trade (CoinDCX) has no stop or prices of its own: its side and position value are worked out from its fees (or fills), its balance from the broker's wallet, and a trade whose fees don't add up shows — for size." : "");
@@ -5203,11 +5203,13 @@
     // A book's balance as the journal computes it: starting balance plus every trade in it.
     function bookNet(id) { return sum(bookTrades(id).map(t => t.pnl || 0)); }
     function bookComputedBalance(a) { return (a.startBalance || 0) + bookNet(a.id) - bookWithdrawn(a.id); }
-    // While Delta has ever answered for this book and the key is still configured,
-    // its own wallet figure is the truth — it also reflects funding, deposits and
-    // open-position P&L, none of which come through in the imported fills. A
-    // disconnect freezes this at the last figure Delta gave; it does not clear it.
-    function deltaLiveFresh() { return liveDeltaBalance && liveDeltaBalance.value != null && Date.now() - liveDeltaBalance.at < 5 * 60 * 1000; }
+    // Once the PC's import has read Delta's wallet for this book, that figure is
+    // the truth — it also reflects funding, deposits and open-position P&L, none
+    // of which come through in the imported fills. With the PC off it holds at the
+    // last figure; it does not clear.
+    // The PC's import writes the figure at least hourly while the PC is on, so two hours is "still coming in".
+    const DELTA_FRESH_MS = 2 * 3600e3;
+    function deltaLiveFresh() { return liveDeltaBalance && liveDeltaBalance.value != null && Date.now() - liveDeltaBalance.at < DELTA_FRESH_MS; }
     // A CoinDCX book's balance is CoinDCX's own futures wallet (rupee or USDT),
     // as GitHub's hourly import last read it: deposits, withdrawals and fees are
     // in it, which a balance worked out from the trades can't know.
@@ -5237,12 +5239,12 @@
         const wordCls = fresh ? 'text-emerald-400' : 'text-amber-400';
         const wallet = !live && cdxWallet(a);
         const liveTitle = live ? 'Delta ' + esc(liveDeltaBalance.field) + ', ' + esc(deltaFetchedText())
-          + (fresh ? '' : ' — Delta hasn\'t answered since; holding this last known figure') + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency))
+          + (fresh ? '' : ' — nothing newer since (is the PC on?); holding this last known figure') + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency))
           : wallet ? esc(cdxWalletTitle(wallet)) + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
         row.innerHTML = `
           <div>
-            <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${empty[a.id] ? ' <span class="text-[10px] font-normal text-slate-500" title="Not on the book bar until it has a trade or a starting balance">· hidden from the bar (empty)</span>' : ''}${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Live from Delta' : 'Last known balance from Delta — not currently reachable'}"></span>` : ''}</div>
-            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'live' : 'last known'}</span>` : wallet ? ` <span class="text-emerald-400">· CoinDCX wallet</span>` : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
+            <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${empty[a.id] ? ' <span class="text-[10px] font-normal text-slate-500" title="Not on the book bar until it has a trade or a starting balance">· hidden from the bar (empty)</span>' : ''}${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Delta wallet, from your PC\'s import' : 'Last known Delta wallet — nothing newer from your PC\'s import'}"></span>` : ''}</div>
+            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'Delta wallet' : 'last known'}</span>` : wallet ? ` <span class="text-emerald-400">· CoinDCX wallet</span>` : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
           </div>
           <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
         host.appendChild(row);
@@ -5261,7 +5263,7 @@
       openModalSheet(`Edit ${a.name} book`, body => {
         body.innerHTML = `
           ${field(`Balance right now (${esc(a.currency)})`, 'bkBalance', +bookBalance(a).toFixed(2), 'any', (a.id === deltaAccountId() && deltaLiveKnown())
-            ? `This is prefilled from Delta's own wallet, fetched ${new Date(liveDeltaBalance.at).toLocaleTimeString()}${deltaLiveFresh() ? '' : ' (Delta is not reachable right now; this is the last figure it gave)'}. Saving it here only sets the starting balance the journal falls back on if Delta's key is ever removed — Delta's own figure keeps winning otherwise, even while it's disconnected.`
+            ? `This is prefilled from Delta's own wallet, ${esc(deltaFetchedText())}${deltaLiveFresh() ? '' : ' (nothing newer since; this is the last figure it gave)'}. Saving it here only sets the starting balance the journal falls back on without Delta's figure; Delta's own figure keeps winning otherwise.`
             : cdxWallet(a) ? `This is CoinDCX's own wallet balance (${esc(cdxWalletTitle(cdxWallet(a)))}). Saving it here only sets the starting balance the journal falls back on without it.`
             : `Type your real broker balance. The journal keeps the difference from your logged trades (${signedMoney(net, a.currency)}) as the starting balance. Once Delta answers for this book, its own live figure takes over here — and stays even if Delta later disconnects.`)}
           ${field(`Daily loss limit (${esc(a.currency)})`, 'bkLimit', a.dailyLossLimit || 0, 'any', 'A day that loses this much or more counts as a breach. 0 turns it off.')}
@@ -5311,7 +5313,6 @@
       renderBacktestFiles();
       renderPlaybook();
       const sync = state.sync || {};
-      const delta = state.delta || {};
 
       if (document.getElementById('syncRepoInput')) document.getElementById('syncRepoInput').value = sync.repo || '';
       if (document.getElementById('syncTokenInput')) document.getElementById('syncTokenInput').value = sync.token || '';
@@ -5320,19 +5321,9 @@
       const syncBadge = document.getElementById('syncStatusBadge');
       if (syncBadge) syncBadge.innerText = sync.token ? (sync.lastAt ? `Synced ${new Date(sync.lastAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Connected') : 'Disconnected';
 
-      if (document.getElementById('deltaKeyInput')) document.getElementById('deltaKeyInput').value = delta.key || '';
-      if (document.getElementById('deltaSecretInput')) document.getElementById('deltaSecretInput').value = delta.secret || '';
-      
-
       renderCdxCard();
       renderDxPc();
       renderKeysCard();
-
-      if (!deltaBusy) {
-        setDeltaStatus(deltaReady()
-          ? (delta.lastAt ? "Last checked " + new Date(delta.lastAt).toLocaleString() : "Connected. Press Import now.")
-          : "Not connected. Paste the key and secret.");
-      }
     }
 
     function renderDashboard() {
@@ -6408,7 +6399,7 @@
       return order.map(id => out[id]).filter(Boolean);
     }
     // Merge, never replace: whatever is only on this device or only on GitHub
-    // survives. Device-local things (sync token, Delta key, UI, calculator)
+    // survives. Device-local things (sync token, UI, calculator)
     // are always kept from this device, never taken from the shared file.
     // Each fresh device invents its own ids for the default Dhan and Delta
     // accounts. Same name, market and currency means the same account, so this
@@ -6677,6 +6668,7 @@
           if (!opts.quiet) toast(r.changed ? "GitHub sync successful" : "Already up to date");
           // A trade saved while this sync was running was skipped by syncSoon; send it now.
           syncSoon();
+          dropOldDeltaKey(); // once the PC's Delta import works, the key an older build saved here goes
           // Keys another device locked into journal.json fill in here.
           return checkKeysLock(opts).then(() => r, () => r);
         }
@@ -6740,17 +6732,19 @@
 
     /* =================== KEYS ON YOUR OTHER DEVICES =================== */
     // Each browser keeps its own storage (on an iPhone the home-screen app and
-    // Safari don't share it), so a new device had no Delta or Gemini key. With
-    // this on, journal.json also carries `keysLock`: those keys sealed with
+    // Safari don't share it), so a new device had no Gemini key. With
+    // this on, journal.json also carries `keysLock`: that key sealed with
     // AES-256-GCM under a key made from a passphrase you pick (PBKDF2-SHA256,
     // 600,000 rounds). GitHub only ever holds the sealed copy; the passphrase is
     // never saved or sent. A device that unlocked it keeps the derived key in
     // state.sync.vault (device-local, like the token), so a key changed later on
     // any device fills in on the others by itself. A setup code is the GitHub
     // repo and token sealed the same way: one paste and the passphrase set up a
-    // new device. CoinDCX's key is not here: it lives in the sync repo's secrets.
+    // new device. Delta's and CoinDCX's keys are not here: they live in the sync
+    // repo's secrets, for the PC's imports. A lock from before that still has the
+    // Delta key (OLD_PARTS) is resealed without it by the first device that opens it.
     const LOCK_ROUNDS = 600000, LOCK_AAD = "victus-keys-1", SETUP_AAD = "victus-setup-1", SETUP_TAG = "VJ1.";
-    const KEY_PARTS = { delta: "Delta key", ai: "Gemini key" };
+    const KEY_PARTS = { ai: "Gemini key" }, OLD_PARTS = ["delta"];
     let keysBusy = false, keysAsked = false;
     function b64u(bytes) { let s = ""; for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
     function unb64u(str) { const s = atob(String(str).replace(/-/g, "+").replace(/_/g, "/")); const out = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i); return out; }
@@ -6762,7 +6756,7 @@
       const ok = (s, max) => typeof s === "string" && s.length <= max && B64U.test(s);
       if (!ok(x.s, 64) || !ok(x.i, 32) || !ok(x.c, 12000)) return null;
       return { v: 1, s: x.s, i: x.i, c: x.c, n: Number.isInteger(x.n) && x.n >= 100000 && x.n <= 5000000 ? x.n : LOCK_ROUNDS, at,
-        has: (Array.isArray(x.has) ? x.has : []).filter(k => k in KEY_PARTS) };
+        has: (Array.isArray(x.has) ? x.has : []).filter(k => k in KEY_PARTS || OLD_PARTS.includes(k)) };
     }
     function newerLock(a, b) { a = cleanKeysLock(a); b = cleanKeysLock(b); return a && b ? (b.at > a.at ? b : a) : a || b; }
     async function lockKdf(pass, salt, rounds) {
@@ -6786,19 +6780,18 @@
     }
     // This device's keys, and what a lock may carry (nothing else is ever read from one).
     function localKeys() {
-      const d = state.delta || {}, ai = aiCfg(), out = {};
-      if (d.key && d.secret) out.delta = { key: String(d.key), secret: String(d.secret) };
+      const ai = aiCfg(), out = {};
       if (ai.key) out.ai = { key: ai.key, model: ai.model || "" };
       return out;
     }
     function cleanLockedKeys(v) {
       const out = {}, s = (x, n) => typeof x === "string" ? x.trim().slice(0, n) : "";
-      if (v && v.delta && s(v.delta.key, 200) && s(v.delta.secret, 400)) out.delta = { key: s(v.delta.key, 200), secret: s(v.delta.secret, 400) };
       if (v && v.ai && s(v.ai.key, 200)) out.ai = { key: s(v.ai.key, 200), model: s(v.ai.model, 80) };
       return out;
     }
     async function keyHash(part) { return part ? hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(part)))).slice(0, 32) : ""; }
-    function keyNames(parts) { return parts.map(p => KEY_PARTS[p]).join(" and "); }
+    function keyNames(parts) { return parts.filter(p => p in KEY_PARTS).map(p => KEY_PARTS[p]).join(" and "); }
+    function lockHasOld(lock) { return !!(lock && !lock.off && (lock.has || []).some(p => OLD_PARTS.includes(p))); }
     function vaultOpen() { const v = state.sync && state.sync.vault, l = state.keysLock; return !!(v && v.k && l && !l.off && v.s === l.s); }
     // A key that changed in the lock since this device last read it is filled in
     // when this device's copy is empty or still the one it read. A key you changed
@@ -6811,10 +6804,7 @@
         nextSeen[p] = h;
         if (!theirs || h === seen[p] || h === hMine) continue;
         if (mine[p] && hMine !== seen[p]) continue;
-        if (p === "delta") {
-          state.delta = state.delta || { key: "", secret: "", lastAt: "", lastFillTime: 0 };
-          state.delta.key = theirs.key; state.delta.secret = theirs.secret;
-        } else if (!aiSetCfg({ key: theirs.key, model: theirs.model })) continue;
+        if (!aiSetCfg({ key: theirs.key, model: theirs.model })) continue;
         filled.push(p);
       }
       vault.seen = nextSeen;
@@ -6852,7 +6842,6 @@
     }
     function keysFilledNote(filled) {
       if (!filled.length) return;
-      if (filled.includes("delta")) fetchLiveBalance();
       renderDataView();
       toast(keyNames(filled) + " filled in from GitHub");
     }
@@ -6865,13 +6854,19 @@
         renderKeysCard(); return;
       }
       if (v && v.k && v.s === lock.s) {
-        if (v.at === lock.at) { renderKeysCard(); return; }
+        if (v.at === lock.at && !lockHasOld(lock)) { renderKeysCard(); return; }
         keysBusy = true;
+        let reseal = null;
         try {
           const got = await lockOpen(unb64u(v.k), lock.i, lock.c, LOCK_AAD);
           if (!got) { delete sync.vault; save(); }
-          else { const filled = await applyLockedKeys(cleanLockedKeys(got), v); v.at = lock.at; save(); keysFilledNote(filled); }
+          else {
+            const keys = cleanLockedKeys(got), filled = await applyLockedKeys(keys, v); v.at = lock.at; save(); keysFilledNote(filled);
+            if (lockHasOld(lock) || Object.keys(got).some(p => !(p in KEY_PARTS))) reseal = keys;
+          }
         } finally { keysBusy = false; }
+        // The Delta key isn't used here any more: it leaves GitHub, sealed or not.
+        if (reseal) await writeKeysLock(reseal, v);
         renderKeysCard(); return;
       }
       renderKeysCard();
@@ -6889,6 +6884,7 @@
       v.at = lock.at;
       state.sync.vault = v;
       save();
+      if (lockHasOld(lock) || Object.keys(got).some(p => !(p in KEY_PARTS))) await writeKeysLock(cleanLockedKeys(got), v);
       await refreshKeysLock({ onlyMissing: true });
       keysFilledNote(filled);
       renderKeysCard();
@@ -6952,7 +6948,7 @@
       if (!box || !state) return;
       const lock = state.keysLock && !state.keysLock.off ? state.keysLock : null, v = state.sync && state.sync.vault;
       const mode = !syncReady() ? "new" : !lock ? "off" : vaultOpen() ? "on" : "locked";
-      const has = lock ? keyNames(lock.has.length ? lock.has : []) : "";
+      const named = lock ? lock.has.filter(p => p in KEY_PARTS) : [], has = keyNames(named);
       const sig = [mode, has, lock && lock.at, !!v].join("|");
       if (box.dataset.sig === sig) return; // a redraw mid-typing would clear the passphrase box
       box.dataset.sig = sig;
@@ -6960,17 +6956,17 @@
       const badge = (text, cls) => `<span id="keysBadge" class="text-[10px] px-2 py-0.5 rounded ${cls}">${text}</span>`;
       const head = b => `<div class="flex items-center justify-between gap-2"><span class="font-bold text-white">Keys on your other devices</span>${b}</div>`;
       box.innerHTML = mode === "new"
-        ? head(badge("New device?", "bg-slate-800 text-slate-300")) + `<p class="text-slate-400 text-[11px] leading-relaxed">Paste a setup code from a device that's already connected. It fills in GitHub and your Delta and Gemini keys in one go.</p>
+        ? head(badge("New device?", "bg-slate-800 text-slate-300")) + `<p class="text-slate-400 text-[11px] leading-relaxed">Paste a setup code from a device that's already connected. It fills in GitHub and your Gemini key in one go.</p>
            <div class="flex flex-wrap gap-2">${btn("openSetupCode('')", "Use setup code", "main")}</div>`
         : mode === "off"
-        ? head(badge("Off", "bg-slate-800 text-slate-300")) + `<p class="text-slate-400 text-[11px] leading-relaxed">Your Delta and Gemini keys stay on this device only. Turn this on to keep a copy in your sync repo, locked with a passphrase, so a new device gets them when it connects. CoinDCX needs nothing: its key is in GitHub's secrets.</p>
-           <div class="flex flex-wrap gap-2">${btn("openCreateKeys()", "Save keys to GitHub", "main")}</div>`
+        ? head(badge("Off", "bg-slate-800 text-slate-300")) + `<p class="text-slate-400 text-[11px] leading-relaxed">Your Gemini key stays on this device only. Turn this on to keep a copy in your sync repo, locked with a passphrase, so a new device gets it when it connects. Delta and CoinDCX need nothing here: their keys are in GitHub's secrets.</p>
+           <div class="flex flex-wrap gap-2">${btn("openCreateKeys()", "Save keys to GitHub", "main")}${btn("openShareSetup()", "Set up another device")}</div>`
         : mode === "locked"
         ? head(badge("Locked", "bg-amber-500/15 text-amber-300")) + `<p class="text-slate-400 text-[11px] leading-relaxed">Your keys${has ? " (" + esc(has) + ")" : ""} are saved in GitHub, locked. Type your passphrase once to fill them in here.</p>
            <div class="flex flex-wrap gap-2 items-center"><input type="password" id="keysPassInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Passphrase" class="flex-1 min-w-0 bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none">${btn("unlockFromCard(this)", "Unlock", "main")}</div>
            <p id="keysErr" class="text-rose-300 text-[11px] hidden"></p>
            <button type="button" onclick="openCreateKeys(true)" class="text-[11px] text-slate-400 hover:text-white underline">Forgot it? Start over with this device's keys</button>`
-        : head(badge("On", "bg-emerald-500/15 text-emerald-400")) + `<p class="text-slate-400 text-[11px] leading-relaxed">${has ? esc(has) + " follow" + (lock.has.length === 1 ? "s" : "") : "Keys you save here follow"} you to every device on this sync, locked with your passphrase. Changed ${esc(new Date(lock.at).toLocaleString())}.</p>
+        : head(badge("On", "bg-emerald-500/15 text-emerald-400")) + `<p class="text-slate-400 text-[11px] leading-relaxed">${has ? esc(has) + " follow" + (named.length === 1 ? "s" : "") : "Keys you save here follow"} you to every device on this sync, locked with your passphrase. Changed ${esc(new Date(lock.at).toLocaleString())}.</p>
            <div class="flex flex-wrap gap-2">${btn("openShareSetup()", "Set up another device", "main")}${btn("removeKeysLock()", "Take keys off GitHub", "bad")}</div>`;
     }
     // Shared by the card's box and the dialog: unlock, or say why not.
@@ -7001,7 +6997,7 @@
       document.getElementById('modalSheetSaveBtn').innerText = "Unlock";
       document.getElementById('mKeysPass').focus(); // now, not on a timer: typing that has started must not jump boxes
     }
-    function openCreateKeys(startOver) {
+    function openCreateKeys(startOver, then) {
       if (!syncReady()) { toast("Connect GitHub sync first"); return; }
       const keys = keyNames(Object.keys(localKeys()));
       openModalSheet(startOver ? "Start over with a new passphrase" : "Save keys to GitHub", body => {
@@ -7019,7 +7015,7 @@
         if (startOver && !confirm("Replace the locked keys on GitHub with this device's?")) return false;
         const btn = document.getElementById('modalSheetSaveBtn');
         btn.disabled = true; btn.innerText = "Locking...";
-        createKeysLock(a).then(() => { closeModalSheet(); toast(keys ? keys + " saved to GitHub, locked" : "Passphrase set. Keys you save here go to GitHub, locked"); },
+        createKeysLock(a).then(() => { closeModalSheet(); toast(keys ? keys + " saved to GitHub, locked" : "Passphrase set. Keys you save here go to GitHub, locked"); if (then) then(); },
           e => { btn.disabled = false; btn.innerText = "Lock & save"; say("Couldn't lock them (" + String((e && e.message) || e).slice(0, 80) + ")."); });
         return false;
       });
@@ -7054,7 +7050,12 @@
       document.getElementById(code ? 'mSetupPass' : 'mSetupCode').focus();
     }
     async function openShareSetup() {
-      if (!vaultOpen() || !syncReady()) { toast("Turn on Keys on your other devices first"); return; }
+      if (!syncReady()) { toast("Connect GitHub sync first"); return; }
+      // The code is locked with the same passphrase as the keys: pick it first, then show the code.
+      if (!vaultOpen()) {
+        if (state.keysLock && !state.keysLock.off) { toast("Type your passphrase in Keys on your other devices first"); const f = document.getElementById('keysPassInput'); if (f) f.focus(); return; }
+        openCreateKeys(false, openShareSetup); return;
+      }
       let code;
       try { code = await makeSetupCode(); } catch (e) { toast("Couldn't make a setup code here"); return; }
       const link = setupLink(code);
@@ -7193,9 +7194,11 @@
       return `<svg id="setupQr" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" width="${px}" height="${px}" shape-rendering="crispEdges" role="img" aria-label="Setup QR code"><rect width="${n}" height="${n}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
     }
 
-    /* =================== DELTA EXCHANGE ENGINE =================== */
+    /* =================== DELTA EXCHANGE =================== */
+    // Delta trades and the wallet figure come from the PC's GitHub job
+    // (tools/delta-import.mjs): Delta only answers a key from whitelisted IPs, so
+    // the journal holds no Delta key. DELTA_BASE is for public candles.
     const DELTA_BASE = "https://api.india.delta.exchange";
-    function deltaCfg() { return state.delta || { key: "", secret: "", lastAt: "", lastFillTime: 0 }; }
     // Delta is a crypto exchange, so its trades always land in the crypto book
     // (preferring one named Delta) rather than asking each time.
     function deltaAccountId() {
@@ -7204,7 +7207,28 @@
       const a = named || crypto[0];
       return a ? a.id : "";
     }
-    function deltaReady() { const c = deltaCfg(); return !!(c.key && c.secret && deltaAccountId()); }
+    // A Delta key an older build saved here: offered for copying into GitHub's
+    // secrets until the PC's import works, then forgotten (dropOldDeltaKey).
+    function oldDeltaKey() { const d = state.delta || {}; return d.key && d.secret ? { key: String(d.key), secret: String(d.secret) } : null; }
+    function dropOldDeltaKey(force) {
+      const d = state.delta, di = state.deltaImport;
+      if (!d || !(d.key || d.secret) || !(force || (di && !di.note))) return false;
+      delete d.key; delete d.secret; delete d.lastAt; delete d.lastFillTime; delete d.openPositions;
+      save();
+      return true;
+    }
+    function copyOldDeltaKey(part) {
+      const k = oldDeltaKey();
+      if (!k) { toast("This device has no saved Delta key"); return; }
+      const text = part === "secret" ? k.secret : k.key, label = part === "secret" ? "DELTA_API_SECRET" : "DELTA_API_KEY";
+      const done = () => toast("Copied: paste it as " + label);
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => toast("This browser wouldn't copy it"));
+      else toast("This browser wouldn't copy it");
+    }
+    function forgetOldDeltaKey() {
+      if (!confirm("Delete the Delta key saved on this device? Make sure it's in GitHub's secrets first, or make a new key on Delta.")) return;
+      dropOldDeltaKey(true); renderDxPc(); toast("Delta key deleted from this device");
+    }
     // Strips currency symbols/commas and matches the actual number rather than
     // stripping every non-digit — "3.7469E-2" stays scientific instead of
     // turning into "3.74692", and spreadsheets do emit that notation.
@@ -7220,368 +7244,21 @@
       for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, "0");
       return s;
     }
-    function deltaSign(secret, message) {
-      const enc = new TextEncoder();
-      return crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
-        .then(key => crypto.subtle.sign("HMAC", key, enc.encode(message)))
-        .then(hex);
-    }
-    function deltaCall(path, query = "") {
-      const c = deltaCfg();
-      const qs = query ? "?" + query : "";
-      const timestamp = String(Math.floor(Date.now() / 1000));
-      const message = "GET" + timestamp + path + qs;
-      return deltaSign(c.secret, message).then(sig => {
-        return fetch(DELTA_BASE + path + qs, {
-          headers: { "api-key": c.key, timestamp: timestamp, signature: sig }
-        });
-      }).then(res => res.text().then(text => {
-        // A proxy, a WAF block page, or a Delta outage can answer with HTML or an
-        // empty body instead of JSON. res.json() throwing there used to abort the
-        // whole call with no status or body to explain it, and the failure showed
-        // up as the unhelpful "Import failed." with nothing to go on.
-        let body; try { body = text ? JSON.parse(text) : {}; } catch (e) { body = { raw: text.slice(0, 200) }; }
-        return { ok: res.status === 200, status: res.status, body: body };
-      }));
-    }
-    // Delta's created_at carries six fraction digits; Date.parse only trusts
-    // millisecond precision, so the rest is dropped before parsing.
-    function deltaMicros(isoStr) {
-      const t = Date.parse(String(isoStr).replace(/(\.\d{3})\d+/, "$1"));
-      return isFinite(t) ? t * 1000 : 0;
-    }
-    // Fills paginate by cursor, capped so a first connect on an old account
-    // can't loop forever against the rate limit.
-    function deltaFetchFills(startMicros) {
-      let fills = [], after = null, pages = 0;
-      function page() {
-        pages++;
-        const q = "page_size=200" + (startMicros ? "&start_time=" + startMicros : "") + (after ? "&after=" + after : "");
-        return deltaCall("/v2/fills", q).then(r => {
-          if (!r.ok) return Promise.reject(r);
-          const pageRows = (r.body.result || []);
-          fills = fills.concat(pageRows);
-          after = r.body.meta && r.body.meta.after;
-          if (after && pageRows.length && pages < 60) return page();
-          return { fills: fills, capped: pages >= 60 && !!after };
-        });
-      }
-      return page();
-    }
-    // A fill's size is in contracts, not coins — every perpetual has its own
-    // contract_value (ETHUSD 0.01, LINKUSD 1, TLMUSD 10000). Skipping this
-    // scales the imported quantity wrong in either direction. Public endpoint,
-    // no signature needed.
-    function deltaFetchContractValues() {
-      return fetch(DELTA_BASE + "/v2/products?contract_types=perpetual_futures&page_size=1000")
-        .then(res => res.json())
-        .then(j => {
-          const map = {};
-          (j.result || []).forEach(p => { map[p.symbol] = num(p.contract_value); });
-          return map;
-        })
-        .catch(() => ({}));
-    }
-    // A trade logged by hand carries no src tag, so a loose match on symbol/day/
-    // direction/size (tolerant of rounding) catches it instead of duplicating it
-    // when Delta imports the same trade.
-    function nearlyEqual(a, b, tolRel) {
-      if (a === b) return true;
-      const scale = Math.max(Math.abs(a), Math.abs(b), 1e-9);
-      return Math.abs(a - b) <= scale * tolRel;
-    }
-    function findExistingTrade(existingByKey, key, qty, entry, exit) {
-      const list = existingByKey[key];
-      if (!list) return null;
-      for (let i = 0; i < list.length; i++) {
-        const t = list[i];
-        if (nearlyEqual(t.qty, qty, 0.01) && nearlyEqual(t.entry, entry, 0.005) && nearlyEqual(t.exit, exit, 0.005)) return t;
-      }
-      return null;
-    }
-    // Fills are executions, not trades — reconstructed here keyed by symbol
-    // alone (a crypto position can sit open across midnight). Each trade is
-    // tagged with the order that closed it so a second import never doubles it.
-    let deltaSkippedSymbols = [];
-    // `resume` says where the previous import left each symbol: fills up to
-    // `upTo` belong to trades already reconstructed, except for a symbol that was
-    // still open, which is rebuilt from the fill that opened it (`open[sym]`).
-    // Without it a window that starts mid-trade reads a closing fill as a new
-    // position and pairs it with the next trade into one that never happened.
-    function deltaFillsToTrades(fills, accountId, seenOrders, existingByKey, contractValues, resume) {
-      contractValues = contractValues || {};
-      resume = resume || null;
-      const stillOpen = {};
-      const bySym = {};
-      fills.forEach(f => { (bySym[f.product_symbol] = bySym[f.product_symbol] || []).push(f); });
-      const trades = [];
-      Object.keys(bySym).forEach(sym => {
-        const list = bySym[sym].slice().sort((a, b) => a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0);
-        // Without the contract size the quantity would be a guess, and a wrong
-        // size means a wrong P&L. Better to leave the symbol out and say so.
-        if (!(contractValues[sym] > 0)) { deltaSkippedSymbols.push(sym); return; }
-        const cv = contractValues[sym];
-        const openAt = resume && resume.open ? resume.open[sym] : null;
-        const skipTo = resume ? Math.max(resume.upTo || 0, (resume.skip && resume.skip[sym]) || 0) : 0;
-        const fresh = f => { const t = deltaMicros(f.created_at); return openAt ? t >= openAt : t > skipTo; };
-        const use = resume ? list.filter(fresh) : list;
-        let pos = 0, eQty = 0, eVal = 0, xQty = 0, xVal = 0, fees = 0, dir = null, startT = null;
-        function emit(closeOrderId, closeAt) {
-          const src = "delta:" + closeOrderId;
-          if (seenOrders[src]) {
-            // Already imported; older copies lack the exit day, so add it.
-            const ex = seenOrders[src];
-            if (ex && typeof ex === "object" && !ex.exitDate) { ex.exitDate = iso(new Date(closeAt)); stamp(ex); }
-            return;
-          }
-          const openD = new Date(startT), closeD = new Date(closeAt);
-          const entry = +(eVal / eQty).toFixed(6), exit = +(xVal / xQty).toFixed(6);
-          const key = accountId + "|" + sym + "|" + iso(openD) + "|" + dir;
-          const already = findExistingTrade(existingByKey, key, eQty, entry, exit);
-          if (already) {
-            already.src = src;
-            seenOrders[src] = true;
-            return;
-          }
-          trades.push({
-            id: uid(), accountId: accountId, date: iso(openD),
-            time: openD.toTimeString().slice(0, 5), exitTime: closeD.toTimeString().slice(0, 5), exitDate: iso(closeD),
-            symbol: sym, direction: dir,
-            entry: entry, exit: exit,
-            stop: 0, qty: +eQty.toFixed(6), fees: +fees.toFixed(6),
-            leverage: (acct(accountId) || {}).defaultLeverage || 1,
-            setup: "", rules: RULES.map(() => false), notes: "",
-            src: src
-          });
-          seenOrders[src] = true;
-        }
-        use.forEach(f => {
-          const qty = Math.abs(num(f.size)) * cv;
-          const price = num(f.price);
-          const fee = num(f.commission) || 0;
-          if (!qty || !isFinite(price)) return;
-          const signed = f.side === "buy" ? qty : -qty;
-          if (pos === 0) {
-            dir = signed > 0 ? "long" : "short";
-            startT = f.created_at; eQty = qty; eVal = qty * price; fees = fee; pos = signed;
-            return;
-          }
-          if ((pos > 0) === (signed > 0)) {
-            eQty += qty; eVal += qty * price; fees += fee; pos += signed;
-            return;
-          }
-          // Opposite side of the open position: reduces it, possibly straight
-          // through to a flip. The fee splits between the closing share and
-          // (on a flip) the opening share of the new position.
-          const posBefore = pos;
-          const close = Math.min(qty, Math.abs(posBefore));
-          const feeClose = fee * (close / qty);
-          xQty += close; xVal += close * price; fees += feeClose;
-          pos = posBefore + signed;
-          const closedFully = close >= Math.abs(posBefore) - 1e-9;
-          if (closedFully) {
-            emit(f.order_id, f.created_at);
-            pos = 0; eQty = 0; eVal = 0; xQty = 0; xVal = 0; fees = 0; dir = null; startT = null;
-            const leftover = qty - close;
-            if (leftover > 1e-9) {
-              dir = signed > 0 ? "long" : "short";
-              startT = f.created_at; eQty = leftover; eVal = leftover * price;
-              fees = fee - feeClose; pos = signed > 0 ? leftover : -leftover;
-            }
-            return;
-          }
-          // Reduced but still open in the same direction: keep accumulating.
-        });
-        if (pos !== 0 && startT) stillOpen[sym] = deltaMicros(startT);
-      });
-      trades.open = stillOpen;
-      return trades;
-    }
-    let deltaBusy = false;
-    function deltaSyncNow(opts) {
-      opts = opts || {};
-      if (!deltaReady()) { if (!opts.quiet) toast("Configure Delta API key and secret first"); return Promise.resolve({ ok: false, why: "not-set-up" }); }
-      if (deltaBusy) return Promise.resolve({ ok: false, why: "busy" });
-      deltaBusy = true;
-      const c = deltaCfg();
-      setDeltaStatus("Checking fills...");
-      // Resume from the last fill seen, reaching back to the start of any position
-      // that was still open then. An import made before positions were tracked
-      // has no record of them, so it reads the whole history once (trades already
-      // in the journal are matched by their order tag and skipped).
-      const known = c.lastFillTime && c.openPositions && typeof c.openPositions === "object";
-      const openStarts = known ? Object.keys(c.openPositions).map(k => c.openPositions[k]).filter(v => v > 0) : [];
-      let since, resume;
-      if (known) {
-        since = Math.min(c.lastFillTime, ...openStarts);
-        resume = { upTo: c.lastFillTime, open: c.openPositions };
-      } else if (c.lastFillTime) {
-        // First import after positions started being tracked: keep the old day of
-        // overlap (a full re-read would bring back every Delta trade ever deleted),
-        // but skip each symbol's fills up to the close of the last trade already
-        // imported, which is what used to turn into a fake trade.
-        since = c.lastFillTime - 86400e6;
-        const skip = {};
-        state.trades.forEach(t => {
-          if (!t.src || t.src.indexOf("delta:") !== 0 || !t.exitTime) return;
-          const d = t.exitDate || t.date, hm = t.exitTime.split(":");
-          const closeAt = new Date(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), +hm[0], +hm[1], 59, 999).getTime() * 1000;
-          if (closeAt >= since && closeAt > (skip[t.symbol] || 0)) skip[t.symbol] = closeAt;
-        });
-        resume = { upTo: 0, skip: skip, open: {} };
-      } else { since = 0; resume = null; }
-      return Promise.all([deltaFetchFills(since), deltaFetchContractValues()]).then(res => {
-        const r = res[0], contractValues = res[1];
-        if (!Object.keys(contractValues).length) return Promise.reject({ message: "contract sizes unavailable" });
-        deltaSkippedSymbols = [];
-        const seen = {}, existingByKey = {};
-        state.trades.forEach(t => {
-          if (t.src) seen[t.src] = t;
-          const key = t.accountId + "|" + t.symbol + "|" + t.date + "|" + t.direction;
-          (existingByKey[key] = existingByKey[key] || []).push(t);
-        });
-        // Trades you deleted stay deleted: their order tag is remembered.
-        Object.keys(state.tombstones || {}).forEach(k => { if (k.indexOf("trades:src:") === 0) seen[k.slice(11)] = true; });
-        const found = deltaFillsToTrades(r.fills, deltaAccountId(), seen, existingByKey, contractValues, resume);
-        if (found.length) state.trades = state.trades.concat(found.map(stamp));
-        const maxT = r.fills.reduce((m, f) => { const t = deltaMicros(f.created_at); return t > m ? t : m; }, c.lastFillTime || 0);
-        // A capped read stopped part way, so it must not move the resume point.
-        if (!r.capped) {
-          state.delta.lastFillTime = maxT || state.delta.lastFillTime;
-          state.delta.openPositions = found.open;
-        }
-        state.delta.lastAt = new Date().toISOString();
-        save(); renderAll(); fetchLiveBalance();
-        let msg = found.length ? `Imported ${found.length} new trade${found.length === 1 ? "" : "s"}` : "Up to date, no new trades";
-        if (r.capped) msg += " (stopped at the 12,000-fill read cap, so part of the history was not read; nothing was skipped for good, the next import reads the same window again)";
-        if (deltaSkippedSymbols.length) msg += ` · skipped ${uniq(deltaSkippedSymbols).join(", ")} (Delta gave no contract size, so the quantity would be a guess)`;
-        setDeltaStatus(msg);
-        if (!opts.quiet) toast(msg);
-        deltaBusy = false;
-        return { ok: true, found: found.length };
-      }).catch(r => {
-        deltaBusy = false;
-        const code = r && r.body && r.body.error && r.body.error.code;
-        const why = code === "invalid_api_key" ? "That key was refused. Check it was copied in full."
-          : code === "ip_not_whitelisted_for_api_key" ? "Delta is asking for this device's IP to be whitelisted on the key. On the phone, let your PC import instead (Through your PC, below)."
-          : code === "insufficient_permissions" ? "This key does not have Read Data permission."
-          : code ? `Delta refused the request (${code}).`
-          : /contract sizes/.test(String(r && r.message)) ? "Delta's contract sizes could not be read, so nothing was imported (quantities would have been wrong). Try again in a moment."
-          : /Failed to fetch/i.test(String(r && r.message)) ? "Could not reach Delta from here."
-          // Every other shape still carries something worth showing — the HTTP
-          // status Delta answered with, or whatever text it sent back — instead
-          // of a bare "Import failed." that gives no way to tell what went wrong.
-          : r && r.status ? `Import failed (Delta answered ${r.status}${r.body && r.body.raw ? ": " + r.body.raw : r.body && r.body.error ? " — " + JSON.stringify(r.body.error).slice(0, 160) : ""}).`
-          : r && r.message ? `Import failed: ${String(r.message).slice(0, 160)}`
-          : "Import failed for an unknown reason.";
-        setDeltaStatus(why, true);
-        if (!opts.quiet) toast(why);
-        return { ok: false, why: why };
-      });
-    }
-    function setDeltaStatus(text, bad) {
-      const badge = document.getElementById('deltaStatusBadge');
-      if (!badge) return;
-      badge.innerText = text;
-      badge.className = "text-[10px] px-2 py-0.5 rounded " + (bad ? "bg-rose-950/60 text-rose-300" : "bg-slate-800 text-slate-300");
-    }
-
-    function saveDeltaSettings() {
-      state.delta = state.delta || {};
-      state.delta.key = document.getElementById('deltaKeyInput').value.trim();
-      state.delta.secret = document.getElementById('deltaSecretInput').value.trim();
-      save();
-      refreshKeysLock({ part: "delta" }).catch(() => {});
-      if (!deltaReady()) { toast(deltaAccountId() ? "Add your Delta API key and secret first" : "No crypto account exists to import into"); renderDataView(); return; }
-      setDeltaStatus("Verifying key...");
-      deltaCall("/v2/wallet/balances").then(r => {
-        if (!r.ok) {
-          const code = r.body && r.body.error && r.body.error.code;
-          const why = code || (r.body && r.body.raw ? `Delta answered ${r.status}: ${r.body.raw}` : `That key was refused (Delta answered ${r.status}).`);
-          setDeltaStatus(why, true); toast(why); return;
-        }
-        toast("Connected. Press Import now to pull fills.");
-        fetchLiveBalance();
-        deltaSyncNow();
-      }).catch(err => {
-        const why = /Failed to fetch/i.test(String(err && err.message)) ? "Could not reach Delta from here." : `Could not reach Delta from here: ${String((err && err.message) || err).slice(0, 160)}`;
-        setDeltaStatus(why, true); toast(why);
-      });
-      renderDataView();
-    }
-
     /* =================== LIVE DELTA BALANCE =================== */
     // The header balance is normally start balance + logged P&L. When Delta is
     // connected it can instead show the exchange's own wallet figure, which
     // also reflects deposits, withdrawals, funding and open-position P&L.
     let lastComputedBalance = null;
-    let liveDeltaBalance = null; // { value, at, field } once fetched
-    let liveBalanceBusy = false;
-    function parseDeltaBalance(body) {
-      const meta = body && body.meta;
-      const eq = meta && parseFloat(meta.net_equity);
-      if (isFinite(eq)) return { value: eq, field: "net equity" };
-      const rows = (body && body.result) || [];
-      const usd = rows.filter(r => /^(USD|USDT|USDC)$/i.test(r.asset_symbol || (r.asset && r.asset.symbol) || ""));
-      const vals = usd.map(r => parseFloat(r.balance)).filter(isFinite);
-      if (vals.length) return { value: sum(vals), field: "wallet balance" };
-      return null;
-    }
-    let liveDeltaLastError = null; // last fetch failure, kept separate so it never overwrites a real balance
-    function fetchLiveBalance() {
-      // Timers start before the page finishes loading; nothing to do until the journal is.
-      if (!state || !deltaReady() || liveBalanceBusy || document.hidden) return Promise.resolve();
-      liveBalanceBusy = true;
-      return deltaCall("/v2/wallet/balances").then(r => {
-        if (!r.ok) throw new Error("http " + r.status);
-        const parsed = parseDeltaBalance(r.body);
-        if (!parsed) throw new Error("Unrecognised balance response");
-        liveDeltaLastError = null;
-        liveDeltaBalance = { value: parsed.value, field: parsed.field, at: Date.now() };
-        // Kept across a reload too, so closing and reopening the tab doesn't
-        // itself count as a disconnect and drop back to the computed figure.
-        if (state.delta) {
-          state.delta.liveBalance = liveDeltaBalance;
-          // Shared through GitHub sync so a device without the key (or one Delta
-          // won't answer, say an IP-locked key on a phone) shows this figure, not
-          // its own trade sum. Written only when it moves, and at most every ten
-          // minutes (hourly when it holds), so an open position doesn't push a
-          // commit on every one-minute poll.
-          shareOwnBalance(false);
-          save();
-        }
-      }).catch(err => {
-        // A failed poll — offline, Delta down, a rejected key — records only the
-        // error. The last real balance this device saw is never overwritten by
-        // it, so the header keeps showing $50 instead of snapping back to
-        // whatever the journal itself computes the moment one poll misses.
-        liveDeltaLastError = String((err && err.message) || err);
-      }).then(() => { liveBalanceBusy = false; applyLiveBalance(); });
-    }
-    // True once Delta has ever answered for this account and the key is still
-    // configured. Not time-limited — a disconnect freezes the figure, it
-    // doesn't clear it. Only removing the key (or switching to a Delta account
-    // this key was never connected for) falls back to the computed balance.
-    // A figure synced from another device counts without a key here.
-    function deltaLiveKnown() { return !!(deltaAccountId() && liveDeltaBalance && liveDeltaBalance.value != null && (deltaReady() || liveDeltaBalance.synced)); }
-    // Copies this device's own Delta figure into the synced one. `now` skips the
-    // ten-minute wait: on opening, a figure the other devices never got (Delta
-    // not answering this session, or a build from before this was synced) goes
-    // out at once instead of waiting for a poll that may never succeed.
-    function shareOwnBalance(now) {
-      const b = liveDeltaBalance, d = state.delta;
-      if (!d || !deltaReady() || !b || b.synced || typeof b.value !== "number") return false;
-      const sh = d.shared, age = sh ? b.at - sh.at : Infinity, moved = !sh || Math.abs(sh.value - b.value) >= 0.005;
-      if (age <= 0 || !(moved && (now || age >= 10 * 60 * 1000) || age >= 60 * 60 * 1000)) return false;
-      d.shared = { value: b.value, field: b.field, at: b.at };
-      return true;
-    }
+    let liveDeltaBalance = null; // { value, at, field } once the PC's import read it
+    // True once the PC's import has read Delta's wallet for this account. Not
+    // time-limited: an older figure stays, marked last known.
+    function deltaLiveKnown() { return !!(deltaAccountId() && liveDeltaBalance && liveDeltaBalance.value != null); }
     function adoptSyncedBalance() {
       const b = state.delta && state.delta.liveBalance;
       if (b && typeof b.value === "number" && (!liveDeltaBalance || b.at > liveDeltaBalance.at)) liveDeltaBalance = b;
     }
     // "fetched 10:42" on the device that asked Delta, "fetched 10:42 on another device" elsewhere.
-    function deltaFetchedText() { return "fetched " + new Date(liveDeltaBalance.at).toLocaleTimeString() + (liveDeltaBalance.synced ? " on another device" : ""); }
+    function deltaFetchedText() { return "read " + new Date(liveDeltaBalance.at).toLocaleString() + " by your PC's import"; }
     function applyLiveBalance() {
       const valEl = document.getElementById('topBalVal');
       const tag = document.getElementById('topBalLive');
@@ -7601,12 +7278,12 @@
         valEl.innerText = money(liveTotal, cur);
         tag.classList.remove('hidden');
         const ok = !deltaIn || fresh;
-        tag.innerText = deltaIn ? (fresh ? 'LIVE' : 'LAST KNOWN') : 'WALLET';
+        tag.innerText = deltaIn && !fresh ? 'LAST KNOWN' : 'WALLET';
         tag.className = 'text-[9px] font-bold px-1 py-0.5 rounded border align-middle '
           + (ok ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40');
         const since = deltaIn ? "Delta " + liveDeltaBalance.field + ", " + deltaFetchedText() : "";
         const cdx = wallets.length ? cdxWalletTitle(wallets[0]) : "";
-        tag.title = [since + (deltaIn && !fresh ? " — Delta hasn't answered since" + (liveDeltaLastError ? " (" + liveDeltaLastError + ")" : "") + "; holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
+        tag.title = [since + (deltaIn && !fresh ? " — nothing newer since (is the PC on?); holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
           + ". Journal-computed balance: " + money(lastComputedBalance.value, cur);
         if (chartEl) { chartEl.innerText = money(liveTotal, cur); chartEl.title = tag.title; }
       } else {
@@ -7618,25 +7295,18 @@
       // fetched on a timer), so the panel is kept in step whenever it changes.
       if (document.getElementById('booksList') && !(document.activeElement && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName))) renderBooks();
     }
-    setInterval(fetchLiveBalance, 60000);
-    setTimeout(fetchLiveBalance, 2000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) fetchLiveBalance(); });
-
-    function deltaFullReimport() {
-      if (state.delta) { state.delta.lastFillTime = 0; delete state.delta.openPositions; save(); }
-      deltaSyncNow();
-    }
     function undoDeltaFills() {
       const n = state.trades.filter(t => t.src && t.src.startsWith('delta:')).length;
       if (!n) { toast("There are no Delta trades to remove"); return; }
-      if (!confirm(`Remove all ${n} trades imported from Delta? Stops, notes, tags and ratings you added to them are lost, on every synced device. Import Now brings the trades back without them.`)) return;
+      if (!confirm(`Remove all ${n} trades imported from Delta? Stops, notes, tags and ratings you added to them are lost, on every synced device. Your PC's next Delta import brings the trades back without them.`)) return;
       const initialCount = state.trades.length;
       state.trades.filter(t => t.src && t.src.startsWith('delta:')).forEach(t => noteDeleted("trades", t.id));
       state.trades = state.trades.filter(t => !t.src || !t.src.startsWith('delta:'));
-      if (state.delta) { state.delta.lastFillTime = 0; state.delta.lastAt = ""; delete state.delta.openPositions; }
+      // The PC's import starts over from the first fill (the newer record wins the merge).
+      if (state.deltaImport) state.deltaImport = { lastFillTime: 0, openPositions: {}, updatedAt: new Date().toISOString() };
       save();
       renderAll();
-      toast(`Removed ${initialCount - state.trades.length} Delta trades. Press Import Now to bring the full history back.`);
+      toast(`Removed ${initialCount - state.trades.length} Delta trades. Press Import now to bring the full history back.`);
     }
 
     /* =================== COINDCX FUTURES IMPORT =================== */
@@ -7657,11 +7327,11 @@
     // name, so these run there and write into the sync repo's journal.json.
     // Delta's is on once its job has written to the file (`deltaImport`).
     const PC_JOBS = {
-      cdx: { name: "CoinDCX", wf: CDX_WORKFLOW, unit: "row",
+      cdx: { name: "CoinDCX", wf: CDX_WORKFLOW, unit: "row", secrets: "COINDCX_API_KEY and COINDCX_API_SECRET",
         on: () => btState().files.some(x => x.id === CDX_FILE),
         count: () => btState().rows.filter(r => r.file === CDX_FILE).length,
         note: () => { const f = btState().files.find(x => x.id === CDX_FILE); return (f && f.note) || ""; } },
-      dx: { name: "Delta", wf: DX_WORKFLOW, unit: "trade",
+      dx: { name: "Delta", wf: DX_WORKFLOW, unit: "trade", secrets: "DELTA_API_KEY and DELTA_API_SECRET",
         on: () => !!state.deltaImport,
         count: () => (state.trades || []).filter(t => t.src && t.src.indexOf("delta:") === 0).length,
         note: () => (state.deltaImport && state.deltaImport.note) || "" }
@@ -7759,7 +7429,7 @@
           if (!res || res.why !== "busy") break;
           await new Promise(ok => setTimeout(ok, 3e3));
         }
-        done.forEach(k => Object.assign(runs[k], { live: false, step: "done", synced: !!(res && res.ok), added: PC_JOBS[k].count() - runs[k].rows, note: PC_JOBS[k].note() }));
+        done.forEach(k => Object.assign(runs[k], { live: false, step: "done", synced: !!(res && res.ok), added: PC_JOBS[k].count() - runs[k].rows, note: PC_JOBS[k].note(), unset: !!(res && res.ok) && !PC_JOBS[k].on() }));
         renderAll();
       }
       const open = live.filter(k => runs[k].live);
@@ -7783,6 +7453,8 @@
         ? (run.conclusion === "cancelled" ? "GitHub cancelled the run: the PC was off for a day, or a newer run took its place. Press Import now again." : "The run failed on your PC (" + (run.conclusion || "no result") + "). Open it on GitHub to see why.")
         : !run.synced ? "Done on your PC. This device couldn't sync just now; the trades come in with the next sync."
         : run.note ? "Ran at " + hm(run.at) + ", but " + job.name + " said no: " + run.note
+        // The job stops before writing anything when its secrets are missing; GitHub still calls that run a success.
+        : run.unset ? "Ran at " + hm(run.at) + ", but nothing reached the journal: " + job.name + " isn't set up on GitHub yet. Add the " + job.secrets + " secrets (steps below); if they're there, open the run to see why."
         : job.name + " import done · " + (run.added > 0 ? run.added + " new " + job.unit + (run.added === 1 ? "" : "s") : "nothing new") + ".";
       if (run.status === "in_progress") return "Running on your PC…";
       if (cdxRunWaiting(run.status)) return (run.live ? "Waiting" : "Still waiting") + " for your PC since " + hm(run.asked) + ": the import runs there. Turn the PC on (with internet); it starts by itself." + (run.live ? "" : " New trades come in with the next sync.");
@@ -7802,7 +7474,7 @@
       if (run.step === "refused") return "GitHub refused (" + run.code + ")";
       if (run.step === "syncing") return "bringing it in";
       if (run.step === "done") return run.conclusion !== "success" ? (run.conclusion === "cancelled" ? "cancelled by GitHub" : "run failed")
-        : !run.synced ? "done, comes in with the next sync" : run.note ? "refused, see its card"
+        : !run.synced ? "done, comes in with the next sync" : run.note ? "refused, see its card" : run.unset ? "not set up yet, see its card"
         : run.added > 0 ? run.added + " new " + job.unit + (run.added === 1 ? "" : "s") : "nothing new";
       if (run.status === "in_progress") return "running on your PC";
       if (cdxRunWaiting(run.status)) return (run.live ? "" : "still ") + "waiting for your PC";
@@ -7813,7 +7485,7 @@
       [["cdx", "cdxRunStatus", "cdxRunBtn", "cdxRunLink"], ["dx", "dxRunStatus", "dxRunBtn", "dxRunLink"]].forEach(([k, sid, bid, lid]) => {
         const el = document.getElementById(sid), btn = document.getElementById(bid), a = document.getElementById(lid);
         if (!el || !btn) return;
-        const run = pcRuns[k], bad = run && (run.step === "refused" || run.step === "offline" || (run.step === "done" && (run.conclusion !== "success" || run.note)));
+        const run = pcRuns[k], bad = run && (run.step === "refused" || run.step === "offline" || (run.step === "done" && (run.conclusion !== "success" || run.note || run.unset)));
         el.innerText = run ? pcRunText(run) : "";
         el.className = "w-full text-[11px] leading-relaxed " + (bad ? "text-rose-300" : run && run.step === "done" ? "text-emerald-300" : "text-slate-400");
         btn.disabled = live;
@@ -7822,26 +7494,34 @@
         if (a) { const url = run && run.url; a.classList.toggle("hidden", !url); if (url) a.href = url; }
       });
     }
-    // Delta through the PC, on the Delta card: set up or not, its last change or
-    // why its last run failed, and the steps when it isn't working.
+    // The Delta card: the PC's import set up or not, its last change or why its
+    // last run failed, and the steps when it isn't working. A key an older build
+    // saved on this device can be copied into the secrets from here.
     function renderDxPc() {
-      const status = document.getElementById("dxPcStatus"), steps = document.getElementById("dxPcSteps");
+      const status = document.getElementById("dxPcStatus"), steps = document.getElementById("dxPcSteps"), badge = document.getElementById("deltaStatusBadge");
       if (!status || !steps) return;
+      dropOldDeltaKey();
       const d = state.deltaImport, repo = syncCfg().repo, hm = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const lastRun = state.ui.dxLastRun, waiting = !!(d && lastRun && lastRun.at && cdxRunWaiting(lastRun.status) && !pcLive());
       const n = PC_JOBS.dx.count();
+      if (badge) {
+        badge.innerText = !d ? "Not set up" : d.note ? "Last run failed" : "Importing";
+        badge.className = "text-[10px] px-2 py-0.5 rounded " + (d && d.note ? "bg-rose-950/60 text-rose-300" : d ? "bg-slate-800 text-emerald-300" : "bg-slate-800 text-slate-300");
+      }
       status.className = "text-[11px] leading-relaxed " + (d && d.note ? "text-rose-300" : "text-slate-300");
       status.innerText = !repo ? "Connect GitHub Sync above first: your PC writes the trades into that repo's journal file."
-        : !d ? "Not set up yet. With it, your PC imports Delta every 30 minutes and every device (this phone too) gets the trades with its sync, no key needed here."
+        : !d ? `Not set up yet, so no new Delta trades come in (${n} in the journal now). With it, your PC imports Delta every 30 minutes and every device (this phone too) gets the trades with its sync, no key needed here.`
         : (d.note ? "GitHub's last Delta run failed: " + d.note + " " : "Your PC imports Delta every 30 minutes while it's on; trades arrive with the sync. ")
           + `${n} Delta trade${n === 1 ? "" : "s"} in the journal` + (d.updatedAt ? ", last change " + new Date(d.updatedAt).toLocaleString() : "") + "."
           + (state.ui.dxKickErr ? " This device can't start it (GitHub said " + state.ui.dxKickErr + "): give the sync token Actions: Read and write."
             : waiting ? " The run from " + hm(lastRun.at) + " is waiting for your PC: it has to be on (with internet)." : "");
       const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">${esc(text)}</a>`;
       const gh = "https://github.com/" + repo;
+      const old = oldDeltaKey(), small = (fn, text) => `<button type="button" onclick="${fn}" class="px-3 py-1 rounded bg-terminal-surface border border-terminal-border text-slate-200 hover:border-amber-500">${text}</button>`;
       steps.innerHTML = !repo || (d && !d.note) ? ""
-        : `<p>1. On Delta, make an API key with <b>Read Data</b> only, whitelisted for your PC's public IP (open <span class="text-amber-300">api.ipify.org</span> on the PC).</p>
+        : `<p>1. ${old ? "Use the Delta key saved on this device (copy it below), or make" : "On Delta, make"} an API key with <b>Read Data</b> only, whitelisted for your PC's public IP (open <span class="text-amber-300">api.ipify.org</span> on the PC).</p>
           <p>2. Open ${link(gh + "/settings/secrets/actions", "Settings → Secrets → Actions")} and add <code class="text-amber-300">DELTA_API_KEY</code> and <code class="text-amber-300">DELTA_API_SECRET</code>.</p>
+          ${old ? `<div id="dxOldKey" class="flex flex-wrap items-center gap-2"><span>Saved on this device:</span>${small("copyOldDeltaKey('key')", "Copy key")}${small("copyOldDeltaKey('secret')", "Copy secret")}<button type="button" onclick="forgetOldDeltaKey()" class="text-rose-400 hover:underline">Delete it</button><span class="w-full text-slate-400">Deleted from here by itself once the PC's import works.</span></div>` : ""}
           <p>3. Press <b>Import now</b> (or ${link(gh + "/actions/workflows/delta.yml", "Actions → Delta import")} → Run workflow). When the PC's IP changes, the reason above names the new one to whitelist.</p>`;
       renderPcRuns();
     }
@@ -10531,7 +10211,7 @@
           const lists = ["accounts", "trades", "goals"];
           if (!p || typeof p !== "object" || !Array.isArray(p.accounts) || !Array.isArray(p.trades)
               || lists.concat(["signals"]).some(k => p[k] !== undefined && !Array.isArray(p[k]))) { toast("That is not a journal backup"); return; }
-          if (!confirm("Replace this device's journal with the backup (" + p.trades.length + " trades)? Your sync token, Delta key, settings and loaded alerts stay as they are."
+          if (!confirm("Replace this device's journal with the backup (" + p.trades.length + " trades)? Your sync token, settings and loaded alerts stay as they are."
             + (syncReady() ? "\n\nSync is on: this is merged with the journal on GitHub at the next sync, so trades that are on GitHub but not in this file come back." : ""))) return;
           // Only journal data is taken from the file — never sync or Delta credentials.
           lists.forEach(k => { state[k] = p[k] || []; });
@@ -11895,6 +11575,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-03.151', pr: 66, title: 'Delta from your PC only, keys out of sight', pts: ['Delta card: no key boxes. Your PC brings the trades and balance to every device; Copy key / Copy secret help set it up', 'Gemini card shows Key saved with a Change key link', 'Set up another device shows before keys are saved; Delta says when the PC import is not set up'] },
       { v: '2026-11-03.150', pr: 65, title: 'Keys come with GitHub sync', pts: ['Delta and Gemini keys saved in your sync repo, locked with a passphrase you pick', 'A new device (like the iPhone home-screen app) types it once and the keys fill in; later changes follow by themselves', 'Set up another device: one setup code, link or QR connects GitHub and the keys'] },
       { v: '2026-11-03.149', pr: 64, title: 'Delta through your PC', pts: ['Delta imports on your PC too (GitHub job), so the phone gets trades without its IP on the key', 'Import now (CoinDCX card, Delta card, Signals → More) runs both imports', "Delta card: the PC import's status, or why it failed and the PC's IP to whitelist"] },
       { v: '2026-11-03.148', pr: 63, title: 'CoinDCX import from your phone', pts: ['Import now on the CoinDCX card (and Signals → More) starts the import from any device', 'Shows if it waits for your PC, runs or is done, then syncs the new trades', 'A refused key now names the PC\'s new IP to make the CoinDCX key for'] },
@@ -11981,13 +11662,9 @@
       state = load();
       signalsReady = loadSignalsStore();
       migrateConfidence();
-      // A balance Delta gave a past session survives a reload too — reopening the
-      // tab is not itself a disconnect, and the last known figure should hold
-      // until Delta actually answers again or falls silent for good.
-      if (state.delta && state.delta.liveBalance && typeof state.delta.liveBalance.value === "number") {
-        liveDeltaBalance = state.delta.liveBalance;
-        if (shareOwnBalance(true)) save();
-      }
+      // The last Delta figure survives a reload: it holds until a newer one arrives.
+      if (state.delta && state.delta.liveBalance && typeof state.delta.liveBalance.value === "number") liveDeltaBalance = state.delta.liveBalance;
+      dropOldDeltaKey();
       renderAll();
       if (loadNotice) {
         const el = document.getElementById("storageAlert");

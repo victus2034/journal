@@ -1579,16 +1579,18 @@ async function withdrawRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
-// Delta's wallet figure travels through sync (never the key): the device with
-// the key fetches it, and a device without one shows that figure instead of its
-// own trade sum. Two pages stand in for a PC and a phone.
+// Delta's wallet figure comes from the PC's import (journal.json `deltaBalance`),
+// never from a key in the browser: every device shows it, the header says how
+// old it is, an older figure never replaces a newer one. A Delta key an older
+// build saved can be copied into GitHub's secrets, and goes once the PC import works.
 async function deltaShareRun(seed) {
   const errs = [];
   const check = (ok, what) => { if (!ok) errs.push(what); };
-  const open = async vp => {
+  const deltaAsks = [];
+  const open = async (vp, s) => {
     const ctx = await browser.newContext({ viewport: vp });
-    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
-    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    await ctx.route(url => !url.href.startsWith(base), r => { if (/delta\.exchange\/v2\/(wallet|fills)/.test(r.request().url())) deltaAsks.push(r.request().url()); return r.abort(); });
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(s || seed));
     const page = await ctx.newPage();
     page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
     page.on('dialog', d => d.accept());
@@ -1596,21 +1598,10 @@ async function deltaShareRun(seed) {
     await page.waitForTimeout(300);
     return { ctx, page };
   };
-  const pc = await open({ width: 1366, height: 900 }), phone = await open({ width: 390, height: 844 });
+  const phone = await open({ width: 390, height: 844 });
   try {
-    const sent = await pc.page.evaluate(async () => {
-      state.delta = Object.assign(state.delta || {}, { key: 'k', secret: 's' });
-      let eq = '0.01';
-      window.deltaCall = () => Promise.resolve({ ok: true, status: 200, body: { meta: { net_equity: eq }, result: [] } });
-      await fetchLiveBalance();
-      const first = JSON.parse(JSON.stringify(syncPayload(state)));
-      // A minute later the figure moved a little: the shared one waits, so no push per poll.
-      eq = '0.02'; state.delta.shared.at -= 60 * 1000; const was = state.delta.shared.value;
-      await fetchLiveBalance();
-      return { p: first, held: state.delta.shared.value === was, local: bookBalance(acct(deltaAccountId())) };
-    });
-    check(sent.p.deltaBalance && sent.p.deltaBalance.value === 0.01 && !JSON.stringify(sent.p).includes('"key"') && !JSON.stringify(sent.p).includes('"secret"') && sent.held && sent.local === 0.02,
-      'PC payload: ' + JSON.stringify({ bal: sent.p.deltaBalance, held: sent.held, local: sent.local }));
+    const at = await phone.page.evaluate(() => Date.now());
+    const p = await phone.page.evaluate(at => Object.assign(syncPayload(state), { deltaBalance: { value: 0.01, field: 'net equity', at: at - 20 * 60e3 } }), at);
     const got = await phone.page.evaluate(p => {
       const before = bookBalance(acct(deltaAccountId()));
       state = mergeState(state, p); adoptSyncedBalance(); save();
@@ -1620,29 +1611,47 @@ async function deltaShareRun(seed) {
       const stale = mergeState(JSON.parse(JSON.stringify(state)), Object.assign({}, p, { deltaBalance: { value: 33.23, field: 'net equity', at: p.deltaBalance.at - 3600e3 } }));
       return { before, after: bookBalance(acct(deltaAccountId())), top: document.getElementById('topBalVal').innerText, tag: tag.classList.contains('hidden') ? '' : tag.innerText,
         title: tag.title, stale: stale.delta.liveBalance.value, key: !!(state.delta && state.delta.key) };
-    }, sent.p);
-    check(got.after === 0.01 && got.before !== 0.01 && got.top.includes('0.01') && /LIVE|LAST KNOWN/.test(got.tag) && /another device/.test(got.title) && got.stale === 0.01 && !got.key,
+    }, p);
+    check(got.after === 0.01 && got.before !== 0.01 && got.top.includes('0.01') && got.tag === 'WALLET' && /by your PC's import/.test(got.title) && got.stale === 0.01 && !got.key,
       'phone after sync: ' + JSON.stringify(got));
-    // A PC that held Delta's figure from before this build, with Delta not answering
-    // now, still sends it the moment the journal opens.
-    const old = await browser.newContext({ viewport: { width: 1366, height: 900 } });
-    await old.route(url => !url.href.startsWith(base), r => r.abort());
-    const seeded = Object.assign({}, seed, { delta: { key: 'k', secret: 's', liveBalance: { value: 0.01, field: 'net equity', at: Date.now() - 3 * 3600e3 } } });
-    await old.addInitScript(s => { localStorage.setItem('tapeAndTarget.v2', s); }, JSON.stringify(seeded));
-    const oldPage = await old.newPage();
-    await oldPage.goto(base, { waitUntil: 'load' }); await oldPage.waitForTimeout(2600);
-    const boot = await oldPage.evaluate(() => ({ p: syncPayload(state).deltaBalance, live: liveDeltaBalance && liveDeltaBalance.value }));
-    await old.close();
-    check(boot.p && boot.p.value === 0.01 && boot.live === 0.01, 'held figure not sent on opening: ' + JSON.stringify(boot));
+    // Three hours with nothing newer (PC off): still shown, marked last known.
+    const old = await phone.page.evaluate(() => { liveDeltaBalance = Object.assign({}, liveDeltaBalance, { at: Date.now() - 3 * 3600e3 }); applyLiveBalance(); const t = document.getElementById('topBalLive'); return { tag: t.innerText, title: t.title }; });
+    check(old.tag === 'LAST KNOWN' && /is the PC on\?/.test(old.title), 'old figure: ' + JSON.stringify(old));
     // The phone keeps it after a reload.
     await phone.page.reload({ waitUntil: 'load' }); await phone.page.waitForTimeout(300);
     const kept = await phone.page.evaluate(() => bookBalance(acct(deltaAccountId())));
     check(kept === 0.01, 'phone after reload: ' + kept);
+
+    // A PC with a key from an older build, the PC import not set up yet: no key boxes,
+    // the key is never used here, and the steps offer it for copying into the secrets.
+    const sync = { token: 'gh-token', repo: 'victus/sync', branch: 'main', auto: false, lastAt: '', lastSha: '' };
+    const pc = await open({ width: 1366, height: 900 }, Object.assign({}, seed, { sync, delta: { key: 'dk-OLD', secret: 'ds-OLD', lastAt: '2026-10-26T10:00:00Z', lastFillTime: 5, liveBalance: { value: 0.02, field: 'net equity', at: Date.now() - 3600e3 } } }));
+    await pc.ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+    await pc.page.waitForTimeout(2500);
+    const v = await pc.page.evaluate(() => { openSettings('connect'); renderDataView(); return {
+      boxes: !!document.getElementById('deltaKeyInput') || !!document.getElementById('deltaSecretInput') || /Test & Connect|Import Full History/.test(document.body.innerText),
+      badge: document.getElementById('deltaStatusBadge').innerText, steps: document.getElementById('dxPcSteps').innerText, key: state.delta.key,
+      inSync: JSON.stringify(syncPayload(state)).includes('dk-OLD') || JSON.stringify(syncPayload(state)).includes('ds-OLD'), live: liveDeltaBalance && liveDeltaBalance.value }; });
+    check(!v.boxes && v.badge === 'Not set up' && /Saved on this device:\s*Copy key\s*Copy secret/.test(v.steps) && v.key === 'dk-OLD' && !v.inSync && v.live === 0.02, 'old key, PC not set up: ' + JSON.stringify(v));
+    check(!deltaAsks.length, 'the browser still asked Delta with a key: ' + deltaAsks.join(' '));
+    await pc.page.click('#dxOldKey button:has-text("Copy secret")');
+    await pc.page.waitForTimeout(200);
+    check((await pc.page.evaluate(() => navigator.clipboard.readText())) === 'ds-OLD', 'Copy secret did not copy the secret');
+    await pc.page.click('#dxOldKey button:has-text("Copy key")');
+    await pc.page.waitForTimeout(200);
+    check((await pc.page.evaluate(() => navigator.clipboard.readText())) === 'dk-OLD', 'Copy key did not copy the key');
+    // A failed PC run (IP refused) keeps it; the first good one deletes it from this device.
+    let k = await pc.page.evaluate(() => { state.deltaImport = { lastFillTime: 0, openPositions: {}, note: 'Delta refused the IP', updatedAt: new Date().toISOString() }; renderDataView(); return state.delta.key || ''; });
+    check(k === 'dk-OLD', 'a failed PC run deleted the key');
+    k = await pc.page.evaluate(() => { state.deltaImport = { lastFillTime: 9, openPositions: {}, updatedAt: new Date().toISOString() }; renderDataView();
+      return { key: state.delta.key || '', sec: state.delta.secret || '', stored: localStorage.getItem('tapeAndTarget.v2').includes('dk-OLD'), live: state.delta.liveBalance && state.delta.liveBalance.value, steps: document.getElementById('dxPcSteps').innerText, badge: document.getElementById('deltaStatusBadge').innerText }; });
+    check(!k.key && !k.sec && !k.stored && k.live === 0.02 && k.steps === '' && k.badge === 'Importing', 'PC import works, old key kept: ' + JSON.stringify(k));
+    await pc.ctx.close();
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
-  await pc.ctx.close(); await phone.ctx.close();
-  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Delta balance shared to a device without the key');
+  await phone.ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Delta from the PC only: balance on every device, no key boxes, old key copied then deleted');
   errs.forEach(e => { console.log('     ' + e); failures.push('delta share: ' + e); });
 }
 
@@ -1921,7 +1930,6 @@ async function deltaImportRun(seed) {
   page.on('dialog', d => d.accept());
   const sync = () => page.evaluate(() => syncNow({ quiet: true }));
   const card = () => page.evaluate(() => { openSettings('connect'); renderDataView(); return { status: document.getElementById('dxPcStatus').innerText, bad: document.getElementById('dxPcStatus').className.includes('rose'), steps: document.getElementById('dxPcSteps').innerText }; });
-  const strip = t => { const o = Object.assign({}, t); delete o.id; delete o.updatedAt; return o; };
   try {
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForTimeout(300);
@@ -1956,12 +1964,6 @@ async function deltaImportRun(seed) {
     check(j.deltaImport && j.deltaImport.lastFillTime === Date.parse('2026-10-21T11:00:00Z') * 1000 && JSON.stringify(j.deltaImport.openPositions) === JSON.stringify({ ETHUSD: Date.parse('2026-10-21T09:00:00Z') * 1000 }) && !('note' in j.deltaImport), 'resume point: ' + JSON.stringify(j.deltaImport));
     check(j.deltaBalance && j.deltaBalance.value === 512.25 && j.deltaBalance.field === 'net equity' && JSON.stringify(j.keysLock) === '{"v":1,"data":"kept-as-is"}', 'balance / other fields: ' + JSON.stringify({ b: j.deltaBalance, k: j.keysLock }));
     check(mock.calls.some(x => x.startsWith('/v2/fills?page_size=200&after=')) && !mock.calls.some(x => /start_time/.test(x)), 'first run paging: ' + mock.calls.join(','));
-    // The same fills through the journal's own import give the same trades.
-    const mine = await page.evaluate(([fills, cv]) => {
-      const seen = { 'delta:o6': true }, made = deltaFillsToTrades(fills, 'acc_cry', seen, {}, cv, null);
-      return { trades: made.map(t => Object.assign({}, t)), open: made.open };
-    }, [mock.fills, CV]);
-    check(JSON.stringify(mine.trades.map(strip)) === JSON.stringify([btc].map(strip)) && JSON.stringify(mine.open) === JSON.stringify(j.deltaImport.openPositions), 'in-page import differs: ' + JSON.stringify(mine.trades.map(strip)) + ' vs ' + JSON.stringify(strip(btc)));
 
     // The phone syncs: the trade and the balance arrive, the card says it works, nothing to push back.
     s = await sync();
@@ -2021,7 +2023,7 @@ async function deltaImportRun(seed) {
   }
   await ctx.close();
   fake.close();
-  const label = 'Delta import on the PC: signed calls, same trades as in-page, resume, IP named, deletes kept';
+  const label = 'Delta import on the PC: signed calls, trades, resume, IP named, deletes kept';
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
@@ -2174,6 +2176,23 @@ async function importNowRun(seed) {
     await page.waitForTimeout(400);
     v = await view();
     check(v.text === 'GitHub refused (403): give the sync token Actions: Read and write, then press Import now again.' && !v.off && /GitHub said 403/.test(v.card), 'refused token: ' + JSON.stringify(v));
+    // 6a. Delta's job is there but has no secrets: it stops before writing, and GitHub
+    // still calls the run a success. The card says it isn't set up, not "nothing new".
+    gh.dispatchStatus = 204;
+    gh.dx = { dispatched: [], runs: [] };
+    await page.evaluate(() => { openSettings('connect'); renderDataView(); });
+    await page.click('#dxRunBtn');
+    await page.waitForTimeout(300);
+    const t6a = await page.evaluate(() => Date.now());
+    gh.runs.unshift({ id: 40, created_at: new Date(t6a).toISOString(), status: 'completed', conclusion: 'success', html_url: RUN_URL + 40 });
+    gh.dx.runs.unshift({ id: 41, created_at: new Date(t6a).toISOString(), status: 'completed', conclusion: 'success', html_url: RUN_URL + 41 });
+    await settle(5000);
+    await page.waitForTimeout(600);
+    v = await view();
+    check(/^Ran at \d\d:\d\d( [AP]M)?, but nothing reached the journal: Delta isn't set up on GitHub yet\. Add the DELTA_API_KEY and DELTA_API_SECRET secrets/.test(v.dx) && !/nothing new/.test(v.dx) && !v.dxBtn && /^Not set up yet/.test(v.dxCard), 'Delta without secrets: ' + JSON.stringify(v));
+    check(await page.evaluate(() => /text-rose-300/.test(document.getElementById('dxRunStatus').className)), 'Delta without secrets not shown in red');
+    check(v.toasts.some(t => /Delta: not set up yet, see its card/.test(t)), 'toast for Delta without secrets: ' + JSON.stringify(v.toasts));
+
     // 6. Delta through the PC too: one press (on the Delta card) runs both jobs, each
     // card says how its own went, and one note says both.
     gh.dispatchStatus = 204;
@@ -3155,8 +3174,10 @@ async function syncSettingsRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
-// Keys on your other devices: Delta and Gemini keys locked into journal.json with a
+// Keys on your other devices: the Gemini key locked into journal.json with a
 // passphrase, unlocked once on a new device, then kept in step; setup codes and links.
+// The Delta key never goes in (its import runs on the PC), and a lock an older
+// build made with the Delta key inside is resealed without it.
 // Several browsers (devices) share one fake GitHub. The lock is also opened by hand
 // here in Node (PBKDF2 + AES-GCM), so it is the standard cipher, not something only
 // the page itself can read.
@@ -3219,11 +3240,11 @@ async function keysLockRun(seed) {
     const A = await device('A', { seed: Object.assign({}, seed, { delta: { key: DKEY, secret: DSEC, lastAt: '', lastFillTime: 0 } }), gemini: GKEY });
     await connect(A.page);
     let c = await card(A.page);
-    check(c.badge === 'Off' && /Save keys to GitHub/.test(c.text) && /CoinDCX needs nothing/.test(c.text), 'A starts Off: ' + JSON.stringify(c));
+    check(c.badge === 'Off' && /Save keys to GitHub/.test(c.text) && /Delta and CoinDCX need nothing here/.test(c.text), 'A starts Off: ' + JSON.stringify(c));
     check(!/keysLock/.test(ghText()) && !ghText().includes(DKEY), 'nothing about keys on GitHub before it is on');
     await A.page.click('#keysBox button:has-text("Save keys to GitHub")');
     let mo = await modal(A.page);
-    check(mo.open && /Delta key and Gemini key are locked/.test(mo.body), 'create dialog names the keys: ' + JSON.stringify(mo));
+    check(mo.open && /This device's Gemini key is locked/.test(mo.body) && !/Delta/.test(mo.body), 'create dialog names the key: ' + JSON.stringify(mo));
     await A.page.fill('#mKeysNew', 'short'); await A.page.fill('#mKeysNew2', 'short'); await A.page.click('#modalSheetSaveBtn');
     let err = await A.page.evaluate(() => document.getElementById('mKeysErr').innerText);
     check(/at least 8/.test(err) && !(await A.page.evaluate(() => state.keysLock)), 'short passphrase refused: ' + err);
@@ -3235,7 +3256,7 @@ async function keysLockRun(seed) {
     await A.page.waitForTimeout(200); await settle(A.page);
     let f = ghFile();
     const text = ghText();
-    check(f && f.keysLock && f.keysLock.s && f.keysLock.c && f.keysLock.n === 600000 && JSON.stringify(f.keysLock.has) === '["delta","ai"]', 'keysLock on GitHub: ' + JSON.stringify(f && f.keysLock));
+    check(f && f.keysLock && f.keysLock.s && f.keysLock.c && f.keysLock.n === 600000 && JSON.stringify(f.keysLock.has) === '["ai"]', 'keysLock on GitHub: ' + JSON.stringify(f && f.keysLock));
     check(![DKEY, DSEC, GKEY, PASS, TOKEN].some(x => text.includes(x)), 'no key, secret, passphrase or token in journal.json in plain text');
     // Opened by hand: PBKDF2-SHA256 600k over the passphrase, AES-256-GCM with its AAD.
     const open = (lock, pass) => {
@@ -3245,13 +3266,13 @@ async function keysLockRun(seed) {
       return JSON.parse(Buffer.concat([d.update(ct.subarray(0, ct.length - 16)), d.final()]).toString('utf8'));
     };
     let plain = null; try { plain = open(f.keysLock, PASS); } catch (e) { errs.push('Node could not open the lock: ' + e.message); }
-    check(plain && plain.delta.key === DKEY && plain.delta.secret === DSEC && plain.ai.key === GKEY, 'lock holds exactly the keys: ' + JSON.stringify(plain));
+    check(plain && !plain.delta && plain.ai.key === GKEY && Object.keys(plain).join() === 'ai', 'lock holds the Gemini key only: ' + JSON.stringify(plain));
     let wrongOpens = true; try { open(f.keysLock, PASS2); } catch (e) { wrongOpens = false; }
     check(!wrongOpens, 'a wrong passphrase does not open it in Node either');
     const bk = await A.page.evaluate(() => [!!syncPayload(state).keysLock, 'keysLock' in backupPayload(state), JSON.stringify(state.sync).includes('"vault"')]);
     check(bk[0] && !bk[1] && bk[2], 'synced, left out of backup files, vault kept on the device: ' + JSON.stringify(bk));
     c = await card(A.page);
-    check(c.badge === 'On' && /Delta key and Gemini key follow you/.test(c.text), 'A shows On: ' + JSON.stringify(c));
+    check(c.badge === 'On' && /Gemini key follows you/.test(c.text), 'A shows On: ' + JSON.stringify(c));
 
     // ---- Device B (the iPhone home-screen app): empty, connects with repo + token ----
     const B = await device('B', { phone: true });
@@ -3259,7 +3280,7 @@ async function keysLockRun(seed) {
     check(c.badge === 'New device?' && /Use setup code/.test(c.text), 'B starts as a new device: ' + JSON.stringify(c));
     await connect(B.page);
     mo = await modal(B.page);
-    check(mo.open && mo.title === 'Unlock your keys' && /Delta key and Gemini key/.test(mo.body), 'B is asked for the passphrase after connecting: ' + JSON.stringify(mo));
+    check(mo.open && mo.title === 'Unlock your keys' && /\(Gemini key\)/.test(mo.body), 'B is asked for the passphrase after connecting: ' + JSON.stringify(mo));
     check((await B.page.evaluate(() => state.trades.length)) === seed.trades.length, 'B pulled the journal');
     await B.page.fill('#mKeysPass', PASS2); await B.page.click('#modalSheetSaveBtn');
     await until(B.page, () => /Wrong/.test(document.getElementById('mKeysErr').innerText));
@@ -3269,44 +3290,45 @@ async function keysLockRun(seed) {
     await until(B.page, () => document.getElementById('modalSheet').classList.contains('hidden'));
     await settle(B.page);
     k = await keysOf(B.page);
-    check(k.dk === DKEY && k.ds === DSEC && k.gk === GKEY, 'B got the Delta key, secret and Gemini key: ' + JSON.stringify(k));
-    check((await B.page.evaluate(() => document.getElementById('deltaKeyInput').value)) === DKEY, 'Delta card shows the filled key');
+    check(!k.dk && !k.ds && k.gk === GKEY, 'B got the Gemini key and no Delta key: ' + JSON.stringify(k));
+    const gc = await B.page.evaluate(() => ({ boxes: !!document.getElementById('deltaKeyInput'), form: !document.getElementById('aiKeyForm').classList.contains('hidden'),
+      saved: document.getElementById('aiKeySaved').innerText, box: document.getElementById('aiKeyInput').value }));
+    check(!gc.boxes && !gc.form && /Key saved/.test(gc.saved) && /Change key/.test(gc.saved) && gc.box === '', 'no Delta key boxes, Gemini key out of sight: ' + JSON.stringify(gc));
     c = await card(B.page);
     check(c.badge === 'On', 'B shows On: ' + c.badge);
     // Reload: B keeps the keys and needs no passphrase again.
     await B.page.reload({ waitUntil: 'load' }); await B.page.waitForTimeout(300);
     await B.page.evaluate(() => syncNow()); await settle(B.page);
-    check(!(await modal(B.page)).open && (await keysOf(B.page)).dk === DKEY, 'after a reload: no passphrase asked, keys kept');
+    check(!(await modal(B.page)).open && (await keysOf(B.page)).gk === GKEY, 'after a reload: no passphrase asked, key kept');
 
-    // ---- A changes its Delta key: B picks it up on its next sync, no passphrase ----
+    // ---- A changes its Gemini key (Change key opens the boxes): B picks it up, no passphrase ----
     const lockAt = f.keysLock.at;
     await A.page.evaluate(() => { openSettings('connect'); renderDataView(); });
-    await A.page.fill('#deltaKeyInput', 'delta-key-NEW1'); await A.page.fill('#deltaSecretInput', 'delta-secret-NEW1');
-    await A.page.click('button:has-text("Test & Connect")');
+    check(!(await A.page.isVisible('#aiKeyInput')), 'A\'s saved Gemini key box is on show');
+    await A.page.click('#aiKeySaved button:has-text("Change key")');
+    await A.page.fill('#aiKeyInput', 'AIza-NEW1'); await A.page.click('button:has-text("Save & Test")');
     check(await until(A.page, at => state.keysLock.at !== at && !syncBusy, lockAt), 'A wrote a new lock');
     await settle(A.page);
-    check(ghFile().keysLock.at !== lockAt, 'new lock pushed to GitHub');
+    check(ghFile().keysLock.at !== lockAt && !(await A.page.isVisible('#aiKeyInput')), 'new lock pushed to GitHub, box hidden again');
     await B.page.evaluate(() => syncNow({ quiet: true })); await settle(B.page);
     k = await keysOf(B.page);
-    check(k.dk === 'delta-key-NEW1' && k.ds === 'delta-secret-NEW1' && k.gk === GKEY, 'B followed the new Delta key: ' + JSON.stringify(k));
-    // A key removed on B stays removed there; the next change elsewhere doesn't bring it back.
+    check(k.gk === 'AIza-NEW1' && !k.dk, 'B followed the new Gemini key: ' + JSON.stringify(k));
+    // A key removed on B stays removed there while the lock doesn't change, and isn't removed from GitHub.
     await B.page.evaluate(() => removeAiKey());
-    await A.page.evaluate(() => { openSettings('connect'); renderDataView(); });
-    await A.page.fill('#deltaKeyInput', 'delta-key-NEW2'); await A.page.fill('#deltaSecretInput', 'delta-secret-NEW2');
-    await A.page.click('button:has-text("Test & Connect")');
-    await until(A.page, () => !syncBusy && !keysBusy); await A.page.waitForTimeout(300); await settle(A.page);
     await B.page.evaluate(() => syncNow({ quiet: true })); await settle(B.page);
+    await A.page.evaluate(() => syncNow({ quiet: true })); await settle(A.page);
     k = await keysOf(B.page);
-    check(k.dk === 'delta-key-NEW2' && !k.gk, 'B: Delta followed, removed Gemini key stayed removed: ' + JSON.stringify(k));
+    check(!k.gk, 'B: removed Gemini key came back: ' + JSON.stringify(k));
     plain = open(ghFile().keysLock, PASS);
-    check(plain.ai && plain.ai.key === GKEY, 'removing on B did not remove it from GitHub or A');
+    check(plain.ai && plain.ai.key === 'AIza-NEW1' && (await keysOf(A.page)).gk === 'AIza-NEW1', 'removing on B did not remove it from GitHub or A');
     // B saves its own Gemini key: A gets it.
     await B.page.evaluate(() => { openSettings('connect'); renderDataView(); });
     await B.page.fill('#aiKeyInput', 'AIza-from-phone'); await B.page.click('button:has-text("Save & Test")');
     await until(B.page, () => !!state.keysLock && !syncBusy && !keysBusy); await B.page.waitForTimeout(500); await settle(B.page);
     await A.page.evaluate(() => syncNow({ quiet: true })); await settle(A.page);
     k = await keysOf(A.page);
-    check(k.gk === 'AIza-from-phone' && k.dk === 'delta-key-NEW2', 'A followed B\'s Gemini key and kept its Delta key: ' + JSON.stringify(k));
+    check(k.gk === 'AIza-from-phone' && k.dk === DKEY, 'A followed B\'s Gemini key; its old Delta key stayed on A only: ' + JSON.stringify(k));
+    check(![DKEY, DSEC].some(x => ghText().includes(x)) && !open(ghFile().keysLock, PASS).delta, 'the Delta key reached GitHub');
 
     // ---- Setup link: device C opens it, types the passphrase once ----
     await A.page.evaluate(() => { openSettings('connect'); renderDataView(); });
@@ -3337,7 +3359,7 @@ async function keysLockRun(seed) {
     const cs = await C.page.evaluate(() => ({ repo: state.sync.repo, token: state.sync.token, auto: state.sync.auto, trades: state.trades.length }));
     k = await keysOf(C.page);
     check(cs.repo === REPO && cs.token === TOKEN && cs.auto && cs.trades === seed.trades.length, 'C connected from the link: ' + JSON.stringify(Object.assign({}, cs, { token: cs.token === TOKEN })));
-    check(k.dk === 'delta-key-NEW2' && k.gk === 'AIza-from-phone' && (await card(C.page)).badge === 'On', 'C got the keys with the same passphrase: ' + JSON.stringify(k));
+    check(!k.dk && k.gk === 'AIza-from-phone' && (await card(C.page)).badge === 'On', 'C got the key with the same passphrase: ' + JSON.stringify(k));
     // ---- Device D: the code pasted into Repository Name works too ----
     const D = await device('D', { phone: true });
     // D already has a Gemini key of its own: it keeps it, and GitHub's stays as it was.
@@ -3348,7 +3370,7 @@ async function keysLockRun(seed) {
     await D.page.fill('#mSetupPass', PASS); await D.page.click('#modalSheetSaveBtn');
     await until(D.page, () => document.getElementById('modalSheet').classList.contains('hidden')); await settle(D.page);
     k = await keysOf(D.page);
-    check(k.dk === 'delta-key-NEW2' && (await D.page.evaluate(() => state.sync.repo)) === REPO, 'D set up from a pasted code');
+    check((await D.page.evaluate(() => state.sync.repo)) === REPO, 'D set up from a pasted code');
     check(k.gk === 'AIza-D-own' && open(ghFile().keysLock, PASS).ai.key === 'AIza-from-phone', 'D kept its own Gemini key, GitHub kept its: ' + k.gk);
     // A damaged or cut code is turned away with a reason.
     const E = await device('E', { phone: true });
@@ -3373,10 +3395,10 @@ async function keysLockRun(seed) {
     await A.page.fill('#mKeysNew', PASS2); await A.page.fill('#mKeysNew2', PASS2); await A.page.click('#modalSheetSaveBtn');
     await until(A.page, () => document.getElementById('modalSheet').classList.contains('hidden')); await A.page.waitForTimeout(200); await settle(A.page);
     plain = open(ghFile().keysLock, PASS2);
-    check(plain.delta.key === 'delta-key-NEW2' && plain.ai.key === 'AIza-from-phone', 'new lock under the new passphrase');
+    check(!plain.delta && plain.ai.key === 'AIza-from-phone', 'new lock under the new passphrase');
     await C.page.evaluate(() => syncNow({ quiet: true })); await settle(C.page);
     c = await card(C.page);
-    check(c.badge === 'Locked' && (await keysOf(C.page)).dk === 'delta-key-NEW2', 'C keeps its keys and asks for the new passphrase: ' + JSON.stringify(c));
+    check(c.badge === 'Locked' && (await keysOf(C.page)).gk === 'AIza-from-phone', 'C keeps its key and asks for the new passphrase: ' + JSON.stringify(c));
     await C.page.fill('#keysPassInput', PASS2); await C.page.click('#keysBox button:has-text("Unlock")');
     await until(C.page, () => (document.getElementById('keysBadge') || {}).innerText === 'On');
     check((await card(C.page)).badge === 'On', 'C unlocked inline with the new passphrase');
@@ -3390,7 +3412,49 @@ async function keysLockRun(seed) {
     await C.page.evaluate(() => syncNow({ quiet: true })); await settle(C.page);
     const cv = await C.page.evaluate(() => !!state.sync.vault);
     c = await card(C.page);
-    check(!cv && c.badge === 'Off' && (await keysOf(C.page)).dk === 'delta-key-NEW2', 'C forgot the passphrase key, kept its keys: ' + JSON.stringify(c));
+    check(!cv && c.badge === 'Off' && (await keysOf(C.page)).gk === 'AIza-from-phone', 'C forgot the passphrase key, kept its key: ' + JSON.stringify(c));
+    // Off still offers Set up another device: it picks the passphrase first, then shows the code.
+    check(/Set up another device/.test(c.text), 'Off shows Set up another device too: ' + JSON.stringify(c.text));
+    await C.page.click('#keysBox button:has-text("Set up another device")');
+    mo = await modal(C.page);
+    check(mo.open && mo.title === 'Save keys to GitHub', 'it asks for a passphrase first: ' + mo.title);
+    await C.page.fill('#mKeysNew', PASS); await C.page.fill('#mKeysNew2', PASS); await C.page.click('#modalSheetSaveBtn');
+    check(await until(C.page, () => !!document.getElementById('mShareCode') && /^VJ1\./.test(document.getElementById('mShareCode').value)), 'then the setup code shows');
+    // The push to GitHub can finish after the code shows: wait for the new lock there.
+    for (let i = 0; i < 80 && !(ghFile().keysLock || {}).c; i++) await C.page.waitForTimeout(100);
+    await settle(C.page);
+    check((await modal(C.page)).title === 'Set up another device' && !!(ghFile().keysLock || {}).c && open(ghFile().keysLock, PASS).ai.key === 'AIza-from-phone', 'and the key is on GitHub again');
+    await C.page.click('#modalSheetSaveBtn'); await settle(C.page);
+
+    // ---- A lock from an older build, with the Delta key sealed inside ----
+    const b64u = b => Buffer.from(b).toString('base64url');
+    const sealOld = (salt, pass, obj, at) => {
+      const u = x => Buffer.from(x, 'base64url'), k = crypto.pbkdf2Sync(pass, u(salt), 600000, 32, 'sha256'), iv = crypto.randomBytes(12);
+      const ci = crypto.createCipheriv('aes-256-gcm', k, iv); ci.setAAD(Buffer.from('victus-keys-1'));
+      return { v: 1, s: salt, i: b64u(iv), c: b64u(Buffer.concat([ci.update(JSON.stringify(obj)), ci.final(), ci.getAuthTag()])), n: 600000, at, has: ['delta', 'ai'] };
+    };
+    const putLock = lock => { const j = ghFile(); j.keysLock = lock; const t = JSON.stringify(j, null, 2); gh.files[REPO + '@main'] = { text: t, sha: crypto.createHash('sha1').update(t).digest('hex') }; };
+    const OLD = { delta: { key: 'dk-OLDLOCK', secret: 'ds-OLDLOCK' }, ai: { key: 'AIza-from-phone', model: '' } };
+    // C made the lock it holds (its passphrase key is open, nothing newer to read): it reseals it without Delta.
+    const salt = ghFile().keysLock.s, old1 = sealOld(salt, PASS, OLD, new Date().toISOString());
+    putLock(old1);
+    await C.page.evaluate(l => { state.keysLock = l; state.sync.vault.at = l.at; save(); }, old1);
+    await C.page.evaluate(() => syncNow({ quiet: true })); await settle(C.page);
+    for (let i = 0; i < 40 && (ghFile().keysLock.has || []).includes('delta'); i++) await C.page.waitForTimeout(100);
+    plain = open(ghFile().keysLock, PASS);
+    check(JSON.stringify(ghFile().keysLock.has) === '["ai"]' && !plain.delta && plain.ai.key === 'AIza-from-phone' && !(await keysOf(C.page)).dk, 'C resealed the old lock without the Delta key: ' + JSON.stringify([ghFile().keysLock.has, plain]));
+    // A new device unlocking an old lock: gets the Gemini key only, and the lock loses the Delta key.
+    putLock(sealOld(salt, PASS, OLD, new Date(Date.now() + 1000).toISOString()));
+    const F = await device('F', { phone: true });
+    await connect(F.page);
+    mo = await modal(F.page);
+    check(mo.open && /\(Gemini key\)/.test(mo.body) && !/Delta/.test(mo.body), 'F is asked for the Gemini key only: ' + JSON.stringify(mo));
+    await F.page.fill('#mKeysPass', PASS); await F.page.click('#modalSheetSaveBtn');
+    await until(F.page, () => document.getElementById('modalSheet').classList.contains('hidden')); await settle(F.page);
+    for (let i = 0; i < 40 && (ghFile().keysLock.has || []).includes('delta'); i++) await F.page.waitForTimeout(100);
+    k = await keysOf(F.page);
+    plain = open(ghFile().keysLock, PASS);
+    check(!k.dk && !k.ds && k.gk === 'AIza-from-phone' && !plain.delta && JSON.stringify(ghFile().keysLock.has) === '["ai"]' && !ghText().includes('dk-OLDLOCK'), 'F: ' + JSON.stringify({ k, has: ghFile().keysLock.has }));
     // The newer of two locks wins a merge, whichever side it is on.
     const mg = await A.page.evaluate(() => {
       const L = at => ({ v: 1, s: 'c2FsdHNhbHRzYWx0c2FsdA', i: 'aXZpdml2aXZpdml2', c: 'Y2lwaGVydGV4dGNpcGhlcnRleHQ', n: 600000, at, has: ['delta'] });
