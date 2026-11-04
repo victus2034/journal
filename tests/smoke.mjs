@@ -3925,6 +3925,111 @@ async function badInputRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Signals breakdown cards: they stack in balanced columns with no hole under a short
+// one, every group is one row, a long symbol list keeps its best and worst rows, a
+// one-group breakdown folds into a line, and the numbers are checked by hand.
+async function sigBreakdownRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const open = sigs => page.evaluate(list => {
+    state.signals = list;
+    Object.assign(state.ui, { sigKind: 'zone', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '', sigNoFee: false, sigSkipTiny: false });
+    switchTab('signals'); renderAll();
+  }, sigs);
+  const look = () => page.evaluate(() => {
+    const grid = document.getElementById('sigBdGrid');
+    const cols = Array.from(grid.querySelectorAll(':scope > .bd-col'));
+    const shown = Array.from(grid.querySelectorAll('.bd-card')).filter(c => !c.classList.contains('hidden'));
+    const rowsOf = id => Array.from(document.querySelectorAll('#' + id + ' .sb-row:not(.hd)')).map(r => r.innerText.replace(/\s+/g, ' ').trim());
+    return {
+      cols: cols.length, colH: cols.map(c => Math.round(c.getBoundingClientRect().height)),
+      first: cols.map(c => { const k = c.querySelector('.bd-card:not(.hidden) h3'); return k ? k.innerText : ''; }),
+      shown: shown.map(c => c.querySelector('h3').innerText),
+      top: document.getElementById('sigBdTop').innerText.replace(/\s+/g, ' ').trim(),
+      rowH: Math.max(...Array.from(document.querySelectorAll('#sigBdGrid .sb-row')).map(r => r.getBoundingClientRect().height)),
+      sym: rowsOf('sigBySymbol'), score: rowsOf('sigByScore'), more: (document.querySelector('#sigBySymbol .sb-more') || {}).innerText || '',
+      note: document.querySelector('#sigBySymbol').parentElement.querySelector('.bd-note').innerText,
+      totShown: getComputedStyle(document.querySelector('#sigByOutcome .sb-row:not(.hd) .sb-tot')).display !== 'none',
+      barShown: getComputedStyle(document.querySelector('#sigByOutcome .sb-row:not(.hd) .sb-bar')).display !== 'none',
+      tip: (document.querySelector('#sigBySymbol .sb-row:not(.hd)') || {}).title || '',
+      wide: Math.max(...shown.map(c => c.scrollWidth - c.clientWidth)),
+      pageWide: document.documentElement.scrollWidth - document.documentElement.clientWidth
+    };
+  });
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    // 18 symbols, two channels, one timeframe, scores 6-8. AAAUSD: +1.9R and -1.08R on
+    // 1% stops = 2 alerts, 50% won, total +0.82R, average +0.41R and +0.41%.
+    const sigs = [];
+    const add = (i, sym, r, score, chan) => sigs.push({ id: 'b' + i, key: 'kb' + i, kind: 'zone', date: '2026-10-' + String(1 + i % 28).padStart(2, '0'), time: String(9 + i % 12).padStart(2, '0') + ':15',
+      symbol: sym, side: 'long', score: String(score), market: 'CRYPTO', timeframe: '4H', channel: chan, filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, entry: 100, stop: 99 });
+    add(0, 'AAAUSD', 1.9, 8, 'CRYPTO 4H'); add(1, 'AAAUSD', -1.08, 8, 'CRYPTO 4H');
+    for (let i = 2; i < 36; i++) add(i, 'S' + String((i % 17) + 1).padStart(2, '0') + 'USD', [1.9, -1.08, -1.08, 0.9][i % 4] * (1 + (i % 5) / 10), 6 + i % 3, i % 3 ? 'CRYPTO 4H' : 'CRYPTO 1D');
+    await open(sigs);
+    await page.waitForTimeout(150);
+    let v = await look();
+    check(v.cols === 3, 'three columns at 1600px: ' + v.cols);
+    check(v.first[0] === 'By outcome', 'first card starts the first column: ' + JSON.stringify(v.first));
+    const tallest = Math.max(...v.colH), shortest = Math.min(...v.colH);
+    check(tallest - shortest < 140, 'columns end close together: ' + JSON.stringify(v.colH));
+    check(!v.shown.includes('By timeframe') && /Same for all 36 graded alerts/.test(v.top) && /Timeframe 4H/.test(v.top), 'one-group timeframe folds into the line: ' + v.top + ' / ' + v.shown.join(', '));
+    check(v.shown.includes('By signal score') && v.score.map(r => r.split(' ').slice(0, 2).join(' ')).join(',') === 'Score 8,Score 7,Score 6', 'scores in order: ' + JSON.stringify(v.score));
+    check(v.rowH < 36, 'each group is one short row: ' + v.rowH);
+    check(v.totShown && v.barShown, 'a wide card shows the total and the bar');
+    check(v.sym.length === 12 && v.more === 'Show 6 more' && v.note === '18 symbols', 'long symbol list cut to 12: ' + v.sym.length + ' ' + v.more + ' ' + v.note);
+    const tot = r => parseFloat(r.split(' ')[3]);
+    check(/alerts · \d+% won · total [+-]\d+\.\d+R \([+-]\d+\.\d+%\) · average/.test(v.tip), 'row tooltip has the full figures: ' + v.tip);
+    check(v.wide <= 0, 'nothing spills out of a card: ' + v.wide);
+    // Show all, then back: the cards are laid out again.
+    const cut = v.sym.map(tot);
+    await page.click('#sigBySymbol .sb-more');
+    v = await look();
+    check(v.sym.length === 18 && v.more === 'Show less' && v.cols === 3, 'show all symbols: ' + v.sym.length + ' ' + v.more);
+    const all = v.sym.map(tot);
+    check(all.every((x, i) => !i || all[i - 1] >= x) && JSON.stringify(cut) === JSON.stringify(all.slice(0, 6).concat(all.slice(12))), 'the cut list is the 6 best and 6 worst: ' + cut.join(',') + ' / ' + all.join(','));
+    const aaa = v.sym.find(r => r.startsWith('AAAUSD'));
+    check(aaa === 'AAAUSD 2 50% +0.82R +0.41R +0.41%', 'AAAUSD by hand: ' + aaa);
+    await page.click('#sigBySymbol .sb-more');
+    v = await look();
+    check(v.sym.length === 12 && v.more === 'Show 6 more', 'back to 12: ' + v.sym.length);
+    // Laptop and phone widths: fewer columns, the bar and then the total drop out.
+    await page.setViewportSize({ width: 1366, height: 900 });
+    await page.waitForTimeout(150);
+    v = await look();
+    check(v.cols === 3 && v.totShown && !v.barShown, '1366px: 3 columns, total kept, bar dropped: ' + JSON.stringify([v.cols, v.totShown, v.barShown]));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(150);
+    v = await look();
+    check(v.cols === 1 && !v.totShown && !v.barShown && v.wide <= 0 && v.pageWide <= 0, 'phone: one column, no sideways scroll: ' + JSON.stringify([v.cols, v.totShown, v.wide, v.pageWide]));
+    await page.click('#sigBySymbol .sb-more');
+    v = await look();
+    check(v.sym.includes('AAAUSD 2 50% +0.41R +0.41%'), 'phone row: ' + v.sym.find(r => r.startsWith('AAA')));
+    // Drawn while the tab is hidden, laid out once it shows.
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.evaluate(() => { switchTab('dashboard'); renderAll(); });
+    await page.evaluate(() => switchTab('signals'));
+    await page.waitForTimeout(150);
+    v = await look();
+    check(v.cols === 3 && v.colH.every(h => h > 100), 'laid out after the tab shows again: ' + JSON.stringify(v.colH));
+    // No graded alert: one note, not eight empty cards.
+    await open(sigs.map(g => Object.assign({}, g, { filled: undefined, resultR: undefined, hasReportR: false, outcome: '' })));
+    await page.waitForTimeout(100);
+    v = await page.evaluate(() => ({ shown: document.querySelectorAll('#sigBdGrid .bd-card:not(.hidden)').length, top: document.getElementById('sigBdTop').innerText }));
+    check(v.shown === 0 && /can be measured/.test(v.top), 'no graded alert: one note: ' + JSON.stringify(v));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'Signals breakdowns: balanced columns, one row per group, best and worst symbols, by hand';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -3962,6 +4067,7 @@ await whatsNewRun(data);
 await syncSettingsRun(data);
 await keysLockRun(data);
 await exitTargetRun(data);
+await sigBreakdownRun(data);
 await nsePathsRun();
 await badInputRun(data);
 
