@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-03.154">
+  <meta name="app-version" content="2026-11-04.155">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -253,6 +253,37 @@
     .wn-date{font-size:12px;color:var(--dim);margin-top:.1rem}
     .wn-pts{margin:.35rem 0 0 1.1rem;list-style:disc;font-size:13px;color:var(--mut);line-height:1.55}
     .wn-pr{font-size:11.5px;color:var(--dim);margin-left:.35rem;font-weight:400}
+    /* Signals breakdowns: the cards stack in up to 3 columns (bdLayout), so a short
+       card leaves no hole. One row per group; a narrow card drops the bar, then the total. */
+    .bd-grid{display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start}
+    .bd-grid>*{flex:1 1 340px;min-width:0}
+    .bd-col{display:flex;flex-direction:column;gap:1rem}
+    .bd-card{padding:.85rem 1rem .55rem;container-type:inline-size}
+    .bd-head{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;margin-bottom:.3rem}
+    .bd-head h3{font-size:13.5px;font-weight:600;color:var(--txt)}
+    .bd-note{font-size:11.5px;color:var(--dim);white-space:nowrap}
+    .sb-row{display:grid;grid-template-columns:minmax(0,1fr) 36px 38px 58px 56px;align-items:center;gap:.5rem;padding:.3rem .3rem;border-top:1px solid var(--line);font-size:12.5px;line-height:1.3}
+    .sb-row.hd{border-top:0;padding-top:0;padding-bottom:.25rem;color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
+    .sb-row:not(.hd):hover{background:var(--hover)}
+    .sb-row .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .sb-k{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt)}
+    .sb-n,.sb-w{color:var(--mut)}
+    .sb-avg{font-weight:600}
+    .sb-tot,.sb-bar{display:none}
+    @container (min-width:380px){.sb-row{grid-template-columns:minmax(0,1fr) 36px 38px 62px 58px 56px}.sb-row .sb-tot{display:block}}
+    @container (min-width:450px){.sb-row{grid-template-columns:minmax(0,1fr) 36px 38px 62px 44px 58px 56px}.sb-row .sb-bar{display:block}}
+    .sb-bar{position:relative;height:6px;border-radius:3px;background:var(--line)}
+    .sb-bar:before{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--line2)}
+    .sb-bar>i{position:absolute;top:0;bottom:0;border-radius:3px}
+    .sb-row.hd .sb-bar{background:none}.sb-row.hd .sb-bar:before{display:none}
+    .sb-more{display:block;width:100%;padding:.35rem;border-top:1px solid var(--line);font-size:12px;font-weight:500;color:var(--acc);text-align:center}
+    .sb-more:hover{background:var(--hover)}
+    .bd-scroll{max-height:25rem;overflow-y:auto;margin-right:-.4rem;padding-right:.4rem}
+    .bd-scroll .sb-row.hd{position:sticky;top:0;z-index:1;background:var(--surface)}
+    .bd-top{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .5rem;font-size:12px;color:var(--dim)}
+    .bd-top:empty{display:none}
+    .bd-same{padding:.15rem .55rem;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
+    .bd-same b{color:var(--txt);font-weight:600;margin-left:.2rem}
 </style>
 </head>
 <body class="bg-terminal-bg text-slate-200 font-sans antialiased min-h-screen flex flex-col selection:bg-amber-500/25 selection:text-amber-200">
@@ -682,39 +713,18 @@
         <div id="sigTinyBar" class="flex justify-end"></div>
         <div id="sigTgtCmp" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
         <div id="sigSetups" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-          <div class="flex items-center gap-2 border-b border-terminal-border pb-2 mb-3"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">By signal score</h3></div>
-          <div id="sigByScore" class="space-y-2 font-mono text-xs"></div>
-        </div>
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-          <div class="flex items-center gap-2 border-b border-terminal-border pb-2 mb-3"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">By outcome</h3></div>
-          <div id="sigByOutcome" class="space-y-2 font-mono text-xs"></div>
-        </div>
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-          <div class="flex items-center justify-between border-b border-terminal-border pb-2 mb-3"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">By symbol</h3></div><span class="text-[10px] text-slate-500">Top 12</span></div>
-          <div id="sigBySymbol" class="space-y-2 font-mono text-xs"></div>
-        </div>
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-          <div class="flex items-center gap-2 border-b border-terminal-border pb-2 mb-3"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">By channel</h3></div>
-          <div id="sigByChannel" class="space-y-2 font-mono text-xs"></div>
-        </div>
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-          <div class="flex items-center gap-2 border-b border-terminal-border pb-2 mb-3"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">By sector or market</h3></div>
-          <div id="sigBySector" class="space-y-2 font-mono text-xs"></div>
-        </div>
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-          <div class="flex items-center gap-2 border-b border-terminal-border pb-2 mb-3"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">By timeframe</h3></div>
-          <div id="sigByTimeframe" class="space-y-2 font-mono text-xs"></div>
-        </div>
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-          <div class="flex items-center gap-2 border-b border-terminal-border pb-2 mb-3"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">By stop distance</h3></div>
-          <div id="sigBySl" class="space-y-2 font-mono text-xs"></div>
-        </div>
-        <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
-          <div class="flex items-center gap-2 border-b border-terminal-border pb-2 mb-3"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-xs font-bold text-white uppercase font-mono tracking-wider">By half hour</h3></div>
-          <div id="sigByHour" class="space-y-2 font-mono text-xs max-h-72 overflow-y-auto"></div>
-        </div>
+      <!-- Breakdowns: one short row per group; the cards stack in columns, so a short
+           card never leaves a hole next to a long one. -->
+      <div id="sigBdTop" class="bd-top"></div>
+      <div id="sigBdGrid" class="bd-grid">
+        <div class="card bd-card" data-ord="0"><div class="bd-head"><h3>By outcome</h3><span class="bd-note"></span></div><div id="sigByOutcome" class="bd-list"></div></div>
+        <div class="card bd-card" data-ord="1"><div class="bd-head"><h3>By channel</h3><span class="bd-note"></span></div><div id="sigByChannel" class="bd-list"></div></div>
+        <div class="card bd-card" data-ord="2"><div class="bd-head"><h3>By timeframe</h3><span class="bd-note"></span></div><div id="sigByTimeframe" class="bd-list"></div></div>
+        <div class="card bd-card" data-ord="3"><div class="bd-head"><h3>By sector or market</h3><span class="bd-note"></span></div><div id="sigBySector" class="bd-list"></div></div>
+        <div class="card bd-card" data-ord="4"><div class="bd-head"><h3>By stop distance</h3><span class="bd-note"></span></div><div id="sigBySl" class="bd-list"></div></div>
+        <div class="card bd-card" data-ord="5"><div class="bd-head"><h3>By signal score</h3><span class="bd-note"></span></div><div id="sigByScore" class="bd-list"></div></div>
+        <div class="card bd-card" data-ord="6"><div class="bd-head"><h3>By symbol</h3><span class="bd-note"></span></div><div id="sigBySymbol" class="bd-list"></div></div>
+        <div class="card bd-card" data-ord="7"><div class="bd-head"><h3>By half hour</h3><span class="bd-note"></span></div><div id="sigByHour" class="bd-list"></div></div>
       </div>
       </section>
 
@@ -8786,31 +8796,92 @@
         return { key: k, n: g.n, winRate: g.wins / g.n * 100, avgR: avg(g.rs), totR: sum(g.rs), avgPct: ps.length ? avg(ps) : null, totPct: ps.length ? sum(ps) : null };
       }).sort((a, b) => b.totR - a.totR);
     }
-    function sigPerfBars(hostId, rows, order, emptyNote) {
+    // Breakdown cards go into as many columns as fit (up to 3). Each column keeps the
+    // cards' order, the first card starts the first column, and of all the ways to
+    // split them the one with the shortest tallest column wins (8 cards, 3 columns:
+    // 2,187 ways, nothing to wait for). Laid out again when the cards or width change.
+    let bdCols = 0, bdWatch = false;
+    function bdSplit(hs, n, gap) {
+      const k = hs.length;
+      if (n <= 1 || k <= 1) return hs.map(() => 0);
+      let best = null, bestH = Infinity;
+      const pick = new Array(k).fill(0), tot = new Array(n);
+      const walk = i => {
+        if (i === k) {
+          tot.fill(-gap);
+          for (let j = 0; j < k; j++) tot[pick[j]] += hs[j] + gap;
+          const used = new Set(pick).size;
+          const h = Math.max(...tot);
+          // A layout within a few pixels of the best keeps the earlier find, which has
+          // the earlier cards further left.
+          if (used === Math.min(n, k) && h < bestH - 8) { bestH = h; best = pick.slice(); }
+          return;
+        }
+        for (let c = 0; c < n; c++) { pick[i] = c; walk(i + 1); }
+      };
+      walk(1);
+      return best || hs.map(() => 0);
+    }
+    function bdLayout(force) {
+      const grid = document.getElementById('sigBdGrid');
+      if (!grid) return;
+      if (!bdWatch && window.ResizeObserver) { bdWatch = true; new ResizeObserver(() => bdLayout(false)).observe(grid); }
+      const w = grid.clientWidth;
+      if (!w) { bdCols = 0; return; } // hidden: lay out once it shows
+      const n = Math.max(1, Math.min(3, Math.floor((w + 16) / (340 + 16))));
+      if (!force && n === bdCols) return;
+      bdCols = n;
+      const cards = Array.from(grid.querySelectorAll('.bd-card')).sort((a, b) => a.dataset.ord - b.dataset.ord);
+      grid.innerHTML = '';
+      const cols = [];
+      for (let i = 0; i < n; i++) { const el = document.createElement('div'); el.className = 'bd-col'; grid.appendChild(el); cols.push(el); }
+      // Measure each card at the column width, then place them.
+      cards.forEach(card => cols[0].appendChild(card));
+      const shown = cards.filter(card => !card.classList.contains('hidden'));
+      const where = bdSplit(shown.map(card => card.offsetHeight), n, 16);
+      shown.forEach((card, i) => cols[where[i]].appendChild(card));
+      cards.filter(card => card.classList.contains('hidden')).forEach(card => cols[n - 1].appendChild(card));
+    }
+    // One breakdown card: a header, then one short row per group (alerts, won,
+    // total R, a bar for the average, average R and %). A narrow card drops the bar,
+    // then the total (container queries in the CSS); the full figures are in each
+    // row's tooltip. opt.limit keeps the best and worst rows of a long list with a
+    // "Show N more" row between them; opt.scroll caps a long list's height instead.
+    const sigBdOpen = {}, sigBdLast = {};
+    function sigPerfBars(hostId, rows, order, emptyNote, opt) {
+      opt = opt || {};
       const host = document.getElementById(hostId);
       if (!host) return;
-      host.innerHTML = '';
+      sigBdLast[hostId] = [rows, order, emptyNote, opt];
       if (order) {
         const pos = {}; order.forEach((k, i) => { pos[k] = i; });
         rows = rows.slice().sort((a, b) => (pos[a.key] ?? 999) - (pos[b.key] ?? 999));
       }
+      const noteEl = host.parentElement && host.parentElement.querySelector('.bd-note');
+      if (noteEl) noteEl.innerText = opt.note && rows.length ? opt.note(rows.length) : '';
       if (!rows.length) { host.innerHTML = `<div class="text-slate-500 text-center py-4 text-[11px]">${emptyNote}</div>`; return; }
       const max = Math.max(...rows.map(r => Math.abs(r.avgR))) || 1;
-      rows.forEach(r => {
-        const half = clamp(Math.abs(r.avgR) / max, 0, 1) * 50;
-        const pos2 = r.avgR >= 0;
-        const row = document.createElement('div');
-        row.innerHTML = `
-          <div class="flex justify-between items-baseline gap-2">
-            <span class="text-slate-300">${esc(r.key)} <span class="text-slate-500 text-[10px]">${r.n} · ${pct(r.winRate)} won · ${rfmt(r.totR)}${pTag(r.totPct)} total</span></span>
-            <span class="font-bold ${pos2 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(r.avgR)}${pTag(r.avgPct)} avg</span>
-          </div>
-          <div class="h-1.5 bg-[#131C2D] rounded-full relative mt-1 overflow-hidden">
-            <div class="absolute inset-y-0 w-px bg-terminal-borderLight" style="left:50%"></div>
-            <div class="absolute inset-y-0 ${pos2 ? 'bg-emerald-500' : 'bg-rose-500'} rounded-full" style="${pos2 ? 'left:50%' : 'right:50%'}; width:${half}%"></div>
-          </div>
-        `;
-        host.appendChild(row);
+      const tone = v => v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+      const line = r => {
+        const w = clamp(Math.abs(r.avgR) / max, 0, 1) * 50, up = r.avgR >= 0;
+        const tip = `${r.key}: ${r.n} alert${r.n === 1 ? '' : 's'} · ${pct(r.winRate)} won · total ${rfmt(r.totR)}${r.totPct != null ? ' (' + pfmt(r.totPct) + ')' : ''} · average ${rfmt(r.avgR)}${r.avgPct != null ? ' (' + pfmt(r.avgPct) + ')' : ''}`;
+        return `<div class="sb-row" title="${esc(tip)}"><span class="sb-k">${esc(r.key)}</span><span class="num sb-n">${r.n}</span><span class="num sb-w">${pct(r.winRate)}</span>`
+          + `<span class="num sb-tot ${tone(r.totR)}">${rfmt(r.totR)}</span>`
+          + `<span class="sb-bar"><i class="${up ? 'bg-emerald-500' : 'bg-rose-500'}" style="${up ? 'left' : 'right'}:50%;width:${w.toFixed(1)}%"></i></span>`
+          + `<span class="num sb-avg ${tone(r.avgR)}">${rfmt(r.avgR)}</span><span class="num sb-pc ${r.avgPct == null ? 'text-slate-500' : tone(r.avgPct)}">${r.avgPct == null ? '—' : pfmt(r.avgPct)}</span></div>`;
+      };
+      const head = '<div class="sb-row hd"><span></span><span class="num">Alerts</span><span class="num">Won</span><span class="num sb-tot">Total</span><span class="sb-bar"></span><span class="num">Avg R</span><span class="num">Avg %</span></div>';
+      const lim = opt.limit, long = lim && rows.length > lim;
+      let body;
+      if (long && !sigBdOpen[hostId]) {
+        const top = Math.ceil(lim / 2);
+        body = rows.slice(0, top).map(line).join('') + `<button type="button" class="sb-more" data-bdmore="1">Show ${rows.length - lim} more</button>` + rows.slice(rows.length - (lim - top)).map(line).join('');
+      } else {
+        body = rows.map(line).join('') + (long ? '<button type="button" class="sb-more" data-bdmore="0">Show less</button>' : '');
+      }
+      host.innerHTML = opt.scroll && rows.length > opt.scroll ? `<div class="bd-scroll">${head}${body}</div>` : head + body;
+      host.querySelectorAll('[data-bdmore]').forEach(b => {
+        b.onclick = () => { sigBdOpen[hostId] = b.getAttribute('data-bdmore') === '1'; sigPerfBars(hostId, ...sigBdLast[hostId]); bdLayout(true); };
       });
     }
 
@@ -9282,14 +9353,31 @@
       setTimeout(() => { tgtLoad(pairs); nseLoad(pairs); }, 0);
       renderSetups(pairs);
       const note = pairs.length ? "Only alerts with a result from the scanner (or an exit price you add) can be measured." : "Import some signals first.";
-      sigPerfBars('sigByScore', groupPerf(pairs, scoreBand), [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map(v => "Score " + v).concat(["No score"]), note);
-      sigPerfBars('sigByChannel', groupPerf(pairs, g => g.channel || "No channel"), null, note);
-      sigPerfBars('sigByHour', groupPerf(pairs, slotBand), ALL_SLOTS, note);
-      sigPerfBars('sigBySector', groupPerf(pairs, g => g.sector || g.market || "No sector"), null, note);
-      sigPerfBars('sigByTimeframe', groupPerf(pairs, g => g.timeframe || "No timeframe"), null, note);
-      sigPerfBars('sigByOutcome', groupPerf(pairs, (g, o) => o.label || g.outcome || "Not stated"), ["Target", "+2R", "+1R", "BE", "Neither", "Time exit", "SL", "Not stated"], note);
-      sigPerfBars('sigBySl', groupPerf(pairs, slBand), SL_BANDS.map(b => b.label).concat(["Not recorded"]), note);
-      sigPerfBars('sigBySymbol', groupPerf(pairs, g => g.symbol).slice(0, 12), null, note);
+      // Cards in the order they stack. A breakdown with a single group says nothing
+      // the strip above does not, so it folds into one "same for all" line.
+      const dims = [
+        ['sigByOutcome', 'Outcome', groupPerf(pairs, (g, o) => o.label || g.outcome || "Not stated"), ["Target", "+2R", "+1R", "BE", "Neither", "Time exit", "SL", "Not stated"]],
+        ['sigByChannel', 'Channel', groupPerf(pairs, g => g.channel || "No channel"), null],
+        ['sigByTimeframe', 'Timeframe', groupPerf(pairs, g => g.timeframe || "No timeframe"), null],
+        ['sigBySector', 'Sector or market', groupPerf(pairs, g => g.sector || g.market || "No sector"), null],
+        ['sigBySl', 'Stop distance', groupPerf(pairs, slBand), SL_BANDS.map(b => b.label).concat(["Not recorded"])],
+        ['sigByScore', 'Signal score', groupPerf(pairs, scoreBand), [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map(v => "Score " + v).concat(["No score"])],
+        // Best by total R first: a long list keeps its 6 best and 6 worst in view.
+        ['sigBySymbol', 'Symbol', groupPerf(pairs, g => g.symbol), null, { limit: 12, note: n => n + (n === 1 ? ' symbol' : ' symbols') }],
+        ['sigByHour', 'Half hour', groupPerf(pairs, slotBand), ALL_SLOTS, { scroll: 14, note: n => n + (n === 1 ? ' slot' : ' slots') }]
+      ];
+      const graded = pairs.filter(outcomeOf).length, same = [];
+      dims.forEach(([id, label, rows, order, opt]) => {
+        const host = document.getElementById(id), card = host && host.closest('.bd-card');
+        const fold = rows.length === 1;
+        if (card) card.classList.toggle('hidden', !graded || fold);
+        if (fold) same.push(`${esc(label)} <b>${esc(rows[0].key)}</b>`);
+        sigPerfBars(id, rows, order, note, opt);
+      });
+      const top = document.getElementById('sigBdTop');
+      if (top) top.innerHTML = !graded ? `<div class="card p-4 text-center text-[11px] text-slate-500">${note}</div>`
+        : same.length ? `<span>Same for all ${graded} graded alert${graded === 1 ? '' : 's'}</span>` + same.map(x => `<span class="bd-same">${x}</span>`).join('') : '';
+      bdLayout(true);
     }
 
 
@@ -11697,6 +11785,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-04.155', pr: 70, title: 'Edge & breakdowns: compact cards', pts: ['Cards stack in balanced columns, so a short card leaves no empty space', 'One row per group with Alerts, Won, Total, Avg R and Avg %; full figures on hover', 'By symbol keeps the 6 best and 6 worst (Show more); a breakdown with one group folds into one line'] },
       { v: '2026-11-03.154', pr: 69, title: 'AI review: no more "Failed to fetch" dead end', pts: ['A dropped connection no longer ends the review: it checks Gemini is reachable, tries again, then the next model', 'If this network can\'t reach Gemini at all, it says so and what to do (VPN, ad-blocker, other network, or Copy for Gemini app)', 'A call stuck for 2.5 min moves on to the next model'] },
       { v: '2026-11-03.153', pr: 68, title: 'Trades go to the closest alert', pts: ['When several alerts fit a trade, the one whose entry is closest to yours wins (BTC 30 Oct: 1M L2, not 1W)', 'Alerts Discord sent that the rebuilt history dropped still match your trades', 'Fib L1 / L2 / L4 alerts place your level right; all trades re-matched'] },
       { v: '2026-11-03.152', pr: 67, title: 'Old CoinDCX wallet is marked', pts: ['While the CoinDCX import fails, the header says LAST KNOWN (amber), not WALLET', 'Trading Books and the CoinDCX card say the balance is from before the failure', 'It updates by itself on the first import that works'] },
