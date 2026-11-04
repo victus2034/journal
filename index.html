@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-04.155">
+  <meta name="app-version" content="2026-11-04.156">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -707,6 +707,10 @@
 
       <section data-sigsec="report" class="space-y-4 hidden">
         <div id="sigBacktest" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
+      </section>
+
+      <section data-sigsec="demo" class="space-y-4 hidden">
+        <div id="sigDemo" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
       </section>
 
       <section data-sigsec="edge" class="space-y-4 hidden">
@@ -9037,7 +9041,7 @@
     }
     function btShowAllRows() { btShowAll = !btShowAll; renderSigBacktest(btLast); }
     // A small line chart of the equity curve (cumulative R) with the drawdown under it.
-    function btCurveSvg(rs) {
+    function btCurveSvg(rs, label) {
       if (rs.length < 2) return '';
       const W = 800, H = 150, D = 50, eq = [0]; rs.forEach(r => eq.push(eq[eq.length - 1] + r));
       let peak = 0; const dd = eq.map(v => { peak = Math.max(peak, v); return v - peak; });
@@ -9048,7 +9052,7 @@
       const line = eq.map((v, i) => x(i) + ',' + y(v)).join(' ');
       const area = 'M0,' + (H + 6) + ' L' + dd.map((v, i) => x(i) + ',' + yd(v)).join(' L') + ' L' + W + ',' + (H + 6) + ' Z';
       const up = eq[eq.length - 1] >= 0;
-      return '<svg viewBox="0 0 ' + W + ' ' + (H + D + 6) + '" preserveAspectRatio="none" class="w-full block" style="height:190px" role="img" aria-label="Equity curve in R with drawdown">'
+      return '<svg viewBox="0 0 ' + W + ' ' + (H + D + 6) + '" preserveAspectRatio="none" class="w-full block" style="height:190px" role="img" aria-label="' + esc(label || 'Equity curve in R with drawdown') + '">'
         + '<line x1="0" x2="' + W + '" y1="' + y(0) + '" y2="' + y(0) + '" stroke="#334155" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>'
         + '<polyline points="' + line + '" fill="none" stroke="' + (up ? '#34d399' : '#fb7185') + '" stroke-width="1.6" vector-effect="non-scaling-stroke"/>'
         + '<line x1="0" x2="' + W + '" y1="' + (H + 6) + '" y2="' + (H + 6) + '" stroke="#334155" vector-effect="non-scaling-stroke"/>'
@@ -9065,7 +9069,7 @@
       btLast = pairs;
       const head = '<div class="flex flex-wrap items-center justify-between gap-2 mb-1"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Backtest report</h3></div>'
         + '<button type="button" onclick="exportSigBacktestCsv()" class="px-2.5 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">Export CSV</button></div>';
-      const graded = pairs.map(pr => ({ pr, o: outcomeOf(pr) })).filter(x => x.o).sort((a, b) => sbtWhen(a.pr.signal) < sbtWhen(b.pr.signal) ? -1 : sbtWhen(a.pr.signal) > sbtWhen(b.pr.signal) ? 1 : 0);
+      const graded = sigGraded(pairs);
       if (!graded.length) { host.innerHTML = head + '<p class="text-slate-500">No alerts with a result in this view yet. Widen the period or pick another channel.</p>'; return; }
       const rs = graded.map(x => x.o.r), st = sigRunStats(rs);
       const filled = pairs.filter(pr => pr.signal.filled === true).length, nofill = pairs.filter(pr => pr.signal.filled === false).length;
@@ -9197,6 +9201,163 @@
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       toast(`Exported ${rows.length} alerts`);
+    }
+
+    /* =================== DEMO ACCOUNT =================== */
+    // A pretend account that takes every alert with a result in the view, in the order
+    // they fired, and compounds (lakky, 2026-11-04: "i have $100 so what will be the
+    // result in the backtest data"). Each trade risks a share of the balance at that
+    // point, or a fixed amount, and makes or loses that risk times the alert's R, so it
+    // follows Exit at, Fees and every filter like the Backtest report does.
+    const DEMO_DEF = { start: 100, cur: "USD", mode: "pct", pct: 1, fixed: 1, lev: 0 };
+    const DEMO_LEVS = [0, 2, 5, 10, 20, 25, 50, 100];
+    const DEMO_CMP = [0.5, 1, 2, 3, 5];
+    let demoRows = [], demoAll = false;
+    function demoRaw() { const d = state.ui.sigDemo; return Object.assign({}, DEMO_DEF, d && typeof d === "object" ? d : {}); }
+    // The settings as numbers, and what is wrong with them.
+    function demoCfg() {
+      const d = demoRaw(), num = v => (v === "" || v == null) ? NaN : Number(v);
+      const start = num(d.start), pct = num(d.pct), fixed = num(d.fixed), lev = num(d.lev);
+      const mode = d.mode === "fixed" ? "fixed" : "pct", cur = d.cur === "INR" ? "INR" : "USD";
+      let err = "", warn = "";
+      if (!isFinite(start) || !(start > 0)) err = "Enter a starting balance above 0.";
+      else if (start > 1e12) err = "That starting balance is too large. Keep it under 1,000,000,000,000.";
+      else if (mode === "pct" && (!isFinite(pct) || !(pct > 0))) err = "Enter the risk per trade as a % above 0.";
+      else if (mode === "pct" && pct > 100) err = "Risk per trade can't be more than 100% of the balance.";
+      else if (mode === "fixed" && (!isFinite(fixed) || !(fixed > 0))) err = "Enter the risk per trade as an amount above 0.";
+      else if (mode === "fixed" && fixed > start) warn = "The risk per trade is more than the starting balance, so a trade risks the whole balance until it grows.";
+      return { start, cur, mode, pct, fixed, lev: isFinite(lev) && lev > 0 ? lev : 0, err, warn };
+    }
+    // rows: [{ r, slp }] in time order (slp = stop distance in %). Pure, so the test can check it by hand.
+    function demoRun(rows, cfg) {
+      let bal = cfg.start, peak = cfg.start, low = cfg.start, maxDD = 0, maxDDPct = 0, maxLev = 0, capped = 0, blownAt = null, tooBig = false;
+      const trades = [];
+      for (let i = 0; i < rows.length; i++) {
+        const x = rows[i], before = bal;
+        let risk = cfg.mode === "fixed" ? Math.min(cfg.fixed, bal) : bal * cfg.pct / 100;
+        // The position is risk ÷ stop distance; as a multiple of the balance, the leverage it needs.
+        let lev = x.slp > 0 ? risk / (x.slp / 100) / bal : null, cap = false;
+        if (cfg.lev && lev != null && lev > cfg.lev) { risk = bal * cfg.lev * x.slp / 100; lev = cfg.lev; cap = true; capped++; }
+        if (lev != null) maxLev = Math.max(maxLev, lev);
+        let pnl = risk * x.r;
+        if (bal + pnl < 0) pnl = -bal; // an account loses what it holds, no more
+        bal += pnl;
+        peak = Math.max(peak, bal); low = Math.min(low, bal);
+        if (peak - bal > maxDD) maxDD = peak - bal;
+        if (peak > 0) maxDDPct = Math.max(maxDDPct, (peak - bal) / peak * 100);
+        trades.push({ i, x, before, risk, pos: x.slp > 0 ? risk / (x.slp / 100) : null, pnl, bal, lev, cap });
+        if (bal <= cfg.start * 1e-6) { bal = Math.max(0, bal); blownAt = i; break; }
+        if (bal > 1e15) { tooBig = true; break; }
+      }
+      const pick = f => trades.length ? trades.reduce((b, t) => f(t, b) ? t : b) : null;
+      return {
+        trades, end: bal, ret: (bal - cfg.start) / cfg.start * 100, peak, low, maxDD, maxDDPct, maxLev, capped, blownAt, tooBig,
+        wins: trades.filter(t => t.pnl > 0).length, losses: trades.filter(t => t.pnl < 0).length,
+        best: pick((t, b) => t.pnl > b.pnl), worst: pick((t, b) => t.pnl < b.pnl)
+      };
+    }
+    // The alerts with a result, oldest first: the same set the Backtest report plays.
+    function sigGraded(pairs) {
+      return pairs.map(pr => ({ pr, o: outcomeOf(pr) })).filter(x => x.o)
+        .sort((a, b) => sbtWhen(a.pr.signal) < sbtWhen(b.pr.signal) ? -1 : sbtWhen(a.pr.signal) > sbtWhen(b.pr.signal) ? 1 : 0);
+    }
+    function renderSigDemo(pairs) {
+      demoRows = sigGraded(pairs).map(x => ({ r: x.o.r, slp: slPct(x.pr.signal), pr: x.pr, label: x.o.label || x.pr.signal.outcome || "" }));
+      renderSigDemoNow();
+    }
+    // Settings change: a number only redraws the results, so the box keeps its focus.
+    function demoSet(k, v) {
+      const d = demoRaw(); d[k] = v; state.ui.sigDemo = d; save();
+      if (k === "mode" || k === "cur") renderSigDemoNow(); else demoDrawOut();
+    }
+    function demoReset() { state.ui.sigDemo = Object.assign({}, DEMO_DEF); demoAll = false; save(); renderSigDemoNow(); }
+    function demoShowAll() { demoAll = !demoAll; demoDrawOut(); }
+    function renderSigDemoNow() {
+      const host = document.getElementById('sigDemo');
+      if (!host) return;
+      const d = demoRaw(), cfg = demoCfg(), sym = curSym(cfg.cur);
+      const segBtn = (on, label, click, data) => '<button type="button" ' + data + ' onclick="' + click + '" class="px-2 py-1 rounded-md font-semibold ' + (on ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + label + '</button>';
+      const seg = btns => '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono">' + btns + '</div>';
+      const box = 'bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500';
+      const lab = t => '<span class="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">' + t + '</span>';
+      const val = v => esc(v == null ? '' : v);
+      const form = '<div id="sigDemoForm" class="flex flex-wrap items-end gap-4 mb-3 pb-3 border-b border-terminal-border">'
+        + '<div>' + lab('Starting balance') + '<div class="flex items-center gap-1.5">' + seg(segBtn(cfg.cur === 'USD', '$', "demoSet('cur','USD')", 'data-cur="USD"') + segBtn(cfg.cur === 'INR', '₹', "demoSet('cur','INR')", 'data-cur="INR"'))
+        + '<input type="number" id="sigDemoStart" step="any" min="0" inputmode="decimal" value="' + val(d.start) + '" oninput="demoSet(\'start\', this.value)" style="width:120px" class="' + box + '"></div></div>'
+        + '<div>' + lab('Risk per trade') + '<div class="flex items-center gap-1.5">' + seg(segBtn(cfg.mode === 'pct', '% of balance', "demoSet('mode','pct')", 'data-mode="pct"') + segBtn(cfg.mode === 'fixed', 'Fixed ' + sym, "demoSet('mode','fixed')", 'data-mode="fixed"'))
+        + '<input type="number" id="sigDemoRisk" step="any" min="0" inputmode="decimal" value="' + val(cfg.mode === 'pct' ? d.pct : d.fixed) + '" oninput="demoSet(\'' + (cfg.mode === 'pct' ? 'pct' : 'fixed') + '\', this.value)" style="width:90px" class="' + box + '">'
+        + '<span class="text-slate-500">' + (cfg.mode === 'pct' ? '%' : sym) + '</span></div></div>'
+        + '<div>' + lab('Max leverage') + '<select id="sigDemoLev" onchange="demoSet(\'lev\', this.value)" class="' + box + '">'
+        + DEMO_LEVS.map(l => '<option value="' + l + '"' + (cfg.lev === l ? ' selected' : '') + '>' + (l ? l + 'x' : 'No cap') + '</option>').join('') + '</select></div>'
+        + '<button type="button" onclick="demoReset()" class="px-2.5 py-1.5 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">Reset</button></div>';
+      host.innerHTML = '<div class="flex items-center gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Demo account</h3></div>'
+        + '<p class="text-slate-500 text-[11px] mb-3">A pretend account that takes every alert with a result in this view, one after another in the order they fired, and compounds. Results follow the filters above: Exit at, Fees, Type or Level, channel, period and BTC day.</p>'
+        + form + '<div id="sigDemoOut"></div>';
+      demoDrawOut();
+    }
+    function demoDrawOut() {
+      const out = document.getElementById('sigDemoOut');
+      if (!out) return;
+      const cfg = demoCfg(), cur = cfg.cur, m = v => money(v, cur), sm = v => signedMoney(v, cur);
+      const tone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+      if (cfg.err) { out.innerHTML = '<p class="text-rose-400">' + esc(cfg.err) + '</p>'; return; }
+      if (!demoRows.length) { out.innerHTML = '<p class="text-slate-500">No alerts with a result in this view yet. Widen the period or pick another channel.</p>'; return; }
+      const run = demoRun(demoRows, cfg), T = run.trades, n = T.length;
+      const first = demoRows[0].pr.signal, last = T[n - 1].x.pr.signal;
+      const riskTxt = cfg.mode === 'pct' ? cfg.pct + '% of the balance' : m(cfg.fixed);
+      const cell = (l, v, sub, c, tip) => '<div class="bg-[#0A0F18] border border-terminal-border rounded-lg p-2"' + (tip ? ' title="' + esc(tip) + '"' : '') + '><div class="text-[10px] uppercase tracking-wider text-slate-500">' + l + '</div><div class="text-sm font-bold mono-num ' + (c || 'text-slate-100') + '">' + v + '</div>' + (sub ? '<div class="text-[10px] text-slate-500 truncate">' + sub + '</div>' : '') + '</div>';
+      const levTxt = v => v == null ? '—' : (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + 'x';
+      const notes = [];
+      if (cfg.warn) notes.push('<p class="text-amber-300 mb-2">' + esc(cfg.warn) + '</p>');
+      if (run.blownAt != null) notes.push('<p class="text-rose-400 font-bold mb-2">Account blown on trade ' + (run.blownAt + 1) + ' of ' + demoRows.length + ' (' + esc(last.date + ' ' + (last.time || '')) + '): the balance hit ' + m(0) + '. The rest of the alerts are not counted.</p>');
+      if (run.tooBig) notes.push('<p class="text-amber-300 mb-2">Stopped after trade ' + n + ': the balance grew past 1,000,000,000,000,000, too large to count.</p>');
+      const stats = '<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">'
+        + cell('Start', m(cfg.start), 'risk ' + riskTxt)
+        + cell('Final balance', m(run.end), 'peak ' + m(run.peak), tone(run.end - cfg.start))
+        + cell('Return', pfmt(run.ret) || '0.00%', sm(run.end - cfg.start), tone(run.ret))
+        + cell('Trades', n, run.wins + 'W / ' + run.losses + 'L · ' + pct(run.wins / n * 100) + ' won', '', 'Alerts with a result in this view' + (n < demoRows.length ? ', up to the trade that blew the account' : ''))
+        + cell('Max drawdown', run.maxDDPct ? '-' + run.maxDDPct.toFixed(2) + '%' : '0%', run.maxDD ? '-' + m(run.maxDD) + ' at most' : 'never below a high', 'text-rose-400', 'The deepest fall from a high point of the balance, as a % of that high.')
+        + cell('Lowest balance', m(run.low), pfmt((run.low - cfg.start) / cfg.start * 100) + ' vs start', tone(run.low - cfg.start))
+        + cell('Best / worst', '<span class="text-emerald-400">' + (run.best && run.best.pnl > 0 ? sm(run.best.pnl) : '—') + '</span> / <span class="text-rose-400">' + (run.worst && run.worst.pnl < 0 ? sm(run.worst.pnl) : '—') + '</span>', 'single trade')
+        + cell('Leverage needed', levTxt(run.maxLev || null), cfg.lev ? (run.capped ? run.capped + ' trade' + (run.capped === 1 ? '' : 's') + ' capped at ' + cfg.lev + 'x' : 'none over ' + cfg.lev + 'x') : 'highest of any trade', run.capped ? 'text-amber-300' : '', 'Position = risk ÷ stop distance. Leverage = position ÷ balance. With a cap, a trade that needs more is taken at the cap, so it risks less.')
+        + '</div>';
+      const curve = '<div class="mb-3"><div class="flex flex-wrap justify-between gap-2 text-[10px] uppercase tracking-wider mb-1"><span class="text-amber-300 font-bold">Balance, trade by trade</span><span class="text-slate-500 normal-case">red below: drawdown from the last high</span></div>'
+        + btCurveSvg(T.map(t => t.pnl), 'Demo account balance with drawdown') + '<div class="flex justify-between text-[10px] text-slate-500 mt-1"><span>' + esc(first.date) + ' · ' + m(cfg.start) + '</span><span class="' + tone(run.ret) + '">' + m(run.end) + '</span><span>' + esc(last.date) + '</span></div></div>';
+
+      // Progress by day, week or month, newest first.
+      const span = Math.round((btDate(last.date) - btDate(first.date)) / 864e5) + 1;
+      const unit = span <= 14 ? 'day' : span <= 120 ? 'week' : 'month';
+      const keyOf = g => unit === 'day' ? g.date : unit === 'week' ? btWeekOf(g.date) : String(g.date || '').slice(0, 7);
+      const groups = [];
+      T.forEach(t => { const k = keyOf(t.x.pr.signal); let g = groups[groups.length - 1]; if (!g || g.k !== k) { g = { k, n: 0, w: 0, l: 0, from: t.before, pnl: 0, to: t.bal }; groups.push(g); } g.n++; if (t.pnl > 0) g.w++; else if (t.pnl < 0) g.l++; g.pnl += t.pnl; g.to = t.bal; });
+      const prog = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">Progress by ' + unit + '</div><div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">' + (unit === 'day' ? 'Day' : unit === 'week' ? 'Week' : 'Month') + '</th><th class="pr-2 text-right">Trades</th><th class="pr-2 text-right">W / L</th><th class="pr-2 text-right">P&amp;L</th><th class="pr-2 text-right">Return</th><th class="text-right">Balance</th></tr></thead><tbody>'
+        + groups.slice().reverse().map(g => '<tr class="border-t border-terminal-border/60"><td class="py-1 pr-2 text-slate-200 whitespace-nowrap">' + esc(g.k) + '</td><td class="pr-2 text-right">' + g.n + '</td><td class="pr-2 text-right text-slate-400">' + g.w + ' / ' + g.l + '</td><td class="pr-2 text-right font-bold ' + tone(g.pnl) + '">' + sm(g.pnl) + '</td><td class="pr-2 text-right ' + tone(g.pnl) + '">' + (g.from > 0 ? pfmt(g.pnl / g.from * 100) : '—') + '</td><td class="text-right text-slate-200">' + m(g.to) + '</td></tr>').join('')
+        + '</tbody></table></div></div>';
+
+      // The same alerts at other risk sizes.
+      const cmp = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Same alerts, other risk sizes</div><p class="text-[10px] text-slate-500 mb-1">Starting with ' + m(cfg.start) + ', each a share of the balance' + (cfg.lev ? ', leverage capped at ' + cfg.lev + 'x' : '') + '.</p><div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Risk a trade</th><th class="pr-2 text-right">Final balance</th><th class="pr-2 text-right">Return</th><th class="pr-2 text-right">Max DD</th><th class="text-right">Lowest</th></tr></thead><tbody>'
+        + DEMO_CMP.concat(cfg.mode === 'pct' && !DEMO_CMP.some(p => Math.abs(p - cfg.pct) < 1e-9) ? [cfg.pct] : []).sort((a, b) => a - b).map(p => { const r2 = demoRun(demoRows, Object.assign({}, cfg, { mode: 'pct', pct: p })), mine = cfg.mode === 'pct' && Math.abs(cfg.pct - p) < 1e-9;
+          return '<tr class="border-t border-terminal-border/60' + (mine ? ' bg-amber-500/10' : '') + '"><td class="py-1 pr-2 text-slate-200">' + p + '%' + (mine ? ' <span class="text-amber-300 text-[10px]">yours</span>' : '') + (r2.blownAt != null ? ' <span class="text-rose-400 text-[10px]">blown</span>' : '') + '</td><td class="pr-2 text-right font-bold ' + tone(r2.ret) + '">' + m(r2.end) + '</td><td class="pr-2 text-right ' + tone(r2.ret) + '">' + (pfmt(r2.ret) || '0.00%') + '</td><td class="pr-2 text-right text-rose-400">-' + r2.maxDDPct.toFixed(2) + '%</td><td class="text-right text-slate-300">' + m(r2.low) + '</td></tr>'; }).join('')
+        + '</tbody></table></div></div>';
+
+      // Trade by trade, newest first.
+      const LIMIT = 30, rowsT = T.slice().reverse(), shown = demoAll ? rowsT : rowsT.slice(0, LIMIT);
+      const list = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">Trade by trade, newest first</div><div class="overflow-x-auto"><table id="sigDemoTrades" class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1.5 pr-3">#</th><th class="pr-3">When</th><th class="pr-3">Alert</th><th class="pr-3 text-right">Stop</th><th class="pr-3 text-right">Result</th><th class="pr-3 text-right">Risk</th><th class="pr-3 text-right">Position</th><th class="pr-3 text-right">P&amp;L</th><th class="text-right">Balance</th></tr></thead><tbody>'
+        + shown.map(t => { const g = t.x.pr.signal;
+          return '<tr class="border-t border-terminal-border/60 hover:bg-white/5"><td class="py-1.5 pr-3 text-slate-500">' + (t.i + 1) + '</td><td class="pr-3 whitespace-nowrap text-slate-400">' + esc(g.date + ' ' + (g.time || '')) + '</td>'
+            + '<td class="pr-3 whitespace-nowrap text-slate-200">' + esc(g.symbol) + ' <span class="' + (g.side === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.side === 'long' ? 'Long' : 'Short') + '</span> <span class="text-slate-500">' + esc(g.timeframe || chanLabel(chanKey(g))) + '</span></td>'
+            + '<td class="pr-3 text-right text-slate-400">' + (t.x.slp != null ? t.x.slp.toFixed(2) + '%' : '—') + '</td>'
+            + '<td class="pr-3 text-right whitespace-nowrap ' + tone(t.x.r) + '">' + rfmt(t.x.r) + (t.x.label ? ' <span class="text-slate-500 text-[10px]">' + esc(t.x.label) + '</span>' : '') + '</td>'
+            + '<td class="pr-3 text-right text-slate-300">' + m(t.risk) + '</td>'
+            + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + (t.pos != null ? m(t.pos) + ' · ' + levTxt(t.lev) + (t.cap ? ' <span class="text-amber-300 text-[10px]">cap</span>' : '') : '—') + '</td>'
+            + '<td class="pr-3 text-right font-bold ' + tone(t.pnl) + '">' + sm(t.pnl) + '</td><td class="text-right text-slate-200">' + m(t.bal) + '</td></tr>'; }).join('')
+        + '</tbody></table></div>'
+        + (rowsT.length > LIMIT ? '<div class="text-center mt-2"><button type="button" onclick="demoShowAll()" class="px-3 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">' + (demoAll ? 'Show the newest ' + LIMIT : 'Show all ' + rowsT.length) + '</button></div>' : '') + '</div>';
+
+      out.innerHTML = notes.join('') + stats + curve
+        + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + prog + cmp + '</div>'
+        + list
+        + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. R is the alert\'s result after fees and stop slippage, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
     }
 
     /* =================== FIB LEVELS =================== */
@@ -9640,7 +9801,7 @@
       return h;
     }
     /* =================== SECTION TABS (Signals and Analysis) =================== */
-    const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
+    const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "demo", label: "Demo account" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
     const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
     const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "ledger", label: "Day's trades" }, { k: "week", label: "Week & grade" }, { k: "habits", label: "Time & habits" }];
     // The Review tab shows how many trades are waiting.
@@ -9679,6 +9840,7 @@
     let sigView = null; // { pairs, mkt, done }
     const SIG_LAZY = {
       report: pairs => renderSigBacktest(pairs),
+      demo: pairs => renderSigDemo(pairs),
       edge: pairs => renderSigEdge(pairs),
       market: () => renderMarketCalendar('mktCalSignals', sigView.mkt || undefined)
     };
@@ -11785,6 +11947,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-04.156', pr: 71, title: 'Demo account in Signals', pts: ['New Signals section: start with $100 (or any amount, $ or ₹) and take every alert in the view, compounding', 'Risk a % of the balance or a fixed amount, with an optional leverage cap', 'Final balance, return, max drawdown, balance curve, progress by day / week / month, other risk sizes and every trade'] },
       { v: '2026-11-04.155', pr: 70, title: 'Edge & breakdowns: compact cards', pts: ['Cards stack in balanced columns, so a short card leaves no empty space', 'One row per group with Alerts, Won, Total, Avg R and Avg %; full figures on hover', 'By symbol keeps the 6 best and 6 worst (Show more); a breakdown with one group folds into one line'] },
       { v: '2026-11-03.154', pr: 69, title: 'AI review: no more "Failed to fetch" dead end', pts: ['A dropped connection no longer ends the review: it checks Gemini is reachable, tries again, then the next model', 'If this network can\'t reach Gemini at all, it says so and what to do (VPN, ad-blocker, other network, or Copy for Gemini app)', 'A call stuck for 2.5 min moves on to the next model'] },
       { v: '2026-11-03.153', pr: 68, title: 'Trades go to the closest alert', pts: ['When several alerts fit a trade, the one whose entry is closest to yours wins (BTC 30 Oct: 1M L2, not 1W)', 'Alerts Discord sent that the rebuilt history dropped still match your trades', 'Fib L1 / L2 / L4 alerts place your level right; all trades re-matched'] },

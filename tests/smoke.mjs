@@ -2417,6 +2417,100 @@ async function sigBacktestRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('signals backtest: ' + e); });
 }
 
+// Demo account: $100 that takes every graded alert in order and compounds. The
+// numbers are worked out by hand from seven alerts at a 1% stop: +2 -1 -1 +1 -1 +2 -1.
+async function demoAccountRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const load = () => page.evaluate(() => {
+    const rs = [2, -1, -1, 1, -1, 2, -1];
+    const sg = (i, r, extra) => Object.assign({ id: 'dm' + i, key: 'd' + i, kind: 'trendline', date: '2026-10-0' + (i + 1), time: '10:00', symbol: 'S' + i + 'USD', side: i % 2 ? 'short' : 'long', score: '',
+      market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H', filled: true, outcome: r > 0 ? (r === 2 ? '+2R' : '+1R') : 'SL', resultR: r, hasReportR: true, price: 100, stop: 99, entry: 100 }, extra || {});
+    state.signals = rs.map((r, i) => sg(i, r)).concat([sg(7, null, { filled: false, outcome: '', resultR: null, date: '2026-10-08' })]);
+    Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', mktFilter: '', sigTgt: '', sigNoFee: false });
+    switchTab('signals'); renderAll();
+  });
+  const text = () => page.evaluate(() => document.getElementById('sigDemo').innerText.replace(/\s+/g, ' '));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => { state.ui.sigSec = 'alerts'; });
+    await load();
+    check(await text() === '', 'Demo account waits until opened');
+    await page.evaluate(() => setSigSec('demo'));
+    // 1% of the balance: 100 → 102 → 100.98 → 99.9702 → 100.9699 → 99.9602 → 101.9594 → 100.9398.
+    let t = await text();
+    ['Start $100.00', 'Final balance $100.94', 'peak $102.00', 'Return +0.94%', 'Trades 7', '3W / 4L', 'Max drawdown -2.00%', '-$2.04 at most', 'Lowest balance $99.96', 'Leverage needed 1.0x']
+      .forEach(x => check(t.includes(x), 'default demo should show "' + x + '": ' + t.slice(0, 700)));
+    check(/Same alerts, other risk sizes .*2% \$101\.76 \+1\.76%/.test(t), '2% row (100 → 101.7586): ' + t.slice(0, 1400));
+    const first = await page.$eval('#sigDemoTrades tbody tr', tr => tr.innerText.replace(/\s+/g, ' ').trim());
+    check(/^7 2026-10-07 10:00 S6USD Long 4H 1\.00% -1\.00R SL \$1\.02 \$101\.96 · 1\.0x -\$1\.02 \$100\.94$/.test(first), 'newest trade first: ' + first);
+    // A new balance redraws the results and keeps the box focused.
+    await page.fill('#sigDemoStart', '1000');
+    t = await text();
+    check(t.includes('Final balance $1,009.40') && t.includes('Return +0.94%'), '$1,000 start: ' + t.slice(0, 500));
+    check(await page.evaluate(() => document.activeElement && document.activeElement.id) === 'sigDemoStart', 'typing keeps focus in the balance box');
+    // Fixed $10: 1000 → 1020 → 1010 → 1000 → 1010 → 1000 → 1020 → 1010; deepest fall 20 from 1020.
+    await page.click('#sigDemo button[data-mode="fixed"]');
+    await page.fill('#sigDemoRisk', '10');
+    t = await text();
+    check(t.includes('Final balance $1,010.00') && t.includes('Return +1.00%') && t.includes('Max drawdown -1.96%') && t.includes('-$20.00 at most'), 'fixed $10: ' + t.slice(0, 600));
+    // Kept on the device: a reload opens on the same settings.
+    await page.reload({ waitUntil: 'load' });
+    await load();
+    await page.evaluate(() => setSigSec('demo'));
+    const kept = await page.evaluate(() => ({ start: document.getElementById('sigDemoStart').value, risk: document.getElementById('sigDemoRisk').value, t: document.getElementById('sigDemo').innerText.replace(/\s+/g, ' ') }));
+    check(kept.start === '1000' && kept.risk === '10' && kept.t.includes('Final balance $1,010.00'), 'settings kept after reload: ' + JSON.stringify(kept).slice(0, 300));
+    // Fees off: each result gets 0.0826% / 1% = 0.0826R back (worked out here, apart from the app).
+    await page.evaluate(() => setSigNoFee(true));
+    let b = 1000; [2, -1, -1, 1, -1, 2, -1].forEach(r => { b += 10 * (r + 0.0826); });
+    t = await text();
+    check(t.includes('Final balance $' + b.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })), 'no fees → $' + b.toFixed(2) + ': ' + t.slice(0, 500));
+    await page.evaluate(() => setSigNoFee(false));
+    // Rupees, then reset to $100 at 1%.
+    await page.click('#sigDemo button[data-cur="INR"]');
+    check((await text()).includes('Final balance ₹1,010.00'), 'rupee label: ' + (await text()).slice(0, 400));
+    await page.click('#sigDemo button:has-text("Reset")');
+    check((await text()).includes('Final balance $100.94'), 'reset to $100 at 1%: ' + (await text()).slice(0, 400));
+    // Wrong inputs say what is wrong instead of drawing nonsense.
+    const bad = [['#sigDemoStart', '', 'Enter a starting balance above 0.'], ['#sigDemoStart', '-5', 'Enter a starting balance above 0.'], ['#sigDemoStart', '1e13', 'too large'], ['#sigDemoStart', '100', 'Final balance $100.94'],
+      ['#sigDemoRisk', '0', 'as a % above 0'], ['#sigDemoRisk', '150', "can't be more than 100%"], ['#sigDemoRisk', '1', 'Final balance $100.94']];
+    for (const [sel, val, want] of bad) { await page.fill(sel, val); const x = await text(); check(x.includes(want), sel + ' = "' + val + '" should say "' + want + '": ' + x.slice(0, 300)); }
+    await page.click('#sigDemo button[data-mode="fixed"]');
+    await page.fill('#sigDemoRisk', '500');
+    check((await text()).includes('more than the starting balance'), 'risk over the balance warns');
+    // Pure checks: a leverage cap, a blown account, and a stop the account can't pay.
+    const p = await page.evaluate(() => {
+      const rows = [2, -1, -1, 1, -1, 2, -1].map(r => ({ r, slp: 1 }));
+      const capped = demoRun(rows, { start: 100, mode: 'pct', pct: 5, lev: 2 }), two = demoRun(rows, { start: 100, mode: 'pct', pct: 2, lev: 0 });
+      const blown = demoRun([{ r: -1.2, slp: 1 }, { r: -1, slp: 1 }, { r: -1, slp: 1 }], { start: 100, mode: 'fixed', fixed: 50, lev: 0 });
+      const all = demoRun([{ r: -1.5, slp: 0.5 }], { start: 100, mode: 'pct', pct: 100, lev: 0 });
+      return { capEnd: capped.end, twoEnd: two.end, capN: capped.capped, capLev: capped.maxLev, blownAt: blown.blownAt, blownEnd: blown.end, blownN: blown.trades.length, allEnd: all.end, allLev: all.maxLev };
+    });
+    check(Math.abs(p.capEnd - p.twoEnd) < 1e-9 && Math.abs(p.twoEnd - 101.7586070) < 1e-6 && p.capN === 7 && p.capLev === 2, '5% risk capped at 2x on a 1% stop = 2% risk: ' + JSON.stringify(p));
+    check(p.blownAt === 1 && p.blownEnd === 0 && p.blownN === 2, 'fixed $50: 100 → 40 → 0, blown on trade 2: ' + JSON.stringify(p));
+    check(p.allEnd === 0 && p.allLev === 200, 'a loss past the balance stops at 0; 100% on a 0.5% stop needs 200x: ' + JSON.stringify(p));
+    await page.fill('#sigDemoStart', '100'); await page.fill('#sigDemoRisk', '60');
+    await page.evaluate(() => { state.signals.forEach(g => { if (g.resultR != null) g.resultR = -1; }); renderAll(); });
+    t = await text();
+    check(/Account blown on trade 2 of 7/.test(t) && t.includes('Final balance $0.00') && t.includes('Trades 2'), 'blown account says so: ' + t.slice(0, 500));
+    // Phone: no sideways scroll on the page.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => { demoReset(); });
+    const sw = await page.evaluate(() => document.documentElement.scrollWidth);
+    check(sw <= 390, 'phone width scrolls sideways: ' + sw);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals demo account: $100 compounded by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('demo account: ' + e); });
+}
+
 // Trades take their alert's stop, setup and fib level; the review queue; empty
 // books off the bar; old deletion markers dropped; setup picked in the inspector.
 async function cleanupRun(seed) {
@@ -4055,6 +4149,7 @@ await importNowRun(data);
 await deltaImportRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
+await demoAccountRun(data);
 await cleanupRun(data);
 await behaviourRun(data);
 await setupLevelRun(data);
