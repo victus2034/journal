@@ -4124,6 +4124,152 @@ async function sigBreakdownRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Nifty options: a Nifty entry and stop turn into the CALL or PUT to buy, its strike,
+// expiry and lots. Every premium, lot count and loss is worked out again here by hand,
+// with a Black-Scholes written separately (its normal curve integrated numerically).
+async function optionsRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const pdf = x => Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI);
+  const cdf = x => { const n = 4000, a = 0, h = (x - a) / n; let t = pdf(a) + pdf(x); for (let i = 1; i < n; i++) t += (i % 2 ? 4 : 2) * pdf(a + i * h); return 0.5 + t * h / 3; };
+  const bs = (call, S, K, T, v, r = 0.065) => { const d1 = (Math.log(S / K) + (r + v * v / 2) * T) / (v * Math.sqrt(T)), d2 = d1 - v * Math.sqrt(T); return call ? S * cdf(d1) - K * Math.exp(-r * T) * cdf(d2) : K * Math.exp(-r * T) * cdf(-d2) - S * cdf(-d1); };
+  const fees = (q, b, sl, brok = 20) => { const buy = q * b, sell = q * sl, txn = (buy + sell) * 0.0003553, sebi = (buy + sell) * 1e-6; return 2 * brok + sell * 0.0015 + txn + sebi + buy * 0.00003 + 0.18 * (2 * brok + txn + sebi); };
+  const rupees = t => Number(String(t).replace(/[^\d.-]/g, ''));
+  // Friday 6 Nov 2026, 11:43 IST. Tue 10 Nov and Tue 24 Nov are NSE holidays.
+  const NOW = Date.parse('2026-11-06T06:13:00Z');
+  const YR = 365 * 864e5;
+  for (const vp of [{ width: 1366, height: 900 }, { width: 390, height: 844 }]) {
+    const ctx = await browser.newContext({ viewport: vp });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push(vp.width + 'px page error: ' + (e.stack || e.message)));
+    await page.clock.setFixedTime(new Date(NOW));
+    const w = vp.width + 'px ';
+    try {
+      await page.goto(base, { waitUntil: 'load' });
+      await page.waitForTimeout(300);
+      await page.click('#accountsBar button[data-cur="INR"]');
+      await page.evaluate(() => switchTab('calculator'));
+      await page.locator('#calcViewSeg button', { hasText: 'Nifty options' }).click();
+      check(await page.isVisible('#optCard') && !(await page.isVisible('#quickSizeCard')), w + 'Nifty options tab did not open its card');
+      // Before any level: it says what CE and PE mean.
+      check(/CALL \(CE\)/.test(await page.innerText('#optOut')) && /PUT \(PE\)/.test(await page.innerText('#optOut')), w + 'empty card does not explain CE / PE');
+      // The expiry list: Tuesdays, holiday weeks a day early, monthlies marked.
+      const exps = await page.$$eval('#optExp option', o => o.map(x => x.value + '|' + x.textContent));
+      check(exps.some(x => x.startsWith('2026-11-09|') && /Tue holiday/.test(x)) && exps.some(x => x.startsWith('2026-11-17|'))
+        && exps.some(x => x.startsWith('2026-11-23|') && /monthly/.test(x) && /Tue holiday/.test(x)) && exps.some(x => x.startsWith('2026-12-29|') && /monthly/.test(x))
+        && !exps.some(x => /^2026-11-(10|24)\|/.test(x)), w + 'expiries: ' + JSON.stringify(exps));
+      // A 4H long from the test NSE book's balance: 25,600 entry, 25,450 stop, ₹10,000 risk.
+      await page.fill('#optEntry', '25600'); await page.fill('#optSl', '25450'); await page.fill('#optRisk', '10000');
+      await page.waitForTimeout(100);
+      const T = (Date.parse('2026-11-17T10:00:00Z') - NOW) / YR, Th = T - 1 / 365;
+      const buy = await page.innerText('#optBuy');
+      check(/^BUY NIFTY 25,600 CE · Tue 17 Nov$/.test(buy), w + '4H long picks ' + buy + ' (want 25,600 CE, 17 Nov: the first expiry 5+ days out)');
+      // By hand: premium at entry, at the stop (now) and at the target (after a day), lots inside ₹10,000.
+      const p0 = bs(true, 25600, 25600, T, 0.14), pSl = bs(true, 25450, 25600, T, 0.14), pT = bs(true, 25750, 25600, Th, 0.14);
+      const loss = n => n * 65 * (p0 - pSl) + fees(n * 65, p0, pSl);
+      let lots = 0; while (loss(lots + 1) <= 10000) lots++;
+      const gain = lots * 65 * (pT - p0) - fees(lots * 65, p0, pT);
+      const shown = await page.evaluate(() => ({ cost: document.getElementById('optCost').innerText, loss: document.getElementById('optLoss').innerText, gain: document.getElementById('optGain').innerText, out: document.getElementById('optOut').innerText }));
+      const prem = rupees(/premium about (₹[\d,.]+)/.exec(shown.out)[1]);
+      check(Math.abs(prem - p0) < 0.01 && lots === 2 && new RegExp('\\b' + lots + ' lots = 130 qty').test(shown.out), w + 'premium ' + prem + ' vs ' + p0.toFixed(2) + ' by hand, lots ' + lots + ': ' + shown.out.slice(0, 200));
+      check(Math.abs(rupees(shown.cost) - lots * 65 * p0) <= 0.5 && Math.abs(rupees(shown.loss) + loss(lots)) <= 0.5 && Math.abs(rupees(shown.gain) - gain) <= 0.5,
+        w + 'cost/loss/gain ' + JSON.stringify([shown.cost, shown.loss, shown.gain]) + ' vs ' + [lots * 65 * p0, -loss(lots), gain].map(x => x.toFixed(0)));
+      check(loss(lots) <= 10000 && loss(lots + 1) > 10000, w + 'lots do not fill the risk');
+      // A 2R target moves the target price and the profit; a typed level wins over R.
+      await page.selectOption('#optTgtR', '2');
+      check((await page.innerText('#optGain')) !== shown.gain && /Nifty 25,900, 2R/.test(await page.innerText('#optOut')), w + '2R target not used');
+      await page.fill('#optTarget', '25800');
+      check(/Nifty 25,800\)/.test(await page.innerText('#optOut')), w + 'typed target not used');
+      // Tap another strike, then back to auto.
+      await page.click('#optTable tr[data-off="1"]');
+      check(/^BUY NIFTY 25,650 CE/.test(await page.innerText('#optBuy')) && /Picked by you/.test(await page.innerText('#optOut')), w + 'tapping OTM 1 did not pick it');
+      await page.locator('#optOut button', { hasText: 'Back to auto' }).click();
+      check(/^BUY NIFTY 25,600 CE/.test(await page.innerText('#optBuy')), w + 'back to auto did not restore the pick');
+      // A stop above the entry is a PUT; the strikes run down from the money.
+      await page.fill('#optTarget', ''); await page.selectOption('#optTgtR', '1');
+      await page.fill('#optSl', '25700');
+      check(/^BUY NIFTY 25,\d{3} PE · Tue 17 Nov$/.test(await page.innerText('#optBuy')) && /Nifty down: buy a PUT/.test(await page.innerText('#optOut')), w + 'short did not give a PUT: ' + await page.innerText('#optBuy'));
+      const peRows = await page.$$eval('#optTable tbody tr', r => r.map(x => x.cells[0].innerText.split('\n')[0].replace(/ pick$/, '')));
+      check(peRows[0] === '25,700 PE' && peRows[2] === '25,600 PE' && peRows[5] === '25,450 PE', w + 'PE strikes: ' + JSON.stringify(peRows));
+      // The app's price for the shown strike sets the volatility: that strike then shows exactly that price.
+      const lbl = await page.innerText('#optCalLbl');
+      await page.fill('#optCalPrem', '250');
+      await page.waitForTimeout(100);
+      const k = /^([\d,]+) PE/.exec(lbl)[1];
+      const row = await page.$$eval('#optTable tbody tr', (r, k) => { const x = r.find(y => y.cells[0].innerText.startsWith(k + ' PE')); return x ? x.cells[1].innerText : null; }, k);
+      check(rupees(row) === 250 && /Volatility read from your price/.test(await page.innerText('#optCalNote')) && !/\(estimate\)/.test(await page.innerText('#optOut')), w + 'calibrated ' + lbl + ' shows ' + row);
+      // Nifty at another level when the price was read: the entry premium moves by about delta x the gap.
+      await page.fill('#optCalSpot', '25650');
+      const row2 = rupees(await page.$$eval('#optTable tbody tr', (r, k) => r.find(y => y.cells[0].innerText.startsWith(k + ' PE')).cells[1].innerText, k));
+      check(row2 > 250 && row2 < 250 + 50, w + 'price read at 25,650 should put the 25,600 premium a little above ₹250: ' + row2);
+      await page.click('#optCalClear');
+      check(await page.inputValue('#optCalPrem') === '' && /\(estimate\)/.test(await page.innerText('#optOut')), w + 'Clear did not go back to VIX');
+      // Too little risk for one lot: no BUY, and says so.
+      await page.fill('#optRisk', '500');
+      check(!/^BUY/.test(await page.innerText('#optBuy')) && /Over your ₹500 risk/.test(await page.innerText('#optOut')) && /Raise the risk, move the stop closer, or skip/.test(await page.innerText('#optOut')), w + 'over-risk not flagged: ' + (await page.innerText('#optOut')).slice(0, 160));
+      // Auto risk: the NSE book's balance x its max risk %.
+      await page.fill('#optRisk', '');
+      const auto = await page.evaluate(() => { const a = state.accounts.find(x => x.market === 'nse'); return { want: money(bookBalance(a) * a.maxRiskPct / 100, 'INR', 0), ph: document.getElementById('optRisk').placeholder, out: document.getElementById('optOut').innerText }; });
+      check(auto.ph === 'auto ' + auto.want && auto.out.includes('Risk ' + auto.want + ': 1% of Test NSE'), w + 'auto risk: ' + JSON.stringify({ ph: auto.ph, want: auto.want }));
+      // Mistakes: a typo'd level, a stop on the entry, a target the wrong side, odd VIX / lot / brokerage.
+      await page.fill('#optEntry', '256000000');
+      check(/does not look like a Nifty level/.test(await page.innerText('#optOut')) && !(await page.$('#optBuy')), w + 'huge entry not refused');
+      await page.fill('#optEntry', '-25600');
+      check(/Type the Nifty level/.test(await page.innerText('#optOut')), w + 'negative entry not refused');
+      await page.fill('#optEntry', '25600'); await page.fill('#optSl', '25600');
+      check(/same as the entry/.test(await page.innerText('#optOut')), w + 'stop on the entry not refused');
+      await page.fill('#optSl', '25450'); await page.fill('#optTarget', '25500'); await page.fill('#optVix', '900'); await page.click('#optMore summary'); await page.fill('#optLot', '-5'); await page.fill('#optBrok', '99999');
+      const odd = await page.innerText('#optOut');
+      check(/wrong side of the entry/.test(odd) && /India VIX 900 looks wrong; using 14/.test(odd) && /Lot size -5 looks wrong; using 65/.test(odd) && /Brokerage ₹99999 an order looks wrong; using ₹20/.test(odd) && /Nifty 25,750, 1R/.test(odd) && /\b65 qty|130 qty|195 qty/.test(odd), w + 'odd inputs: ' + odd.slice(0, 400));
+      await page.fill('#optVix', '14'); await page.fill('#optLot', '65'); await page.fill('#optBrok', '20'); await page.fill('#optTarget', '');
+      // Kept after a reload.
+      await page.fill('#optRisk', '10000');
+      await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(300);
+      await page.evaluate(() => switchTab('calculator'));
+      check(await page.inputValue('#optEntry') === '25600' && await page.inputValue('#optSl') === '25450' && /^BUY NIFTY 25,600 CE/.test(await page.innerText('#optBuy')), w + 'not kept after reload');
+      // In dollars on the header, the money also shows in $ (option prices stay in ₹).
+      await page.click('#accountsBar button[data-cur="USD"]');
+      await page.evaluate(() => switchTab('calculator'));
+      check(/In dollars \(₹85 a \$\): pay ≈ \$/.test(await page.innerText('#optOut')) && /₹/.test(await page.innerText('#optCost')), w + 'dollar line missing');
+      const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      check(wide <= 1, w + 'page scrolls sideways by ' + wide);
+      // Intraday on Monday 9 Nov (expiry day, Tue 10 Nov a holiday): skip today's expiry for next week's.
+      await page.clock.setFixedTime(new Date('2026-11-09T04:00:00Z'));
+      await page.selectOption('#optTf', 'intra');
+      check(/· Tue 17 Nov$/.test(await page.innerText('#optBuy')) && /Auto \(Tue 17 Nov\)/.test(await page.$eval('#optExp option', o => o.textContent)), w + 'intraday on expiry day: ' + await page.innerText('#optBuy'));
+      // Picking today's expiry by hand warns about its last day.
+      await page.selectOption('#optExp', '2026-11-09');
+      check(/loses value fastest on its last day/.test(await page.innerText('#optOut')), w + 'last-day warning missing');
+      // A 1W setup reaches into 2027, whose holidays are not known yet.
+      await page.selectOption('#optTf', '1w');
+      check(/· Tue 29 Dec$/.test(await page.innerText('#optBuy')), w + '1W expiry: ' + await page.innerText('#optBuy'));
+      await page.clock.setFixedTime(new Date('2026-12-20T04:00:00Z'));
+      await page.fill('#optEntry', '25601');
+      check(/holidays after 2026 are not in yet/.test(await page.innerText('#optOut')), w + '2027 holiday warning missing');
+    } catch (e) {
+      errs.push(w + 'threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+    }
+    await ctx.close();
+  }
+  // The NSE futures fee preset carries Budget 2026's STT (0.05% on the sell) and NSE's 0.00183%.
+  {
+    const ctx = await browser.newContext();
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    const page = await ctx.newPage();
+    await page.goto(base, { waitUntil: 'load' });
+    const got = await page.evaluate(() => calcPresetPercent('nse-futures'));
+    const b = 2 * 20 / 500000 * 100, x = 2 * 0.00183, sebi = 2 * 0.0001;
+    const want = +(b + 0.05 + x + sebi + 0.002 + 0.18 * (b + x + sebi)).toFixed(3);
+    check(got === want, 'NSE futures preset ' + got + '% vs ' + want + '% by hand');
+    await ctx.close();
+  }
+  const label = 'Nifty options: CE / PE, strike, expiry and lots, re-priced by hand';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -4140,6 +4286,7 @@ await reviewRun(data);
 await withdrawRun(data);
 await tradingDayRun(data);
 await goalPlannerRun(data);
+await optionsRun(data);
 await goalPctRun(data);
 await deltaShareRun(data);
 await alertRefreshRun(data);
