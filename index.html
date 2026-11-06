@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-04.156">
+  <meta name="app-version" content="2026-11-06.157">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -97,6 +97,8 @@
     /* Clean look (v.132): one sans font, quiet surfaces, hairline borders, no
        shadows or gradients. Colours come from these tokens, so the light theme
        only swaps the tokens. Loaded last, so it wins over the older rules. */
+    /* Nifty options card (v.157): utilities the static Tailwind build leaves out. */
+    .list-disc{list-style-type:disc}.pl-4{padding-left:1rem}.w-32{width:8rem}
     :root{--bg:#0b0d12;--surface:#12151c;--inset:#0e1117;--hover:#191d26;--line:#1e232d;--line2:#2a303c;--txt:#e7e9ee;--mut:#9aa1ad;--dim:#6b7280;--acc:#f5a524}
     html.light{--bg:#f5f6f8;--surface:#ffffff;--inset:#f7f8fa;--hover:#f0f2f5;--line:#e6e8ec;--line2:#d5d9e0;--txt:#111827;--mut:#4b5563;--dim:#8a919c;--acc:#d97706}
 
@@ -806,6 +808,89 @@
           </div>
         </div>
         <p class="text-[11px] text-slate-400 mt-2.5 leading-relaxed" id="quickNote"></p>
+      </div>
+
+      <!-- Nifty options: a Nifty entry and stop in; the CALL or PUT to buy, its strike, expiry and lots out,
+           with what the premium does at the stop and the target. Always in rupees. -->
+      <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs hidden" id="optCard" data-calcsec="options">
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <h3 class="font-bold text-white uppercase tracking-wider">Nifty options</h3>
+          <span class="text-slate-500 text-[11px]">Type the entry and stop from your Nifty chart; get the CALL or PUT to buy, its strike, expiry and lots. Option prices are in ₹</span>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+          <div>
+            <label for="optEntry" class="text-slate-400 block mb-1">Nifty entry</label>
+            <input type="number" id="optEntry" step="any" min="0" placeholder="e.g. 25600" oninput="optSet('optEntry', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
+          </div>
+          <div>
+            <label for="optSl" class="text-slate-400 block mb-1">Stop-loss (Nifty)</label>
+            <input type="number" id="optSl" step="any" min="0" placeholder="e.g. 25500" oninput="optSet('optSl', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
+          </div>
+          <div>
+            <div class="flex items-center justify-between gap-2 mb-1">
+              <label for="optTarget" class="text-slate-400">Target (Nifty)</label>
+              <select id="optTgtR" onchange="optSet('optTgtR', this.value)" title="Target when none is typed" class="bg-[#070A11] border border-terminal-border px-1 rounded text-slate-300 text-[10px] focus:outline-none focus:border-amber-500">
+                <option value="1">1R</option><option value="1.5">1.5R</option><option value="2">2R</option><option value="3">3R</option>
+              </select>
+            </div>
+            <input type="number" id="optTarget" step="any" min="0" placeholder="or type a level" oninput="optSet('optTarget', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
+          </div>
+          <div>
+            <label for="optRisk" class="text-slate-400 block mb-1">Risk to take (₹)</label>
+            <input type="number" id="optRisk" step="any" min="0" placeholder="auto" oninput="optSet('optRisk', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end mt-3">
+          <div>
+            <label for="optTf" class="text-slate-400 block mb-1">Chart timeframe</label>
+            <select id="optTf" onchange="optSet('optTf', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500"></select>
+          </div>
+          <div>
+            <label for="optHold" class="text-slate-400 block mb-1">Expect to hold</label>
+            <select id="optHold" onchange="optSet('optHold', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500"></select>
+          </div>
+          <div>
+            <label for="optExp" class="text-slate-400 block mb-1">Expiry</label>
+            <select id="optExp" onchange="optSet('optExp', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500"></select>
+          </div>
+          <div>
+            <label for="optVix" class="text-slate-400 block mb-1">India VIX (%)</label>
+            <input type="number" id="optVix" step="any" min="0" placeholder="14" oninput="optSet('optVix', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500">
+          </div>
+        </div>
+        <div id="optOut" class="mt-4"></div>
+        <!-- The price the broker's app shows for one strike: the volatility is read back from it,
+             so every premium here matches the app instead of a VIX estimate. -->
+        <div class="mt-3 p-2.5 rounded-lg border border-terminal-border bg-black/30">
+          <div class="text-slate-400 mb-2">Premium on your app looks different? Type it and everything above re-prices from it.</div>
+          <div class="flex flex-wrap items-end gap-3">
+            <div>
+              <label for="optCalPrem" class="text-slate-500 block mb-1">Price of <b id="optCalLbl" class="text-slate-200">the strike above</b> (₹)</label>
+              <input type="number" id="optCalPrem" step="any" min="0" placeholder="e.g. 142.5" oninput="optCalSet()" class="w-32 bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500">
+            </div>
+            <div>
+              <label for="optCalSpot" class="text-slate-500 block mb-1">while Nifty is at</label>
+              <input type="number" id="optCalSpot" step="any" min="0" placeholder="entry" oninput="optCalSet()" class="w-32 bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500">
+            </div>
+            <button type="button" id="optCalClear" onclick="optCalSet(true)" class="px-3 py-2 rounded-md bg-terminal-surface border border-terminal-border hover:border-amber-500 text-slate-300 text-[11px]">Clear</button>
+            <span id="optCalNote" class="text-[11px] text-slate-400 pb-2"></span>
+          </div>
+        </div>
+        <details id="optMore" class="mt-3 border-t border-terminal-border/60 pt-3">
+          <summary class="cursor-pointer text-slate-400 hover:text-white select-none">Contract and charges: lot size, brokerage</summary>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end mt-3">
+            <div>
+              <label for="optLot" class="text-slate-400 block mb-1">Lot size (units)</label>
+              <input type="number" id="optLot" step="1" min="1" placeholder="65" oninput="optSet('optLot', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500">
+            </div>
+            <div>
+              <label for="optBrok" class="text-slate-400 block mb-1">Brokerage per order (₹)</label>
+              <input type="number" id="optBrok" step="any" min="0" placeholder="20" oninput="optSet('optBrok', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500">
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-2 leading-relaxed">Nifty: lot 65 since the January 2026 series, strikes every 50, weekly expiry on Tuesday (the last Tuesday of the month is the monthly); when that Tuesday is an NSE holiday it expires the trading day before. Holidays are known to the end of 2026. Charges: brokerage on the buy and the sell, STT 0.15% of the sell premium, exchange 0.03553%, SEBI ₹10 a crore, stamp 0.003% of the buy, 18% GST on brokerage, exchange and SEBI.</p>
+        </details>
       </div>
 
       <!-- Goal planner: target, days and trades a day in; what each day and each trade must earn out.
@@ -7754,8 +7839,8 @@
           hint: "Zero brokerage, but STT 0.1% on BOTH sides + DP charge on sell",
           percent: roundTrip({ sttPercentOneSide: 0.2, exchangeTxnPercentPerSide: 0.00297, sebiPercentPerSide: 0.0001, stampDutyPercentOnBuy: 0.015, flatChargePercentEquivalent: (DP_CHARGE / REF) * 100 }) },
         { id: "nse-futures", label: "NSE futures (intraday)", currency: "INR",
-          hint: "Flat Rs 20/order brokerage — the % falls as contract value rises",
-          percent: roundTrip({ brokeragePercentPerSide: (20 / REF_FUT) * 100, sttPercentOneSide: 0.02, exchangeTxnPercentPerSide: 0.00173, sebiPercentPerSide: 0.0001, stampDutyPercentOnBuy: 0.002 }) },
+          hint: "Flat Rs 20/order brokerage, STT 0.05% on sell (from Apr 2026) — the % falls as contract value rises",
+          percent: roundTrip({ brokeragePercentPerSide: (20 / REF_FUT) * 100, sttPercentOneSide: 0.05, exchangeTxnPercentPerSide: 0.00183, sebiPercentPerSide: 0.0001, stampDutyPercentOnBuy: 0.002 }) },
         { id: "custom", label: "Custom / my own broker", currency: "INR", hint: "Enter the round-trip cost your broker charges", percent: null }
       ];
     })();
@@ -7776,7 +7861,9 @@
       plannedMargin: 5000, takeProfitEnabled: true, takeProfitPercent: 4, view: "quick",
       ladderIncludeFees: true, ladderLinked: true, ladderAmount: 5000, ladderLeverage: 1,
       quickEntry: "", quickSlPrice: "", quickRisk: "",
-      gpGoalId: "auto", gpTarget: "", gpDays: "", gpX: "2.5", gpRiskPct: "1", gpStop: "1", gpWin: "50", gpRR: "1.5", gpTrades: "3", gpAdvOpen: false, gpUnit: "amt", gpPct: ""
+      gpGoalId: "auto", gpTarget: "", gpDays: "", gpX: "2.5", gpRiskPct: "1", gpStop: "1", gpWin: "50", gpRR: "1.5", gpTrades: "3", gpAdvOpen: false, gpUnit: "amt", gpPct: "",
+      optEntry: "", optSl: "", optTarget: "", optTgtR: "1", optRisk: "", optTf: "4h", optHold: "", optExp: "", optVix: "14",
+      optLot: "65", optBrok: "20", optPick: "", optCal: null
     };
     function calcSettings() { return Object.assign({}, CALC_DEFAULTS, state.calculatorSettings || {}); }
     function calcUpdate(patch) {
@@ -8016,6 +8103,343 @@
 
       adv.innerHTML = h;
     }
+    // ---- Nifty options picker ----
+    // Turns a Nifty idea (entry, stop, target) into the contract to buy: CALL (CE)
+    // when Nifty should rise, PUT (PE) when it should fall, the strike, the expiry,
+    // the lots that fit the risk, and what the premium does at the stop and target.
+    // Premiums are Black-Scholes estimates (Nifty options are European) from India VIX,
+    // or from the price the broker's app shows when one is typed.
+    // Checked 6 Nov 2026: lot 65 (from the Jan 2026 series), strikes every 50, weekly
+    // expiry on Tuesday (the last Tuesday is the monthly), a holiday moves it a day earlier.
+    const NIFTY_LOT = 65, NIFTY_STEP = 50, OPT_RATE = 0.065;
+    // NSE weekday trading holidays (NSE list for 2026). 2027 is not out yet: past
+    // 2026 a holiday expiry has to be picked by hand.
+    const NSE_HOLIDAYS = ['2026-01-15', '2026-01-26', '2026-03-03', '2026-03-26', '2026-03-31', '2026-04-03', '2026-04-14', '2026-05-01', '2026-05-28', '2026-06-26', '2026-09-14', '2026-10-02', '2026-10-20', '2026-11-10', '2026-11-24', '2026-12-25'];
+    const NSE_HOLIDAYS_UNTIL = '2026-12-31';
+    // Charges on a bought NSE option, per side unless said (Zerodha's list, Nov 2026):
+    // STT 0.15% of the sell premium (Budget 2026, from 1 Apr 2026), exchange 0.03553%,
+    // SEBI ₹10 a crore, stamp 0.003% of the buy, 18% GST on brokerage + exchange + SEBI.
+    const OPT_FEES = { stt: 0.0015, txn: 0.0003553, sebi: 0.000001, stamp: 0.00003, gst: 0.18 };
+    // Each chart's setup: how long a trade on it is usually held (calendar days), and
+    // the nearest expiry worth buying, at least this many days out (and 3x the hold),
+    // because a bought option loses value fastest in its last days.
+    const OPT_TF = [{ k: 'intra', label: 'Intraday (5m-1H)', days: 1, hold: 0.1 }, { k: '4h', label: '4H', days: 5, hold: 1 }, { k: '1d', label: '1D', days: 10, hold: 3 }, { k: '1w', label: '1W', days: 30, hold: 7 }];
+    const OPT_HOLDS = [{ v: 0.1, label: '2 hours' }, { v: 0.5, label: 'Half a day' }, { v: 1, label: '1 day' }, { v: 2, label: '2 days' }, { v: 3, label: '3 days' }, { v: 7, label: '1 week' }, { v: 14, label: '2 weeks' }];
+
+    function normCdf(x) {
+      // Abramowitz & Stegun 7.1.26 (error under 1.5e-7).
+      const t = 1 / (1 + 0.3275911 * Math.abs(x) / Math.SQRT2);
+      const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x / 2);
+      return x >= 0 ? (1 + y) / 2 : (1 - y) / 2;
+    }
+    function normPdf(x) { return Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI); }
+    // Price, delta and theta (₹ a day) of one unit. type 'ce' | 'pe'; T in years; v as 0.14 for 14%.
+    function bsOption(type, S, K, T, v, r) {
+      r = r == null ? OPT_RATE : r;
+      const call = type === 'ce';
+      if (!(T > 0) || !(v > 0)) {
+        const intr = Math.max(0, call ? S - K : K - S);
+        return { price: intr, delta: intr > 0 ? (call ? 1 : -1) : 0, theta: 0 };
+      }
+      const sq = v * Math.sqrt(T);
+      const d1 = (Math.log(S / K) + (r + v * v / 2) * T) / sq, d2 = d1 - sq;
+      const disc = K * Math.exp(-r * T);
+      const price = call ? S * normCdf(d1) - disc * normCdf(d2) : disc * normCdf(-d2) - S * normCdf(-d1);
+      const decay = -S * normPdf(d1) * v / (2 * Math.sqrt(T));
+      const theta = (call ? decay - r * disc * normCdf(d2) : decay + r * disc * normCdf(-d2)) / 365;
+      return { price: Math.max(0, price), delta: call ? normCdf(d1) : normCdf(d1) - 1, theta };
+    }
+    // The volatility that gives this premium, or null when no volatility can (below
+    // what the option is already worth, or above anything sensible).
+    function bsImpliedVol(type, prem, S, K, T, r) {
+      if (!(prem > 0) || !(S > 0) || !(K > 0) || !(T > 0)) return null;
+      let lo = 0.005, hi = 5;
+      if (bsOption(type, S, K, T, lo, r).price > prem || bsOption(type, S, K, T, hi, r).price < prem) return null;
+      for (let i = 0; i < 100; i++) {
+        const mid = (lo + hi) / 2;
+        if (bsOption(type, S, K, T, mid, r).price > prem) hi = mid; else lo = mid;
+      }
+      return (lo + hi) / 2;
+    }
+    // Round-trip charges for qty units bought at buyPx and sold at sellPx.
+    function optFees(qty, buyPx, sellPx, brokPerOrder) {
+      const buy = qty * buyPx, sell = qty * Math.max(0, sellPx), brok = 2 * Math.max(0, brokPerOrder || 0);
+      const txn = (buy + sell) * OPT_FEES.txn, sebi = (buy + sell) * OPT_FEES.sebi;
+      return brok + sell * OPT_FEES.stt + txn + sebi + buy * OPT_FEES.stamp + (brok + txn + sebi) * OPT_FEES.gst;
+    }
+    // Dates are the IST calendar day as 'YYYY-MM-DD'; an expiry is that day at 15:30 IST.
+    function istDay(ms) { return new Date(ms + 5.5 * 3600e3).toISOString().slice(0, 10); }
+    function dayAdd(d, n) { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
+    function dayDow(d) { return new Date(d + 'T00:00:00Z').getUTCDay(); }
+    function expiryMs(d) { return Date.parse(d + 'T10:00:00Z'); }
+    function nseOpen(d) { const w = dayDow(d); return w !== 0 && w !== 6 && !NSE_HOLIDAYS.includes(d); }
+    // The next Nifty expiries after now: every Tuesday for 5 weeks and the next 3
+    // monthlies (last Tuesday of the month), each moved back to the trading day
+    // before when the Tuesday is a holiday.
+    function niftyExpiries(now) {
+      now = now == null ? Date.now() : now;
+      const today = istDay(now);
+      let tue = today; while (dayDow(tue) !== 2) tue = dayAdd(tue, 1);
+      const out = new Map();
+      const add = (t, monthly) => {
+        let d = t, shifted = false;
+        while (!nseOpen(d)) { d = dayAdd(d, -1); shifted = true; }
+        const ms = expiryMs(d);
+        if (ms <= now) return;
+        const prev = out.get(d);
+        out.set(d, { date: d, tuesday: t, ms, shifted, monthly: monthly || (prev && prev.monthly) || false, days: (ms - now) / 864e5 });
+      };
+      for (let k = 0; k < 15; k++) {
+        const t = dayAdd(tue, 7 * k);
+        const monthly = dayAdd(t, 7).slice(0, 7) !== t.slice(0, 7);
+        if (k < 5 || (monthly && [...out.values()].filter(x => x.monthly).length < 3)) add(t, monthly);
+      }
+      return [...out.values()].sort((a, b) => a.ms - b.ms);
+    }
+    function expiryLabel(e) {
+      const d = new Date(e.date + 'T00:00:00Z');
+      const txt = d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).replace(',', '');
+      return txt + (e.monthly ? ' · monthly' : '') + (e.shifted ? ' (Tue holiday)' : '');
+    }
+    function optDaysText(days) {
+      if (days < 1) { const h = Math.max(0, Math.round(days * 24)); return h + (h === 1 ? ' hour' : ' hours'); }
+      const n = Math.round(days); return n + (n === 1 ? ' day' : ' days');
+    }
+    // Everything the card shows, worked out from the inputs. Pure, so the test can call it.
+    // i: { side, entry, sl, target, tgtR, risk, vix, lot, brok, exp ('' = auto), tf, pick ('' = auto | step offset),
+    //      cal: { prem, spot, strike, side, exp } | null, now }
+    function optPlan(i) {
+      const now = i.now == null ? Date.now() : i.now;
+      const num = v => { const n = parseFloat(v); return isFinite(n) ? n : NaN; };
+      const E = num(i.entry), L = num(i.sl);
+      const res = { errors: [], warns: [] };
+      let lot = Math.round(num(i.lot));
+      if (!(lot >= 1 && lot <= 10000)) { if (String(i.lot || '') !== '') res.warns.push('Lot size ' + i.lot + ' looks wrong; using ' + NIFTY_LOT + '.'); lot = NIFTY_LOT; }
+      let brok = num(i.brok);
+      if (!(brok >= 0 && brok <= 1000)) { if (String(i.brok || '') !== '') res.warns.push('Brokerage ₹' + i.brok + ' an order looks wrong; using ₹20.'); brok = 20; }
+      const sane = x => x >= 5000 && x <= 200000;
+      if (!(E > 0)) { res.errors.push('Type the Nifty level you will enter at (your fib entry).'); return res; }
+      if (!sane(E)) { res.errors.push('Nifty ' + E.toLocaleString('en-IN') + ' does not look like a Nifty level (it trades around 20,000-30,000).'); return res; }
+      if (!(L > 0)) { res.errors.push('Type the Nifty stop-loss level.'); return res; }
+      if (!sane(L)) { res.errors.push('Stop-loss ' + L.toLocaleString('en-IN') + ' does not look like a Nifty level.'); return res; }
+      if (L === E) { res.errors.push('The stop-loss is the same as the entry.'); return res; }
+      const side = L < E ? 'ce' : 'pe', up = side === 'ce';
+      if (i.side && i.side !== side) res.warns.push('Your stop is ' + (up ? 'below' : 'above') + ' the entry, so this is a ' + (up ? 'CALL (CE): Nifty up' : 'PUT (PE): Nifty down') + ' trade.');
+      const riskPts = Math.abs(E - L);
+      if (riskPts / E > 0.1) res.warns.push('A ' + (riskPts / E * 100).toFixed(1) + '% stop is very wide for Nifty; check the levels.');
+      let G = num(i.target), tgtFrom = 'price';
+      if (G > 0 && ((up && G <= E) || (!up && G >= E))) { res.warns.push('Target ' + G.toLocaleString('en-IN') + ' is on the wrong side of the entry for a ' + (up ? 'CALL' : 'PUT') + '; using ' + (num(i.tgtR) || 1) + 'R instead.'); G = NaN; }
+      if (!(G > 0) || !sane(G)) { const R = num(i.tgtR) > 0 ? num(i.tgtR) : 1; G = up ? E + R * riskPts : E - R * riskPts; tgtFrom = R + 'R'; }
+      const exps = niftyExpiries(now);
+      if (!exps.length) { res.errors.push('No expiry ahead found.'); return res; }
+      const tf = OPT_TF.find(t => t.k === i.tf) || OPT_TF[1];
+      let hold = num(i.hold) > 0 ? num(i.hold) : tf.hold, holdAuto = !(num(i.hold) > 0);
+      const autoExp = exps.find(e => e.days >= Math.max(tf.days, 3 * hold)) || exps[exps.length - 1];
+      let exp = autoExp, expAuto = true;
+      if (i.exp) {
+        const m = exps.find(e => e.date === i.exp);
+        if (m) { exp = m; expAuto = false; }
+        else if (/^\d{4}-\d{2}-\d{2}$/.test(i.exp) && expiryMs(i.exp) > now) { exp = { date: i.exp, ms: expiryMs(i.exp), shifted: false, monthly: false, days: (expiryMs(i.exp) - now) / 864e5 }; expAuto = false; }
+        else res.warns.push('The expiry picked before has passed; using ' + expiryLabel(autoExp) + '.');
+      }
+      const T = Math.max(exp.ms - now, 15 * 60e3) / (365 * 864e5);
+      if (exp.date > NSE_HOLIDAYS_UNTIL) res.warns.push("NSE's holidays after " + NSE_HOLIDAYS_UNTIL.slice(0, 4) + ' are not in yet: check this expiry date on your app.');
+      if (hold >= exp.days) { res.warns.push('You plan to hold about ' + optDaysText(hold) + ' but this expiry ends in ' + optDaysText(exp.days) + '; the target is priced at half that.'); hold = exp.days / 2; }
+      // The target is priced after the hold (time decay taken off); the stop at once,
+      // because a stop placed on the premium caps the loss there whenever it hits.
+      const Th = Math.max(T - hold / 365, 15 * 60e3 / (365 * 864e5));
+      if (exp.days < 1) res.warns.push('This expiry ends in ' + optDaysText(exp.days) + ': a bought option loses value fastest on its last day.');
+      // Volatility: from the price the user typed for one strike, else India VIX.
+      let iv = num(i.vix) / 100, ivFrom = 'vix';
+      if (!(iv >= 0.03 && iv <= 1.5)) { if (isFinite(iv) && i.vix !== '') res.warns.push('India VIX ' + i.vix + ' looks wrong; using 14.'); iv = 0.14; }
+      const cal = i.cal;
+      if (cal && num(cal.prem) > 0 && num(cal.strike) > 0) {
+        const cS = num(cal.spot) > 0 ? num(cal.spot) : E, cK = num(cal.strike), cType = cal.side === 'pe' ? 'pe' : 'ce';
+        const cExp = exps.find(e => e.date === cal.exp) || exp;
+        const cT = Math.max(cExp.ms - now, 15 * 60e3) / (365 * 864e5);
+        const v = sane(cS) && cK > 0 ? bsImpliedVol(cType, num(cal.prem), cS, cK, cT) : null;
+        if (v) { iv = v; ivFrom = 'price'; }
+        else res.warns.push('₹' + cal.prem + ' for ' + (cK || '?').toLocaleString('en-IN') + ' ' + cType.toUpperCase() + ' with Nifty at ' + cS.toLocaleString('en-IN') + ' cannot be right (below what it is already worth, or far too high); check the strike and Nifty level. Using VIX.');
+      }
+      const risk = num(i.risk);
+      const K0 = Math.round(E / NIFTY_STEP) * NIFTY_STEP;
+      const rows = [];
+      for (let o = -2; o <= 3; o++) {
+        const K = up ? K0 + o * NIFTY_STEP : K0 - o * NIFTY_STEP;
+        const at = bsOption(side, E, K, T, iv), atSl = bsOption(side, L, K, T, iv), atT = bsOption(side, G, K, Th, iv);
+        const p0 = at.price, pSl = atSl.price, pT = atT.price;
+        const lossU = p0 - pSl, gainU = pT - p0;
+        const lossFor = n => n * lot * lossU + optFees(n * lot, p0, pSl, brok);
+        const gainFor = n => n * lot * gainU - optFees(n * lot, p0, pT, brok);
+        let lots = 0;
+        if (risk > 0 && lossU > 0) { while (lots < 1000 && lossFor(lots + 1) <= risk) lots++; }
+        const name = o === 0 ? 'ATM' : (o < 0 ? 'ITM ' + (-o) : 'OTM ' + o);
+        rows.push({ off: o, K, name, p0, pSl, pT, delta: at.delta, theta: at.theta, lossU, gainU, lots, loss1: lossFor(1), gain1: gainFor(1), lossFor, gainFor, capped: lots >= 1000,
+          decayToStop: at.theta < 0 ? lossU / -at.theta : Infinity });
+      }
+      // Pick: strikes that move with Nifty (delta 0.35-0.75; outside it the option is
+      // too slow or costs like the index). Among them, the one that makes the most at
+      // the target for the lots your risk buys; if none fits a lot, the one closest to it.
+      const band = rows.filter(r => Math.abs(r.delta) >= 0.35 && Math.abs(r.delta) <= 0.75);
+      const pool = band.length ? band : rows.slice().sort((a, b) => Math.abs(Math.abs(a.delta) - 0.5) - Math.abs(Math.abs(b.delta) - 0.5)).slice(0, 1);
+      const fits = pool.filter(r => r.lots >= 1);
+      let auto = fits.length
+        ? fits.reduce((b, r) => { const g = r.gainFor(r.lots), gb = b.gainFor(b.lots); return (g > gb + 0.5 || (Math.abs(g - gb) <= 0.5 && Math.abs(r.delta) > Math.abs(b.delta))) ? r : b; })
+        : pool.reduce((b, r) => r.loss1 < b.loss1 ? r : b);
+      let pick = auto, pickAuto = true;
+      if (i.pick !== '' && i.pick != null && isFinite(Number(i.pick))) { const m = rows.find(r => r.off === Number(i.pick)); if (m) { pick = m; pickAuto = m === auto; } }
+      const lots = pick.lots >= 1 ? pick.lots : 1, over = !(pick.lots >= 1);
+      Object.assign(res, {
+        ok: true, side, up, E, L, G, tgtFrom, riskPts, risk: risk > 0 ? risk : 0, lot, brok, iv, ivFrom, exp, expAuto, autoExp, exps, tf, T, hold, holdAuto,
+        rows, pick, pickAuto, auto, lots, over, qty: lots * lot,
+        cost: lots * lot * pick.p0, feesSl: optFees(lots * lot, pick.p0, pick.pSl, brok), feesT: optFees(lots * lot, pick.p0, pick.pT, brok),
+        lossSl: pick.lossFor(lots), gainT: pick.gainFor(lots), decayDay: -pick.theta * lots * lot
+      });
+      res.rr = res.lossSl > 0 ? res.gainT / res.lossSl : null;
+      return res;
+    }
+    // The NSE book the risk comes from: the calculator's own when it is an NSE one, else the first NSE book.
+    function optBook() {
+      const s = calcSettings();
+      const linked = state.accounts.find(a => a.id === s.accountId);
+      if (linked && linked.market === 'nse') return linked;
+      return state.accounts.find(a => a.market === 'nse' && !a.reportBroker) || null;
+    }
+    function optAutoRisk() {
+      const a = optBook();
+      if (!a) return null;
+      const bal = bookBalance(a) * fxk(a, 'INR');
+      if (!(bal > 0)) return null;
+      const pct = a.maxRiskPct || 1;
+      return { book: a, bal, pct, risk: +(bal * pct / 100).toFixed(2) };
+    }
+    function optInputs() {
+      const s = calcSettings(), auto = optAutoRisk();
+      const typed = parseFloat(s.optRisk);
+      return {
+        side: '', entry: s.optEntry, sl: s.optSl, target: s.optTarget, tgtR: s.optTgtR, tf: s.optTf, hold: s.optHold, exp: s.optExp,
+        vix: s.optVix, lot: s.optLot, brok: s.optBrok, pick: s.optPick, cal: s.optCal,
+        risk: typed > 0 ? typed : (auto ? auto.risk : ''), auto, riskTyped: typed > 0
+      };
+    }
+    function optSet(k, v) {
+      const patch = { [k]: v };
+      // A new entry or stop starts from the automatic strike again; a picked expiry stays.
+      if (k === 'optEntry' || k === 'optSl') patch.optPick = '';
+      if (k === 'optTf') { patch.optExp = ''; patch.optHold = ''; }
+      state.calculatorSettings = Object.assign(calcSettings(), patch);
+      save(); renderOptions();
+    }
+    // The premium the broker's app shows, for the strike shown when its price was first typed.
+    function optCalSet(clear) {
+      const s = calcSettings(), el = id => document.getElementById(id);
+      if (clear) el('optCalPrem').value = el('optCalSpot').value = '';
+      const prem = el('optCalPrem').value, spot = el('optCalSpot').value;
+      const old = s.optCal || {}, p = lastOptPlan;
+      let cal = null;
+      if (prem !== '' || spot !== '') {
+        cal = { prem, spot, strike: old.strike || '', side: old.side || '', exp: old.exp || '' };
+        if (!(parseFloat(prem) > 0)) Object.assign(cal, { strike: '', side: '', exp: '' });
+        else if (!cal.strike && p && p.ok) Object.assign(cal, { strike: p.pick.K, side: p.side, exp: p.exp.date });
+      }
+      state.calculatorSettings = Object.assign(s, { optCal: cal });
+      save(); renderOptions();
+    }
+    function optPick(off) { state.calculatorSettings = Object.assign(calcSettings(), { optPick: off === '' ? '' : String(off) }); save(); renderOptions(); }
+    let lastOptPlan = null;
+    function renderOptions() {
+      const el = id => document.getElementById(id);
+      if (!el('optOut')) return;
+      const s = calcSettings(), inp = optInputs();
+      setCalcValue('optEntry', s.optEntry); setCalcValue('optSl', s.optSl); setCalcValue('optTarget', s.optTarget);
+      setCalcValue('optRisk', s.optRisk); setCalcValue('optVix', s.optVix); setCalcValue('optLot', s.optLot); setCalcValue('optBrok', s.optBrok);
+      el('optRisk').placeholder = inp.auto ? 'auto ' + money(inp.auto.risk, 'INR', 0) : 'type ₹';
+      if (document.activeElement !== el('optTgtR')) el('optTgtR').value = ['1', '1.5', '2', '3'].includes(String(s.optTgtR)) ? String(s.optTgtR) : '1';
+      const tfSel = el('optTf');
+      if (document.activeElement !== tfSel) { tfSel.innerHTML = OPT_TF.map(t => `<option value="${t.k}">${esc(t.label)}</option>`).join(''); tfSel.value = OPT_TF.some(t => t.k === s.optTf) ? s.optTf : '4h'; }
+      const p = optPlan(inp);
+      lastOptPlan = p;
+      const tf = OPT_TF.find(t => t.k === s.optTf) || OPT_TF[1];
+      const holdSel = el('optHold');
+      if (document.activeElement !== holdSel) {
+        const autoHold = OPT_HOLDS.find(h => h.v === tf.hold);
+        holdSel.innerHTML = `<option value="">Auto (${esc(autoHold ? autoHold.label.toLowerCase() : optDaysText(tf.hold))})</option>` + OPT_HOLDS.map(h => `<option value="${h.v}">${esc(h.label)}</option>`).join('');
+        holdSel.value = OPT_HOLDS.some(h => String(h.v) === String(s.optHold)) ? String(s.optHold) : '';
+      }
+      const expSel = el('optExp');
+      if (document.activeElement !== expSel) {
+        const exps = p.ok ? p.exps : niftyExpiries();
+        const auto = p.ok ? p.autoExp : null;
+        expSel.innerHTML = `<option value="">Auto${auto ? ' (' + esc(expiryLabel(auto)) + ')' : ''}</option>` + exps.map(e => `<option value="${e.date}">${esc(expiryLabel(e))} · ${esc(optDaysText(e.days))}</option>`).join('');
+        expSel.value = exps.some(e => e.date === s.optExp) ? s.optExp : '';
+      }
+      // The calibration row names the strike its price belongs to.
+      const cal = s.optCal;
+      setCalcValue('optCalPrem', cal ? cal.prem : ''); setCalcValue('optCalSpot', cal ? cal.spot : '');
+      el('optCalSpot').placeholder = p.ok ? String(p.E) : 'entry';
+      el('optCalLbl').innerText = cal && cal.strike ? Number(cal.strike).toLocaleString('en-IN') + ' ' + (cal.side === 'pe' ? 'PE' : 'CE')
+        : p.ok ? p.pick.K.toLocaleString('en-IN') + ' ' + p.side.toUpperCase() + ' ' + expiryLabel(p.exp).replace(/ ·.*| \(.*/, '') : 'the strike above';
+      el('optCalNote').innerHTML = p.ok && p.ivFrom === 'price' ? `Volatility read from your price: <b class="text-slate-200">${(p.iv * 100).toFixed(1)}%</b> (VIX not used)` : '';
+      const out = el('optOut');
+      const warnHtml = (p.warns || []).map(w => `<div class="p-2 rounded-lg border bg-amber-500/10 border-amber-500/40 text-amber-300 text-[11px] mb-2">${esc(w)}</div>`).join('');
+      if (!p.ok) {
+        out.innerHTML = warnHtml + `<p class="text-slate-400 text-[11px] leading-relaxed">${esc(p.errors[0] || '')}</p>`
+          + `<p class="text-slate-500 text-[11px] mt-1">Nifty up: buy a <b class="text-emerald-300">CALL (CE)</b>. Nifty down: buy a <b class="text-rose-300">PUT (PE)</b>. The stop decides which: below the entry is a CALL, above it a PUT.</p>`;
+        return;
+      }
+      const R = v => money(v, 'INR', 0), R2 = v => money(v, 'INR', 2), nf = v => Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+      const up = p.up, pk = p.pick, typ = up ? 'CE' : 'PE';
+      const sideCls = up ? 'text-emerald-300' : 'text-rose-300';
+      const expTxt = expiryLabel(p.exp).replace(/ ·.*| \(.*/, '');
+      // Over the risk, the contract is still named (the one closest to fitting), but not as a buy.
+      const head = `<div class="rounded-lg border ${p.over ? 'border-rose-800/60' : 'border-amber-500/40'} bg-black/30 p-3">
+          <div class="text-[10px] uppercase tracking-wider font-bold ${p.over ? 'text-rose-300' : 'text-slate-500'}">${p.over ? (p.risk > 0 ? 'Over your ' + R(p.risk) + ' risk: even 1 lot loses more' : 'Type the risk to take to size it') + ' · closest fit below' : (up ? 'Nifty up: buy a CALL' : 'Nifty down: buy a PUT')}</div>
+          <div id="optBuy" class="text-2xl font-bold ${p.over ? 'text-slate-400' : sideCls} mt-0.5">${p.over ? '' : 'BUY '}NIFTY ${pk.K.toLocaleString('en-IN')} ${typ} · ${esc(expTxt)}</div>
+          <div class="text-slate-300 mt-1"><b class="text-white">${p.lots} ${p.lots === 1 ? 'lot' : 'lots'}</b> = ${p.qty} qty · ${esc(pk.name)} strike · premium about <b class="text-white">${R2(pk.p0)}</b> when Nifty is at ${nf(p.E)}${p.ivFrom === 'vix' ? ' <span class="text-slate-500">(estimate)</span>' : ''}</div>
+        </div>`;
+      const tile = (label, val, sub, cls, id) => `<div class="rounded-lg bg-black/30 border border-terminal-border p-2.5 text-center"><div class="text-[10px] uppercase tracking-wider text-slate-500 font-bold">${label}</div><div class="text-lg font-bold ${cls} mt-0.5"${id ? ' id="' + id + '"' : ''}>${val}</div><div class="text-[10px] text-slate-500 mt-0.5">${sub}</div></div>`;
+      const tiles = `<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">`
+        + tile('You pay', R(p.cost), 'premium × ' + p.qty + ' qty', 'text-amber-300', 'optCost')
+        + tile('Loss at stop', '-' + R(p.lossSl), 'sell at ≈ ' + R2(pk.pSl) + ' (Nifty ' + nf(p.L) + ')', 'text-rose-300', 'optLoss')
+        + tile('Profit at target', (p.gainT >= 0 ? '+' : '-') + R(Math.abs(p.gainT)), 'sell at ≈ ' + R2(pk.pT) + ' (Nifty ' + nf(p.G) + (p.tgtFrom !== 'price' ? ', ' + p.tgtFrom : '') + ')', p.gainT >= 0 ? 'text-emerald-300' : 'text-rose-300', 'optGain')
+        + tile('Reward : risk', p.rr == null ? '—' : p.rr.toFixed(2), 'fees in, after ' + esc(optDaysText(p.hold)), p.rr >= 1 ? 'text-sky-300' : 'text-amber-300', 'optRR')
+        + `</div>`;
+      const usd = viewCur() === 'USD' && p.ok ? (() => { const a = optBook(), k = a ? fxRate(a) : FX_DEFAULT; return `<p class="text-[10px] text-slate-500 mt-1.5">In dollars (₹${nf(k)} a $): pay ≈ ${money(p.cost / k, 'USD')} · lose ≈ ${money(p.lossSl / k, 'USD')} · make ≈ ${money(p.gainT / k, 'USD')}</p>`; })() : '';
+      // Why this contract, in a few lines.
+      const why = [];
+      why.push(`<b class="${sideCls}">${up ? 'CALL (CE)' : 'PUT (PE)'}</b>: your stop is ${up ? 'below' : 'above'} the entry, so you need Nifty to ${up ? 'rise' : 'fall'}. ${up ? 'A CALL' : 'A PUT'} gains when it does.`);
+      why.push(`<b class="text-slate-200">${pk.K.toLocaleString('en-IN')} (${esc(pk.name)})</b>: delta ${Math.abs(pk.delta).toFixed(2)}, the premium moves about ₹${Math.abs(pk.delta).toFixed(2)} per Nifty point. `
+        + (p.pickAuto ? (p.over ? 'The strike nearest to fitting your risk among those that follow Nifty well (delta 0.35-0.75).' : 'Most profit at the target for your risk among strikes that follow Nifty well (delta 0.35-0.75). Far OTM is cheap but needs a big, fast move.')
+          : 'Picked by you. <button type="button" class="underline text-amber-300" onclick="optPick(\'\')">Back to auto</button>'));
+      why.push(`<b class="text-slate-200">${esc(expiryLabel(p.exp))}</b>, ${esc(optDaysText(p.exp.days))} left: `
+        + (p.expAuto ? `the first expiry at least ${esc(optDaysText(Math.max(p.tf.days, 3 * p.hold)))} out for a ${esc(p.tf.label)} setup, so time decay eats less.` : 'picked by you.')
+        + (p.exp.shifted ? ' Tuesday is an NSE holiday, so it expires the day before.' : ''));
+      const dPerLot = -pk.theta * p.lot;
+      why.push(`Time decay: about <b class="text-slate-200">${R(dPerLot)} a day per lot</b> if Nifty stands still`
+        + (isFinite(pk.decayToStop) && pk.decayToStop < 10 ? `; that alone takes the premium to your stop (${R2(pk.pSl)}) in about ${esc(optDaysText(pk.decayToStop))}.` : '.'));
+      const rk = inp.riskTyped ? `Risk ${R(p.risk)} (typed).` : inp.auto ? `Risk ${R(p.risk)}: ${nf(inp.auto.pct)}% of ${esc(inp.auto.book.name)} (${R(inp.auto.bal)}).` : '';
+      if (p.over) why.push(`<span class="text-rose-300">${p.risk > 0 ? rk + ' ' : 'No risk set. '}One lot here loses ${R(pk.loss1)} at the stop${p.risk > 0 ? ', ' + (pk.loss1 / p.risk).toFixed(1) + '× that' : ''}. Raise the risk, move the stop closer, or skip this trade.</span>`);
+      else why.push(rk + ` ${p.lots} ${p.lots === 1 ? 'lot loses' : 'lots lose'} ${R(p.lossSl)} at the stop, fees included${pk.capped ? ' (capped at 1,000 lots)' : ''}.`);
+      why.push(`Put the stop on the premium (sell at ≈ ${R2(pk.pSl)}) or on Nifty ${nf(p.L)}, whichever your app allows; the premium stop also gets you out if time decay drags it down.`);
+      const whyHtml = `<ul class="mt-3 space-y-1.5 text-[11px] text-slate-400 leading-relaxed list-disc pl-4">${why.map(x => '<li>' + x + '</li>').join('')}</ul>`;
+      // Every strike near the money, to compare and pick by hand.
+      const rowsHtml = p.rows.map(r => {
+        const on = r === pk;
+        return `<tr data-off="${r.off}" onclick="optPick(${r.off})" class="cursor-pointer border-t border-terminal-border/60 ${on ? 'bg-amber-500/10' : 'hover:bg-white/5'}">
+          <td class="py-1.5 pr-2 text-slate-200 whitespace-nowrap">${r.K.toLocaleString('en-IN')} ${typ}${on ? ' <span class="text-amber-300 text-[10px]">pick</span>' : ''}<div class="text-[10px] text-slate-500">${esc(r.name)}</div></td>
+          <td class="pr-2 text-right">${R2(r.p0)}</td>
+          <td class="pr-2 text-right">${Math.abs(r.delta).toFixed(2)}</td>
+          <td class="pr-2 text-right ${r.lots ? 'text-slate-200' : 'text-slate-500'}">${r.lots}${r.capped ? '+' : ''}</td>
+          <td class="pr-2 text-right text-rose-300">-${R(r.lots ? r.lossFor(r.lots) : r.loss1)}${r.lots ? '' : '<div class="text-[10px] text-slate-500">for 1 lot</div>'}</td>
+          <td class="text-right ${r.gainFor(Math.max(1, r.lots)) >= 0 ? 'text-emerald-300' : 'text-rose-300'}">${signedMoney(r.gainFor(Math.max(1, r.lots)), 'INR', 0)}</td>
+        </tr>`;
+      }).join('');
+      const table = `<div class="mt-4"><div class="text-slate-400 mb-1">Strikes near ${nf(p.E)} · ${esc(expTxt)} expiry · tap one to pick it</div>
+        <div class="overflow-x-auto"><table id="optTable" class="w-full text-[11px]"><thead><tr class="text-slate-500 text-[10px] uppercase"><th class="text-left font-semibold pb-1">Strike</th><th class="text-right font-semibold pr-2">Premium</th><th class="text-right font-semibold pr-2">Delta</th><th class="text-right font-semibold pr-2">Lots</th><th class="text-right font-semibold pr-2">At stop</th><th class="text-right font-semibold">At target</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+        <p class="text-[10px] text-slate-500 mt-2 leading-relaxed">${p.ivFrom === 'price' ? 'Premiums from the volatility in your app\'s price' : 'Premiums are Black-Scholes estimates at India VIX ' + nf(p.iv * 100) + '%'}; the target is priced after ${esc(optDaysText(p.hold))} of time decay, the stop at once. Fees ≈ ${R(p.feesSl)} a round trip at the stop (₹${nf(p.brok)} an order, STT, exchange, stamp, GST).</p></div>`;
+      out.innerHTML = warnHtml + head + tiles + usd + whyHtml + table;
+    }
+
     function renderQuickSize(s, levHtml) {
       const el = id => document.getElementById(id);
       if (!el('quickMargin')) return;
@@ -8203,6 +8627,7 @@
       if (document.activeElement !== levSel) { levSel.innerHTML = levHtml; levSel.value = s.leverage; }
       renderQuickSize(s, levHtml);
       renderGoalPlanner();
+      renderOptions();
 
       const presetRow = document.getElementById("calcPresetRow");
       presetRow.classList.toggle("hidden", cur !== "INR");
@@ -9802,7 +10227,7 @@
     }
     /* =================== SECTION TABS (Signals and Analysis) =================== */
     const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "demo", label: "Demo account" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
-    const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
+    const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "options", label: "Nifty options" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
     const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "ledger", label: "Day's trades" }, { k: "week", label: "Week & grade" }, { k: "habits", label: "Time & habits" }];
     // The Review tab shows how many trades are waiting.
     function dashSecList() { return DASH_SECS; }
@@ -11947,6 +12372,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-06.157', pr: 72, title: 'Nifty options picker', pts: ['Calculator → Nifty options: type your Nifty entry and stop; it says CALL (CE) or PUT (PE), which strike, which expiry and how many lots', 'What you pay, loss at the stop and profit at the target, fees in; tap any strike to compare', 'Type the premium your app shows and every price matches it'] },
       { v: '2026-11-04.156', pr: 71, title: 'Demo account in Signals', pts: ['New Signals section: start with $100 (or any amount, $ or ₹) and take every alert in the view, compounding', 'Risk a % of the balance or a fixed amount, with an optional leverage cap', 'Final balance, return, max drawdown, balance curve, progress by day / week / month, other risk sizes and every trade'] },
       { v: '2026-11-04.155', pr: 70, title: 'Edge & breakdowns: compact cards', pts: ['Cards stack in balanced columns, so a short card leaves no empty space', 'One row per group with Alerts, Won, Total, Avg R and Avg %; full figures on hover', 'By symbol keeps the 6 best and 6 worst (Show more); a breakdown with one group folds into one line'] },
       { v: '2026-11-03.154', pr: 69, title: 'AI review: no more "Failed to fetch" dead end', pts: ['A dropped connection no longer ends the review: it checks Gemini is reachable, tries again, then the next model', 'If this network can\'t reach Gemini at all, it says so and what to do (VPN, ad-blocker, other network, or Copy for Gemini app)', 'A call stuck for 2.5 min moves on to the next model'] },
