@@ -4133,6 +4133,8 @@ async function optionsRun(seed) {
   const pdf = x => Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI);
   const cdf = x => { const n = 4000, a = 0, h = (x - a) / n; let t = pdf(a) + pdf(x); for (let i = 1; i < n; i++) t += (i % 2 ? 4 : 2) * pdf(a + i * h); return 0.5 + t * h / 3; };
   const bs = (call, S, K, T, v, r = 0.065) => { const d1 = (Math.log(S / K) + (r + v * v / 2) * T) / (v * Math.sqrt(T)), d2 = d1 - v * Math.sqrt(T); return call ? S * cdf(d1) - K * Math.exp(-r * T) * cdf(d2) : K * Math.exp(-r * T) * cdf(-d2) - S * cdf(-d1); };
+  const buyCost = (q, b, brok = 20) => { const t = q * b, x = t * (0.0003553 + 1e-6); return t + brok + x + t * 0.00003 + 0.18 * (brok + x); };
+  const delta = (S, K, T, v, r = 0.065) => cdf((Math.log(S / K) + (r + v * v / 2) * T) / (v * Math.sqrt(T)));
   const fees = (q, b, sl, brok = 20) => { const buy = q * b, sell = q * sl, txn = (buy + sell) * 0.0003553, sebi = (buy + sell) * 1e-6; return 2 * brok + sell * 0.0015 + txn + sebi + buy * 0.00003 + 0.18 * (2 * brok + txn + sebi); };
   const rupees = t => Number(String(t).replace(/[^\d.-]/g, ''));
   // Friday 6 Nov 2026, 11:43 IST. Tue 10 Nov and Tue 24 Nov are NSE holidays.
@@ -4174,8 +4176,40 @@ async function optionsRun(seed) {
       const shown = await page.evaluate(() => ({ cost: document.getElementById('optCost').innerText, loss: document.getElementById('optLoss').innerText, gain: document.getElementById('optGain').innerText, out: document.getElementById('optOut').innerText }));
       const prem = rupees(/premium about (₹[\d,.]+)/.exec(shown.out)[1]);
       check(Math.abs(prem - p0) < 0.01 && lots === 2 && new RegExp('\\b' + lots + ' lots = 130 qty').test(shown.out), w + 'premium ' + prem + ' vs ' + p0.toFixed(2) + ' by hand, lots ' + lots + ': ' + shown.out.slice(0, 200));
-      check(Math.abs(rupees(shown.cost) - lots * 65 * p0) <= 0.5 && Math.abs(rupees(shown.loss) + loss(lots)) <= 0.5 && Math.abs(rupees(shown.gain) - gain) <= 0.5,
-        w + 'cost/loss/gain ' + JSON.stringify([shown.cost, shown.loss, shown.gain]) + ' vs ' + [lots * 65 * p0, -loss(lots), gain].map(x => x.toFixed(0)));
+      check(Math.abs(rupees(shown.cost) - buyCost(lots * 65, p0)) <= 0.5 && Math.abs(rupees(shown.loss) + loss(lots)) <= 0.5 && Math.abs(rupees(shown.gain) - gain) <= 0.5,
+        w + 'cost/loss/gain ' + JSON.stringify([shown.cost, shown.loss, shown.gain]) + ' vs ' + [buyCost(lots * 65, p0), -loss(lots), gain].map(x => x.toFixed(0)));
+      // Account size: a bought option costs its whole premium, so the lots are also capped by what
+      // the account pays for. ₹30,000 buys 1 lot of the ATM (₹17,969 a lot), though the risk allows 2.
+      await page.fill('#optCap', '30000');
+      const capAtm = Math.floor(30000 / buyCost(65, p0));
+      const a30 = await page.evaluate(() => ({ out: document.getElementById('optOut').innerText, rows: [...document.querySelectorAll('#optTable tbody tr')].map(r => ({ k: r.cells[0].innerText.split('\n')[0].replace(/ pick$/, ''), lots: r.cells[3].innerText.replace(/\s+/g, ' ') })) }));
+      const atmRow = a30.rows.find(r => r.k === '25,600 CE');
+      check(capAtm === 1 && atmRow && atmRow.lots === '1 acct 1' && /Account ₹30,000: 1 lot of 25,\d{3} CE costs ₹[\d,]+, so it pays for \d+ lots?; your risk allows \d+\./.test(a30.out),
+        w + 'account ₹30,000: ' + JSON.stringify(atmRow) + ' ' + a30.out.slice(0, 300));
+      // The pick's lots, by hand: the smaller of what ₹30,000 pays for and what ₹10,000 of risk allows.
+      const pk30 = Number(/NIFTY ([\d,]+) CE/.exec(await page.innerText('#optBuy'))[1].replace(/,/g, ''));
+      const q0 = bs(true, 25600, pk30, T, 0.14), qSl = bs(true, 25450, pk30, T, 0.14);
+      let capL = 0; while (buyCost((capL + 1) * 65, q0) <= 30000) capL++;
+      let riskL = 0; while ((riskL + 1) * 65 * (q0 - qSl) + fees((riskL + 1) * 65, q0, qSl) <= 10000) riskL++;
+      const want30 = Math.min(capL, riskL), pickCost = rupees(await page.innerText('#optCost'));
+      check(want30 >= 1 && new RegExp('\\b' + want30 + (want30 === 1 ? ' lot' : ' lots') + ' = ' + want30 * 65 + ' qty').test(a30.out) && Math.abs(pickCost - buyCost(want30 * 65, q0)) <= 0.5 && pickCost <= 30000,
+        w + pk30 + ' CE with ₹30,000: want ' + want30 + ' lots (account ' + capL + ', risk ' + riskL + '), cost ' + pickCost);
+      // ₹5,000 can't pay for a lot near the money: the nearest strike it can (delta 0.15+), by hand.
+      await page.fill('#optCap', '5000');
+      let far = null;
+      for (let o = 4; o <= 40 && !far; o++) { const K = 25600 + 50 * o; if (delta(25600, K, T, 0.14) < 0.15) break; if (buyCost(65, bs(true, 25600, K, T, 0.14)) <= 5000) far = K; }
+      const o5 = await page.innerText('#optOut');
+      check(far && (await page.innerText('#optBuy')).includes(far.toLocaleString('en-IN') + ' CE') && /Strikes nearer the money cost more than your account/.test(o5),
+        w + 'account ₹5,000 should point to ' + far + ' CE: ' + await page.innerText('#optBuy'));
+      // ₹500 pays for nothing worth buying: says so, no BUY.
+      await page.fill('#optCap', '500');
+      check(!/^BUY/.test(await page.innerText('#optBuy')) && /Your ₹500 account can't pay for 1 lot/.test(await page.innerText('#optOut')), w + 'account ₹500 not flagged: ' + (await page.innerText('#optOut')).slice(0, 160));
+      // Risk from the account: 2% of ₹2,00,000 = ₹4,000 when no amount is typed.
+      await page.fill('#optRisk', ''); await page.fill('#optCap', '200000'); await page.selectOption('#optRiskPct', '2');
+      check(await page.getAttribute('#optRisk', 'placeholder') === 'auto ₹4,000' && /Risk ₹4,000: 2% of the account\./.test(await page.innerText('#optOut')), w + 'risk % of account: ' + await page.getAttribute('#optRisk', 'placeholder'));
+      await page.fill('#optCap', '-5');
+      check(/Account size -5 looks wrong; not used/.test(await page.innerText('#optOut')), w + 'negative account not refused');
+      await page.fill('#optCap', ''); await page.selectOption('#optRiskPct', '1'); await page.fill('#optRisk', '10000');
       check(loss(lots) <= 10000 && loss(lots + 1) > 10000, w + 'lots do not fill the risk');
       // A 2R target moves the target price and the profit; a typed level wins over R.
       await page.selectOption('#optTgtR', '2');
@@ -4198,21 +4232,21 @@ async function optionsRun(seed) {
       await page.fill('#optCalPrem', '250');
       await page.waitForTimeout(100);
       const k = /^([\d,]+) PE/.exec(lbl)[1];
-      const row = await page.$$eval('#optTable tbody tr', (r, k) => { const x = r.find(y => y.cells[0].innerText.startsWith(k + ' PE')); return x ? x.cells[1].innerText : null; }, k);
+      const row = await page.$$eval('#optTable tbody tr', (r, k) => { const x = r.find(y => y.cells[0].innerText.startsWith(k + ' PE')); return x ? x.cells[1].innerText.split('\n')[0] : null; }, k);
       check(rupees(row) === 250 && /Volatility read from your price/.test(await page.innerText('#optCalNote')) && !/\(estimate\)/.test(await page.innerText('#optOut')), w + 'calibrated ' + lbl + ' shows ' + row);
       // Nifty at another level when the price was read: the entry premium moves by about delta x the gap.
       await page.fill('#optCalSpot', '25650');
-      const row2 = rupees(await page.$$eval('#optTable tbody tr', (r, k) => r.find(y => y.cells[0].innerText.startsWith(k + ' PE')).cells[1].innerText, k));
+      const row2 = rupees(await page.$$eval('#optTable tbody tr', (r, k) => r.find(y => y.cells[0].innerText.startsWith(k + ' PE')).cells[1].innerText.split('\n')[0], k));
       check(row2 > 250 && row2 < 250 + 50, w + 'price read at 25,650 should put the 25,600 premium a little above ₹250: ' + row2);
       await page.click('#optCalClear');
       check(await page.inputValue('#optCalPrem') === '' && /\(estimate\)/.test(await page.innerText('#optOut')), w + 'Clear did not go back to VIX');
       // Too little risk for one lot: no BUY, and says so.
       await page.fill('#optRisk', '500');
       check(!/^BUY/.test(await page.innerText('#optBuy')) && /Over your ₹500 risk/.test(await page.innerText('#optOut')) && /Raise the risk, move the stop closer, or skip/.test(await page.innerText('#optOut')), w + 'over-risk not flagged: ' + (await page.innerText('#optOut')).slice(0, 160));
-      // Auto risk: the NSE book's balance x its max risk %.
+      // No account typed: the NSE book's balance is the account, and the risk its max risk %.
       await page.fill('#optRisk', '');
-      const auto = await page.evaluate(() => { const a = state.accounts.find(x => x.market === 'nse'); return { want: money(bookBalance(a) * a.maxRiskPct / 100, 'INR', 0), ph: document.getElementById('optRisk').placeholder, out: document.getElementById('optOut').innerText }; });
-      check(auto.ph === 'auto ' + auto.want && auto.out.includes('Risk ' + auto.want + ': 1% of Test NSE'), w + 'auto risk: ' + JSON.stringify({ ph: auto.ph, want: auto.want }));
+      const auto = await page.evaluate(() => { const a = state.accounts.find(x => x.market === 'nse'), b = bookBalance(a); return { bal: money(b, 'INR', 0), want: money(b * a.maxRiskPct / 100, 'INR', 0), ph: document.getElementById('optRisk').placeholder, cph: document.getElementById('optCap').placeholder, out: document.getElementById('optOut').innerText }; });
+      check(auto.ph === 'auto ' + auto.want && auto.cph === 'Test NSE ' + auto.bal && auto.out.includes('Risk ' + auto.want + ': 1% of the account.') && auto.out.includes('Account ' + auto.bal + ' (Test NSE balance)'), w + 'auto account / risk: ' + JSON.stringify({ ph: auto.ph, cph: auto.cph, want: auto.want }));
       // Mistakes: a typo'd level, a stop on the entry, a target the wrong side, odd VIX / lot / brokerage.
       await page.fill('#optEntry', '256000000');
       check(/does not look like a Nifty level/.test(await page.innerText('#optOut')) && !(await page.$('#optBuy')), w + 'huge entry not refused');
