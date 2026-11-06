@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-06.157">
+  <meta name="app-version" content="2026-11-06.158">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -816,9 +816,9 @@
         <div class="flex flex-wrap items-center gap-2 mb-3">
           <span class="w-2 h-2 rounded-full bg-amber-400"></span>
           <h3 class="font-bold text-white uppercase tracking-wider">Nifty options</h3>
-          <span class="text-slate-500 text-[11px]">Type the entry and stop from your Nifty chart; get the CALL or PUT to buy, its strike, expiry and lots. Option prices are in ₹</span>
+          <span class="text-slate-500 text-[11px]">Type the entry and stop from your Nifty chart and your account size; get the CALL or PUT to buy, its strike, expiry and the lots you can afford. Option prices are in ₹</span>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
           <div>
             <label for="optEntry" class="text-slate-400 block mb-1">Nifty entry</label>
             <input type="number" id="optEntry" step="any" min="0" placeholder="e.g. 25600" oninput="optSet('optEntry', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
@@ -837,7 +837,14 @@
             <input type="number" id="optTarget" step="any" min="0" placeholder="or type a level" oninput="optSet('optTarget', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
           </div>
           <div>
-            <label for="optRisk" class="text-slate-400 block mb-1">Risk to take (₹)</label>
+            <label for="optCap" class="text-slate-400 block mb-1">Account size (₹)</label>
+            <input type="number" id="optCap" step="any" min="0" placeholder="e.g. 50000" oninput="optSet('optCap', this.value)" title="The money you have to buy options with; a bought option costs its whole premium up front" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
+          </div>
+          <div>
+            <div class="flex items-center justify-between gap-2 mb-1">
+              <label for="optRisk" class="text-slate-400">Risk (₹)</label>
+              <select id="optRiskPct" onchange="optSet('optRiskPct', this.value)" title="Risk as a % of the account, when no amount is typed" class="bg-[#070A11] border border-terminal-border px-1 rounded text-slate-300 text-[10px] focus:outline-none focus:border-amber-500"></select>
+            </div>
             <input type="number" id="optRisk" step="any" min="0" placeholder="auto" oninput="optSet('optRisk', this.value)" class="w-full bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500 text-base font-bold">
           </div>
         </div>
@@ -7863,7 +7870,7 @@
       quickEntry: "", quickSlPrice: "", quickRisk: "",
       gpGoalId: "auto", gpTarget: "", gpDays: "", gpX: "2.5", gpRiskPct: "1", gpStop: "1", gpWin: "50", gpRR: "1.5", gpTrades: "3", gpAdvOpen: false, gpUnit: "amt", gpPct: "",
       optEntry: "", optSl: "", optTarget: "", optTgtR: "1", optRisk: "", optTf: "4h", optHold: "", optExp: "", optVix: "14",
-      optLot: "65", optBrok: "20", optPick: "", optCal: null
+      optLot: "65", optBrok: "20", optPick: "", optCal: null, optCap: "", optRiskPct: ""
     };
     function calcSettings() { return Object.assign({}, CALC_DEFAULTS, state.calculatorSettings || {}); }
     function calcUpdate(patch) {
@@ -8167,6 +8174,11 @@
       const txn = (buy + sell) * OPT_FEES.txn, sebi = (buy + sell) * OPT_FEES.sebi;
       return brok + sell * OPT_FEES.stt + txn + sebi + buy * OPT_FEES.stamp + (brok + txn + sebi) * OPT_FEES.gst;
     }
+    // What buying qty units at px takes from the account: the premium plus the buy order's charges.
+    function optBuyCost(qty, px, brokPerOrder) {
+      const t = qty * px, b = Math.max(0, brokPerOrder || 0), x = t * (OPT_FEES.txn + OPT_FEES.sebi);
+      return t + b + x + t * OPT_FEES.stamp + (b + x) * OPT_FEES.gst;
+    }
     // Dates are the IST calendar day as 'YYYY-MM-DD'; an expiry is that day at 15:30 IST.
     function istDay(ms) { return new Date(ms + 5.5 * 3600e3).toISOString().slice(0, 10); }
     function dayAdd(d, n) { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
@@ -8262,37 +8274,57 @@
         else res.warns.push('₹' + cal.prem + ' for ' + (cK || '?').toLocaleString('en-IN') + ' ' + cType.toUpperCase() + ' with Nifty at ' + cS.toLocaleString('en-IN') + ' cannot be right (below what it is already worth, or far too high); check the strike and Nifty level. Using VIX.');
       }
       const risk = num(i.risk);
+      // Account size: what there is to pay the premium with. A bought option costs its
+      // whole premium up front, so the lots are the smaller of what the account pays for
+      // and what the risk allows.
+      let cap = num(i.cap);
+      if (!(cap > 0 && cap <= 1e10)) { if (String(i.cap || '') !== '' && !(num(i.cap) === 0)) res.warns.push('Account size ' + i.cap + ' looks wrong; not used.'); cap = 0; }
       const K0 = Math.round(E / NIFTY_STEP) * NIFTY_STEP;
-      const rows = [];
-      for (let o = -2; o <= 3; o++) {
+      const mkRow = o => {
         const K = up ? K0 + o * NIFTY_STEP : K0 - o * NIFTY_STEP;
         const at = bsOption(side, E, K, T, iv), atSl = bsOption(side, L, K, T, iv), atT = bsOption(side, G, K, Th, iv);
         const p0 = at.price, pSl = atSl.price, pT = atT.price;
         const lossU = p0 - pSl, gainU = pT - p0;
         const lossFor = n => n * lot * lossU + optFees(n * lot, p0, pSl, brok);
         const gainFor = n => n * lot * gainU - optFees(n * lot, p0, pT, brok);
-        let lots = 0;
-        if (risk > 0 && lossU > 0) { while (lots < 1000 && lossFor(lots + 1) <= risk) lots++; }
+        let riskLots = 0, capLots = null;
+        if (risk > 0 && lossU > 0) { while (riskLots < 1000 && lossFor(riskLots + 1) <= risk) riskLots++; }
+        if (cap > 0 && p0 > 0) { capLots = 0; while (capLots < 1000 && optBuyCost((capLots + 1) * lot, p0, brok) <= cap) capLots++; }
+        const lots = capLots == null ? riskLots : Math.min(riskLots, capLots);
         const name = o === 0 ? 'ATM' : (o < 0 ? 'ITM ' + (-o) : 'OTM ' + o);
-        rows.push({ off: o, K, name, p0, pSl, pT, delta: at.delta, theta: at.theta, lossU, gainU, lots, loss1: lossFor(1), gain1: gainFor(1), lossFor, gainFor, capped: lots >= 1000,
-          decayToStop: at.theta < 0 ? lossU / -at.theta : Infinity });
-      }
+        return { off: o, K, name, p0, pSl, pT, delta: at.delta, theta: at.theta, lossU, gainU, lots, riskLots, capLots, costLot: optBuyCost(lot, p0, brok),
+          loss1: lossFor(1), gain1: gainFor(1), lossFor, gainFor, capped: lots >= 1000, decayToStop: at.theta < 0 ? lossU / -at.theta : Infinity };
+      };
+      const rows = [];
+      for (let o = -2; o <= 3; o++) rows.push(mkRow(o));
       // Pick: strikes that move with Nifty (delta 0.35-0.75; outside it the option is
       // too slow or costs like the index). Among them, the one that makes the most at
-      // the target for the lots your risk buys; if none fits a lot, the one closest to it.
-      const band = rows.filter(r => Math.abs(r.delta) >= 0.35 && Math.abs(r.delta) <= 0.75);
+      // the target for the lots your risk and account allow. When the account cannot pay
+      // for one lot of any of them, the deepest strike further out that it can (delta 0.15 at least).
+      const inBand = r => Math.abs(r.delta) >= 0.35 && Math.abs(r.delta) <= 0.75;
+      const band = rows.filter(inBand);
       const pool = band.length ? band : rows.slice().sort((a, b) => Math.abs(Math.abs(a.delta) - 0.5) - Math.abs(Math.abs(b.delta) - 0.5)).slice(0, 1);
       const fits = pool.filter(r => r.lots >= 1);
-      let auto = fits.length
-        ? fits.reduce((b, r) => { const g = r.gainFor(r.lots), gb = b.gainFor(b.lots); return (g > gb + 0.5 || (Math.abs(g - gb) <= 0.5 && Math.abs(r.delta) > Math.abs(b.delta))) ? r : b; })
-        : pool.reduce((b, r) => r.loss1 < b.loss1 ? r : b);
+      const afford = r => !(cap > 0) || r.capLots >= 1;
+      let auto;
+      if (fits.length) auto = fits.reduce((b, r) => { const g = r.gainFor(r.lots), gb = b.gainFor(b.lots); return (g > gb + 0.5 || (Math.abs(g - gb) <= 0.5 && Math.abs(r.delta) > Math.abs(b.delta))) ? r : b; });
+      else if (cap > 0 && !pool.some(afford)) {
+        let far = null;
+        // Not past delta 0.15: further out an option rarely pays.
+        for (let o = 4; o <= 40 && !far; o++) { const r = mkRow(o); if (Math.abs(r.delta) < 0.15) break; if (r.capLots >= 1) far = r; }
+        if (far) { rows.push(far); auto = far; }
+        else auto = pool.reduce((b, r) => r.costLot < b.costLot ? r : b);
+      } else auto = (pool.some(afford) ? pool.filter(afford) : pool).reduce((b, r) => r.loss1 < b.loss1 ? r : b);
       let pick = auto, pickAuto = true;
       if (i.pick !== '' && i.pick != null && isFinite(Number(i.pick))) { const m = rows.find(r => r.off === Number(i.pick)); if (m) { pick = m; pickAuto = m === auto; } }
-      const lots = pick.lots >= 1 ? pick.lots : 1, over = !(pick.lots >= 1);
+      // ok: buy it · far: fits, but far from the money · risk: one lot loses more than the risk · cash: the account cannot pay for one lot.
+      const status = pick.lots >= 1 ? (inBand(pick) ? 'ok' : 'far') : (cap > 0 && !(pick.capLots >= 1) ? 'cash' : 'risk');
+      const lots = pick.lots >= 1 ? pick.lots : 1, over = status === 'risk' || status === 'cash';
       Object.assign(res, {
-        ok: true, side, up, E, L, G, tgtFrom, riskPts, risk: risk > 0 ? risk : 0, lot, brok, iv, ivFrom, exp, expAuto, autoExp, exps, tf, T, hold, holdAuto,
-        rows, pick, pickAuto, auto, lots, over, qty: lots * lot,
-        cost: lots * lot * pick.p0, feesSl: optFees(lots * lot, pick.p0, pick.pSl, brok), feesT: optFees(lots * lot, pick.p0, pick.pT, brok),
+        ok: true, side, up, E, L, G, tgtFrom, riskPts, risk: risk > 0 ? risk : 0, cap, lot, brok, iv, ivFrom, exp, expAuto, autoExp, exps, tf, T, hold, holdAuto,
+        rows, pick, pickAuto, auto, lots, over, status, inBand: inBand(pick), qty: lots * lot,
+        capLimited: cap > 0 && pick.capLots != null && pick.capLots < pick.riskLots,
+        cost: optBuyCost(lots * lot, pick.p0, brok), feesSl: optFees(lots * lot, pick.p0, pick.pSl, brok), feesT: optFees(lots * lot, pick.p0, pick.pT, brok),
         lossSl: pick.lossFor(lots), gainT: pick.gainFor(lots), decayDay: -pick.theta * lots * lot
       });
       res.rr = res.lossSl > 0 ? res.gainT / res.lossSl : null;
@@ -8305,21 +8337,24 @@
       if (linked && linked.market === 'nse') return linked;
       return state.accounts.find(a => a.market === 'nse' && !a.reportBroker) || null;
     }
-    function optAutoRisk() {
-      const a = optBook();
-      if (!a) return null;
-      const bal = bookBalance(a) * fxk(a, 'INR');
-      if (!(bal > 0)) return null;
-      const pct = a.maxRiskPct || 1;
-      return { book: a, bal, pct, risk: +(bal * pct / 100).toFixed(2) };
+    // Account size: typed, else the NSE book's balance. Risk: typed, else that account x the risk %
+    // (picked here, else the book's max risk, else 1%).
+    function optAccount() {
+      const s = calcSettings(), a = optBook();
+      const typed = parseFloat(s.optCap);
+      const bal = a ? bookBalance(a) * fxk(a, 'INR') : 0;
+      const pct = parseFloat(s.optRiskPct) > 0 ? parseFloat(s.optRiskPct) : (a && a.maxRiskPct) || 1;
+      if (String(s.optCap || '') !== '') return { typed: true, cap: s.optCap, value: typed > 0 ? typed : 0, book: a, pct };
+      return { typed: false, cap: bal > 0 ? +bal.toFixed(2) : '', value: bal > 0 ? bal : 0, book: a, pct };
     }
     function optInputs() {
-      const s = calcSettings(), auto = optAutoRisk();
+      const s = calcSettings(), acc = optAccount();
       const typed = parseFloat(s.optRisk);
+      const autoRisk = acc.value > 0 ? +(acc.value * acc.pct / 100).toFixed(2) : '';
       return {
         side: '', entry: s.optEntry, sl: s.optSl, target: s.optTarget, tgtR: s.optTgtR, tf: s.optTf, hold: s.optHold, exp: s.optExp,
-        vix: s.optVix, lot: s.optLot, brok: s.optBrok, pick: s.optPick, cal: s.optCal,
-        risk: typed > 0 ? typed : (auto ? auto.risk : ''), auto, riskTyped: typed > 0
+        vix: s.optVix, lot: s.optLot, brok: s.optBrok, pick: s.optPick, cal: s.optCal, cap: acc.cap,
+        risk: typed > 0 ? typed : autoRisk, acc, autoRisk, riskTyped: typed > 0
       };
     }
     function optSet(k, v) {
@@ -8353,7 +8388,17 @@
       const s = calcSettings(), inp = optInputs();
       setCalcValue('optEntry', s.optEntry); setCalcValue('optSl', s.optSl); setCalcValue('optTarget', s.optTarget);
       setCalcValue('optRisk', s.optRisk); setCalcValue('optVix', s.optVix); setCalcValue('optLot', s.optLot); setCalcValue('optBrok', s.optBrok);
-      el('optRisk').placeholder = inp.auto ? 'auto ' + money(inp.auto.risk, 'INR', 0) : 'type ₹';
+      setCalcValue('optCap', s.optCap);
+      const acc = inp.acc;
+      el('optCap').placeholder = !acc.typed && acc.value > 0 ? (acc.book ? acc.book.name + ' ' : '') + money(acc.value, 'INR', 0) : 'e.g. 50000';
+      el('optRisk').placeholder = inp.autoRisk !== '' ? 'auto ' + money(inp.autoRisk, 'INR', 0) : 'type ₹';
+      const pctSel = el('optRiskPct');
+      if (document.activeElement !== pctSel) {
+        const opts = [0.5, 1, 2, 3, 5, 10];
+        if (!opts.includes(acc.pct)) opts.push(acc.pct), opts.sort((a, b) => a - b);
+        pctSel.innerHTML = opts.map(v => `<option value="${v}">${v}% of acct</option>`).join('');
+        pctSel.value = String(acc.pct);
+      }
       if (document.activeElement !== el('optTgtR')) el('optTgtR').value = ['1', '1.5', '2', '3'].includes(String(s.optTgtR)) ? String(s.optTgtR) : '1';
       const tfSel = el('optTf');
       if (document.activeElement !== tfSel) { tfSel.innerHTML = OPT_TF.map(t => `<option value="${t.k}">${esc(t.label)}</option>`).join(''); tfSel.value = OPT_TF.some(t => t.k === s.optTf) ? s.optTf : '4h'; }
@@ -8391,15 +8436,19 @@
       const up = p.up, pk = p.pick, typ = up ? 'CE' : 'PE';
       const sideCls = up ? 'text-emerald-300' : 'text-rose-300';
       const expTxt = expiryLabel(p.exp).replace(/ ·.*| \(.*/, '');
-      // Over the risk, the contract is still named (the one closest to fitting), but not as a buy.
+      // Over the risk or the account, the contract is still named (the one closest to fitting), but not as a buy.
+      const headLbl = p.status === 'cash' ? `Your ${R(p.cap)} account can't pay for 1 lot of a strike that follows Nifty · cheapest below`
+        : p.status === 'risk' ? (p.risk > 0 ? 'Over your ' + R(p.risk) + ' risk: even 1 lot loses more' : 'Type your account size or risk to size it') + ' · closest fit below'
+        : p.status === 'far' ? `Your account fits only far OTM (delta ${Math.abs(pk.delta).toFixed(2)}): it needs a big, fast move`
+        : (up ? 'Nifty up: buy a CALL' : 'Nifty down: buy a PUT');
       const head = `<div class="rounded-lg border ${p.over ? 'border-rose-800/60' : 'border-amber-500/40'} bg-black/30 p-3">
-          <div class="text-[10px] uppercase tracking-wider font-bold ${p.over ? 'text-rose-300' : 'text-slate-500'}">${p.over ? (p.risk > 0 ? 'Over your ' + R(p.risk) + ' risk: even 1 lot loses more' : 'Type the risk to take to size it') + ' · closest fit below' : (up ? 'Nifty up: buy a CALL' : 'Nifty down: buy a PUT')}</div>
+          <div class="text-[10px] uppercase tracking-wider font-bold ${p.over ? 'text-rose-300' : p.status === 'far' ? 'text-amber-300' : 'text-slate-500'}">${headLbl}</div>
           <div id="optBuy" class="text-2xl font-bold ${p.over ? 'text-slate-400' : sideCls} mt-0.5">${p.over ? '' : 'BUY '}NIFTY ${pk.K.toLocaleString('en-IN')} ${typ} · ${esc(expTxt)}</div>
           <div class="text-slate-300 mt-1"><b class="text-white">${p.lots} ${p.lots === 1 ? 'lot' : 'lots'}</b> = ${p.qty} qty · ${esc(pk.name)} strike · premium about <b class="text-white">${R2(pk.p0)}</b> when Nifty is at ${nf(p.E)}${p.ivFrom === 'vix' ? ' <span class="text-slate-500">(estimate)</span>' : ''}</div>
         </div>`;
       const tile = (label, val, sub, cls, id) => `<div class="rounded-lg bg-black/30 border border-terminal-border p-2.5 text-center"><div class="text-[10px] uppercase tracking-wider text-slate-500 font-bold">${label}</div><div class="text-lg font-bold ${cls} mt-0.5"${id ? ' id="' + id + '"' : ''}>${val}</div><div class="text-[10px] text-slate-500 mt-0.5">${sub}</div></div>`;
       const tiles = `<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">`
-        + tile('You pay', R(p.cost), 'premium × ' + p.qty + ' qty', 'text-amber-300', 'optCost')
+        + tile('You pay', R(p.cost), 'premium × ' + p.qty + ' qty + charges' + (p.cap > 0 ? ' · ' + Math.round(p.cost / p.cap * 100) + '% of account' : ''), p.cap > 0 && p.cost > p.cap ? 'text-rose-300' : 'text-amber-300', 'optCost')
         + tile('Loss at stop', '-' + R(p.lossSl), 'sell at ≈ ' + R2(pk.pSl) + ' (Nifty ' + nf(p.L) + ')', 'text-rose-300', 'optLoss')
         + tile('Profit at target', (p.gainT >= 0 ? '+' : '-') + R(Math.abs(p.gainT)), 'sell at ≈ ' + R2(pk.pT) + ' (Nifty ' + nf(p.G) + (p.tgtFrom !== 'price' ? ', ' + p.tgtFrom : '') + ')', p.gainT >= 0 ? 'text-emerald-300' : 'text-rose-300', 'optGain')
         + tile('Reward : risk', p.rr == null ? '—' : p.rr.toFixed(2), 'fees in, after ' + esc(optDaysText(p.hold)), p.rr >= 1 ? 'text-sky-300' : 'text-amber-300', 'optRR')
@@ -8409,7 +8458,10 @@
       const why = [];
       why.push(`<b class="${sideCls}">${up ? 'CALL (CE)' : 'PUT (PE)'}</b>: your stop is ${up ? 'below' : 'above'} the entry, so you need Nifty to ${up ? 'rise' : 'fall'}. ${up ? 'A CALL' : 'A PUT'} gains when it does.`);
       why.push(`<b class="text-slate-200">${pk.K.toLocaleString('en-IN')} (${esc(pk.name)})</b>: delta ${Math.abs(pk.delta).toFixed(2)}, the premium moves about ₹${Math.abs(pk.delta).toFixed(2)} per Nifty point. `
-        + (p.pickAuto ? (p.over ? 'The strike nearest to fitting your risk among those that follow Nifty well (delta 0.35-0.75).' : 'Most profit at the target for your risk among strikes that follow Nifty well (delta 0.35-0.75). Far OTM is cheap but needs a big, fast move.')
+        + (p.pickAuto ? (!p.inBand && p.cap > 0 && pk.capLots >= 1 ? 'Strikes nearer the money cost more than your account; this is the nearest one it pays for. Its premium moves little with Nifty and loses most of its value if Nifty doesn\'t move fast.'
+            : p.status === 'cash' ? 'The cheapest of the strikes that follow Nifty well (delta 0.35-0.75).'
+            : p.over ? 'The strike nearest to fitting your risk among those that follow Nifty well (delta 0.35-0.75).'
+            : 'Most profit at the target for your risk and account among strikes that follow Nifty well (delta 0.35-0.75). Far OTM is cheap but needs a big, fast move.')
           : 'Picked by you. <button type="button" class="underline text-amber-300" onclick="optPick(\'\')">Back to auto</button>'));
       why.push(`<b class="text-slate-200">${esc(expiryLabel(p.exp))}</b>, ${esc(optDaysText(p.exp.days))} left: `
         + (p.expAuto ? `the first expiry at least ${esc(optDaysText(Math.max(p.tf.days, 3 * p.hold)))} out for a ${esc(p.tf.label)} setup, so time decay eats less.` : 'picked by you.')
@@ -8417,9 +8469,13 @@
       const dPerLot = -pk.theta * p.lot;
       why.push(`Time decay: about <b class="text-slate-200">${R(dPerLot)} a day per lot</b> if Nifty stands still`
         + (isFinite(pk.decayToStop) && pk.decayToStop < 10 ? `; that alone takes the premium to your stop (${R2(pk.pSl)}) in about ${esc(optDaysText(pk.decayToStop))}.` : '.'));
-      const rk = inp.riskTyped ? `Risk ${R(p.risk)} (typed).` : inp.auto ? `Risk ${R(p.risk)}: ${nf(inp.auto.pct)}% of ${esc(inp.auto.book.name)} (${R(inp.auto.bal)}).` : '';
-      if (p.over) why.push(`<span class="text-rose-300">${p.risk > 0 ? rk + ' ' : 'No risk set. '}One lot here loses ${R(pk.loss1)} at the stop${p.risk > 0 ? ', ' + (pk.loss1 / p.risk).toFixed(1) + '× that' : ''}. Raise the risk, move the stop closer, or skip this trade.</span>`);
-      else why.push(rk + ` ${p.lots} ${p.lots === 1 ? 'lot loses' : 'lots lose'} ${R(p.lossSl)} at the stop, fees included${pk.capped ? ' (capped at 1,000 lots)' : ''}.`);
+      // What the account pays for, and what the risk allows: the lots are the smaller.
+      if (p.cap > 0) why.push(`<b class="text-slate-200">Account ${R(p.cap)}</b>${inp.acc.typed ? '' : ' (' + esc(inp.acc.book ? inp.acc.book.name : 'book') + ' balance)'}: 1 lot of ${pk.K.toLocaleString('en-IN')} ${typ} costs ${R(pk.costLot)}, so it pays for ${pk.capLots >= 1000 ? '1,000+' : pk.capLots} ${pk.capLots === 1 ? 'lot' : 'lots'}; your risk allows ${pk.riskLots >= 1000 ? '1,000+' : pk.riskLots}.`
+        + (p.status === 'cash' ? ` <span class="text-rose-300">Add money, or wait for a setup where a cheaper strike works.</span>` : p.capLimited ? ' The account is the limit here.' : ''));
+      else why.push(`Type your <b class="text-slate-200">account size</b> to see how many lots it can pay for (a bought option costs its whole premium up front).`);
+      const rk = inp.riskTyped ? `Risk ${R(p.risk)} (typed).` : p.risk > 0 ? `Risk ${R(p.risk)}: ${nf(inp.acc.pct)}% of the account.` : '';
+      if (p.status === 'risk') why.push(`<span class="text-rose-300">${p.risk > 0 ? rk + ' ' : 'No risk set. '}One lot here loses ${R(pk.loss1)} at the stop${p.risk > 0 ? ', ' + (pk.loss1 / p.risk).toFixed(1) + '× that' : ''}${inp.riskTyped ? '' : '; at ' + nf(inp.acc.pct) + '% risk that takes an account of about ' + R(pk.loss1 / inp.acc.pct * 100)}. Raise the risk, move the stop closer, or skip this trade.</span>`);
+      else if (!p.over) why.push(rk + ` ${p.lots} ${p.lots === 1 ? 'lot loses' : 'lots lose'} ${R(p.lossSl)} at the stop, fees included${pk.capped ? ' (capped at 1,000 lots)' : ''}.`);
       why.push(`Put the stop on the premium (sell at ≈ ${R2(pk.pSl)}) or on Nifty ${nf(p.L)}, whichever your app allows; the premium stop also gets you out if time decay drags it down.`);
       const whyHtml = `<ul class="mt-3 space-y-1.5 text-[11px] text-slate-400 leading-relaxed list-disc pl-4">${why.map(x => '<li>' + x + '</li>').join('')}</ul>`;
       // Every strike near the money, to compare and pick by hand.
@@ -8427,16 +8483,16 @@
         const on = r === pk;
         return `<tr data-off="${r.off}" onclick="optPick(${r.off})" class="cursor-pointer border-t border-terminal-border/60 ${on ? 'bg-amber-500/10' : 'hover:bg-white/5'}">
           <td class="py-1.5 pr-2 text-slate-200 whitespace-nowrap">${r.K.toLocaleString('en-IN')} ${typ}${on ? ' <span class="text-amber-300 text-[10px]">pick</span>' : ''}<div class="text-[10px] text-slate-500">${esc(r.name)}</div></td>
-          <td class="pr-2 text-right">${R2(r.p0)}</td>
+          <td class="pr-2 text-right">${R2(r.p0)}<div class="text-[10px] text-slate-500">${R(r.costLot)} a lot</div></td>
           <td class="pr-2 text-right">${Math.abs(r.delta).toFixed(2)}</td>
-          <td class="pr-2 text-right ${r.lots ? 'text-slate-200' : 'text-slate-500'}">${r.lots}${r.capped ? '+' : ''}</td>
+          <td class="pr-2 text-right ${r.lots ? 'text-slate-200' : 'text-slate-500'}">${r.lots}${r.capped ? '+' : ''}${r.capLots != null ? '<div class="text-[10px] text-slate-500">acct ' + (r.capLots >= 1000 ? '1000+' : r.capLots) + '</div>' : ''}</td>
           <td class="pr-2 text-right text-rose-300">-${R(r.lots ? r.lossFor(r.lots) : r.loss1)}${r.lots ? '' : '<div class="text-[10px] text-slate-500">for 1 lot</div>'}</td>
           <td class="text-right ${r.gainFor(Math.max(1, r.lots)) >= 0 ? 'text-emerald-300' : 'text-rose-300'}">${signedMoney(r.gainFor(Math.max(1, r.lots)), 'INR', 0)}</td>
         </tr>`;
       }).join('');
       const table = `<div class="mt-4"><div class="text-slate-400 mb-1">Strikes near ${nf(p.E)} · ${esc(expTxt)} expiry · tap one to pick it</div>
         <div class="overflow-x-auto"><table id="optTable" class="w-full text-[11px]"><thead><tr class="text-slate-500 text-[10px] uppercase"><th class="text-left font-semibold pb-1">Strike</th><th class="text-right font-semibold pr-2">Premium</th><th class="text-right font-semibold pr-2">Delta</th><th class="text-right font-semibold pr-2">Lots</th><th class="text-right font-semibold pr-2">At stop</th><th class="text-right font-semibold">At target</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
-        <p class="text-[10px] text-slate-500 mt-2 leading-relaxed">${p.ivFrom === 'price' ? 'Premiums from the volatility in your app\'s price' : 'Premiums are Black-Scholes estimates at India VIX ' + nf(p.iv * 100) + '%'}; the target is priced after ${esc(optDaysText(p.hold))} of time decay, the stop at once. Fees ≈ ${R(p.feesSl)} a round trip at the stop (₹${nf(p.brok)} an order, STT, exchange, stamp, GST).</p></div>`;
+        <p class="text-[10px] text-slate-500 mt-2 leading-relaxed">Lots: the smaller of what your account pays for (acct) and what your risk allows. ${p.ivFrom === 'price' ? 'Premiums from the volatility in your app\'s price' : 'Premiums are Black-Scholes estimates at India VIX ' + nf(p.iv * 100) + '%'}; the target is priced after ${esc(optDaysText(p.hold))} of time decay, the stop at once. Fees ≈ ${R(p.feesSl)} a round trip at the stop (₹${nf(p.brok)} an order, STT, exchange, stamp, GST).</p></div>`;
       out.innerHTML = warnHtml + head + tiles + usd + whyHtml + table;
     }
 
@@ -12372,6 +12428,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-06.158', pr: 73, title: 'Nifty options: lots by account size', pts: ['Type your account size: lots are what it can pay for and what your risk allows, whichever is smaller', 'Risk as a % of the account (0.5% to 10%); each strike shows its cost a lot', 'Too small for a lot near the money: shows the nearest strike it can buy, or says none'] },
       { v: '2026-11-06.157', pr: 72, title: 'Nifty options picker', pts: ['Calculator → Nifty options: type your Nifty entry and stop; it says CALL (CE) or PUT (PE), which strike, which expiry and how many lots', 'What you pay, loss at the stop and profit at the target, fees in; tap any strike to compare', 'Type the premium your app shows and every price matches it'] },
       { v: '2026-11-04.156', pr: 71, title: 'Demo account in Signals', pts: ['New Signals section: start with $100 (or any amount, $ or ₹) and take every alert in the view, compounding', 'Risk a % of the balance or a fixed amount, with an optional leverage cap', 'Final balance, return, max drawdown, balance curve, progress by day / week / month, other risk sizes and every trade'] },
       { v: '2026-11-04.155', pr: 70, title: 'Edge & breakdowns: compact cards', pts: ['Cards stack in balanced columns, so a short card leaves no empty space', 'One row per group with Alerts, Won, Total, Avg R and Avg %; full figures on hover', 'By symbol keeps the 6 best and 6 worst (Show more); a breakdown with one group folds into one line'] },
