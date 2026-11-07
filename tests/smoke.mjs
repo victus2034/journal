@@ -4193,6 +4193,105 @@ async function holdPctRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals hold (till TP / SL or 20 candles) and Move SL in %: by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('hold / % move: ' + e); });
 }
+// Trail TP (lakky, 2026-11-07): each target reached moves the target up a step and the
+// stop to the gap behind it. One long alert E, 100 / stop 99 (1% = 1R), 15m candles:
+// fill (close +0.1R), 1R (low +0.5R), 1.3R (low +0.9R), then a low of +0.95R.
+async function trailRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const t0 = Date.parse('2026-10-01T10:00:00+05:30') / 1000, Q = 900;
+  const bars = { EUSD: [[t0, 100.2, 99.9, 100.1], [t0 + Q, 101, 100.5, 100.8], [t0 + 2 * Q, 101.3, 100.9, 101.2], [t0 + 3 * Q, 101.2, 100.95, 101]] };
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const b = bars[new URL(route.request().url()).searchParams.get('symbol')];
+    if (!b) return route.abort();
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: b.map(([time, high, low, close]) => ({ time, open: close, high, low, close })) }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const strip = () => page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+  const ready = () => page.waitForFunction(() => /1 of 1 graded alerts have price data/.test(document.getElementById('sigEdgeStrip').innerText) && !/reading/.test(document.getElementById('sigEdgeStrip').innerText), null, { timeout: 10000 });
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => {
+      state.signals = [{ id: 'e', key: 'ke', kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: 'E', side: 'long', score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: true, outcome: '+1R', resultR: 0.9, hasReportR: true, price: 100, stop: 99, entry: 100 }];
+      delete state.ui.sigTrail; delete state.ui.sigHold;
+      state.ui.sigDemo = Object.assign({}, state.ui.sigDemo || {}, { real: false });
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '1R', sigNoFee: false, sigStop: { mode: 'off' } });
+      switchTab('signals'); renderAll();
+    });
+    await ready();
+    let st = await strip();
+    // Off (the default): the 1R target, +1 - 0.0826.
+    const off = await page.evaluate(() => ({ cls: document.querySelector('#sigTrailBar button[data-trail="false"]').className, sel: !!document.getElementById('sigTrailStep') }));
+    check(/text-amber-400/.test(off.cls) && !off.sel && /Total R \+0\.92R/.test(st) && !/Trail TP/.test(st), 'Trail TP off by default: ' + st);
+    // On, +0.25R, SL 0.25R behind: 1R -> target 1.25R, stop +0.75R; 1.25R -> 1.5R, +1R;
+    // the +0.95R low stops it at +1R: 1 - 1.01 x 0.05 - 0.0826 = +0.8669R.
+    await page.click('#sigTrailBar button[data-trail="true"]');
+    st = await strip();
+    const on = await page.evaluate(() => ({ step: document.getElementById('sigTrailStep').value, gap: document.getElementById('sigTrailGap').value, unit: document.getElementById('sigTrailStep').dataset.unit, r: inSigScope(() => outcomeNow(sigView.pairs[0])) }));
+    check(on.step === '0.25' && on.gap === '0.25' && on.unit === 'R', 'Trail TP selects: ' + JSON.stringify(on));
+    check(/Trail TP \+0\.25R, SL 0\.25R behind/.test(st) && /Total R \+0\.87R/.test(st), 'Trail TP strip: ' + st);
+    check(on.r && on.r.label === 'Trail TP' && Math.abs(on.r.r - 0.8669) < 1e-9, 'Trail TP result: ' + JSON.stringify(on.r));
+    const out = await page.evaluate(() => document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' '));
+    check(/Trail TP\s*1\s*100%/.test(out), 'By outcome shows Trail TP: ' + out);
+    // Move SL triggers past the target can fire now (the target moves up), so none are greyed out; no "same" cells.
+    await page.evaluate(() => setSigStop('mode', 'shift'));
+    const mv = await page.evaluate(() => ({ dis: document.querySelectorAll('#sigStopAt option[disabled]').length, same: [...document.querySelectorAll('#sigStopGrid td')].filter(t => t.innerText === 'same').length, head: document.getElementById('sigTgtCmp').innerText.includes('Trail TP +0.25R') }));
+    check(mv.dis === 0 && mv.same === 0 && mv.head, 'Move SL with Trail TP: ' + JSON.stringify(mv));
+    await page.evaluate(() => setSigStop('mode', 'off'));
+    // SL 0.5R behind: stops at +0.5R then +0.75R; the +0.95R low doesn't reach it, so it is still open.
+    await page.selectOption('#sigTrailGap', '0.5');
+    st = await strip();
+    check(/1 still open/.test(st) && /SL 0\.5R behind/.test(st), 'wider gap leaves it open: ' + st);
+    await page.selectOption('#sigTrailGap', '0.25');
+    // Demo account follows: $100, 1% risk, one trade at +0.8669R after Delta's fee = $100.87.
+    await page.evaluate(() => setSigSec('demo'));
+    await page.waitForFunction(() => document.getElementById('sigDemoOut') && /Final balance/i.test(document.getElementById('sigDemoOut').innerText));
+    const demo = await page.evaluate(() => document.getElementById('sigDemoOut').innerText.replace(/\s+/g, ' '));
+    check(/\$100\.87/.test(demo), 'demo account follows Trail TP: ' + demo.slice(0, 300));
+    // % target: the steps turn into %.
+    await page.evaluate(() => setSigTgt('1%'));
+    const pc = await page.evaluate(() => ({ unit: document.getElementById('sigTrailStep').dataset.unit, txt: document.getElementById('sigTrailStep').selectedOptions[0].innerText, strip: document.getElementById('sigEdgeStrip').innerText }));
+    check(pc.unit === '%' && pc.txt === '+0.25%' && /Trail TP \+0\.25%, SL 0\.25% behind/.test(pc.strip), '% trail: ' + JSON.stringify(pc));
+    // Pure checks.
+    const pure = await page.evaluate(() => {
+      const L = { side: 'long', entry: 100, stop: 98 }, L1 = { side: 'long', entry: 100, stop: 99 };
+      // % trail on a 2% stop: 1% target = 0.5R, +0.5% = 0.25R, 0.25% = 0.125R. 0.6R -> stop 0.375R, 0.8R -> 0.625R;
+      // the fall to 0.6R hits it: 0.625 - 1.0125 x 0.05 / 2 (no fees).
+      const a = tgtScore(L, { m: 0.016, sl: 0, e: 0.012, done: 0, p: [[0.6, 0.6], [0.8, 0.45]], ta: 0.6 }, { p: 1 }, true, null, trailMove('%', 0.5, 0.25));
+      // One candle through several steps: 3R target, best 4R -> stop 3.75R; the next low (1.9R) hits it.
+      const b = tgtScore(L1, { m: 0.04, sl: 0, e: 0.02, done: 1, tr: 1, p: [[0.1, 0.1], [4, 1]], ta: 1.9 }, { r: 3 }, true, null, trailMove('R', 0.25, 0.25));
+      // BE at 0.5R with Trail TP: BE is the higher stop until the target, then the stop to -1R hits BE.
+      const c = tgtScore(L, { m: 0.018, sl: 1, e: 0, done: 1, p: [[0.6, 0.6], [0.9, 0.2]], ta: -1 }, { r: 1 }, true, stopMove('be', 0.5), trailMove('R', 0.25, 0.5));
+      // SL shift at 1.5R (past the 1R target) fires once Trail TP moved the target up: 1.6R -> trail +1R, shift +1.25R wins.
+      const d = tgtScore(L1, { m: 0.016, sl: 0, e: 0.012, done: 0, p: [[1, 1], [1.6, 0.8]], ta: 1.2 }, { r: 1 }, true, stopMove('shift', 1.5, 1.25), trailMove('R', 0.25, 0.5));
+      // The walk: past 3R it goes on until a 2R fall back on a later candle.
+      const sig = { side: 'long', entry: 100, stop: 99, date: '2026-10-01', time: '10:00', timeframe: '4H' }, t = Date.parse('2026-10-01T10:00:00+05:30') / 1000;
+      const cs = [[0, 100.2, 99.9, 100.1], [1, 104, 101, 103.5], [2, 103.8, 102.5, 103], [3, 103, 101.9, 102]].map(([i, high, low, close]) => ({ time: t + i * 900, high, low, close }));
+      const w3 = tgtWalk(sig, cs.slice(0, 3), 15, 'tp'), w4 = tgtWalk(sig, cs, 15, 'tp'), w20 = tgtWalk(sig, cs, 15, '20');
+      // The path: a best held back (under 0.01R past the last) is kept once price dips after it,
+      // bests round down and dips up, so 2.2496R reads 2.249 and can't reach a 2.25R level early.
+      const r1 = tgtRec(0.01, 0); r1.bar(0.01, 0.005); r1.bar(0.01005, 0.009); r1.bar(0.0095, 0.0075); r1.bar(0.0102, 0.0099);
+      const r2 = tgtRec(0.01, 0); r2.bar(0.022496, 0.019996);
+      return { a, b, c, d, w3: [w3.done, w3.tr], w4: [w4.done, w4.tr, w4.ta], w20: [w20.done, w20.tr], rec: JSON.stringify(r1.end()), rnd: JSON.stringify(r2.end()) };
+    });
+    check(pure.a && pure.a.label === 'Trail TP' && Math.abs(pure.a.r - 0.5996875) < 1e-9, '% trail: ' + JSON.stringify(pure.a));
+    check(pure.b && pure.b.label === 'Trail TP' && Math.abs(pure.b.r - 3.698125) < 1e-9, 'several steps in one candle: ' + JSON.stringify(pure.b));
+    check(pure.c && pure.c.label === 'BE' && Math.abs(pure.c.r + 0.025) < 1e-9, 'BE under Trail TP: ' + JSON.stringify(pure.c));
+    check(pure.d && pure.d.label === 'SL shift' && Math.abs(pure.d.r - (1.25 - 1.0125 * 0.05)) < 1e-9, 'SL shift past the target with Trail TP: ' + JSON.stringify(pure.d));
+    check(pure.rec === '{"p":[[1,0.5],[1.005,0.9],[1.02,0.75]],"ta":null}' && pure.rnd === '{"p":[[2.249,2]],"ta":null}', 'path kept for Trail TP: ' + pure.rec + ' ' + pure.rnd);
+    check(JSON.stringify(pure.w3) === '[0,1]' && JSON.stringify(pure.w4) === '[1,1,1.9]' && pure.w20[1] === undefined, 'till TP / SL walk past 3R: ' + JSON.stringify(pure));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals Trail TP (target steps up, stop follows) in R and %: by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('trail TP: ' + e); });
+}
 // NSE "Exit at": the sync repo's job reads Yahoo candles (a fake one here) and writes
 // nse-paths.json; the journal reads it with its sync token and re-scores NSE alerts.
 async function nsePathsRun() {
@@ -4253,7 +4352,7 @@ async function nsePathsRun() {
     const p = file && file.paths['ABC|long|98|2026-10-20 10:00'];
     check(p && p.m === 0.031 && p.sl === 1 && p.done === 1, 'ABC walked: ' + JSON.stringify(file && file.paths));
     const pt = file && file.paths['ABC|long|98|2026-10-20 10:00|tp'];
-    check(pt && pt.sl === 1 && pt.done === 1 && JSON.stringify(pt.p) === JSON.stringify(p.p), 'ABC till TP / SL walk (stopped inside the window, same path): ' + JSON.stringify(pt));
+    check(pt && pt.sl === 1 && pt.done === 1 && pt.tr === 1 && JSON.stringify(pt.p) === JSON.stringify(p.p), 'ABC till TP / SL walk (stopped inside the window, same path, walked for Trail TP): ' + JSON.stringify(pt));
     // Move SL's path: fill close +0.1R, +0.25R (dip -0.25R), +1.55R, then stopped at -1.05R.
     check(p && JSON.stringify(p.p) === '[[0.1,0.1],[0.25,-0.25],[1.55,-0.25]]' && p.ta === -1.05, 'ABC path for Move SL: ' + JSON.stringify(p));
     // A summary kept before Move SL (no path) is walked again on the next run.
@@ -4262,6 +4361,12 @@ async function nsePathsRun() {
     try { await tool.main(Date.parse('2026-11-20T12:00:00Z')); } finally { console.log = log2; }
     const again = put && JSON.parse(Buffer.from(put.content, 'base64').toString()).paths['ABC|long|98|2026-10-20 10:00'];
     check(again && Array.isArray(again.p) && again.p.length === 3 && put.sha === 'abc', 'old NSE summary walked again: ' + JSON.stringify(again));
+    // A "till TP / SL" summary kept before Trail TP (no tr) is walked again too.
+    existing = { v: 1, paths: { 'ABC|long|98|2026-10-20 10:00': p, 'ABC|long|98|2026-10-20 10:00|tp': { m: 0.06, sl: 0, e: 0.06, done: 1, p: [[3, 0.1]], ta: 2.9 } } }; put = null; yahooAsks = [];
+    console.log = () => {};
+    try { await tool.main(Date.parse('2026-11-20T12:00:00Z')); } finally { console.log = log2; }
+    const againTp = put && JSON.parse(Buffer.from(put.content, 'base64').toString()).paths['ABC|long|98|2026-10-20 10:00|tp'];
+    check(againTp && againTp.tr === 1 && againTp.sl === 1 && yahooAsks.length === 1, 'old till TP / SL summary walked again for Trail TP: ' + JSON.stringify(againTp));
     existing = null;
     check(file && JSON.stringify(Object.keys(file.paths)) === '["ABC|long|98|2026-10-20 10:00","ABC|long|98|2026-10-20 10:00|tp"]', 'only graded NSE alerts (no crypto, no unfilled, no timeout), both holds: ' + JSON.stringify(file && Object.keys(file.paths)));
     check(JSON.stringify(yahooAsks) === '["ABC.NS 15m"]', 'one 15m read for the one symbol: ' + JSON.stringify(yahooAsks));
@@ -4270,6 +4375,11 @@ async function nsePathsRun() {
     check(w && w.sl === 0 && w.done === 1 && w.e === 0.001, 'stop after 20 NSE candles is outside the window: ' + JSON.stringify(w));
     const wTp = tool.walkAlert({ side: 'long', entry: 100, stop: 98, alertMs, tf: '4h' }, bars.map(b => ({ t: b[0] * 1000, h: b[1], l: b[0] * 1000 >= Date.parse('2026-10-27T09:15:00+05:30') ? 100 : b[2], c: b[3] })).concat(['2026-11-02T09:15', '2026-11-02T13:15', '2026-11-03T09:15'].map(x => ({ t: Date.parse(x + ':00+05:30'), h: 100.4, l: x.endsWith('03T09:15') ? 90 : 99.8, c: 100.1 }))), 15, 'tp');
     check(wTp && wTp.sl === 1 && wTp.done === 1, 'till TP / SL: the same stop on the 11th day counts: ' + JSON.stringify(wTp));
+    // Long 100, stop 99 (1%): past the biggest target (3R / 3%) the walk goes on until price falls back
+    // 2R / 2% (the biggest Trail TP step + gap) from its best on a later candle.
+    const tw = extra => tool.walkAlert({ side: 'long', entry: 100, stop: 99, alertMs, tf: '4h' }, [[0, 100.2, 99.9, 100.1], [1, 104, 101, 103.5], [2, 103.8, 102.5, 103]].concat(extra).map(([i, h, l, c]) => ({ t: alertMs + i * 900e3, h, l, c })), 15, 'tp');
+    const twOpen = tw([]), twDone = tw([[3, 103, 101.9, 102]]);
+    check(twOpen && twOpen.done === 0 && twOpen.tr === 1 && twDone && twDone.done === 1 && twDone.tr === 1 && twDone.ta === 1.9, 'NSE till TP / SL past 3R: open until a 2R fall back: ' + JSON.stringify([twOpen, twDone]));
     check(tool.tfBucket(Date.parse('2026-10-20T13:14:00+05:30'), 240) !== tool.tfBucket(Date.parse('2026-10-20T13:15:00+05:30'), 240), 'NSE 4H candle turns at 13:15');
   } catch (e) { errs.push('tool threw: ' + e.message); }
   fake.close();
@@ -4766,6 +4876,7 @@ await keysLockRun(data);
 await exitTargetRun(data);
 await stopMoveRun(data);
 await holdPctRun(data);
+await trailRun(data);
 await sigBreakdownRun(data);
 await nsePathsRun();
 await badInputRun(data);
