@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-07.159">
+  <meta name="app-version" content="2026-11-07.160">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -644,7 +644,8 @@
         </div>
         <div id="sigChanBar" class="flex items-center"></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">BTC day</span><div id="sigMktBar"></div></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Exit at</span><div id="sigTgtBar"></div></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Exit at</span><div id="sigTgtBar"></div></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Move SL</span><div id="sigStopBar"></div></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Fees</span><div id="sigFeeBar"></div></div>
         <div id="sigLvlWrap" class="flex items-center gap-2"><span class="text-xs text-slate-500">Level</span><div id="sigLvlBar"></div></div>
         <div id="sigTlWrap" class="flex items-center gap-2"><span class="text-xs text-slate-500">Type</span><div id="sigTlBar"></div></div>
@@ -3915,6 +3916,7 @@
       const mfSig = mktFilter();
       renderMktFilterBar('sigMktBar', 'mktCalSignals');
       renderSigTgtBar();
+      renderSigStopBar();
       renderSigFeeBar();
       renderSigLvlBar(kind);
       renderSigTlBar(kind);
@@ -8899,7 +8901,7 @@
     function outcomeNow(pair) {
       const nf = sigNoFee(), base = scanR(pair, nf), tg = tgtScope ? sigTgt() : null;
       if (!base || !tg) return base;
-      const o = tgtScore(pair.signal, tgtPath(pair.signal), tg, nf);
+      const o = tgtScore(pair.signal, tgtPath(pair.signal), tg, nf, sigStopMove());
       return o ? { r: o.r, source: "target", label: o.label } : null;
     }
     // Fees: the scanner's results are after its round-trip fee, Delta's 0.02% maker in
@@ -8946,6 +8948,43 @@
     const tgtLive = {}, tgtTried = {};
     function sigTgt() { return SIG_TGTS.find(x => x.k && x.k === state.ui.sigTgt) || null; }
     function setSigTgt(k) { state.ui.sigTgt = k; save(); renderSignalsTable(); }
+    // ---- "Move SL": breakeven or a stop shift on top of a fixed Exit at (lakky, 2026-11-07) ----
+    // BE: once price reaches +at R the stop goes to entry. SL shift: once it reaches
+    // +at R the stop goes to +to R (e.g. at 1R, lock +0.75R). Works with every fixed
+    // target; the scanner's own result keeps the scanner's own stop rules.
+    const STOP_ATS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3], STOP_TOS = [-0.5, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5];
+    const STOP_DEF = { mode: "off", beAt: 1, shAt: 1, shTo: 0.75 };
+    function stopRaw() {
+      const d = state.ui.sigStop && typeof state.ui.sigStop === "object" ? state.ui.sigStop : {};
+      const pick = (v, list, def) => list.indexOf(Number(v)) !== -1 ? Number(v) : def;
+      const shAt = pick(d.shAt, STOP_ATS, STOP_DEF.shAt);
+      let shTo = pick(d.shTo, STOP_TOS, STOP_DEF.shTo);
+      if (shTo >= shAt) shTo = STOP_TOS.filter(x => x < shAt).pop();
+      return { mode: d.mode === "be" || d.mode === "shift" ? d.mode : "off", beAt: pick(d.beAt, STOP_ATS, STOP_DEF.beAt), shAt, shTo };
+    }
+    function rTxt(v) { return (v > 0 ? "+" : "") + v + "R"; }
+    function stopMove(mode, at, to) {
+      if (mode === "be") return { k: "be|" + at, at, to: 0, label: "BE at " + at + "R" };
+      if (mode === "shift") return { k: "shift|" + at + "|" + to, at, to, label: "SL to " + rTxt(to) + " at " + at + "R" };
+      return null;
+    }
+    function sigStopRule() { const d = stopRaw(); return d.mode === "be" ? stopMove("be", d.beAt) : d.mode === "shift" ? stopMove("shift", d.shAt, d.shTo) : null; }
+    // The stop move in force: only inside Signals, and only with a fixed target.
+    function sigStopMove() { return tgtScope && sigTgt() ? sigStopRule() : null; }
+    function setSigStop(k, v) {
+      const d = stopRaw(); d[k] = k === "mode" ? v : Number(v);
+      state.ui.sigStop = d; state.ui.sigStop = stopRaw(); // keeps the shift below its trigger
+      save(); renderSignalsTable();
+    }
+    // One click on the compare grid: a target and a stop move together.
+    function setSigTgtStop(tk, mk) {
+      const d = stopRaw(), m = String(mk || "").split("|");
+      d.mode = m[0] === "be" || m[0] === "shift" ? m[0] : "off";
+      if (d.mode === "be") d.beAt = Number(m[1]);
+      if (d.mode === "shift") { d.shAt = Number(m[1]); d.shTo = Number(m[2]); }
+      state.ui.sigStop = d; state.ui.sigStop = stopRaw(); state.ui.sigTgt = tk;
+      save(); renderSignalsTable();
+    }
     // Runs fn with the picked target applied to every alert result it reads.
     function inSigScope(fn) { const was = tgtScope; tgtScope = true; try { return fn(); } finally { tgtScope = was; } }
     function tfMinutes(tf) {
@@ -8974,22 +9013,72 @@
       if (fi < 0) return { none: "entry not reached" };
       const f = bars[fi], end = f.t + TGT_BARS * tfMs;
       const hitSl = k => s > 0 ? k.l <= stop : k.h >= stop, mv = p => s * (p - entry) / entry;
-      if (hitSl(f)) return { m: 0, sl: 1, e: 0, done: 1 };
+      if (hitSl(f)) return { m: 0, sl: 1, e: 0, done: 1, p: [], ta: -1 };
       // On the fill candle only its close is known to come after the fill.
       let m = Math.max(0, mv(f.c)), last = f;
+      const rec = tgtRec(Math.abs(entry - stop) / entry, m);
       for (let i = fi + 1; i < bars.length && bars[i].t < end; i++) {
         const k = bars[i]; last = k;
-        if (hitSl(k)) return { m, sl: 1, e: 0, done: 1 };
-        m = Math.max(m, mv(s > 0 ? k.h : k.l));
+        if (hitSl(k)) return Object.assign({ m, sl: 1, e: 0, done: 1 }, rec.end(mv(s > 0 ? k.l : k.h)));
+        const best = mv(s > 0 ? k.h : k.l);
+        rec.bar(best, mv(s > 0 ? k.l : k.h));
+        m = Math.max(m, best);
       }
-      return { m, sl: 0, e: mv(last.c), done: last.t + resMs >= end ? 1 : 0 };
+      return Object.assign({ m, sl: 0, e: mv(last.c), done: last.t + resMs >= end ? 1 : 0 }, rec.end());
+    }
+    // Pure: the price path, small enough to keep, for "Move SL". p = each new best
+    // move (in R, at least 0.01R past the last one kept) with the worst move since
+    // the one before it, in candle order; ta = the worst move after the last one.
+    // From that a stop moved at any trigger, and any target, can be replayed.
+    // rk = stop distance as a fraction of entry; m0 = the fill candle's close move.
+    // tools/nse-paths.mjs keeps the same copy for NSE.
+    function tgtRec(rk, m0) {
+      const R = v => Math.round(v / rk * 1000) / 1000, p = [];
+      let best = Math.max(0, m0), kept = best, seg = Infinity, pend = null, after = Infinity;
+      if (best > 0) p.push([R(best), R(best)]);
+      return {
+        bar(fav, adv) {
+          seg = Math.min(seg, adv); after = Math.min(after, adv);
+          if (!(fav > best)) return;
+          best = fav;
+          if (fav - kept >= 0.01 * rk) { p.push([R(fav), R(seg)]); kept = fav; seg = Infinity; pend = null; }
+          else pend = [R(fav), R(seg)];
+          after = Infinity;
+        },
+        end(advLast) {
+          if (advLast != null) { seg = Math.min(seg, advLast); after = Math.min(after, advLast); }
+          if (pend) p.push(pend);
+          const t = pend ? after : seg;
+          return { p, ta: isFinite(t) ? R(t) : null };
+        }
+      };
     }
     // Pure: one walked alert at one target -> { r, label } or null (still open / no data).
-    function tgtScore(sig, w, tg, noFee) {
+    // mv = a stop move ({ at, to } in R; sigStopMove): once a candle reaches +at R the
+    // stop goes to +to R (0 = entry, breakeven) from the next candle, like the
+    // scanner's breakeven. A candle touching the moved stop and the target counts
+    // as the stop; the moved stop slips 0.05% too. Never reached: as a fixed stop.
+    function tgtScore(sig, w, tg, noFee, mv) {
       const entry = signalEntry(sig), riskPct = slPct(sig);
       if (!w || w.none || !(riskPct > 0)) return null;
       const costR = noFee ? 0 : sigFeePct(sig) / riskPct;
       const tR = tg.r != null ? tg.r : tg.p / riskPct, d = tR * riskPct / 100;
+      if (mv && mv.at > 0) {
+        if (!Array.isArray(w.p)) return null; // kept before Move SL: read again
+        const eps = 1e-9, s = sig.side === "short" ? -1 : 1;
+        const moved = () => ({ r: mv.to - (1 + s * mv.to * riskPct / 100) * TGT_SLIP_PCT / riskPct - costR, label: mv.to === 0 ? "BE" : "SL shift" });
+        let armed = false;
+        for (let i = 0; i < w.p.length; i++) {
+          const f = w.p[i][0], a = w.p[i][1];
+          if (armed && a <= mv.to + eps) return moved();
+          if (f >= tR - eps) { if (armed) return { r: tR - costR, label: "Target" }; break; }
+          if (!armed && f >= mv.at - eps) armed = true;
+        }
+        if (armed) {
+          if (w.ta != null && w.ta <= mv.to + eps) return moved();
+          return w.done ? { r: w.e * 100 / riskPct - costR, label: "Time exit" } : null;
+        }
+      }
       if (w.m >= d - 1e-12) return { r: tR - costR, label: "Target" };
       if (w.sl) return { r: -1 - (sig.stop / entry) * TGT_SLIP_PCT / riskPct - costR, label: "SL" };
       return w.done ? { r: w.e * 100 / riskPct - costR, label: "Time exit" } : null;
@@ -9042,8 +9131,9 @@
       if (tgtBusy) return;
       const seen = {};
       const todo = pairs.map(pr => pr.signal).filter(g => {
-        const k = tgtKey(g);
-        if (seen[k] || tgtCache()[k] || tgtTried[k] || tgtWhy(g) || !outcomeBase({ signal: g })) return false;
+        const k = tgtKey(g), c = tgtCache()[k];
+        // A summary kept before Move SL has no path: read it once more.
+        if (seen[k] || (c && (c.none || Array.isArray(c.p))) || tgtTried[k] || tgtWhy(g) || !outcomeBase({ signal: g })) return false;
         return (seen[k] = true);
       });
       if (!todo.length) return;
@@ -9068,7 +9158,8 @@
     function tgtCoverNote(pairs) {
       const graded = pairs.filter(pr => outcomeBase(pr));
       const nse = graded.filter(pr => isNseSig(pr.signal) && !tgtPath(pr.signal)).length;
-      const have = graded.filter(pr => { const w = tgtPath(pr.signal); return w && !w.none; }).length;
+      const need = !!sigStopRule();
+      const have = graded.filter(pr => { const w = tgtPath(pr.signal); return w && !w.none && (!need || Array.isArray(w.p)); }).length;
       const bits = [`${have} of ${graded.length} graded alerts have price data`];
       if (nse) bits.push(`${nse} NSE ` + (!syncReady() ? "without prices: turn on GitHub sync in Settings to read them" : nseBusy ? "prices loading…" : nseErr ? "without prices: " + nseErr : "without prices yet (the NSE price job runs twice a day)"));
       if (tgtProg) bits.push(`reading prices ${tgtProg.done}/${tgtProg.total}…`);
@@ -9079,7 +9170,7 @@
       if (!bar) return;
       const cur = sigTgt() ? sigTgt().k : "";
       bar.className = 'flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
-      bar.title = "What if every alert closed at one fixed target, same stop, no breakeven? Scanner = the scanner's own result. Read from Delta's candles; crypto only.";
+      bar.title = "What if every alert closed at one fixed target, with its own stop (moved only if Move SL is on)? Scanner = the scanner's own result. Crypto from Delta's candles; NSE from the sync repo's price job.";
       bar.innerHTML = '';
       SIG_TGTS.forEach(x => {
         const b = document.createElement('button'); b.type = 'button';
@@ -9089,6 +9180,21 @@
         b.onclick = () => setSigTgt(x.k);
         bar.appendChild(b);
       });
+    }
+    function renderSigStopBar() {
+      const bar = document.getElementById('sigStopBar');
+      if (!bar) return;
+      const d = stopRaw(), fixed = !!sigTgt();
+      bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
+      bar.title = "Off: the stop stays where it is. BE: once price reaches the trigger, the stop goes to entry. SL shift: once it reaches the trigger, the stop goes to the level you pick (e.g. at 1R lock +0.75R). It moves from the next candle. Works with every fixed Exit at; Scanner keeps the scanner's own rules.";
+      const btn = (k, l) => '<button type="button" data-stop="' + k + '" onclick="setSigStop(\'mode\',\'' + k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (d.mode === k ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + l + '</button>';
+      const sel = (id, k, list, v, txt, off) => '<select id="' + id + '" onchange="setSigStop(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">'
+        + list.map(x => '<option value="' + x + '"' + (x === v ? ' selected' : '') + (off && off(x) ? ' disabled' : '') + '>' + txt(x) + '</option>').join('') + '</select>';
+      let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (fixed ? '' : ' opacity-60') + '">' + btn('off', 'Off') + btn('be', 'BE') + btn('shift', 'SL shift') + '</div>';
+      if (d.mode === 'be') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', 'beAt', STOP_ATS, d.beAt, x => '+' + x + 'R');
+      if (d.mode === 'shift') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', 'shAt', STOP_ATS, d.shAt, x => '+' + x + 'R')
+        + '<span class="text-slate-500">to</span>' + sel('sigStopTo', 'shTo', STOP_TOS, d.shTo, rTxt, x => x >= d.shAt);
+      bar.innerHTML = h;
     }
     function renderSigFeeBar() {
       const bar = document.getElementById('sigFeeBar');
@@ -9185,18 +9291,18 @@
       const host = document.getElementById('sigTgtCmp');
       if (!host) return;
       const cur = sigTgt() ? sigTgt().k : "";
-      const tgs = SIG_TGTS.filter(x => x.k);
+      const tgs = SIG_TGTS.filter(x => x.k), mvR = sigStopRule();
       // Alerts every target can score, so each row is measured on the same alerts.
-      const set = pairs.filter(pr => outcomeBase(pr) && tgs.every(tg => tgtScore(pr.signal, tgtPath(pr.signal), tg)));
+      const set = pairs.filter(pr => outcomeBase(pr) && tgs.every(tg => tgtScore(pr.signal, tgtPath(pr.signal), tg, false, mvR)));
       const cv = tgtCoverNote(pairs), nf = sigNoFee();
-      let h = '<div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Exit targets compared</h3><span class="text-[11px] text-slate-500">' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + '</span></div>';
+      let h = '<div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Exit targets compared' + (mvR ? ' <span class="text-amber-300 font-normal">· ' + esc(mvR.label) + '</span>' : '') + '</h3><span class="text-[11px] text-slate-500">' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + '</span></div>';
       if (!set.length) {
-        host.innerHTML = h + '<p class="text-slate-500">' + (tgtProg ? 'Reading prices…' : 'No graded crypto alert with price data in this view yet.') + '</p>';
+        host.innerHTML = h + '<p class="text-slate-500">' + (tgtProg ? 'Reading prices…' : sigTgt() ? 'No graded crypto alert with price data in this view yet.' : 'No graded crypto alert with price data in this view yet. Pick an Exit at target to read prices.') + '</p>';
         return;
       }
       const rows = SIG_TGTS.map(tg => {
         const rs = [], ps = [];
-        set.forEach(pr => { const o = tg.k ? tgtScore(pr.signal, tgtPath(pr.signal), tg, nf) : scanR(pr, nf); rs.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) ps.push(p); });
+        set.forEach(pr => { const o = tg.k ? tgtScore(pr.signal, tgtPath(pr.signal), tg, nf, mvR) : scanR(pr, nf); rs.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) ps.push(p); });
         const w = rs.filter(r => r > 0).length, gw = sum(rs.filter(r => r > 0)), gl = -sum(rs.filter(r => r < 0));
         return { tg, n: rs.length, wr: w / rs.length * 100, tot: sum(rs), avg: avg(rs), pf: gl > 0 ? gw / gl : (gw > 0 ? Infinity : null), totP: ps.length ? sum(ps) : null };
       });
@@ -9212,8 +9318,49 @@
           + `<td class="pr-2 text-right">${x.pf == null ? '—' : x.pf === Infinity ? '∞' : x.pf.toFixed(2)}</td>`
           + `<td class="text-right">${x.totP == null ? '—' : (x.totP >= 0 ? '+' : '') + x.totP.toFixed(2) + '%'}</td></tr>`;
       });
-      h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row. Fixed target, the alert\'s own stop, no breakeven move; a candle touching both counts as the stop. Not hit in 20 candles of the alert\'s timeframe: closed there. ' + (nf ? 'No fees (the 0.05% stop slippage still counts).' : 'Fees as the scanner (0.08% round trip) + 0.05% stop slippage.') + ' Click a row to score the whole tab at that exit.</p>';
+      const fees = nf ? 'No fees (the 0.05% stop slippage still counts).' : 'Fees as the scanner (0.08% round trip) + 0.05% stop slippage.';
+      h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row. Fixed target, the alert\'s own stop, '
+        + (mvR ? 'moved as Move SL says (' + esc(mvR.label) + ', from the candle after the one that reached it); the Scanner row keeps the scanner\'s own rules' : 'no breakeven move')
+        + '; a candle touching the stop and the target counts as the stop. Not hit in 20 candles of the alert\'s timeframe: closed there. ' + fees + ' Click a row to score the whole tab at that exit.</p>';
+      h += renderStopGrid(pairs, tgs, nf, cur, mvR);
       host.innerHTML = h;
+    }
+    // "Move SL compared": every fixed target with no move, breakeven and stop shifts,
+    // total R on the same alerts, so the best mix shows at a glance. Click a cell to
+    // score the whole tab with it.
+    const STOP_CMP = [["be", 0.5], ["be", 1], ["be", 1.5], ["be", 2], ["shift", 1, 0.5], ["shift", 1, 0.75], ["shift", 1.5, 1], ["shift", 2, 1], ["shift", 2, 1.5]];
+    function renderStopGrid(pairs, tgs, nf, cur, mvR) {
+      const rules = [null].concat(STOP_CMP.map(x => stopMove(x[0], x[1], x[2])));
+      if (mvR && !rules.some(m => m && m.k === mvR.k)) rules.push(mvR);
+      const head = '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Move SL compared</h3><span class="text-[11px] text-slate-500">Total R at each exit and stop move</span></div>';
+      const sets = [];
+      pairs.forEach(pr => {
+        const w = outcomeBase(pr) && tgtPath(pr.signal);
+        if (!w || w.none || !Array.isArray(w.p)) return;
+        const row = rules.map(m => tgs.map(tg => tgtScore(pr.signal, w, tg, nf, m)));
+        if (row.every(r => r.every(Boolean))) sets.push(row);
+      });
+      if (!sets.length) return head + '<p class="text-slate-500">' + (tgtProg ? 'Reading prices…' : 'No graded crypto alert with its price path in this view yet. Pick an Exit at target to read prices.') + '</p></div>';
+      const cells = rules.map((m, i) => tgs.map((tg, j) => {
+        const rs = sets.map(row => row[i][j].r), w = rs.filter(r => r > 0).length;
+        return { tot: sum(rs), avg: avg(rs), wr: w / rs.length * 100 };
+      }));
+      let best = null;
+      cells.forEach((row, i) => row.forEach((c, j) => { if (!best || c.tot > best.c.tot) best = { c, i, j }; }));
+      const curM = sigTgt() ? (mvR ? mvR.k : "") : null;
+      let h = head + '<div class="overflow-x-auto"><table id="sigStopGrid" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Move SL</th>'
+        + tgs.map(tg => '<th class="pr-2 text-right">' + esc(tg.k) + '</th>').join('') + '</tr></thead><tbody>';
+      rules.forEach((m, i) => {
+        const mk = m ? m.k : "";
+        h += '<tr class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold whitespace-nowrap' + (curM === mk ? ' text-amber-300' : ' text-slate-300') + '">' + (m ? esc(m.label) : 'No move') + '</td>';
+        tgs.forEach((tg, j) => {
+          const c = cells[i][j], on = curM === mk && cur === tg.k, top = best.i === i && best.j === j;
+          h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" onclick="setSigTgtStop(\'' + tg.k + '\',\'' + mk + '\')" title="' + esc((m ? m.label : 'No move') + ' · exit at ' + tg.k + ': ' + pct(c.wr) + ' won, ' + rfmt(c.avg) + ' a trade. Click to score the whole tab with it.') + '" class="pr-2 py-1 text-right cursor-pointer hover:bg-white/5 '
+            + (c.tot >= 0 ? 'text-emerald-400' : 'text-rose-400') + (on ? ' bg-amber-500/15 font-bold' : '') + (top ? ' underline' : '') + '">' + rfmt(c.tot) + '</td>';
+        });
+        h += '</tr>';
+      });
+      return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. BE: at the trigger the stop goes to entry. SL shift: at the trigger it goes to the level shown. The stop moves from the next candle and slips 0.05% like any stop. Click a cell to use it on the whole tab.</p></div>';
     }
     function sumPct(list) { const v = list.filter(x => x != null && isFinite(x)); return v.length ? sum(v) : null; }
     // The Victus Alert System backtest and paper trading do not take a trade whose
@@ -10031,12 +10178,20 @@
           line.innerHTML = 'No fees: each result with the 0.08% round-trip fee added back (NSE 0.11%; stop slippage still counts) · <button type="button" class="underline" onclick="setSigNoFee(false)">with fees</button>';
           strip.appendChild(line);
         }
+        if (!tg && sigStopRule()) {
+          const line = document.createElement('div');
+          line.id = 'sigStopNote';
+          line.className = 'col-span-full text-[11px] font-mono text-amber-300';
+          line.innerHTML = 'Move SL (' + esc(sigStopRule().label) + ') works with a fixed Exit at; the scanner\'s own results keep its own stop rules · <button type="button" class="underline" onclick="setSigTgt(\'2R\')">exit at 2R</button>';
+          strip.appendChild(line);
+        }
         if (tg) {
           const cv = tgtCoverNote(pairs);
           const line = document.createElement('div');
           line.id = 'sigTgtNote';
           line.className = 'col-span-full text-[11px] font-mono text-amber-300';
-          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (same stop, no breakeven' + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
+          const mv = sigStopMove();
+          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (' + (mv ? esc(mv.label) : 'same stop, no breakeven') + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
           strip.appendChild(line);
         }
         // Say why numbers are missing instead of leaving dashes unexplained.
@@ -10068,7 +10223,7 @@
       // Cards in the order they stack. A breakdown with a single group says nothing
       // the strip above does not, so it folds into one "same for all" line.
       const dims = [
-        ['sigByOutcome', 'Outcome', groupPerf(pairs, (g, o) => o.label || g.outcome || "Not stated"), ["Target", "+2R", "+1R", "BE", "Neither", "Time exit", "SL", "Not stated"]],
+        ['sigByOutcome', 'Outcome', groupPerf(pairs, (g, o) => o.label || g.outcome || "Not stated"), ["Target", "+2R", "+1R", "SL shift", "BE", "Neither", "Time exit", "SL", "Not stated"]],
         ['sigByChannel', 'Channel', groupPerf(pairs, g => g.channel || "No channel"), null],
         ['sigByTimeframe', 'Timeframe', groupPerf(pairs, g => g.timeframe || "No timeframe"), null],
         ['sigBySector', 'Sector or market', groupPerf(pairs, g => g.sector || g.market || "No sector"), null],
@@ -12498,6 +12653,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-07.160', pr: 75, title: 'Move SL: breakeven or SL shift on Exit at', pts: ['Signals → Move SL next to Exit at: Off, BE (at +0.5R to +3R the stop goes to entry) or SL shift (e.g. at 1R lock +0.75R)', 'Works with every fixed Exit at; the headline, breakdowns, Backtest report and Demo account follow it', 'Edge & breakdowns: new Move SL compared grid, total R for every exit and stop move; click a cell to use it'] },
       { v: '2026-11-07.159', pr: 74, title: 'Demo account: fees shown, Delta or CoinDCX', pts: ['Fees were always charged (Delta 0.0826% a trade); now a line says Fees on or off, the total paid and the balance without them', 'Pick where the trades are: Delta or CoinDCX, how orders fill (limit or market) and the maker / taker rates', 'Every trade shows its fee; No fees is the same switch as Fees on the tab'] },
       { v: '2026-11-06.158', pr: 73, title: 'Nifty options: lots by account size', pts: ['Type your account size: lots are what it can pay for and what your risk allows, whichever is smaller', 'Risk as a % of the account (0.5% to 10%); each strike shows its cost a lot', 'Too small for a lot near the money: shows the nearest strike it can buy, or says none'] },
       { v: '2026-11-06.157', pr: 72, title: 'Nifty options picker', pts: ['Calculator → Nifty options: type your Nifty entry and stop; it says CALL (CE) or PUT (PE), which strike, which expiry and how many lots', 'What you pay, loss at the stop and profit at the target, fees in; tap any strike to compare', 'Type the premium your app shows and every price matches it'] },

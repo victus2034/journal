@@ -12,6 +12,9 @@
 // One summary per alert: m = best move its way before the stop (fraction of
 // entry), sl = 1 when stopped, e = move at the window's last close, done = 1
 // when the window is over; or { none } when the entry was never reached.
+// p / ta = the price path for "Move SL" (breakeven or a stop shift): each new
+// best move in R with the worst move since the one before, and the worst move
+// after the last one (pathRec, the same as the journal's tgtRec).
 // The window is the scanner's: 20 candles of the alert's own timeframe after
 // the fill, counted in NSE candles (4H = 09:15-13:15 and 13:15-15:30), so
 // weekends and holidays don't count. A candle that touches both the stop and
@@ -67,16 +70,44 @@ export function walkAlert(a, bars, resMin) {
   if (fi < 0) return live.some(k => k.i >= BARS) ? { none: 'entry not reached' } : null;
   const f = live[fi], end = f.i + BARS, r6 = v => Math.round(v * 1e6) / 1e6;
   const hitSl = k => s > 0 ? k.l <= stop : k.h >= stop, mv = p => s * (p - entry) / entry;
-  if (hitSl(f)) return { m: 0, sl: 1, e: 0, done: 1 };
+  if (hitSl(f)) return { m: 0, sl: 1, e: 0, done: 1, p: [], ta: -1 };
   let m = Math.max(0, mv(f.c)), lastBar = f;
+  const rec = pathRec(Math.abs(entry - stop) / entry, m);
   for (let i = fi + 1; i < live.length; i++) {
     const k = live[i];
-    if (k.i >= end) return { m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 1 };
+    if (k.i >= end) return Object.assign({ m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 1 }, rec.end());
     lastBar = k;
-    if (hitSl(k)) return { m: r6(m), sl: 1, e: 0, done: 1 };
-    m = Math.max(m, mv(s > 0 ? k.h : k.l));
+    if (hitSl(k)) return Object.assign({ m: r6(m), sl: 1, e: 0, done: 1 }, rec.end(mv(s > 0 ? k.l : k.h)));
+    const best = mv(s > 0 ? k.h : k.l);
+    rec.bar(best, mv(s > 0 ? k.l : k.h));
+    m = Math.max(m, best);
   }
-  return { m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 0 };
+  return Object.assign({ m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 0 }, rec.end());
+}
+// Pure: the price path, small enough to keep. p = each new best move (in R, at
+// least 0.01R past the last one kept) with the worst move since the one before
+// it; ta = the worst move after the last one. rk = stop distance / entry, m0 =
+// the fill candle's close move. Keep it the same as tgtRec in index.html.
+export function pathRec(rk, m0) {
+  const R = v => Math.round(v / rk * 1000) / 1000, p = [];
+  let best = Math.max(0, m0), kept = best, seg = Infinity, pend = null, after = Infinity;
+  if (best > 0) p.push([R(best), R(best)]);
+  return {
+    bar(fav, adv) {
+      seg = Math.min(seg, adv); after = Math.min(after, adv);
+      if (!(fav > best)) return;
+      best = fav;
+      if (fav - kept >= 0.01 * rk) { p.push([R(fav), R(seg)]); kept = fav; seg = Infinity; pend = null; }
+      else pend = [R(fav), R(seg)];
+      after = Infinity;
+    },
+    end(advLast) {
+      if (advLast != null) { seg = Math.min(seg, advLast); after = Math.min(after, advLast); }
+      if (pend) p.push(pend);
+      const t = pend ? after : seg;
+      return { p, ta: isFinite(t) ? R(t) : null };
+    }
+  };
 }
 
 // ---- the scanner's graded NSE alerts ----
@@ -148,7 +179,8 @@ export async function main(now = Date.now()) {
     const k = pathKey(a);
     if (seen[k]) return; seen[k] = 1;
     const p = paths[k];
-    if (p && (p.done || p.none)) return;
+    // Settled, unless it was walked before Move SL kept the path.
+    if (p && (p.none || (p.done && Array.isArray(p.p)))) return;
     const [resMin, interval] = pickRes(a, now);
     const g = todo[a.symbol + '|' + interval] = todo[a.symbol + '|' + interval] || { symbol: a.symbol, interval, resMin, list: [] };
     g.list.push(Object.assign({ key: k }, a));
