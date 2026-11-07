@@ -2536,6 +2536,8 @@ async function sigRedesignRun(seed) {
     check(v.win && Math.abs(v.win.lo - 15.82) < 0.05 && Math.abs(v.win.hi - 74.95) < 0.05, 'Wilson 3 of 7: ' + JSON.stringify(v.win));
     // Fold the rules panel by its title; it says its settings; Reset doesn't unfold it.
     await page.click('#sigRulesPanel > summary h3');
+    // The details "toggle" event fires on a later task, so wait for it to be saved.
+    await page.waitForFunction(() => state.ui.sigFold && state.ui.sigFold.rules === true, null, { timeout: 5000 }).catch(() => {});
     await page.evaluate(() => setSigTgt('2R'));
     const f1 = await page.evaluate(() => ({ open: document.getElementById('sigRulesPanel').open, fold: state.ui.sigFold, sum: document.getElementById('sigRulesSum').innerText, reset: !!document.getElementById('sigRulesResetBtn') }));
     check(f1.open === false && f1.fold.rules === true && /exit at 2R · stop stays · held till TP or SL · with fees/.test(f1.sum) && f1.reset, 'folded rules: ' + JSON.stringify(f1));
