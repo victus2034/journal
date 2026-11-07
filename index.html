@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-07.160">
+  <meta name="app-version" content="2026-11-07.161">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -8993,7 +8993,11 @@
       const m = s.match(/^(\d+)\s*([mhdw])$/i);
       return m ? +m[1] * { m: 1, h: 60, d: 1440, w: 10080 }[m[2].toLowerCase()] : null;
     }
-    function tgtSym(s) { s = aiDeltaSym(s); return /USD$/.test(s) ? s : s + "USD"; }
+    function tgtPlain(s) { s = aiDeltaSym(s); return /USD$/.test(s) ? s : s + "USD"; }
+    // Delta's own name: US stocks are "bStocks" there (an MRVL alert reads MRVLBUSD).
+    function tgtSym(s) { return deltaSymOf(s) || tgtPlain(s); }
+    // A "no candles" kept from before the bStocks names were known is read again once.
+    function tgtStale(sig, w) { return !!w && w.none === "no candles on Delta" && !w.via && tgtSym(sig.symbol) !== tgtPlain(sig.symbol); }
     function tgtKey(sig) { return [sig.key || sig.symbol + "|" + sig.date + "|" + sig.time, sig.side, signalEntry(sig), sig.stop].join("|"); }
     function tgtAlertMs(sig) { return new Date(sig.date + "T" + String(sig.time || "00:00").slice(0, 5).padStart(5, "0") + ":00+05:30").getTime(); }
     // Why an alert can't be re-scored, or "" when it can.
@@ -9119,11 +9123,11 @@
       const tfMin = tfMinutes(sig.timeframe), t0 = tgtAlertMs(sig), span = 2 * TGT_BARS * tfMin * 60000;
       const r = AI_RES.find(x => span / (x[0] * 60000) <= 1900) || AI_RES[AI_RES.length - 1];
       const from = t0 - r[0] * 60000, to = Math.min(Date.now(), t0 + span);
-      const url = DELTA_BASE + "/v2/history/candles?resolution=" + r[1] + "&symbol=" + encodeURIComponent(tgtSym(sig.symbol)) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
+      const sym = tgtSym(sig.symbol), url = DELTA_BASE + "/v2/history/candles?resolution=" + r[1] + "&symbol=" + encodeURIComponent(sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
       const res = await fetch(url);
       const j = await res.json().catch(() => null);
       if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad reply");
-      return j.result.length ? tgtWalk(sig, j.result, r[0]) : { none: "no candles on Delta" };
+      return j.result.length ? tgtWalk(sig, j.result, r[0]) : Object.assign({ none: "no candles on Delta" }, sym !== tgtPlain(sig.symbol) ? { via: sym } : {});
     }
     // Reads the candles of every graded alert in view that has none yet, four at a
     // time, and redraws as they come in. Finished windows are kept on this device.
@@ -9132,8 +9136,9 @@
       const seen = {};
       const todo = pairs.map(pr => pr.signal).filter(g => {
         const k = tgtKey(g), c = tgtCache()[k];
-        // A summary kept before Move SL has no path: read it once more.
-        if (seen[k] || (c && (c.none || Array.isArray(c.p))) || tgtTried[k] || tgtWhy(g) || !outcomeBase({ signal: g })) return false;
+        // A summary kept before Move SL has no path: read it once more. So is a "no
+        // candles" kept before the bStocks names were known (tgtStale).
+        if (seen[k] || (c && ((c.none && !tgtStale(g, c)) || Array.isArray(c.p))) || tgtTried[k] || tgtWhy(g) || !outcomeBase({ signal: g })) return false;
         return (seen[k] = true);
       });
       if (!todo.length) return;
@@ -9145,7 +9150,7 @@
           tgtTried[k] = 1;
           try {
             const w = await tgtOne(g);
-            if (w.none || w.sl || w.done) tgtCache()[k] = w; else tgtLive[k] = w;
+            if (w.none || w.sl || w.done) tgtCache()[k] = w; else { tgtLive[k] = w; delete tgtCache()[k]; }
           } catch (e) { tgtFail++; }
           tgtProg.done++;
           if (Date.now() - drawn > 1500) { drawn = Date.now(); tgtSave(); renderSignalsTable(); }
@@ -9847,10 +9852,83 @@
     const DEMO_BROKERS = [{ k: "delta", label: "Delta", mk: 0.02, tk: 0.05 }, { k: "coindcx", label: "CoinDCX", mk: 0.02, tk: 0.05 }];
     const DEMO_ORDERS = [{ k: "lm", label: "Limit in, market out", legs: ["mk", "tk"] }, { k: "mm", label: "Market in and out", legs: ["tk", "tk"] }, { k: "ll", label: "Limit in and out", legs: ["mk", "mk"] }];
     const DEMO_GST = 18, DEMO_NSE_FEE = 0.1063;
-    const DEMO_DEF = { start: 100, cur: "USD", mode: "pct", pct: 1, fixed: 1, lev: 0, broker: "delta", orders: "lm", mk_delta: 0.02, tk_delta: 0.05, mk_coindcx: 0.02, tk_coindcx: 0.05 };
+    const DEMO_DEF = { start: 100, cur: "USD", mode: "pct", pct: 1, fixed: 1, lev: 0, broker: "delta", orders: "lm", mk_delta: 0.02, tk_delta: 0.05, mk_coindcx: 0.02, tk_coindcx: 0.05, real: true, minStop: 0.1, lot1: "skip" };
     const DEMO_LEVS = [0, 2, 5, 10, 20, 25, 50, 100];
     const DEMO_CMP = [0.5, 1, 2, 3, 5];
     let demoRows = [], demoAll = false;
+    // ---- Real orders (lakky, 2026-11-07: "is it possible to have my desire sl ... some
+    // trades ... not possible to have that much of low sl, so make it practical") ----
+    // A size worked out as risk ÷ stop can't always be ordered. With real orders on, each
+    // trade is placed the way the broker would take it:
+    //  - whole contracts only (Delta) or whole quantity steps above the minimum order
+    //    (CoinDCX), rounded down, so the risk is never more than planned. Smaller than one
+    //    contract: the trade is skipped, or (if picked) taken at one contract, risking more.
+    //  - no more leverage than the coin allows on that broker (BTC/ETH 200x on Delta, most
+    //    alts 20x, some 10x), and your own cap if lower.
+    //  - a stop closer than the min stop (0.10% by default) or 3 ticks can't really be held:
+    //    the spread alone takes it. Skipped.
+    //  - a coin the broker doesn't list is skipped.
+    // Specs read from the brokers' public APIs on 7 Nov 2026 (VAS research/demo_sl_audit.py):
+    // Delta [contract value in coins, tick, max leverage = 100 / initial margin %], CoinDCX
+    // [quantity step, min quantity, min order in USDT, tick, max leverage]. Delta's are read
+    // again live when the section opens. NSE: one share, 5x (broker margin).
+    const DEMO_SPECS_AT = "7 Nov 2026", DEMO_MIN_TICKS = 3, DEMO_NSE_LEV = 5;
+    const DEMO_DELTA = {"1000BONKUSD":[1000.0,1e-06,20.0],"1000FLOKIUSD":[100.0,1e-05,20.0],"1000PEPEUSD":[1000.0,1e-07,20.0],"1000SATSUSD":[1000.0,1e-08,20.0],"1000SHIBUSD":[1000.0,1e-06,20.0],"1MBABYDOGEUSD":[100.0,1e-07,20.0],"AAOIBUSD":[0.1,0.01,25.0],"AAPLXUSD":[0.01,0.01,25.0],"AAVEUSD":[1.0,0.001,50.0],"ACTUSD":[10.0,1e-06,20.0],"ADAUSD":[1.0,1e-05,100.0],"AIGENSYNUSD":[100.0,1e-05,20.0],"AINUSD":[100.0,1e-05,20.0],"AIOTUSD":[100.0,1e-05,20.0],"AIOUSD":[100.0,1e-05,20.0],"AIXBTUSD":[10.0,1e-05,20.0],"AKEUSD":[10000.0,1e-07,20.0],"ALLOUSD":[100.0,0.0001,20.0],"ALTUSD":[10.0,1e-06,20.0],"AMDBUSD":[0.01,0.01,25.0],"AMZNXUSD":[0.01,0.01,25.0],"API3USD":[10.0,0.0001,20.0],"APTUSD":[1.0,0.0001,20.0],"ARBUSD":[1.0,1e-05,20.0],"ARCUSD":[10.0,1e-05,20.0],"ARIAUSD":[10.0,1e-05,20.0],"ARKUSD":[10.0,0.0001,10.0],"ARMBUSD":[0.01,0.01,25.0],"ARUSD":[1.0,0.001,20.0],"ASTERUSD":[10.0,0.0001,20.0],"AUCTIONUSD":[0.1,0.001,20.0],"AVAAIUSD":[100.0,1e-06,20.0],"AVAXUSD":[1.0,0.0001,100.0],"AVGOBUSD":[0.1,0.01,25.0],"AXSUSD":[10.0,0.001,20.0],"BABABUSD":[0.1,0.01,25.0],"BANKUSD":[100.0,1e-05,20.0],"BASEDUSD":[100.0,1e-05,20.0],"BBUSD":[10.0,1e-05,20.0],"BCHUSD":[0.01,0.01,100.0],"BEATUSD":[10.0,0.0001,20.0],"BEBUSD":[0.01,0.01,25.0],"BERAUSD":[1.0,0.0001,20.0],"BILLUSD":[100.0,1e-05,20.0],"BIOUSD":[10.0,1e-05,20.0],"BLESSUSD":[100.0,1e-06,20.0],"BLURUSD":[10.0,1e-05,20.0],"BMNRBUSD":[0.1,0.01,25.0],"BMTUSD":[10.0,1e-05,20.0],"BNBUSD":[0.1,0.001,100.0],"BRUSD":[10.0,1e-05,10.0],"BTCUSD":[0.001,0.5,200.0],"BTWUSD":[10.0,0.0001,10.0],"BUSD":[100.0,0.0001,20.0],"CAKEUSD":[1.0,0.0001,20.0],"CAPUSD":[100.0,1e-05,10.0],"CBRSBUSD":[0.1,0.01,25.0],"CHIPUSD":[100.0,1e-05,20.0],"COAIUSD":[10.0,0.0001,20.0],"COHRBUSD":[0.01,0.01,25.0],"COINXUSD":[0.01,0.01,25.0],"COOKIEUSD":[10.0,1e-06,20.0],"CRCLXUSD":[0.1,0.01,25.0],"CROSSUSD":[10.0,1e-05,20.0],"CRWVBUSD":[0.1,0.01,25.0],"DASHUSD":[0.1,0.01,20.0],"DEEPUSD":[10.0,1e-05,20.0],"DELLBUSD":[0.01,0.01,25.0],"DOGEUSD":[100.0,1e-06,100.0],"DOGSUSD":[1000.0,1e-08,20.0],"DOODUSD":[10000.0,1e-06,10.0],"DOTUSD":[1.0,0.001,100.0],"DRAMBUSD":[0.1,0.01,25.0],"DUSKUSD":[100.0,1e-05,20.0],"DYDXUSD":[1.0,0.0001,20.0],"EDENUSD":[10.0,1e-05,20.0],"EIGENUSD":[1.0,0.0001,20.0],"ENAUSD":[1.0,1e-05,20.0],"ENJUSD":[100.0,1e-05,20.0],"ESPORTSUSD":[100.0,1e-05,20.0],"ETCUSD":[0.1,0.001,50.0],"ETHFIUSD":[1.0,0.0001,20.0],"ETHUSD":[0.01,0.05,200.0],"EVAAUSD":[1.0,0.0001,20.0],"EWYBUSD":[0.1,0.01,25.0],"FARTCOINUSD":[1.0,0.0001,20.0],"FFUSD":[100.0,1e-05,20.0],"FILUSD":[1.0,0.0001,50.0],"FRAXUSD":[10.0,0.0001,20.0],"GALAUSD":[100.0,1e-06,20.0],"GIGGLEUSD":[0.1,0.01,20.0],"GLMUSD":[10.0,1e-05,20.0],"GOATUSD":[10.0,1e-05,20.0],"GOOGLXUSD":[0.01,0.01,25.0],"GRAMUSD":[10.0,0.001,20.0],"GRIFFAINUSD":[10.0,1e-06,20.0],"GTCUSD":[100.0,1e-05,10.0],"HANAUSD":[100.0,1e-05,20.0],"HBARUSD":[1.0,1e-05,20.0],"HIVEUSD":[10.0,1e-05,20.0],"HOODBUSD":[0.1,0.01,25.0],"HUSD":[100.0,1e-05,20.0],"HYPEUSD":[0.1,0.001,20.0],"INITUSD":[10.0,1e-05,20.0],"INJUSD":[1.0,0.001,20.0],"INTCBUSD":[0.1,0.01,25.0],"INUSD":[100.0,1e-05,20.0],"IOSTUSD":[10000.0,1e-07,10.0],"IOTAUSD":[1.0,1e-05,20.0],"IOUSD":[1.0,0.0001,20.0],"IRYSUSD":[100.0,1e-05,10.0],"JASMYUSD":[100.0,1e-06,20.0],"JCTUSD":[1000.0,1e-06,10.0],"JTOUSD":[1.0,0.0001,20.0],"JUPUSD":[10.0,0.0001,20.0],"KAITOUSD":[1.0,0.0001,20.0],"KITEUSD":[100.0,1e-05,20.0],"KORUBUSD":[1.0,0.01,25.0],"KSMUSD":[0.1,0.001,20.0],"LABUSD":[10.0,1e-05,20.0],"LAYERUSD":[10.0,1e-05,20.0],"LDOUSD":[1.0,0.0001,20.0],"LIGHTUSD":[10.0,0.0001,20.0],"LINKUSD":[1.0,0.001,100.0],"LISTAUSD":[10.0,1e-05,20.0],"LITEBUSD":[0.01,0.01,25.0],"LITUSD":[10.0,0.0001,20.0],"LTCUSD":[0.1,0.01,100.0],"MANAUSD":[1.0,0.0001,20.0],"MANTAUSD":[1.0,1e-05,20.0],"MASKUSD":[1.0,0.0001,20.0],"MELANIAUSD":[1.0,0.0001,20.0],"MEMEUSD":[100.0,1e-07,20.0],"METAXUSD":[0.01,0.01,25.0],"MEUSD":[10.0,1e-05,20.0],"MMTUSD":[10.0,0.0001,20.0],"MONUSD":[100.0,1e-05,20.0],"MOODENGUSD":[10.0,1e-05,20.0],"MOVEUSD":[10.0,1e-05,20.0],"MOVRUSD":[10.0,0.0001,10.0],"MRNABUSD":[0.1,0.01,25.0],"MRVLBUSD":[0.1,0.01,25.0],"MSFTBUSD":[0.01,0.01,25.0],"MSTRBUSD":[0.1,0.01,25.0],"MUBARAKUSD":[10.0,1e-05,20.0],"MUBUSD":[0.01,0.01,25.0],"MUSD":[10.0,0.0001,20.0],"MUUBUSD":[0.1,0.01,25.0],"MVLLBUSD":[0.1,0.01,25.0],"NBISBUSD":[0.1,0.01,25.0],"NEARUSD":[1.0,0.0001,20.0],"NEIROUSD":[1000.0,1e-08,20.0],"NMRUSD":[1.0,0.001,20.0],"NOTUSD":[100.0,1e-07,20.0],"NVDAXUSD":[0.01,0.01,25.0],"OILUSD":[0.1,0.01,25.0],"ONDOUSD":[10.0,0.0001,20.0],"OPNUSD":[100.0,1e-05,20.0],"OPUSD":[0.1,0.0001,20.0],"ORCLBUSD":[0.1,0.01,25.0],"ORDERUSD":[10.0,1e-05,20.0],"ORDIUSD":[0.1,0.001,20.0],"PARTIUSD":[100.0,1e-05,20.0],"PAXGUSD":[0.001,0.01,100.0],"PENDLEUSD":[1.0,0.0001,20.0],"PENGUUSD":[100.0,1e-06,20.0],"PEOPLEUSD":[100.0,1e-05,20.0],"PIEVERSEUSD":[10.0,0.0001,20.0],"PIPPINUSD":[100.0,1e-05,20.0],"PIUSD":[10.0,0.0001,20.0],"PLTRBUSD":[0.1,0.01,25.0],"PNUTUSD":[1.0,1e-05,20.0],"POLUSD":[10.0,1e-05,50.0],"POPCATUSD":[1.0,1e-05,20.0],"PROVEUSD":[10.0,0.0001,20.0],"PUMPUSD":[1000.0,1e-06,20.0],"QNTUSD":[0.1,0.01,20.0],"QQQXUSD":[0.01,0.01,25.0],"RAREUSD":[100.0,1e-05,20.0],"RAVEUSD":[1.0,0.0001,20.0],"REDUSD":[10.0,0.0001,20.0],"RIVERUSD":[1.0,0.001,20.0],"RKLBBUSD":[0.1,0.01,25.0],"RLCUSD":[10.0,0.0001,10.0],"RSRUSD":[100.0,1e-06,20.0],"RUNEUSD":[1.0,0.0001,20.0],"SAGAUSD":[1.0,1e-05,20.0],"SAHARAUSD":[100.0,1e-05,20.0],"SEIUSD":[10.0,1e-05,20.0],"SIGNUSD":[100.0,1e-06,20.0],"SIRENUSD":[10.0,1e-05,20.0],"SKHYBUSD":[0.1,0.01,25.0],"SKLUSD":[100.0,1e-05,20.0],"SKYAIUSD":[10.0,1e-05,20.0],"SLVONUSD":[0.1,0.01,50.0],"SNDKBUSD":[0.01,0.01,25.0],"SNXXBUSD":[1.0,0.01,25.0],"SOLUSD":[1.0,0.0001,100.0],"SOLVUSD":[100.0,1e-06,20.0],"SONICUSD":[10.0,1e-05,20.0],"SOONUSD":[10.0,0.0001,10.0],"SOPHUSD":[100.0,1e-06,20.0],"SOXLBUSD":[0.1,0.01,25.0],"SPCXXUSD":[0.01,0.01,25.0],"SPXUSD":[10.0,0.0001,20.0],"SPYXUSD":[0.01,0.01,25.0],"STBLUSD":[10.0,1e-05,20.0],"STRKUSD":[100.0,1e-05,20.0],"STXUSD":[1.0,0.0001,20.0],"SUIUSD":[1.0,0.0001,20.0],"SUNUSD":[100.0,1e-06,20.0],"SUSD":[10.0,1e-05,20.0],"SUSHIUSD":[1.0,0.0001,20.0],"SWARMSUSD":[10.0,1e-06,20.0],"TACUSD":[100.0,1e-06,20.0],"TAOUSD":[0.01,0.01,20.0],"TIAUSD":[1.0,0.0001,20.0],"TLMUSD":[10000.0,1e-06,20.0],"TNSRUSD":[100.0,1e-05,20.0],"TOWNSUSD":[100.0,1e-06,20.0],"TQQQBUSD":[0.1,0.01,25.0],"TRBUSD":[0.1,0.001,20.0],"TRUMPUSD":[0.1,0.001,20.0],"TRXUSD":[1.0,1e-05,50.0],"TSLAXUSD":[0.01,0.01,25.0],"TSMBUSD":[0.01,0.01,25.0],"TSTUSD":[100.0,1e-06,20.0],"UNIUSD":[1.0,0.0001,100.0],"USUALUSD":[10.0,1e-05,20.0],"VANAUSD":[1.0,0.0001,20.0],"VELVETUSD":[10.0,0.0001,20.0],"VIRTUALUSD":[1.0,0.0001,20.0],"VVVUSD":[1.0,0.001,20.0],"WCTUSD":[10.0,1e-05,20.0],"WDCBUSD":[0.01,0.01,25.0],"WIFUSD":[1.0,0.0001,20.0],"WLDUSD":[1.0,0.0001,20.0],"WLFIUSD":[10.0,0.0001,20.0],"XAIUSD":[10.0,1e-06,20.0],"XANUSD":[100.0,1e-06,20.0],"XAUTUSD":[0.001,0.01,100.0],"XLMUSD":[1.0,1e-05,20.0],"XMRUSD":[0.01,0.01,20.0],"XPLUSD":[10.0,0.0001,20.0],"XRPUSD":[1.0,0.0001,100.0],"ZECUSD":[0.1,0.01,20.0],"ZENUSD":[1.0,0.001,20.0],"ZKUSD":[10.0,1e-05,20.0],"ZORAUSD":[100.0,1e-06,20.0],"ZROUSD":[1.0,0.0001,20.0]};
+    // Delta lists US stocks as "bStocks" (MRVL is MRVLBUSD), so their alerts map to those.
+    const DEMO_DELTA_ALIAS = {"AAOI":"AAOIBUSD","AMD":"AMDBUSD","ARM":"ARMBUSD","AVGO":"AVGOBUSD","BABA":"BABABUSD","BE":"BEBUSD","BMNR":"BMNRBUSD","CBRS":"CBRSBUSD","COHR":"COHRBUSD","CRWV":"CRWVBUSD","DELL":"DELLBUSD","DRAM":"DRAMBUSD","EWY":"EWYBUSD","HOOD":"HOODBUSD","INTC":"INTCBUSD","KORU":"KORUBUSD","LITE":"LITEBUSD","MRNA":"MRNABUSD","MRVL":"MRVLBUSD","MSFT":"MSFTBUSD","MSTR":"MSTRBUSD","MU":"MUBUSD","MUU":"MUUBUSD","MVLL":"MVLLBUSD","NBIS":"NBISBUSD","ORCL":"ORCLBUSD","PLTR":"PLTRBUSD","RKLB":"RKLBBUSD","SKHY":"SKHYBUSD","SNDK":"SNDKBUSD","SNXX":"SNXXBUSD","SOXL":"SOXLBUSD","TQQQ":"TQQQBUSD","TSM":"TSMBUSD","WDC":"WDCBUSD"};
+    const DEMO_DCX = {"0G":[1.0,1.0,6.0,0.0001,30.0],"1000BONK":[1.0,1.0,6.0,1e-06,5.0],"1000PEPE":[1.0,1.0,6.0,1e-07,5.0],"1000SHIB":[1.0,1.0,6.0,1e-06,10.0],"AAVE":[0.1,0.1,6.0,0.01,10.0],"ACE":[0.01,0.01,6.0,1e-05,5.0],"ADA":[1.0,1.0,6.0,0.0001,10.0],"AERO":[0.1,0.1,6.0,0.0001,5.0],"AKE":[1.0,1.0,6.0,1e-06,7.0],"ALGO":[0.1,0.1,6.0,1e-05,5.0],"ALLO":[1.0,1.0,6.0,1e-05,30.0],"APT":[0.1,0.1,6.0,0.0001,20.0],"ARB":[0.1,0.1,6.0,1e-05,5.0],"ASTER":[1.0,1.0,6.0,0.0001,30.0],"ATOM":[0.01,0.01,6.0,0.001,20.0],"AVAX":[1.0,1.0,6.0,0.001,10.0],"BANK":[1.0,1.0,6.0,1e-05,30.0],"BAT":[0.1,0.1,6.0,1e-05,5.0],"BCH":[0.001,0.001,24.0,0.01,10.0],"BEAT":[1.0,1.0,6.0,1e-05,30.0],"BLESS":[1.0,1.0,6.0,1e-06,7.0],"BNB":[0.01,0.01,6.0,0.01,25.0],"BOME":[1.0,1.0,6.0,1e-07,5.0],"BTC":[0.001,0.001,60.0,0.1,20.0],"BTW":[1.0,1.0,6.0,0.0001,30.0],"CAP":[1.0,1.0,6.0,1e-05,30.0],"CL":[0.01,0.01,6.0,0.01,30.0],"COAI":[1.0,1.0,6.0,0.0001,30.0],"COTI":[1.0,1.0,6.0,1e-06,5.0],"CRV":[0.1,0.1,6.0,0.0001,10.0],"DASH":[0.001,0.001,6.0,0.01,5.0],"DEXE":[0.01,0.01,6.0,0.001,5.0],"DOGE":[1.0,1.0,6.0,1e-05,10.0],"DOS":[1.0,1.0,6.0,0.0001,7.0],"DOT":[0.1,0.1,6.0,0.0001,10.0],"ENA":[1.0,1.0,6.0,1e-05,5.0],"ERA":[1.0,1.0,6.0,1e-05,30.0],"ESP":[1.0,1.0,6.0,1e-05,30.0],"ESPORTS":[1.0,1.0,6.0,1e-06,7.0],"ETC":[0.01,0.01,24.0,0.001,25.0],"ETH":[0.001,0.001,24.0,0.01,20.0],"ETHFI":[0.1,0.1,6.0,0.0001,5.0],"EUL":[0.1,0.1,6.0,0.0001,30.0],"FARTCOIN":[0.1,0.1,6.0,0.0001,5.0],"FIL":[0.1,0.1,6.0,0.0001,20.0],"GALA":[1.0,1.0,6.0,1e-06,20.0],"GRAM":[0.1,0.1,6.0,0.001,30.0],"GTC":[0.1,0.1,6.0,1e-05,5.0],"GWEI":[1.0,1.0,6.0,1e-05,30.0],"H":[1.0,1.0,6.0,1e-05,30.0],"HBAR":[1.0,1.0,6.0,1e-05,5.0],"HOME":[1.0,1.0,6.0,1e-06,30.0],"HYPE":[0.01,0.01,6.0,0.001,30.0],"ICP":[1.0,1.0,6.0,0.001,5.0],"INJ":[0.1,0.1,6.0,0.001,5.0],"JTO":[1.0,1.0,6.0,0.0001,5.0],"JUP":[1.0,1.0,6.0,0.0001,5.0],"KAITO":[0.1,0.1,6.0,0.0001,5.0],"KGEN":[1.0,1.0,6.0,0.0001,30.0],"LA":[0.1,0.1,6.0,1e-05,30.0],"LAB":[1.0,1.0,6.0,1e-05,30.0],"LDO":[1.0,1.0,6.0,0.0001,20.0],"LINK":[0.01,0.01,24.0,0.001,10.0],"LTC":[0.001,0.001,24.0,0.01,25.0],"MAGIC":[0.1,0.1,6.0,1e-05,10.0],"MMT":[1.0,1.0,6.0,0.0001,30.0],"NEAR":[1.0,1.0,6.0,0.001,15.0],"O":[1.0,1.0,6.0,0.0001,30.0],"OGN":[1.0,1.0,6.0,1e-05,5.0],"ONDO":[0.1,0.1,6.0,0.0001,5.0],"OP":[0.1,0.1,6.0,1e-05,5.0],"ORDI":[0.1,0.1,6.0,0.001,5.0],"PAXG":[0.001,0.001,6.0,0.01,5.0],"PENGU":[1.0,1.0,6.0,1e-06,5.0],"PEOPLE":[1.0,1.0,6.0,1e-06,5.0],"PHAROS":[1.0,1.0,6.0,0.0001,30.0],"POL":[1.0,1.0,6.0,1e-05,5.0],"PUMP":[1.0,1.0,6.0,1e-06,30.0],"QNT":[0.1,0.1,6.0,0.01,5.0],"RE":[1.0,1.0,6.0,0.0001,30.0],"RIVER":[0.1,0.1,6.0,0.001,30.0],"RLC":[0.1,0.1,6.0,0.0001,10.0],"RSR":[1.0,1.0,6.0,1e-06,10.0],"S":[1.0,1.0,6.0,1e-05,5.0],"SEI":[1.0,1.0,6.0,1e-05,5.0],"SOL":[0.01,0.01,6.0,0.01,5.0],"SOON":[1.0,1.0,6.0,0.0001,30.0],"STRK":[0.1,0.1,6.0,1e-05,5.0],"SUI":[0.1,0.1,6.0,0.0001,5.0],"TAC":[1.0,1.0,6.0,1e-06,30.0],"TAIKO":[1.0,1.0,6.0,1e-05,7.0],"TAO":[0.001,0.001,6.0,0.01,5.0],"TIA":[1.0,1.0,6.0,0.0001,5.0],"TRUMP":[0.01,0.01,6.0,0.001,4.0],"TRX":[1.0,1.0,6.0,1e-05,20.0],"UB":[1.0,1.0,6.0,1e-05,30.0],"UNI":[1.0,1.0,6.0,0.001,20.0],"US":[1.0,1.0,6.0,1e-06,30.0],"VELVET":[1.0,1.0,6.0,1e-05,7.0],"VIRTUAL":[0.1,0.1,6.0,0.0001,5.0],"VVV":[0.01,0.01,6.0,0.001,4.0],"W":[0.1,0.1,6.0,1e-06,5.0],"WIF":[0.1,0.1,6.0,0.0001,5.0],"WLD":[1.0,1.0,6.0,0.0001,10.0],"WLFI":[1.0,1.0,6.0,1e-05,30.0],"XLM":[1.0,1.0,6.0,1e-05,10.0],"XMR":[0.001,0.001,6.0,0.01,15.0],"XPL":[1.0,1.0,6.0,1e-05,30.0],"XRP":[0.1,0.1,6.0,0.0001,10.0],"ZAMA":[1.0,1.0,6.0,1e-05,30.0],"ZEC":[0.001,0.001,6.0,0.01,5.0],"ZIL":[1.0,1.0,6.0,1e-06,10.0],"ZORA":[1.0,1.0,6.0,1e-06,30.0],"ZRO":[0.1,0.1,6.0,0.0001,5.0]};
+    let demoLive = null, demoLiveAt = 0, demoLiveBusy = false;
+    function deltaSpecs() { return demoLive || DEMO_DELTA; }
+    // An alert's symbol as Delta names it ("BTCUSD", "MRVLBUSD"), or "" when Delta has none.
+    function deltaSymOf(sym, specs) {
+      specs = specs || deltaSpecs();
+      let s = aiDeltaSym(sym); if (!/USD$/.test(s)) s += "USD";
+      if (specs[s]) return s;
+      const a = (demoLive && demoLive.__alias ? demoLive.__alias : DEMO_DELTA_ALIAS)[s.slice(0, -3)];
+      return a && specs[a] ? a : "";
+    }
+    // Delta's product list, read once when the Demo account opens, kept in memory only.
+    function demoParseProducts(j) {
+      if (!j || j.success !== true || !Array.isArray(j.result)) return null;
+      const m = {}, al = {};
+      j.result.forEach(p => {
+        if (!p || p.contract_type !== "perpetual_futures" || (p.state && p.state !== "live")) return;
+        const cv = +p.contract_value, tk = +p.tick_size, im = +p.initial_margin;
+        if (!(cv > 0) || !(tk > 0) || !(im > 0) || !p.symbol) return;
+        m[p.symbol] = [cv, tk, +(100 / im).toFixed(4)];
+        if (/bStocks/.test(p.short_description || "") && /BUSD$/.test(p.symbol)) al[p.symbol.slice(0, -4)] = p.symbol;
+      });
+      if (Object.keys(m).length < 20) return null;
+      Object.defineProperty(m, "__alias", { value: al });
+      return m;
+    }
+    async function demoSpecsLoad() {
+      if (demoLive || demoLiveBusy || Date.now() - demoLiveAt < 10 * 60000) return;
+      demoLiveBusy = true;
+      try {
+        const res = await fetch(DELTA_BASE + "/v2/products?contract_types=perpetual_futures&page_size=1000");
+        demoLive = demoParseProducts(await res.json().catch(() => null));
+      } catch (e) { demoLive = null; }
+      demoLiveAt = Date.now(); demoLiveBusy = false;
+      demoDrawOut(); // live or not, the "reading Delta now" note goes
+    }
+    // How the broker takes one alert, in the account's money: step = one contract (or
+    // quantity step), min = the smallest order, qty = coins per step; null = not listed.
+    function demoSpec(sig, cfg) {
+      const entry = signalEntry(sig);
+      if (!(entry > 0)) return null;
+      if (isNseSig(sig)) { const k = cfg.cur === "INR" ? 1 : 1 / FX_DEFAULT; return { venue: "NSE", step: entry * k, min: entry * k, qty: 1, unit: "share", maxLev: DEMO_NSE_LEV, tickPct: 0 }; }
+      if (cfg.broker === "coindcx") {
+        const base = aiDeltaSym(sig.symbol).replace(/USD$/, ""), d = DEMO_DCX[base];
+        if (!d) return null;
+        const k = cfg.cur === "INR" ? FX_COINDCX : 1;
+        return { venue: "CoinDCX", step: d[0] * entry * k, min: Math.max(d[1] * entry, d[2]) * k, qty: d[0], unit: base, maxLev: d[4] || 0, tickPct: d[3] / entry * 100 };
+      }
+      const sym = deltaSymOf(sig.symbol), d = sym ? deltaSpecs()[sym] : null;
+      if (!d) return null;
+      const k = cfg.cur === "INR" ? FX_DEFAULT : 1;
+      return { venue: "Delta", sym, step: d[0] * entry * k, min: d[0] * entry * k, qty: d[0], unit: sym.replace(/USD$/, ""), maxLev: d[2] || 0, tickPct: d[1] / entry * 100 };
+    }
     function demoBroker(k) { return DEMO_BROKERS.find(b => b.k === k) || DEMO_BROKERS[0]; }
     function demoOrders(k) { return DEMO_ORDERS.find(o => o.k === k) || DEMO_ORDERS[0]; }
     // Round trip in % of the position: the two legs' rates + GST on them.
@@ -9863,6 +9941,7 @@
       const mode = d.mode === "fixed" ? "fixed" : "pct", cur = d.cur === "INR" ? "INR" : "USD";
       const broker = demoBroker(d.broker).k, orders = demoOrders(d.orders).k, mk = num(d["mk_" + broker]), tk = num(d["tk_" + broker]);
       const feesOn = state.ui.sigNoFee !== true;
+      const real = d.real !== false, minStop = num(d.minStop), lot1 = d.lot1 === "one" ? "one" : "skip";
       let err = "", warn = "";
       if (!isFinite(start) || !(start > 0)) err = "Enter a starting balance above 0.";
       else if (start > 1e12) err = "That starting balance is too large. Keep it under 1,000,000,000,000.";
@@ -9871,24 +9950,49 @@
       else if (mode === "fixed" && (!isFinite(fixed) || !(fixed > 0))) err = "Enter the risk per trade as an amount above 0.";
       const feeOk = [mk, tk].every(v => isFinite(v) && v >= 0 && v <= 1);
       if (!err && feesOn && !feeOk) err = "Enter the maker and taker fees as a % from 0 to 1 (Delta and CoinDCX: 0.02 and 0.05).";
+      else if (!err && real && (!isFinite(minStop) || minStop < 0 || minStop > 10)) err = "Enter the min stop as a % from 0 to 10 (0.10 by default).";
       else if (!err && mode === "fixed" && fixed > start) warn = "The risk per trade is more than the starting balance, so a trade risks the whole balance until it grows.";
       // The round trip at the broker's rates, also worked out with fees off for the "with fees" line.
       const feePct = feeOk ? demoFeePct(mk, tk, orders) : null;
-      return { start, cur, mode, pct, fixed, lev: isFinite(lev) && lev > 0 ? lev : 0, broker, orders, mk, tk, feesOn, feePct, err, warn };
+      return { start, cur, mode, pct, fixed, lev: isFinite(lev) && lev > 0 ? lev : 0, broker, orders, mk, tk, feesOn, feePct, real, minStop: isFinite(minStop) && minStop > 0 ? minStop : 0, lot1, err, warn };
     }
-    // rows: [{ r, slp, fee }] in time order: r = the result in R before fees, slp = stop
-    // distance in %, fee = the round trip in R (fee % ÷ stop %, 0 = none). Pure, so the
-    // test can check it by hand.
+    // rows: [{ r, slp, fee, spec }] in time order: r = the result in R before fees, slp =
+    // stop distance in %, fee = the round trip in R (fee % ÷ stop %, 0 = none), spec = how
+    // the broker takes it (demoSpec; null = not listed). cfg.real places each trade as a
+    // real order (whole contracts, the coin's max leverage, min stop); off, any size goes.
+    // Pure, so the test can check it by hand.
     function demoRun(rows, cfg) {
-      let bal = cfg.start, peak = cfg.start, low = cfg.start, maxDD = 0, maxDDPct = 0, maxLev = 0, capped = 0, blownAt = null, tooBig = false, fees = 0;
-      const trades = [];
+      let bal = cfg.start, peak = cfg.start, low = cfg.start, maxDD = 0, maxDDPct = 0, maxLev = 0, capped = 0, capCoin = 0, blownAt = null, tooBig = false, fees = 0, rounded = 0, ones = 0, oneMax = 0;
+      const trades = [], skips = [], tiny = 1e-9;
       for (let i = 0; i < rows.length; i++) {
-        const x = rows[i], before = bal;
-        let risk = cfg.mode === "fixed" ? Math.min(cfg.fixed, bal) : bal * cfg.pct / 100;
-        // The position is risk ÷ stop distance; as a multiple of the balance, the leverage it needs.
-        let lev = x.slp > 0 ? risk / (x.slp / 100) / bal : null, cap = false;
-        if (cfg.lev && lev != null && lev > cfg.lev) { risk = bal * cfg.lev * x.slp / 100; lev = cfg.lev; cap = true; capped++; }
-        if (lev != null) maxLev = Math.max(maxLev, lev);
+        const x = rows[i], before = bal, sp = cfg.real ? x.spec || null : null;
+        const want = cfg.mode === "fixed" ? Math.min(cfg.fixed, bal) : bal * cfg.pct / 100;
+        let risk = want, lev = null, cap = "", pos = null, units = null, one = false;
+        if (x.slp > 0) {
+          if (cfg.real) {
+            const why = !x.spec ? "venue" : x.slp < (cfg.minStop || 0) - tiny ? "tight" : sp.tickPct > 0 && x.slp < DEMO_MIN_TICKS * sp.tickPct - tiny ? "ticks" : "";
+            if (why) { skips.push({ i, x, why, before, want }); continue; }
+          }
+          // The position is risk ÷ stop distance; as a multiple of the balance, the leverage it needs.
+          pos = want / (x.slp / 100);
+          const coinCap = sp && sp.maxLev > 0 ? sp.maxLev : Infinity, youCap = cfg.lev > 0 ? cfg.lev : Infinity, capX = Math.min(coinCap, youCap);
+          if (pos > bal * capX * (1 + tiny)) { pos = bal * capX; cap = coinCap < youCap ? "coin" : "you"; }
+          if (sp) {
+            // Whole steps, rounded down; under the smallest order: skip, or one order if picked.
+            const minPos = Math.ceil(sp.min / sp.step - tiny) * sp.step, n = Math.floor(pos / sp.step + tiny);
+            if (n * sp.step < minPos - tiny * minPos) {
+              if (cfg.lot1 === "one" && minPos <= bal * capX * (1 + tiny)) { pos = minPos; one = true; ones++; oneMax = Math.max(oneMax, minPos * x.slp / bal); }
+              else { skips.push({ i, x, why: "lot", before, want, minPos, need: minPos * x.slp / 100, over: minPos > bal * capX * (1 + tiny) ? capX : 0 }); continue; }
+            } else {
+              if (n * sp.step < pos * (1 - 1e-6)) rounded++;
+              pos = n * sp.step;
+            }
+            units = Math.round(pos / sp.step) * sp.qty;
+          }
+          risk = pos * x.slp / 100; lev = pos / bal;
+          if (cap) { capped++; if (cap === "coin") capCoin++; }
+          maxLev = Math.max(maxLev, lev);
+        }
         // The fee is the position × the fee %, i.e. risk × fee in R; it comes off the result.
         const fee = risk * (x.fee || 0);
         let pnl = risk * x.r - fee;
@@ -9897,13 +10001,14 @@
         peak = Math.max(peak, bal); low = Math.min(low, bal);
         if (peak - bal > maxDD) maxDD = peak - bal;
         if (peak > 0) maxDDPct = Math.max(maxDDPct, (peak - bal) / peak * 100);
-        trades.push({ i, x, before, risk, pos: x.slp > 0 ? risk / (x.slp / 100) : null, fee, pnl, bal, lev, cap });
+        trades.push({ i, x, before, want, risk, pos, units, fee, pnl, bal, lev, cap, one });
         if (bal <= cfg.start * 1e-6) { bal = Math.max(0, bal); blownAt = i; break; }
         if (bal > 1e15) { tooBig = true; break; }
       }
       const pick = f => trades.length ? trades.reduce((b, t) => f(t, b) ? t : b) : null;
+      const why = {}; skips.forEach(k => { why[k.why] = (why[k.why] || 0) + 1; });
       return {
-        trades, end: bal, ret: (bal - cfg.start) / cfg.start * 100, peak, low, maxDD, maxDDPct, maxLev, capped, blownAt, tooBig, fees,
+        trades, skips, why, end: bal, ret: (bal - cfg.start) / cfg.start * 100, peak, low, maxDD, maxDDPct, maxLev, capped, capCoin, rounded, ones, oneMax, blownAt, tooBig, fees,
         wins: trades.filter(t => t.pnl > 0).length, losses: trades.filter(t => t.pnl < 0).length,
         best: pick((t, b) => t.pnl > b.pnl), worst: pick((t, b) => t.pnl < b.pnl)
       };
@@ -9925,7 +10030,7 @@
     }
     // The rows demoRun plays, with this fee setting (on = charge fees).
     function demoPlay(cfg, on) {
-      return demoRows.map(x => Object.assign({}, x, { r: x.g, fee: on && x.slp > 0 ? (x.nse ? DEMO_NSE_FEE : cfg.feePct) / x.slp : 0 }));
+      return demoRows.map(x => Object.assign({}, x, { r: x.g, fee: on && x.slp > 0 ? (x.nse ? DEMO_NSE_FEE : cfg.feePct) / x.slp : 0, spec: x.pr ? demoSpec(x.pr.signal, cfg) : x.spec }));
     }
     function demoFees(k) {
       const d = demoRaw();
@@ -9936,7 +10041,7 @@
     // Settings change: a number only redraws the results, so the box keeps its focus.
     function demoSet(k, v) {
       const d = demoRaw(); d[k] = v; state.ui.sigDemo = d; save();
-      if (k === "mode" || k === "cur") renderSigDemoNow(); else demoDrawOut();
+      if (k === "mode" || k === "cur" || k === "real" || k === "lot1") renderSigDemoNow(); else demoDrawOut();
     }
     // Reset puts the demo's own settings back; Fees with / without is the tab's switch.
     function demoReset() { state.ui.sigDemo = Object.assign({}, DEMO_DEF); demoAll = false; save(); renderSigDemoNow(); }
@@ -9970,9 +10075,18 @@
           + '<input type="number" id="sigDemoTk" step="any" min="0" max="1" inputmode="decimal" value="' + val(d['tk_' + bk]) + '" oninput="demoSet(\'tk_' + bk + '\', this.value)" style="width:70px" class="' + box + '">+ ' + DEMO_GST + '% GST</div></div>'
           : '<p class="text-slate-500 text-[11px] pb-2">Same switch as Fees above: every result on the tab is without fees.</p>')
         + '</div>';
+      // Real orders: whole contracts, the coin's max leverage, a min stop; or any size.
+      const rl = cfg.real, vn = demoBroker(bk).label;
+      const real = '<div id="sigDemoRealForm" class="flex flex-wrap items-end gap-4 mb-3 pb-3 border-b border-terminal-border">'
+        + '<div>' + lab('Real orders') + seg(segBtn(rl, 'On', "demoSet('real',true)", 'data-real="1"') + segBtn(!rl, 'Off (any size)', "demoSet('real',false)", 'data-real="0"')) + '</div>'
+        + (rl ? '<div>' + lab('Min stop') + '<div class="flex items-center gap-1.5 text-slate-500"><input type="number" id="sigDemoMinStop" step="any" min="0" max="10" inputmode="decimal" value="' + val(d.minStop) + '" oninput="demoSet(\'minStop\', this.value)" style="width:70px" class="' + box + '">% and ' + DEMO_MIN_TICKS + ' ticks</div></div>'
+          + '<div>' + lab('Smaller than 1 ' + (bk === 'coindcx' ? 'min order' : 'contract')) + seg(segBtn(cfg.lot1 === 'skip', 'Skip the trade', "demoSet('lot1','skip')", 'data-lot1="skip"') + segBtn(cfg.lot1 === 'one', 'Take 1 (risks more)', "demoSet('lot1','one')", 'data-lot1="one"')) + '</div>'
+          : '<p class="text-slate-500 text-[11px] pb-2">Any size, any stop: positions are risk ÷ stop, however small, with no leverage limit but yours.</p>')
+        + '</div>';
       host.innerHTML = '<div class="flex items-center gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Demo account</h3></div>'
-        + '<p class="text-slate-500 text-[11px] mb-3">A pretend account that takes every alert with a result in this view, one after another in the order they fired, and compounds. Results follow the filters above: Exit at, Type or Level, channel, period and BTC day. Fees are your broker\'s, set below.</p>'
-        + form + fees + '<div id="sigDemoOut"></div>';
+        + '<p class="text-slate-500 text-[11px] mb-3">A pretend account that takes every alert with a result in this view, one after another in the order they fired, and compounds. Results follow the filters above: Exit at, Type or Level, channel, period and BTC day. Fees are your broker\'s, set below. With real orders on, each trade is placed as ' + esc(vn) + ' would take it: whole contracts, the coin\'s max leverage, no stop tighter than the min.</p>'
+        + form + fees + real + '<div id="sigDemoOut"></div>';
+      if (rl && bk === 'delta') demoSpecsLoad();
       demoDrawOut();
     }
     function demoDrawOut() {
@@ -9983,7 +10097,7 @@
       if (cfg.err) { out.innerHTML = '<p class="text-rose-400">' + esc(cfg.err) + '</p>'; return; }
       if (!demoRows.length) { out.innerHTML = '<p class="text-slate-500">No alerts with a result in this view yet. Widen the period or pick another channel.</p>'; return; }
       const rows = demoPlay(cfg, cfg.feesOn), run = demoRun(rows, cfg), T = run.trades, n = T.length;
-      const first = demoRows[0].pr.signal, last = T[n - 1].x.pr.signal;
+      const first = demoRows[0].pr.signal, last = n ? T[n - 1].x.pr.signal : demoRows[demoRows.length - 1].pr.signal;
       const riskTxt = cfg.mode === 'pct' ? cfg.pct + '% of the balance' : m(cfg.fixed);
       const cell = (l, v, sub, c, tip) => '<div class="bg-[#0A0F18] border border-terminal-border rounded-lg p-2"' + (tip ? ' title="' + esc(tip) + '"' : '') + '><div class="text-[10px] uppercase tracking-wider text-slate-500">' + l + '</div><div class="text-sm font-bold mono-num ' + (c || 'text-slate-100') + '">' + v + '</div>' + (sub ? '<div class="text-[10px] text-slate-500 truncate">' + sub + '</div>' : '') + '</div>';
       const levTxt = v => v == null ? '—' : (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + 'x';
@@ -9997,10 +10111,26 @@
       const nNse = T.filter(t => t.x.nse).length, noStop = T.filter(t => !(t.x.slp > 0)).length;
       const alt = cfg.feePct != null ? demoRun(demoPlay(cfg, !cfg.feesOn), cfg) : null;
       const altTxt = r => '<span class="' + tone(r.ret) + '">' + m(r.end) + ' (' + (pfmt(r.ret) || '0.00%') + ')</span>';
+      // Real orders on or off, in one line: what was placed, what was skipped and why, and the other way's result.
+      const W = run.why, sk = run.skips.length, dcx = cfg.broker === 'coindcx', one1 = dcx ? 'min order' : 'contract';
+      const other = demoRun(rows, Object.assign({}, cfg, { real: !cfg.real }));
+      const skipBits = [W.lot ? W.lot + ' smaller than 1 ' + one1 : '', W.tight ? W.tight + ' stop under ' + cfg.minStop + '%' : '', W.ticks ? W.ticks + ' stop within ' + DEMO_MIN_TICKS + ' ticks' : '', W.venue ? W.venue + ' not on ' + bkl : ''].filter(Boolean);
+      const specTxt = dcx ? 'Min orders and leverage as CoinDCX listed them on ' + DEMO_SPECS_AT + '.' : demoLive ? 'Contract sizes and leverage read live from Delta.' : 'Contract sizes and leverage as Delta listed them on ' + DEMO_SPECS_AT + (demoLiveBusy ? ' (reading Delta now…)' : '') + '.';
+      const realLine = '<div id="sigDemoRealLine" class="rounded-lg border p-2 mb-3 text-[11px] ' + (cfg.real ? 'border-sky-500/40 bg-sky-500/5' : 'border-amber-500/40 bg-amber-500/5') + '">'
+        + (cfg.real
+          ? '<b class="text-sky-300">Real orders on</b> · ' + esc(bkl) + ': whole ' + one1 + 's, rounded down; each coin\'s max leverage' + (cfg.lev ? ' and your ' + cfg.lev + 'x' : '') + '; stops under ' + cfg.minStop + '% or ' + DEMO_MIN_TICKS + ' ticks skipped. '
+            + 'Placed <b class="text-slate-100">' + n + '</b> of ' + (n + sk) + (sk ? ', skipped <b class="text-amber-300">' + sk + '</b>: ' + skipBits.join(', ') : '') + '.'
+            + (run.capCoin ? ' ' + run.capCoin + ' sized down to the coin\'s max leverage.' : '')
+            + (run.ones ? ' ' + run.ones + ' taken at 1 ' + one1 + ', risking more than planned (up to <b class="text-rose-400">' + run.oneMax.toFixed(1) + '%</b> of the balance on one trade).' : '')
+            + ' Any size, every alert: ' + altTxt(other) + '. ' + specTxt
+            + (nNse || rows.some(x => x.nse) ? ' NSE: 1 share, ' + DEMO_NSE_LEV + 'x.' : '')
+          : '<b class="text-amber-300">Real orders off</b>: every trade at its exact risk ÷ stop size, however small. As real ' + esc(bkl) + ' orders: ' + altTxt(other) + ', ' + other.trades.length + ' of ' + rows.length + ' placed.'
+            + ' <button type="button" onclick="demoSet(\'real\', true)" class="underline text-sky-300">Use real orders</button>')
+        + '</div>';
       const feeLine = '<div id="sigDemoFeeLine" class="rounded-lg border p-2 mb-3 text-[11px] ' + (cfg.feesOn ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/5') + '">'
         + (cfg.feesOn
           ? '<b class="text-emerald-400">Fees on</b> · ' + esc(bkl) + ' · ' + esc(ord.label.toLowerCase()) + ': ' + legs + ' = <b class="text-slate-100">' + cfg.feePct.toFixed(4) + '%</b> of each position.'
-            + ' Paid <b class="text-rose-400">' + m(run.fees) + '</b> on ' + n + ' trade' + (n === 1 ? '' : 's') + ' (about ' + m(run.fees / n) + ' a trade).'
+            + ' Paid <b class="text-rose-400">' + m(run.fees) + '</b> on ' + n + ' trade' + (n === 1 ? '' : 's') + (n ? ' (about ' + m(run.fees / n) + ' a trade)' : '') + '.'
             + (alt ? ' Without fees: ' + altTxt(alt) + '.' : '')
             + (nNse ? ' NSE alerts pay ' + DEMO_NSE_FEE + '% (Indian broker), whatever the broker.' : '')
             + (noStop ? ' ' + noStop + ' trade' + (noStop === 1 ? ' has' : 's have') + ' no stop, so no position size and no fee.' : '')
@@ -10012,11 +10142,11 @@
         + cell('Start', m(cfg.start), 'risk ' + riskTxt)
         + cell('Final balance', m(run.end), 'peak ' + m(run.peak), tone(run.end - cfg.start))
         + cell('Return', pfmt(run.ret) || '0.00%', sm(run.end - cfg.start) + (cfg.feesOn ? ' after fees' : ' no fees'), tone(run.ret))
-        + cell('Trades', n, run.wins + 'W / ' + run.losses + 'L · ' + pct(run.wins / n * 100) + ' won', '', 'Alerts with a result in this view' + (n < demoRows.length ? ', up to the trade that blew the account' : ''))
+        + cell('Trades', n + (sk ? ' <span class="text-[10px] font-normal text-amber-300">+' + sk + ' skipped</span>' : ''), run.wins + 'W / ' + run.losses + 'L · ' + pct(run.wins / n * 100) + ' won', '', 'Alerts with a result in this view, placed' + (sk ? '; ' + sk + ' could not be placed as real orders' : '') + (run.blownAt != null ? ', up to the trade that blew the account' : ''))
         + cell('Max drawdown', run.maxDDPct ? '-' + run.maxDDPct.toFixed(2) + '%' : '0%', run.maxDD ? '-' + m(run.maxDD) + ' at most' : 'never below a high', 'text-rose-400', 'The deepest fall from a high point of the balance, as a % of that high.')
         + cell('Lowest balance', m(run.low), pfmt((run.low - cfg.start) / cfg.start * 100) + ' vs start', tone(run.low - cfg.start))
         + cell('Best / worst', '<span class="text-emerald-400">' + (run.best && run.best.pnl > 0 ? sm(run.best.pnl) : '—') + '</span> / <span class="text-rose-400">' + (run.worst && run.worst.pnl < 0 ? sm(run.worst.pnl) : '—') + '</span>', 'single trade')
-        + cell('Leverage needed', levTxt(run.maxLev || null), cfg.lev ? (run.capped ? run.capped + ' trade' + (run.capped === 1 ? '' : 's') + ' capped at ' + cfg.lev + 'x' : 'none over ' + cfg.lev + 'x') : 'highest of any trade', run.capped ? 'text-amber-300' : '', 'Position = risk ÷ stop distance. Leverage = position ÷ balance. With a cap, a trade that needs more is taken at the cap, so it risks less.')
+        + cell('Leverage needed', levTxt(run.maxLev || null), run.capped ? run.capped + ' trade' + (run.capped === 1 ? '' : 's') + ' capped' + (run.capCoin === run.capped ? ' at the coin\'s max' : cfg.lev && !run.capCoin ? ' at ' + cfg.lev + 'x' : '') : cfg.lev ? 'none over ' + cfg.lev + 'x' : 'highest of any trade', run.capped ? 'text-amber-300' : '', 'Position = risk ÷ stop distance. Leverage = position ÷ balance. A trade that needs more than the coin allows' + (cfg.lev ? ' or your cap' : '') + ' is taken at that leverage, so it risks less.')
         + '</div>';
       const curve = '<div class="mb-3"><div class="flex flex-wrap justify-between gap-2 text-[10px] uppercase tracking-wider mb-1"><span class="text-amber-300 font-bold">Balance, trade by trade</span><span class="text-slate-500 normal-case">red below: drawdown from the last high</span></div>'
         + btCurveSvg(T.map(t => t.pnl), 'Demo account balance with drawdown') + '<div class="flex justify-between text-[10px] text-slate-500 mt-1"><span>' + esc(first.date) + ' · ' + m(cfg.start) + '</span><span class="' + tone(run.ret) + '">' + m(run.end) + '</span><span>' + esc(last.date) + '</span></div></div>';
@@ -10032,30 +10162,46 @@
         + '</tbody></table></div></div>';
 
       // The same alerts at other risk sizes.
-      const cmp = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Same alerts, other risk sizes</div><p class="text-[10px] text-slate-500 mb-1">Starting with ' + m(cfg.start) + ', each a share of the balance' + (cfg.lev ? ', leverage capped at ' + cfg.lev + 'x' : '') + (cfg.feesOn ? ', same fees' : ', no fees') + '.</p><div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Risk a trade</th><th class="pr-2 text-right">Final balance</th><th class="pr-2 text-right">Return</th><th class="pr-2 text-right">Max DD</th><th class="text-right">Lowest</th></tr></thead><tbody>'
+      const cmp = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Same alerts, other risk sizes</div><p class="text-[10px] text-slate-500 mb-1">Starting with ' + m(cfg.start) + ', each a share of the balance' + (cfg.lev ? ', leverage capped at ' + cfg.lev + 'x' : '') + (cfg.feesOn ? ', same fees' : ', no fees') + '.</p><div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Risk a trade</th><th class="pr-2 text-right">Final balance</th><th class="pr-2 text-right">Return</th><th class="pr-2 text-right">Max DD</th><th class="text-right">Lowest</th>' + (cfg.real ? '<th class="pl-2 text-right">Placed</th>' : '') + '</tr></thead><tbody>'
         + DEMO_CMP.concat(cfg.mode === 'pct' && !DEMO_CMP.some(p => Math.abs(p - cfg.pct) < 1e-9) ? [cfg.pct] : []).sort((a, b) => a - b).map(p => { const r2 = demoRun(rows, Object.assign({}, cfg, { mode: 'pct', pct: p })), mine = cfg.mode === 'pct' && Math.abs(cfg.pct - p) < 1e-9;
-          return '<tr class="border-t border-terminal-border/60' + (mine ? ' bg-amber-500/10' : '') + '"><td class="py-1 pr-2 text-slate-200">' + p + '%' + (mine ? ' <span class="text-amber-300 text-[10px]">yours</span>' : '') + (r2.blownAt != null ? ' <span class="text-rose-400 text-[10px]">blown</span>' : '') + '</td><td class="pr-2 text-right font-bold ' + tone(r2.ret) + '">' + m(r2.end) + '</td><td class="pr-2 text-right ' + tone(r2.ret) + '">' + (pfmt(r2.ret) || '0.00%') + '</td><td class="pr-2 text-right text-rose-400">-' + r2.maxDDPct.toFixed(2) + '%</td><td class="text-right text-slate-300">' + m(r2.low) + '</td></tr>'; }).join('')
+          return '<tr class="border-t border-terminal-border/60' + (mine ? ' bg-amber-500/10' : '') + '"><td class="py-1 pr-2 text-slate-200">' + p + '%' + (mine ? ' <span class="text-amber-300 text-[10px]">yours</span>' : '') + (r2.blownAt != null ? ' <span class="text-rose-400 text-[10px]">blown</span>' : '') + '</td><td class="pr-2 text-right font-bold ' + tone(r2.ret) + '">' + m(r2.end) + '</td><td class="pr-2 text-right ' + tone(r2.ret) + '">' + (pfmt(r2.ret) || '0.00%') + '</td><td class="pr-2 text-right text-rose-400">-' + r2.maxDDPct.toFixed(2) + '%</td><td class="text-right text-slate-300">' + m(r2.low) + '</td>' + (cfg.real ? '<td class="pl-2 text-right text-slate-400" title="Placed as real orders, of the alerts">' + r2.trades.length + ' / ' + (r2.trades.length + r2.skips.length) + '</td>' : '') + '</tr>'; }).join('')
         + '</tbody></table></div></div>';
 
-      // Trade by trade, newest first.
-      const LIMIT = 30, rowsT = T.slice().reverse(), shown = demoAll ? rowsT : rowsT.slice(0, LIMIT);
-      const list = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">Trade by trade, newest first</div><div class="overflow-x-auto"><table id="sigDemoTrades" class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1.5 pr-3">#</th><th class="pr-3">When</th><th class="pr-3">Alert</th><th class="pr-3 text-right">Stop</th><th class="pr-3 text-right">Result</th><th class="pr-3 text-right">Risk</th><th class="pr-3 text-right">Position</th><th class="pr-3 text-right">Fee</th><th class="pr-3 text-right">P&amp;L</th><th class="text-right">Balance</th></tr></thead><tbody>'
+      // Trade by trade, newest first, with the alerts that could not be placed.
+      const sizeTxt = t => t.units == null ? '—' : t.x.spec && t.x.spec.unit === 'share' ? t.units + ' share' + (t.units === 1 ? '' : 's') : (+t.units.toPrecision(6)) + ' ' + esc(t.x.spec ? t.x.spec.unit : '');
+      const skipTxt = k => {
+        const sp = k.x.spec;
+        if (k.why === 'venue') return esc(k.x.pr.signal.symbol) + ' is not on ' + esc(bkl);
+        if (k.why === 'tight') return 'stop ' + k.x.slp.toFixed(3) + '% is under the ' + cfg.minStop + '% min';
+        if (k.why === 'ticks') return 'stop ' + k.x.slp.toFixed(3) + '% is within ' + DEMO_MIN_TICKS + ' ticks (1 tick = ' + sp.tickPct.toFixed(4) + '%)';
+        const q = Math.round(k.minPos / sp.step) * sp.qty;
+        return (sp.unit === 'share' ? '1 share = ' : '1 ' + one1 + ' (' + (+q.toPrecision(6)) + ' ' + esc(sp.unit) + ') = ') + m(k.minPos)
+          + (k.over ? ', more than ' + k.over + 'x leverage on ' + m(k.before) : ' risks ' + m(k.need) + ' at this stop, more than the ' + m(k.want) + ' planned');
+      };
+      const LIMIT = 30, rowsT = T.concat(run.skips).sort((a, b) => b.i - a.i), shown = demoAll ? rowsT : rowsT.slice(0, LIMIT);
+      const head = (when, alert) => '<td class="py-1.5 pr-3 text-slate-500">' + when + '</td>' + alert;
+      const list = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">Trade by trade, newest first</div><div class="overflow-x-auto"><table id="sigDemoTrades" class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1.5 pr-3">#</th><th class="pr-3">When</th><th class="pr-3">Alert</th><th class="pr-3 text-right">Stop</th><th class="pr-3 text-right">Result</th><th class="pr-3 text-right">Risk</th><th class="pr-3 text-right">Position</th><th class="pr-3 text-right">Size</th><th class="pr-3 text-right">Fee</th><th class="pr-3 text-right">P&amp;L</th><th class="text-right">Balance</th></tr></thead><tbody>'
         + shown.map(t => { const g = t.x.pr.signal;
-          return '<tr class="border-t border-terminal-border/60 hover:bg-white/5"><td class="py-1.5 pr-3 text-slate-500">' + (t.i + 1) + '</td><td class="pr-3 whitespace-nowrap text-slate-400">' + esc(g.date + ' ' + (g.time || '')) + '</td>'
+          const lead = head(t.i + 1, '<td class="pr-3 whitespace-nowrap text-slate-400">' + esc(g.date + ' ' + (g.time || '')) + '</td>'
             + '<td class="pr-3 whitespace-nowrap text-slate-200">' + esc(g.symbol) + ' <span class="' + (g.side === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.side === 'long' ? 'Long' : 'Short') + '</span> <span class="text-slate-500">' + esc(g.timeframe || chanLabel(chanKey(g))) + '</span></td>'
-            + '<td class="pr-3 text-right text-slate-400">' + (t.x.slp != null ? t.x.slp.toFixed(2) + '%' : '—') + '</td>'
+            + '<td class="pr-3 text-right text-slate-400">' + (t.x.slp != null ? t.x.slp.toFixed(2) + '%' : '—') + '</td>');
+          if (t.why) return '<tr class="border-t border-terminal-border/60 text-slate-500" data-skip="' + t.why + '">' + lead
+            + '<td class="pr-3 text-right whitespace-nowrap">' + rfmt(t.x.r - t.x.fee) + '</td><td colspan="6" class="pr-3 text-amber-300/80">Skipped: ' + skipTxt(t) + '</td></tr>';
+          return '<tr class="border-t border-terminal-border/60 hover:bg-white/5">' + lead
             + '<td class="pr-3 text-right whitespace-nowrap ' + tone(t.x.r - t.x.fee) + '"' + (t.x.fee ? ' title="' + rfmt(t.x.r) + ' before fees, ' + rfmt(-t.x.fee) + ' fees"' : '') + '>' + rfmt(t.x.r - t.x.fee) + (t.x.label ? ' <span class="text-slate-500 text-[10px]">' + esc(t.x.label) + '</span>' : '') + '</td>'
-            + '<td class="pr-3 text-right text-slate-300">' + m(t.risk) + '</td>'
-            + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + (t.pos != null ? m(t.pos) + ' · ' + levTxt(t.lev) + (t.cap ? ' <span class="text-amber-300 text-[10px]">cap</span>' : '') : '—') + '</td>'
+            + '<td class="pr-3 text-right ' + (t.one ? 'text-amber-300' : 'text-slate-300') + '"' + (t.one ? ' title="1 ' + one1 + ' risks more than the ' + esc(m(t.want)) + ' planned"' : '') + '>' + m(t.risk) + '</td>'
+            + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + (t.pos != null ? m(t.pos) + ' · ' + levTxt(t.lev) + (t.cap ? ' <span class="text-amber-300 text-[10px]">' + (t.cap === 'coin' ? 'max' : 'cap') + '</span>' : '') : '—') + '</td>'
+            + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + sizeTxt(t) + (t.one ? ' <span class="text-amber-300 text-[10px]">min</span>' : '') + '</td>'
             + '<td class="pr-3 text-right text-slate-400">' + (t.fee ? '-' + m(t.fee) : '—') + '</td>'
             + '<td class="pr-3 text-right font-bold ' + tone(t.pnl) + '">' + sm(t.pnl) + '</td><td class="text-right text-slate-200">' + m(t.bal) + '</td></tr>'; }).join('')
         + '</tbody></table></div>'
         + (rowsT.length > LIMIT ? '<div class="text-center mt-2"><button type="button" onclick="demoShowAll()" class="px-3 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">' + (demoAll ? 'Show the newest ' + LIMIT : 'Show all ' + rowsT.length) + '</button></div>' : '') + '</div>';
 
-      out.innerHTML = notes.join('') + feeLine + stats + curve
+      if (!n) { out.innerHTML = notes.join('') + realLine + feeLine + '<p class="text-amber-300 mb-3">None of these ' + rows.length + ' alerts can be placed as real ' + esc(bkl) + ' orders at this balance and risk. Raise the balance or the risk, pick Take 1 above, or turn real orders off.</p>' + list; return; }
+      out.innerHTML = notes.join('') + realLine + feeLine + stats + curve
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + prog + cmp + '</div>'
         + list
-        + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. Fees come off on top: position × the round trip above (position = risk ÷ stop distance), per trade under Fee; Result is in R after them. Stop slippage (0.05%) counts either way, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
+        + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. Fees come off on top: position × the round trip above (position = risk ÷ stop distance), per trade under Fee; Result is in R after them. With real orders on, the position is rounded down to whole contracts (Size), so a trade can risk a little less than planned, never more unless Take 1 is picked. Stop slippage (0.05%) counts either way, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
     }
 
     /* =================== FIB LEVELS =================== */
@@ -12653,6 +12799,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-07.161', pr: 76, title: 'Demo account: real orders only', pts: ['Each trade is sized as Delta (or CoinDCX) would take it: whole contracts, rounded down, and no more leverage than the coin allows', 'A trade smaller than 1 contract, a stop under 0.1% or 3 ticks, or a coin the broker doesn\'t list is skipped and says why; or pick Take 1 contract', 'Off (any size) shows the old way; the line says both results. MRVL and other US stocks read Delta\'s bStocks (MRVLBUSD)'] },
       { v: '2026-11-07.160', pr: 75, title: 'Move SL: breakeven or SL shift on Exit at', pts: ['Signals → Move SL next to Exit at: Off, BE (at +0.5R to +3R the stop goes to entry) or SL shift (e.g. at 1R lock +0.75R)', 'Works with every fixed Exit at; the headline, breakdowns, Backtest report and Demo account follow it', 'Edge & breakdowns: new Move SL compared grid, total R for every exit and stop move; click a cell to use it'] },
       { v: '2026-11-07.159', pr: 74, title: 'Demo account: fees shown, Delta or CoinDCX', pts: ['Fees were always charged (Delta 0.0826% a trade); now a line says Fees on or off, the total paid and the balance without them', 'Pick where the trades are: Delta or CoinDCX, how orders fill (limit or market) and the maker / taker rates', 'Every trade shows its fee; No fees is the same switch as Fees on the tab'] },
       { v: '2026-11-06.158', pr: 73, title: 'Nifty options: lots by account size', pts: ['Type your account size: lots are what it can pay for and what your risk allows, whichever is smaller', 'Risk as a % of the account (0.5% to 10%); each strike shows its cost a lot', 'Too small for a lot near the money: shows the nearest strike it can buy, or says none'] },

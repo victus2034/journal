@@ -2433,9 +2433,13 @@ async function demoAccountRun(seed) {
       market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H', filled: true, outcome: r > 0 ? (r === 2 ? '+2R' : '+1R') : 'SL', resultR: r, hasReportR: true, price: 100, stop: 99, entry: 100 }, extra || {});
     state.signals = rs.map((r, i) => sg(i, r)).concat([sg(7, null, { filled: false, outcome: '', resultR: null, date: '2026-10-08' })]);
     Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', mktFilter: '', sigTgt: '', sigNoFee: false });
+    // These made-up coins aren't on Delta, so the money is checked with real orders off
+    // (any size); real orders have their own test (demoRealRun).
+    state.ui.sigDemo = Object.assign({}, state.ui.sigDemo || {}, { real: false });
     switchTab('signals'); renderAll();
   });
   const text = () => page.evaluate(() => document.getElementById('sigDemo').innerText.replace(/\s+/g, ' '));
+  const realOff = () => page.click('#sigDemo button[data-real="0"]');
   try {
     await page.goto(base, { waitUntil: 'load' });
     await page.evaluate(() => { state.ui.sigSec = 'alerts'; });
@@ -2448,7 +2452,8 @@ async function demoAccountRun(seed) {
       .forEach(x => check(t.includes(x), 'default demo should show "' + x + '": ' + t.slice(0, 700)));
     check(/Same alerts, other risk sizes .*2% \$101\.76 \+1\.76%/.test(t), '2% row (100 → 101.7586): ' + t.slice(0, 1400));
     const first = await page.$eval('#sigDemoTrades tbody tr', tr => tr.innerText.replace(/\s+/g, ' ').trim());
-    check(/^7 2026-10-07 10:00 S6USD Long 4H 1\.00% -1\.00R SL \$1\.02 \$101\.96 · 1\.0x -\$0\.08 -\$1\.02 \$100\.94$/.test(first), 'newest trade first, with its fee: ' + first);
+    check(/^7 2026-10-07 10:00 S6USD Long 4H 1\.00% -1\.00R SL \$1\.02 \$101\.96 · 1\.0x — -\$0\.08 -\$1\.02 \$100\.94$/.test(first), 'newest trade first, with its fee: ' + first);
+    check((await text()).includes('Real orders off: every trade at its exact risk ÷ stop size') && (await text()).includes('0 of 7 placed'), 'real orders off says so, and that none of these made-up coins is on Delta');
     // Fees (lakky, 2026-11-07): on by default at Delta's rates and said in money. Worked out
     // here apart from the app: each result already carries 0.0826R of fee on a 1% stop, so the
     // fee paid is risk × 0.0826 and the result before fees is R + 0.0826.
@@ -2459,7 +2464,7 @@ async function demoAccountRun(seed) {
     t = await text();
     check(t.includes('Fees on · Delta · limit in, market out: 0.02% maker in + 0.05% taker out + 18% GST = 0.0826% of each position.'), 'fee line says on, broker and rate: ' + t.slice(0, 900));
     check(t.includes('Paid ' + usd(lm.f) + ' on 7 trades') && t.includes('Without fees: ' + usd(none.b)) && t.includes('Final balance ' + usd(lm.b)) && t.includes('after fees'), 'fees paid ' + usd(lm.f) + ', without ' + usd(none.b) + ': ' + t.slice(0, 900));
-    const feeCol = await page.$$eval('#sigDemoTrades tbody tr', trs => trs.map(tr => tr.children[7].innerText.trim()));
+    const feeCol = await page.$$eval('#sigDemoTrades tbody tr', trs => trs.map(tr => tr.children[8].innerText.trim()));
     check(feeCol.length === 7 && feeCol.every(x => /^-\$0\.0[89]$/.test(x)), 'a fee on every trade: ' + JSON.stringify(feeCol));
     // Market in and out: 0.05% + 0.05% + GST = 0.118%; limit both: 0.0472%.
     await page.selectOption('#sigDemoOrders', 'mm');
@@ -2494,6 +2499,8 @@ async function demoAccountRun(seed) {
     await page.selectOption('#sigDemoOrders', 'mm'); await page.click('#sigDemo button[data-broker="coindcx"]');
     await page.click('#sigDemo button:has-text("Reset")');
     check(await page.inputValue('#sigDemoOrders') === 'lm' && (await text()).includes('Fees on · Delta') && (await page.inputValue('#sigDemoTk')) === '0.05', 'reset: Delta, limit in, market out');
+    check((await text()).includes('Real orders on · Delta'), 'reset turns real orders back on');
+    await realOff();
     // A new balance redraws the results and keeps the box focused.
     await page.fill('#sigDemoStart', '1000');
     t = await text();
@@ -2520,6 +2527,7 @@ async function demoAccountRun(seed) {
     await page.click('#sigDemo button[data-cur="INR"]');
     check((await text()).includes('Final balance ₹1,010.00'), 'rupee label: ' + (await text()).slice(0, 400));
     await page.click('#sigDemo button:has-text("Reset")');
+    await realOff();
     check((await text()).includes('Final balance $100.94'), 'reset to $100 at 1%: ' + (await text()).slice(0, 400));
     // Wrong inputs say what is wrong instead of drawing nonsense.
     const bad = [['#sigDemoStart', '', 'Enter a starting balance above 0.'], ['#sigDemoStart', '-5', 'Enter a starting balance above 0.'], ['#sigDemoStart', '1e13', 'too large'], ['#sigDemoStart', '100', 'Final balance $100.94'],
@@ -2563,6 +2571,162 @@ async function demoAccountRun(seed) {
   await ctx.close();
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals demo account: $100 compounded by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('demo account: ' + e); });
+}
+
+// Real orders in the Demo account (lakky, 2026-11-07: "is it possible to have my desire sl
+// ... make it practical ... different and random sl ... check is it showing correct").
+// Part 1, by hand on Delta's own contract sizes (7 Nov 2026): $100 risking 2% a trade.
+//  1 BTC  long  75000 / 72000 (4%):  wants a $50 position, 1 contract is $75 -> skipped
+//  2 ETH  long  2240 / 2228.8 (0.5%): $400 wanted, 17 x $22.40 = $380.80, risk $1.904, +2R
+//  3 DOGE short stop 0.07% -> under the 0.1% min, skipped
+//  4 VELVET long 0.05 / 0.0498 (0.4%): its tick 0.0001 is 0.2%, so 3 ticks = 0.6% -> skipped
+//  5 RLC  long 0.12% stop: $1,730 wanted, RLC max 10x = $1,038.08, 241 x $4.30 = $1,036.30, -1.5R
+//  6 MAGIC is not on Delta -> skipped
+//  7 MRVL (Delta's MRVLBUSD) 140 / 137.2: 7 x $14 = $98, risk $1.96, +1R
+//  8 SOL  short 90 / 91.8: 1 x $90, risk $1.80, -1R
+// Part 2: 400 random alerts on random Delta coins, prices and stops from 0.01% to 40%, at
+// random balances, risks, caps and settings, each checked against a sizing worked out here.
+async function demoRealRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  // Delta's product list, served from here: 25 coins, BTC's contract made 0.01 to see the live list win.
+  const live = { success: true, result: Array.from({ length: 25 }, (_, i) => ({ symbol: i ? 'FAKE' + i + 'USD' : 'BTCUSD', contract_type: 'perpetual_futures', state: 'live', contract_value: i ? '1' : '0.01', tick_size: '0.5', initial_margin: '0.5', short_description: 'x' })) };
+  let liveOn = false, liveCalls = 0;
+  await ctx.route(url => !url.href.startsWith(base), r => {
+    if (liveOn && /\/v2\/products\?/.test(r.request().url())) { liveCalls++; return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(live) }); }
+    return r.abort();
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const text = () => page.evaluate(() => document.getElementById('sigDemo').innerText.replace(/\s+/g, ' '));
+  const usd = v => '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // symbol, side, entry, stop, scanner R (after its 0.0826% fee, which Delta's default fee equals)
+  const A = [['BTCUSD', 'long', 75000, 72000, -1], ['ETHUSD', 'long', 2240, 2228.8, 2], ['DOGEUSD', 'short', 0.0718, 0.07185, 2], ['VELVETUSD', 'long', 0.05, 0.0498, -1],
+    ['RLCUSD', 'long', 0.43, 0.43 * (1 - 0.0012), -1.5], ['MAGICUSD', 'long', 0.1, 0.098, 1], ['MRVL', 'long', 140, 137.2, 1], ['SOLUSD', 'short', 90, 91.8, -1]];
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(A => {
+      state.signals = A.map((a, i) => ({ id: 'rl' + i, key: 'r' + i, kind: 'trendline', date: '2026-10-0' + (i + 1), time: '10:00', symbol: a[0], side: a[1], score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: true, outcome: a[4] > 0 ? '+' + a[4] + 'R' : 'SL', resultR: a[4], hasReportR: true, price: a[2], entry: a[2], stop: a[3] }));
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', mktFilter: '', sigTgt: '', sigNoFee: false, sigSec: 'demo' });
+      state.ui.sigDemo = { start: 100, mode: 'pct', pct: 2 };
+      switchTab('signals'); renderAll();
+    }, A);
+    let t = await text();
+    // 100 -> +3.808 -> -1.86534 -> +1.96 -> -1.80 = 102.10266
+    check(t.includes('Real orders on · Delta: whole contracts, rounded down') && t.includes('Placed 4 of 8, skipped 4: 1 smaller than 1 contract, 1 stop under 0.1%, 1 stop within 3 ticks, 1 not on Delta.') && t.includes('1 sized down to the coin\'s max leverage.'), 'real orders line: ' + t.slice(0, 1600));
+    check(t.includes('Final balance $102.10') && t.includes('Trades 4 +4 skipped'), 'real orders by hand → $102.10: ' + t.slice(0, 1800));
+    const rows = await page.$$eval('#sigDemoTrades tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
+    const want = [
+      /^8 2026-10-08 10:00 SOLUSD Short 4H 2\.00% -1\.00R SL \$1\.80 \$90\.00 · 0\.9x 1 SOL /,
+      /^7 2026-10-07 10:00 MRVL Long 4H 2\.00% \+1\.00R \+1R \$1\.96 \$98\.00 · 1\.0x 0\.7 MRVLB /,
+      /^6 2026-10-06 10:00 MAGICUSD Long 4H 2\.00% \+1\.00R Skipped: MAGICUSD is not on Delta$/,
+      /^5 2026-10-05 10:00 RLCUSD Long 4H 0\.12% -1\.50R SL \$1\.24 \$1,036\.30 · 10\.0x max 2410 RLC /,
+      /^4 2026-10-04 10:00 VELVETUSD Long 4H 0\.40% -1\.00R Skipped: stop 0\.400% is within 3 ticks \(1 tick = 0\.2000%\)$/,
+      /^3 2026-10-03 10:00 DOGEUSD Short 4H 0\.07% \+2\.00R Skipped: stop 0\.070% is under the 0\.1% min$/,
+      /^2 2026-10-02 10:00 ETHUSD Long 4H 0\.50% \+2\.00R \+2R \$1\.90 \$380\.80 · 3\.8x 0\.17 ETH /,
+      /^1 2026-10-01 10:00 BTCUSD Long 4H 4\.00% -1\.00R Skipped: 1 contract \(0\.001 BTC\) = \$75\.00 risks \$3\.00 at this stop, more than the \$2\.00 planned$/];
+    want.forEach((re, i) => check(re.test(rows[i] || ''), 'trade row ' + (8 - i) + ' ' + re + ': ' + rows[i]));
+    // Take 1 contract instead: BTC goes in at $75 (risk $3, -1R), the rest re-size from there.
+    // 100 -3 = 97; ETH 17 x 22.4, +3.808 = 100.808; RLC 234 x 4.3 = 1006.2, -1.81116 = 98.99684;
+    // MRVL 7 x 14, +1.96 = 100.95684; SOL 1 x 90, -1.80 = 99.15684.
+    await page.click('#sigDemo button[data-lot1="one"]');
+    t = await text();
+    check(t.includes('Final balance $99.16') && t.includes('Placed 5 of 8') && t.includes('1 taken at 1 contract, risking more than planned (up to 3.0% of the balance on one trade).'), 'take 1 contract → $99.16: ' + t.slice(0, 1800));
+    check(/^1 2026-10-01 10:00 BTCUSD Long 4H 4\.00% -1\.00R SL \$3\.00 \$75\.00 · 0\.8x 0\.001 BTC min /.test(await page.$eval('#sigDemoTrades tbody tr:last-child', tr => tr.innerText.replace(/\s+/g, ' ').trim())), 'BTC at 1 contract');
+    await page.click('#sigDemo button[data-lot1="skip"]');
+    // Min stop 0: DOGE is placed (0.07% stop, $2 / 0.0007 = $2,872 needs 28x of 100x, 400 x $7.18).
+    await page.fill('#sigDemoMinStop', '0');
+    t = await text();
+    check(t.includes('Placed 5 of 8') && !t.includes('stop under'), 'min stop 0 places DOGE: ' + t.slice(0, 1400));
+    for (const v of ['-1', '11', '']) { await page.fill('#sigDemoMinStop', v); check((await text()).includes('Enter the min stop'), 'min stop "' + v + '" says what is wrong'); }
+    await page.fill('#sigDemoMinStop', '0.1');
+    // Real orders off: every alert at its exact size, 2% each, compounding.
+    let b = 100; A.forEach(a => { b += b * 0.02 * a[4]; });
+    check(t.includes('Any size, every alert: ' + usd(b)) || (await text()).includes('Any size, every alert: ' + usd(b)), 'real orders line gives the any-size result ' + usd(b));
+    await page.click('#sigDemo button[data-real="0"]');
+    t = await text();
+    check(t.includes('Final balance ' + usd(b)) && t.includes('Real orders off') && t.includes('As real Delta orders: $102.10') && t.includes('4 of 8 placed'), 'off → ' + usd(b) + ': ' + t.slice(0, 1400));
+    await page.click('#sigDemo button:has-text("Use real orders")');
+    check((await text()).includes('Final balance $102.10'), 'Use real orders turns them back on');
+    // CoinDCX: its own minimum orders (BTC 0.001 and $60, ETH $24, SOL 0.01), no MRVL or VELVET.
+    await page.click('#sigDemo button[data-broker="coindcx"]');
+    t = await text();
+    check(t.includes('Real orders on · CoinDCX: whole min orders') && t.includes('not on CoinDCX'), 'CoinDCX specs: ' + t.slice(0, 1400));
+    await page.click('#sigDemo button[data-broker="delta"]');
+    // Rupees: Delta India's ₹85 a dollar, so 1 BTC contract = ₹6,375; ₹10,000 at 2% wants ₹5,000.
+    await page.evaluate(() => { demoSet('cur', 'INR'); demoSet('start', '10000'); });
+    const rb = await page.$eval('#sigDemoTrades tbody tr:last-child', tr => tr.innerText.replace(/\s+/g, ' ').trim());
+    check(/1 contract \(0\.001 BTC\) = ₹6,375\.00 risks ₹255\.00 at this stop, more than the ₹200\.00 planned/.test(rb), 'rupees use ₹85 a dollar: ' + rb);
+    await page.evaluate(() => { demoSet('cur', 'USD'); demoSet('start', '100'); });
+    // Delta's live list wins over the saved one: BTC at 0.01 a contract ($750) and FAKE coins.
+    liveOn = true;
+    await page.evaluate(() => { demoLiveAt = 0; renderSigDemoNow(); });
+    await page.waitForFunction(() => !!demoLive, null, { timeout: 5000 });
+    t = await text();
+    check(liveCalls === 1 && t.includes('read live from Delta') && t.includes('Placed 0 of 8') && t.includes('None of these 8 alerts'), 'live specs: only BTC + 24 fake coins listed, so nothing places: calls ' + liveCalls + ' ' + t.slice(0, 900));
+    await page.evaluate(() => { demoLive = null; demoLiveAt = Date.now(); renderSigDemoNow(); });
+    // Part 2: random alerts, checked trade by trade against sizing worked out here.
+    const res = await page.evaluate(() => {
+      let seed = 20261107; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+      const syms = Object.keys(DEMO_DELTA), runs = [];
+      for (let k = 0; k < 40; k++) {
+        const cfg = Object.assign(demoCfg(), { start: [100, 1000, 25000][k % 3], mode: k % 5 ? 'pct' : 'fixed', pct: [0.5, 1, 2, 5][k % 4], fixed: [1, 10, 50][k % 3], lev: [0, 5, 20][k % 3], lot1: k % 2 ? 'one' : 'skip', minStop: [0, 0.1, 0.3][k % 3], real: true, broker: 'delta' });
+        const rows = Array.from({ length: 10 }, () => {
+          const sym = syms[Math.floor(rnd() * syms.length)], entry = Math.pow(10, rnd() * 8 - 3), slp = Math.pow(10, rnd() * 3.6 - 2), side = rnd() < 0.5 ? 'long' : 'short';
+          const sig = { symbol: sym, side, entry, stop: side === 'long' ? entry * (1 - slp / 100) : entry * (1 + slp / 100), market: 'CRYPTO' };
+          return { sig, r: [-1.3, -1, 1, 2, 0.4][Math.floor(rnd() * 5)], slp: slPct(sig), fee: 0.0826 / slPct(sig), spec: demoSpec(sig, cfg) };
+        });
+        runs.push({ cfg, rows: rows.map(x => ({ sym: x.sig.symbol, entry: x.sig.entry, r: x.r, slp: x.slp, fee: x.fee, spec: x.spec })), out: demoRun(rows, cfg) });
+      }
+      return { runs, specs: DEMO_DELTA };
+    });
+    let n = 0, placed = 0, skipped = 0;
+    res.runs.forEach((run, k) => {
+      const cfg = run.cfg, o = run.out;
+      let bal = cfg.start, ti = 0, si = 0;
+      for (let i = 0; i < run.rows.length; i++) {
+        const x = run.rows[i], d = res.specs[x.sym], step = d[0] * x.entry, tickPct = d[1] / x.entry * 100;
+        n++;
+        // the spec itself
+        check(Math.abs(x.spec.step - step) <= 1e-9 * step && x.spec.maxLev === d[2] && Math.abs(x.spec.tickPct - tickPct) <= 1e-9 * tickPct, 'spec ' + x.sym + ' ' + JSON.stringify(x.spec));
+        const plan = cfg.mode === 'fixed' ? Math.min(cfg.fixed, bal) : bal * cfg.pct / 100;
+        const why = x.slp < cfg.minStop ? 'tight' : x.slp < 3 * tickPct ? 'ticks' : '';
+        const lim = bal * Math.min(d[2], cfg.lev || Infinity);
+        let lots = Math.floor(Math.min(plan / (x.slp / 100), lim) / step + 1e-9), one = false;
+        if (!why && lots < 1 && cfg.lot1 === 'one' && step <= lim * (1 + 1e-9)) { lots = 1; one = true; }
+        if (why || lots < 1) {
+          const sk = o.skips[si++];
+          check(sk && sk.i === i && sk.why === (why || 'lot'), 'run ' + k + ' alert ' + i + ' should skip (' + (why || 'lot') + '): ' + JSON.stringify(sk));
+          skipped++; continue;
+        }
+        const tr = o.trades[ti++];
+        if (!tr) { errs.push('run ' + k + ' alert ' + i + ' missing'); break; }
+        const pos = lots * step, risk = pos * x.slp / 100, fee = pos * 0.0826 / 100;
+        let pnl = risk * x.r - fee; if (bal + pnl < 0) pnl = -bal;
+        bal += pnl; placed++;
+        check(tr.i === i && Math.abs(tr.units - lots * d[0]) <= 1e-9 * lots * d[0] && Math.abs(tr.risk - risk) <= 1e-9 * risk && Math.abs(tr.fee - fee) <= 1e-9 * fee && Math.abs(tr.bal - bal) <= 1e-9 * Math.max(1, bal) && tr.one === one,
+          'run ' + k + ' alert ' + i + ' ' + x.sym + ': ' + lots + ' contracts, risk ' + risk + ', balance ' + bal + ' vs ' + JSON.stringify({ units: tr.units, risk: tr.risk, bal: tr.bal, one: tr.one }));
+        // never more risk than planned unless one contract was asked for; never past the leverage
+        check(one || tr.risk <= plan * (1 + 1e-9), 'run ' + k + ' alert ' + i + ' risks more than planned');
+        check(tr.pos <= lim * (1 + 1e-9), 'run ' + k + ' alert ' + i + ' over its max leverage');
+        if (bal <= cfg.start * 1e-6) break;
+      }
+      check(Math.abs(o.end - bal) <= 1e-9 * Math.max(1, bal), 'run ' + k + ' ends at ' + bal + ', the app says ' + o.end);
+    });
+    check(n === 400 && placed > 80 && skipped > 80, 'random audit covered placed and skipped trades: ' + n + ' alerts, ' + placed + ' placed, ' + skipped + ' skipped');
+    console.log('     random audit: ' + n + ' alerts, ' + placed + ' placed, ' + skipped + ' skipped, all sized as worked out here');
+    // Phone: no sideways scroll on the page.
+    await page.setViewportSize({ width: 390, height: 844 });
+    check(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'phone width scrolls sideways');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals demo account: real orders (contracts, max leverage, min stop) by hand and 400 random alerts');
+  errs.forEach(e => { console.log('     ' + e); failures.push('demo real orders: ' + e); });
 }
 
 // Trades take their alert's stop, setup and fib level; the review queue; empty
@@ -3880,6 +4044,8 @@ async function stopMoveRun(seed) {
         filled: true, outcome: r > 0 ? '+1R' : 'SL', resultR: r, hasReportR: true, price: entry, stop, entry });
       state.signals = [sg('a', 'A', 'long', 100, 99, 0.9), sg('b', 'B', 'short', 200, 202, -1)];
       Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '3R', sigNoFee: false, sigStop: { mode: 'be', beAt: 1 } });
+      // A and B are made-up coins (BUSD's real contract is $20,000), so the demo sizes them at any size
+      state.ui.sigDemo = Object.assign({}, state.ui.sigDemo || {}, { real: false });
       switchTab('signals'); renderAll();
     });
     await page.waitForFunction(() => /2 of 2 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText) && !/reading/.test(document.getElementById('sigTgtCmp').innerText) && document.getElementById('sigStopGrid'), null, { timeout: 10000 });
@@ -4502,6 +4668,7 @@ await deltaImportRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
 await demoAccountRun(data);
+await demoRealRun(data);
 await cleanupRun(data);
 await behaviourRun(data);
 await setupLevelRun(data);
