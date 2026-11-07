@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-07.161">
+  <meta name="app-version" content="2026-11-07.162">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -9189,16 +9189,21 @@
     function renderSigStopBar() {
       const bar = document.getElementById('sigStopBar');
       if (!bar) return;
-      const d = stopRaw(), fixed = !!sigTgt();
+      const d = stopRaw(), tg = sigTgt(), fixed = !!tg;
+      // A trigger at or past an R target never fires (the target comes first), so those
+      // are greyed out. A % target is a different R on every alert, so all stay open.
+      const tR = tg && tg.r != null ? tg.r : null, at = d.mode === 'be' ? d.beAt : d.shAt;
+      const atOff = x => tR != null && x >= tR - 1e-9;
       bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
       bar.title = "Off: the stop stays where it is. BE: once price reaches the trigger, the stop goes to entry. SL shift: once it reaches the trigger, the stop goes to the level you pick (e.g. at 1R lock +0.75R). It moves from the next candle. Works with every fixed Exit at; Scanner keeps the scanner's own rules.";
       const btn = (k, l) => '<button type="button" data-stop="' + k + '" onclick="setSigStop(\'mode\',\'' + k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (d.mode === k ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + l + '</button>';
       const sel = (id, k, list, v, txt, off) => '<select id="' + id + '" onchange="setSigStop(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">'
         + list.map(x => '<option value="' + x + '"' + (x === v ? ' selected' : '') + (off && off(x) ? ' disabled' : '') + '>' + txt(x) + '</option>').join('') + '</select>';
       let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (fixed ? '' : ' opacity-60') + '">' + btn('off', 'Off') + btn('be', 'BE') + btn('shift', 'SL shift') + '</div>';
-      if (d.mode === 'be') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', 'beAt', STOP_ATS, d.beAt, x => '+' + x + 'R');
-      if (d.mode === 'shift') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', 'shAt', STOP_ATS, d.shAt, x => '+' + x + 'R')
+      if (d.mode === 'be') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', 'beAt', STOP_ATS, d.beAt, x => '+' + x + 'R', atOff);
+      if (d.mode === 'shift') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', 'shAt', STOP_ATS, d.shAt, x => '+' + x + 'R', atOff)
         + '<span class="text-slate-500">to</span>' + sel('sigStopTo', 'shTo', STOP_TOS, d.shTo, rTxt, x => x >= d.shAt);
+      if (d.mode !== 'off' && atOff(at)) h += '<span id="sigStopWarn" class="text-amber-300">pick "at" below your ' + esc(tg.k) + ' target: the stop never moves</span>';
       bar.innerHTML = h;
     }
     function renderSigFeeBar() {
@@ -9351,7 +9356,7 @@
         return { tot: sum(rs), avg: avg(rs), wr: w / rs.length * 100 };
       }));
       let best = null;
-      cells.forEach((row, i) => row.forEach((c, j) => { if (!best || c.tot > best.c.tot) best = { c, i, j }; }));
+      cells.forEach((row, i) => row.forEach((c, j) => { const m = rules[i], tg = tgs[j]; if (m && tg.r != null && m.at >= tg.r - 1e-9) return; if (!best || c.tot > best.c.tot) best = { c, i, j }; }));
       const curM = sigTgt() ? (mvR ? mvR.k : "") : null;
       let h = head + '<div class="overflow-x-auto"><table id="sigStopGrid" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Move SL</th>'
         + tgs.map(tg => '<th class="pr-2 text-right">' + esc(tg.k) + '</th>').join('') + '</tr></thead><tbody>';
@@ -9360,12 +9365,14 @@
         h += '<tr class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold whitespace-nowrap' + (curM === mk ? ' text-amber-300' : ' text-slate-300') + '">' + (m ? esc(m.label) : 'No move') + '</td>';
         tgs.forEach((tg, j) => {
           const c = cells[i][j], on = curM === mk && cur === tg.k, top = best.i === i && best.j === j;
+          // Trigger at or past an R target: the target comes first, so it is the same as No move.
+          if (m && tg.r != null && m.at >= tg.r - 1e-9) { h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" class="pr-2 py-1 text-right text-slate-600" title="Trigger at or past the ' + esc(tg.k) + ' target: the stop never moves, same as No move">same</td>'; return; }
           h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" onclick="setSigTgtStop(\'' + tg.k + '\',\'' + mk + '\')" title="' + esc((m ? m.label : 'No move') + ' · exit at ' + tg.k + ': ' + pct(c.wr) + ' won, ' + rfmt(c.avg) + ' a trade. Click to score the whole tab with it.') + '" class="pr-2 py-1 text-right cursor-pointer hover:bg-white/5 '
             + (c.tot >= 0 ? 'text-emerald-400' : 'text-rose-400') + (on ? ' bg-amber-500/15 font-bold' : '') + (top ? ' underline' : '') + '">' + rfmt(c.tot) + '</td>';
         });
         h += '</tr>';
       });
-      return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. BE: at the trigger the stop goes to entry. SL shift: at the trigger it goes to the level shown. The stop moves from the next candle and slips 0.05% like any stop. Click a cell to use it on the whole tab.</p></div>';
+      return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">"same": the trigger is at or past that target, so the stop never moves. Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. BE: at the trigger the stop goes to entry. SL shift: at the trigger it goes to the level shown. The stop moves from the next candle and slips 0.05% like any stop. Click a cell to use it on the whole tab.</p></div>';
     }
     function sumPct(list) { const v = list.filter(x => x != null && isFinite(x)); return v.length ? sum(v) : null; }
     // The Victus Alert System backtest and paper trading do not take a trade whose
@@ -12799,6 +12806,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-07.162', pr: 77, title: 'Move SL: no trigger past the target', pts: ['"at" greys out triggers at or above your R target (at 1.5R: +1.5R to +3R off), since the target comes first and the stop would never move', 'A saved trigger past the target says so in amber', 'Move SL compared shows "same" in those cells'] },
       { v: '2026-11-07.161', pr: 76, title: 'Demo account: real orders only', pts: ['Each trade is sized as Delta (or CoinDCX) would take it: whole contracts, rounded down, and no more leverage than the coin allows', 'A trade smaller than 1 contract, a stop under 0.1% or 3 ticks, or a coin the broker doesn\'t list is skipped and says why; or pick Take 1 contract', 'Off (any size) shows the old way; the line says both results. MRVL and other US stocks read Delta\'s bStocks (MRVLBUSD)'] },
       { v: '2026-11-07.160', pr: 75, title: 'Move SL: breakeven or SL shift on Exit at', pts: ['Signals → Move SL next to Exit at: Off, BE (at +0.5R to +3R the stop goes to entry) or SL shift (e.g. at 1R lock +0.75R)', 'Works with every fixed Exit at; the headline, breakdowns, Backtest report and Demo account follow it', 'Edge & breakdowns: new Move SL compared grid, total R for every exit and stop move; click a cell to use it'] },
       { v: '2026-11-07.159', pr: 74, title: 'Demo account: fees shown, Delta or CoinDCX', pts: ['Fees were always charged (Delta 0.0826% a trade); now a line says Fees on or off, the total paid and the balance without them', 'Pick where the trades are: Delta or CoinDCX, how orders fill (limit or market) and the maker / taker rates', 'Every trade shows its fee; No fees is the same switch as Fees on the tab'] },

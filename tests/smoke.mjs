@@ -4094,6 +4094,18 @@ async function stopMoveRun(seed) {
     await page.click('#sigStopGrid td[data-cell="2R~be|1"]');
     const picked = await page.evaluate(() => ({ t: state.ui.sigTgt, s: JSON.stringify(stopRaw()) }));
     check(picked.t === '2R' && /"mode":"be","beAt":1/.test(picked.s), 'grid click sets both: ' + JSON.stringify(picked));
+    // A trigger at or past an R target never fires: greyed out, warned, "same" in the grid.
+    await page.evaluate(() => setSigTgt('1.5R'));
+    const offAt = await page.evaluate(() => [...document.querySelectorAll('#sigStopAt option')].filter(o => o.disabled).map(o => o.value).join(','));
+    check(offAt === '1.5,2,2.5,3', 'at 1.5R, triggers from +1.5R are off: ' + offAt);
+    check(!(await page.$('#sigStopWarn')), 'no warning while the trigger is under the target');
+    await page.evaluate(() => setSigStop('beAt', '2'));
+    const warn = await page.evaluate(() => (document.getElementById('sigStopWarn') || {}).innerText || '');
+    check(/below your 1\.5R target/.test(warn), 'trigger past the target is warned: ' + warn);
+    check(await cell('be|1', '1R') === 'same' && await cell('be|1', '2R') !== 'same', 'grid: BE at 1R with a 1R target is "same": ' + await cell('be|1', '1R'));
+    await page.evaluate(() => setSigTgt('1%'));
+    const offPct = await page.evaluate(() => [...document.querySelectorAll('#sigStopAt option')].filter(o => o.disabled).length);
+    check(offPct === 0 && !(await page.$('#sigStopWarn')), '% targets keep every trigger: ' + offPct);
     // Pure: the path kept for a long, and outside Signals the scanner result stands.
     const pure = await page.evaluate(() => {
       const sig = { side: 'long', entry: 100, stop: 99, timeframe: '4H', date: '2026-10-01', time: '10:00' };
