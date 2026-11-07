@@ -4195,13 +4195,14 @@ async function holdPctRun(seed) {
 }
 // Trail TP (lakky, 2026-11-07): each target reached moves the target up a step and the
 // stop to the gap behind it. One long alert E, 100 / stop 99 (1% = 1R), 15m candles:
-// fill (close +0.1R), 1R (low +0.5R), 1.3R (low +0.9R), then a low of +0.95R.
+// fill (close +0.1R), 1R (low +0.5R), 1.3R (low +0.9R), a low of +0.95R, then 1.6R,
+// 2.4R, 3.3R and a fall to +0.9R.
 async function trailRun(seed) {
   const errs = [];
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
   const t0 = Date.parse('2026-10-01T10:00:00+05:30') / 1000, Q = 900;
-  const bars = { EUSD: [[t0, 100.2, 99.9, 100.1], [t0 + Q, 101, 100.5, 100.8], [t0 + 2 * Q, 101.3, 100.9, 101.2], [t0 + 3 * Q, 101.2, 100.95, 101]] };
+  const bars = { EUSD: [[t0, 100.2, 99.9, 100.1], [t0 + Q, 101, 100.5, 100.8], [t0 + 2 * Q, 101.3, 100.9, 101.2], [t0 + 3 * Q, 101.2, 100.95, 101], [t0 + 4 * Q, 101.6, 101.1, 101.5], [t0 + 5 * Q, 102.4, 101.5, 102.3], [t0 + 6 * Q, 103.3, 102.2, 103.2], [t0 + 7 * Q, 103.2, 100.9, 101]] };
   await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
   await ctx.route('https://api.india.delta.exchange/**', route => {
     const b = bars[new URL(route.request().url()).searchParams.get('symbol')];
@@ -4238,15 +4239,16 @@ async function trailRun(seed) {
     check(on.r && on.r.label === 'Trail TP' && Math.abs(on.r.r - 0.8669) < 1e-9, 'Trail TP result: ' + JSON.stringify(on.r));
     const out = await page.evaluate(() => document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' '));
     check(/Trail TP\s*1\s*100%/.test(out), 'By outcome shows Trail TP: ' + out);
-    // Move SL triggers past the target can fire now (the target moves up), so none are greyed out; no "same" cells.
+    // Move SL works up to the target: triggers at or past 1R stay greyed out with Trail TP on (lakky), and read "same".
     await page.evaluate(() => setSigStop('mode', 'shift'));
-    const mv = await page.evaluate(() => ({ dis: document.querySelectorAll('#sigStopAt option[disabled]').length, same: [...document.querySelectorAll('#sigStopGrid td')].filter(t => t.innerText === 'same').length, head: document.getElementById('sigTgtCmp').innerText.includes('Trail TP +0.25R') }));
-    check(mv.dis === 0 && mv.same === 0 && mv.head, 'Move SL with Trail TP: ' + JSON.stringify(mv));
+    const mv = await page.evaluate(() => ({ dis: [...document.querySelectorAll('#sigStopAt option[disabled]')].map(o => o.value).join(','), warn: (document.getElementById('sigStopWarn') || {}).innerText || '', same: [...document.querySelectorAll('#sigStopGrid td')].filter(t => t.innerText === 'same').length, head: document.getElementById('sigTgtCmp').innerText.includes('Trail TP +0.25R'), r: inSigScope(() => outcomeNow(sigView.pairs[0])) }));
+    check(mv.dis === '1,1.25,1.5,2,2.5,3' && /Trail TP moves it/.test(mv.warn) && mv.same > 0 && mv.head && mv.r && Math.abs(mv.r.r - 0.8669) < 1e-9, 'Move SL with Trail TP: ' + JSON.stringify(mv));
     await page.evaluate(() => setSigStop('mode', 'off'));
-    // SL 0.5R behind: stops at +0.5R then +0.75R; the +0.95R low doesn't reach it, so it is still open.
+    // SL 0.5R behind: +0.5R, +0.75R (the +0.95R low misses it), +1R at 1.6R, +1.75R at 2.4R, +2.75R at 3.3R;
+    // the fall to +0.9R ends it at +2.75R: 2.75 - 1.0275 x 0.05 - 0.0826 = +2.62R.
     await page.selectOption('#sigTrailGap', '0.5');
     st = await strip();
-    check(/1 still open/.test(st) && /SL 0\.5R behind/.test(st), 'wider gap leaves it open: ' + st);
+    check(!/still open/.test(st) && /SL 0\.5R behind/.test(st) && /Total R \+2\.62R/.test(st), 'wider gap rides further: ' + st);
     await page.selectOption('#sigTrailGap', '0.25');
     // Demo account follows: $100, 1% risk, one trade at +0.8669R after Delta's fee = $100.87.
     await page.evaluate(() => setSigSec('demo'));
@@ -4267,8 +4269,8 @@ async function trailRun(seed) {
       const b = tgtScore(L1, { m: 0.04, sl: 0, e: 0.02, done: 1, tr: 1, p: [[0.1, 0.1], [4, 1]], ta: 1.9 }, { r: 3 }, true, null, trailMove('R', 0.25, 0.25));
       // BE at 0.5R with Trail TP: BE is the higher stop until the target, then the stop to -1R hits BE.
       const c = tgtScore(L, { m: 0.018, sl: 1, e: 0, done: 1, p: [[0.6, 0.6], [0.9, 0.2]], ta: -1 }, { r: 1 }, true, stopMove('be', 0.5), trailMove('R', 0.25, 0.5));
-      // SL shift at 1.5R (past the 1R target) fires once Trail TP moved the target up: 1.6R -> trail +1R, shift +1.25R wins.
-      const d = tgtScore(L1, { m: 0.016, sl: 0, e: 0.012, done: 0, p: [[1, 1], [1.6, 0.8]], ta: 1.2 }, { r: 1 }, true, stopMove('shift', 1.5, 1.25), trailMove('R', 0.25, 0.5));
+      // SL shift at 1.5R (past the 1R target) never fires: 1.6R -> trail stop +1R, then the 0.9R dip ends it there.
+      const d = tgtScore(L1, { m: 0.016, sl: 0, e: 0.012, done: 0, p: [[1, 1], [1.6, 0.8]], ta: 0.9 }, { r: 1 }, true, stopMove('shift', 1.5, 1.25), trailMove('R', 0.25, 0.5));
       // The walk: past 3R it goes on until a 2R fall back on a later candle.
       const sig = { side: 'long', entry: 100, stop: 99, date: '2026-10-01', time: '10:00', timeframe: '4H' }, t = Date.parse('2026-10-01T10:00:00+05:30') / 1000;
       const cs = [[0, 100.2, 99.9, 100.1], [1, 104, 101, 103.5], [2, 103.8, 102.5, 103], [3, 103, 101.9, 102]].map(([i, high, low, close]) => ({ time: t + i * 900, high, low, close }));
@@ -4282,7 +4284,7 @@ async function trailRun(seed) {
     check(pure.a && pure.a.label === 'Trail TP' && Math.abs(pure.a.r - 0.5996875) < 1e-9, '% trail: ' + JSON.stringify(pure.a));
     check(pure.b && pure.b.label === 'Trail TP' && Math.abs(pure.b.r - 3.698125) < 1e-9, 'several steps in one candle: ' + JSON.stringify(pure.b));
     check(pure.c && pure.c.label === 'BE' && Math.abs(pure.c.r + 0.025) < 1e-9, 'BE under Trail TP: ' + JSON.stringify(pure.c));
-    check(pure.d && pure.d.label === 'SL shift' && Math.abs(pure.d.r - (1.25 - 1.0125 * 0.05)) < 1e-9, 'SL shift past the target with Trail TP: ' + JSON.stringify(pure.d));
+    check(pure.d && pure.d.label === 'Trail TP' && Math.abs(pure.d.r - (1 - 1.01 * 0.05)) < 1e-9, 'SL shift past the target never fires with Trail TP: ' + JSON.stringify(pure.d));
     check(pure.rec === '{"p":[[1,0.5],[1.005,0.9],[1.02,0.75]],"ta":null}' && pure.rnd === '{"p":[[2.249,2]],"ta":null}', 'path kept for Trail TP: ' + pure.rec + ' ' + pure.rnd);
     check(JSON.stringify(pure.w3) === '[0,1]' && JSON.stringify(pure.w4) === '[1,1,1.9]' && pure.w20[1] === undefined, 'till TP / SL walk past 3R: ' + JSON.stringify(pure));
   } catch (e) {
