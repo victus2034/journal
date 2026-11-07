@@ -16,7 +16,9 @@
 // best move in R with the worst move since the one before, and the worst move
 // after the last one (pathRec, the same as the journal's tgtRec).
 // A second summary under "<key>|tp" is for the journal's Hold "Till TP / SL": no
-// window, walked until the stop or the biggest target (3R / 3%), else still open.
+// window, walked until the stop, or past the biggest target (3R / 3%) until price
+// falls back TRAIL_MAX (R or %) from its best on a later candle, so the journal's
+// Trail TP stops are settled too (tr = walked that way); else still open.
 // The window is the scanner's: 20 candles of the alert's own timeframe after
 // the fill, counted in NSE candles (4H = 09:15-13:15 and 13:15-15:30), so
 // weekends and holidays don't count. A candle that touches both the stop and
@@ -65,6 +67,8 @@ export function pathKey(a) { const p = istParts(a.alertMs); return [a.symbol, a.
 // Returns the summary, or null while the entry could still come.
 // Keep in step with SIG_TGTS in index.html: past the biggest target every target is settled.
 const CAP_R = 3, CAP_PCT = 3;
+// Keep in step with TRAIL_MAX in index.html: the biggest Trail TP step + gap (R or %).
+const TRAIL_MAX = 2;
 export function walkAlert(a, bars, resMin, hold) {
   const s = a.side === 'short' ? -1 : 1, entry = a.entry, stop = a.stop, tfMin = tfMinutes(a.tf), resMs = resMin * 60000;
   const live = bars.filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + resMs > a.alertMs).sort((x, y) => x.t - y.t);
@@ -73,45 +77,51 @@ export function walkAlert(a, bars, resMin, hold) {
   const fi = live.findIndex(k => k.i < BARS && (s > 0 ? k.l <= entry : k.h >= entry));
   if (fi < 0) return live.some(k => k.i >= BARS) ? { none: 'entry not reached' } : null;
   const tp = hold === 'tp', f = live[fi], end = tp ? Infinity : f.i + BARS, r6 = v => Math.round(v * 1e6) / 1e6;
-  const hitSl = k => s > 0 ? k.l <= stop : k.h >= stop, mv = p => s * (p - entry) / entry;
-  if (hitSl(f)) return { m: 0, sl: 1, e: 0, done: 1, p: [], ta: -1 };
-  let m = Math.max(0, mv(f.c)), lastBar = f;
+  const hitSl = k => s > 0 ? k.l <= stop : k.h >= stop, mv = p => s * (p - entry) / entry, T = tp ? { tr: 1 } : {};
+  if (hitSl(f)) return Object.assign({ m: 0, sl: 1, e: 0, done: 1, p: [], ta: -1 }, T);
+  let m = Math.max(0, mv(f.c)), lastBar = f, since = Infinity;
   const rk = Math.abs(entry - stop) / entry, cap = Math.max(CAP_R * rk, CAP_PCT / 100), rec = pathRec(rk, m);
-  if (tp && m >= cap) return Object.assign({ m: r6(m), sl: 0, e: r6(mv(f.c)), done: 1 }, rec.end());
+  const back = Math.max(TRAIL_MAX * rk, TRAIL_MAX / 100);
   for (let i = fi + 1; i < live.length; i++) {
     const k = live[i];
     if (k.i >= end) return Object.assign({ m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 1 }, rec.end());
     lastBar = k;
-    if (hitSl(k)) return Object.assign({ m: r6(m), sl: 1, e: 0, done: 1 }, rec.end(mv(s > 0 ? k.l : k.h)));
-    const best = mv(s > 0 ? k.h : k.l);
-    rec.bar(best, mv(s > 0 ? k.l : k.h));
-    m = Math.max(m, best);
-    if (tp && m >= cap) return Object.assign({ m: r6(m), sl: 0, e: r6(mv(k.c)), done: 1 }, rec.end());
+    if (hitSl(k)) return Object.assign({ m: r6(m), sl: 1, e: 0, done: 1 }, rec.end(mv(s > 0 ? k.l : k.h)), T);
+    const best = mv(s > 0 ? k.h : k.l), adv = mv(s > 0 ? k.l : k.h);
+    rec.bar(best, adv);
+    // since = the worst move on candles after the best one (a stop moves from the next candle).
+    if (best > m) { m = best; since = Infinity; } else since = Math.min(since, adv);
+    if (tp && m >= cap && since <= m - back) return Object.assign({ m: r6(m), sl: 0, e: r6(mv(k.c)), done: 1 }, rec.end(), T);
   }
-  return Object.assign({ m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 0 }, rec.end());
+  return Object.assign({ m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 0 }, rec.end(), T);
 }
 // Pure: the price path, small enough to keep. p = each new best move (in R, at
 // least 0.01R past the last one kept) with the worst move since the one before
 // it; ta = the worst move after the last one. rk = stop distance / entry, m0 =
 // the fill candle's close move. Keep it the same as tgtRec in index.html.
 export function pathRec(rk, m0) {
-  const R = v => Math.round(v / rk * 1000) / 1000, p = [];
+  // Bests round down and dips round up (0.001R), so a level is never reached early.
+  const F = v => Math.floor(v / rk * 1000 + 1e-6) / 1000, C = v => Math.ceil(v / rk * 1000 - 1e-6) / 1000, p = [];
   let best = Math.max(0, m0), kept = best, seg = Infinity, pend = null, after = Infinity;
-  if (best > 0) p.push([R(best), R(best)]);
+  if (best > 0) p.push([F(best), C(best)]);
   return {
     bar(fav, adv) {
+      if (fav > best) {
+        seg = Math.min(seg, adv); best = fav;
+        if (fav - kept >= 0.01 * rk) { p.push([F(fav), C(seg)]); kept = fav; seg = Infinity; pend = null; }
+        else pend = [F(fav), C(seg)];
+        after = Infinity;
+        return;
+      }
+      // A best held back (under 0.01R past the last one) is kept once price dips after it.
+      if (pend) { p.push(pend); kept = best; seg = Infinity; pend = null; }
       seg = Math.min(seg, adv); after = Math.min(after, adv);
-      if (!(fav > best)) return;
-      best = fav;
-      if (fav - kept >= 0.01 * rk) { p.push([R(fav), R(seg)]); kept = fav; seg = Infinity; pend = null; }
-      else pend = [R(fav), R(seg)];
-      after = Infinity;
     },
     end(advLast) {
-      if (advLast != null) { seg = Math.min(seg, advLast); after = Math.min(after, advLast); }
+      if (advLast != null) { if (pend) { p.push(pend); pend = null; seg = Infinity; } seg = Math.min(seg, advLast); after = Math.min(after, advLast); }
       if (pend) p.push(pend);
       const t = pend ? after : seg;
-      return { p, ta: isFinite(t) ? R(t) : null };
+      return { p, ta: isFinite(t) ? C(t) : null };
     }
   };
 }
@@ -185,9 +195,9 @@ export async function main(now = Date.now()) {
     if (seen[k]) return; seen[k] = 1;
     const p = paths[k];
     // Settled, unless it was walked before Move SL kept the path, or its "till TP / SL"
-    // walk is still open.
+    // walk is still open or was walked before Trail TP (no tr).
     const q = paths[k + '|tp'];
-    if (p && (p.none || (p.done && Array.isArray(p.p))) && q && (q.none || q.done)) return;
+    if (p && (p.none || (p.done && Array.isArray(p.p))) && q && (q.none || (q.done && q.tr))) return;
     const [resMin, interval] = pickRes(a, now);
     const g = todo[a.symbol + '|' + interval] = todo[a.symbol + '|' + interval] || { symbol: a.symbol, interval, resMin, list: [] };
     g.list.push(Object.assign({ key: k }, a));
