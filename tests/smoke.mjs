@@ -4244,11 +4244,11 @@ async function trailRun(seed) {
     const mv = await page.evaluate(() => ({ dis: [...document.querySelectorAll('#sigStopAt option[disabled]')].map(o => o.value).join(','), warn: (document.getElementById('sigStopWarn') || {}).innerText || '', same: [...document.querySelectorAll('#sigStopGrid td')].filter(t => t.innerText === 'same').length, head: document.getElementById('sigTgtCmp').innerText.includes('Trail TP +0.25R'), r: inSigScope(() => outcomeNow(sigView.pairs[0])) }));
     check(mv.dis === '1,1.25,1.5,2,2.5,3' && /Trail TP moves it/.test(mv.warn) && mv.same > 0 && mv.head && mv.r && Math.abs(mv.r.r - 0.8669) < 1e-9, 'Move SL with Trail TP: ' + JSON.stringify(mv));
     await page.evaluate(() => setSigStop('mode', 'off'));
-    // SL 0.5R behind: +0.5R, +0.75R (the +0.95R low misses it), +1R at 1.6R, +1.75R at 2.4R, +2.75R at 3.3R;
-    // the fall to +0.9R ends it at +2.75R: 2.75 - 1.0275 x 0.05 - 0.0826 = +2.62R.
+    // SL 0.5R behind: the TP is locked once hit (lakky), so at 1R the stop goes to +1R (not +0.5R) and the
+    // +0.9R low ends it there: +0.87R again. (Without the lock it would ride to +2.75R: +2.62R.)
     await page.selectOption('#sigTrailGap', '0.5');
     st = await strip();
-    check(!/still open/.test(st) && /SL 0\.5R behind/.test(st) && /Total R \+2\.62R/.test(st), 'wider gap rides further: ' + st);
+    check(!/still open/.test(st) && /SL 0\.5R behind, TP locked/.test(st) && /Total R \+0\.87R/.test(st), 'TP locked under a wider gap: ' + st);
     await page.selectOption('#sigTrailGap', '0.25');
     // Demo account follows: $100, 1% risk, one trade at +0.8669R after Delta's fee = $100.87.
     await page.evaluate(() => setSigSec('demo'));
@@ -4264,7 +4264,12 @@ async function trailRun(seed) {
       const L = { side: 'long', entry: 100, stop: 98 }, L1 = { side: 'long', entry: 100, stop: 99 };
       // % trail on a 2% stop: 1% target = 0.5R, +0.5% = 0.25R, 0.25% = 0.125R. 0.6R -> stop 0.375R, 0.8R -> 0.625R;
       // the fall to 0.6R hits it: 0.625 - 1.0125 x 0.05 / 2 (no fees).
-      const a = tgtScore(L, { m: 0.016, sl: 0, e: 0.012, done: 0, p: [[0.6, 0.6], [0.8, 0.45]], ta: 0.6 }, { p: 1 }, true, null, trailMove('%', 0.5, 0.25));
+      const a = tgtScore(L, { m: 0.016, sl: 0, e: 0.012, done: 0, p: [[0.6, 0.6], [0.8, 0.55]], ta: 0.6 }, { p: 1 }, true, null, trailMove('%', 0.5, 0.25));
+      // lakky's example: 1.5R target, +0.25R, SL 0.5R behind. 1.5R -> SL 1.5R (locked), 1.75R and 2R -> still 1.5R,
+      // 2.25R -> 1.75R; the dips to 1.6R / 1.8R / 1.76R miss it, the fall to 1.7R ends it at 1.75 - 1.0175 x 0.05.
+      const e = tgtScore(L1, { m: 0.023, sl: 0, e: 0.017, done: 0, p: [[1.5, 1.5], [1.75, 1.6], [2, 1.6], [2.25, 1.8], [2.3, 1.76]], ta: 1.7 }, { r: 1.5 }, true, null, trailMove('R', 0.25, 0.5));
+      // Same path one step earlier: at 2R the stop is still 1.5R, so a dip to 1.55R doesn't end it.
+      const e2 = tgtScore(L1, { m: 0.02, sl: 0, e: 0.017, done: 0, p: [[1.5, 1.5], [1.75, 1.6], [2, 1.6]], ta: 1.55 }, { r: 1.5 }, true, null, trailMove('R', 0.25, 0.5));
       // One candle through several steps: 3R target, best 4R -> stop 3.75R; the next low (1.9R) hits it.
       const b = tgtScore(L1, { m: 0.04, sl: 0, e: 0.02, done: 1, tr: 1, p: [[0.1, 0.1], [4, 1]], ta: 1.9 }, { r: 3 }, true, null, trailMove('R', 0.25, 0.25));
       // BE at 0.5R with Trail TP: BE is the higher stop until the target, then the stop to -1R hits BE.
@@ -4279,9 +4284,10 @@ async function trailRun(seed) {
       // bests round down and dips up, so 2.2496R reads 2.249 and can't reach a 2.25R level early.
       const r1 = tgtRec(0.01, 0); r1.bar(0.01, 0.005); r1.bar(0.01005, 0.009); r1.bar(0.0095, 0.0075); r1.bar(0.0102, 0.0099);
       const r2 = tgtRec(0.01, 0); r2.bar(0.022496, 0.019996);
-      return { a, b, c, d, w3: [w3.done, w3.tr], w4: [w4.done, w4.tr, w4.ta], w20: [w20.done, w20.tr], rec: JSON.stringify(r1.end()), rnd: JSON.stringify(r2.end()) };
+      return { a, b, c, d, e, e2, w3: [w3.done, w3.tr], w4: [w4.done, w4.tr, w4.ta], w20: [w20.done, w20.tr], rec: JSON.stringify(r1.end()), rnd: JSON.stringify(r2.end()) };
     });
     check(pure.a && pure.a.label === 'Trail TP' && Math.abs(pure.a.r - 0.5996875) < 1e-9, '% trail: ' + JSON.stringify(pure.a));
+    check(pure.e && pure.e.label === 'Trail TP' && Math.abs(pure.e.r - (1.75 - 1.0175 * 0.05)) < 1e-9 && pure.e2 === null, 'TP locked, then 0.5R behind: ' + JSON.stringify([pure.e, pure.e2]));
     check(pure.b && pure.b.label === 'Trail TP' && Math.abs(pure.b.r - 3.698125) < 1e-9, 'several steps in one candle: ' + JSON.stringify(pure.b));
     check(pure.c && pure.c.label === 'BE' && Math.abs(pure.c.r + 0.025) < 1e-9, 'BE under Trail TP: ' + JSON.stringify(pure.c));
     check(pure.d && pure.d.label === 'Trail TP' && Math.abs(pure.d.r - (1 - 1.01 * 0.05)) < 1e-9, 'SL shift past the target never fires with Trail TP: ' + JSON.stringify(pure.d));
