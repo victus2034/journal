@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-07.164">
+  <meta name="app-version" content="2026-11-07.165">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -9135,7 +9135,8 @@
     // Pure: one walked alert at one target -> { r, label } or null (still open / no data).
     // mv = a stop move ({ at, to } in R; sigStopMove): once a candle reaches +at R the
     // stop goes to +to R (0 = entry, breakeven) from the next candle, like the
-    // scanner's breakeven. tr = Trail TP ({ step, gap }; sigTrail): each target reached
+    // scanner's breakeven; a trigger at or past the target never fires. tr = Trail TP
+    // ({ step, gap }; sigTrail): each target reached
     // moves the target up a step and the stop to gap behind that target, from the next
     // candle; the higher of the two stops counts. A candle touching the moved stop and
     // the target counts as the stop; the moved stop slips 0.05% too. Never moved: as
@@ -9163,7 +9164,8 @@
             if (!useTr) return { r: tR - costR, label: "Target" };
             while (f >= tgt - eps) { raise(tgt - gap, "Trail TP"); tgt += step; }
           }
-          if (f >= at - eps) raise(to, mv.to === 0 ? "BE" : "SL shift");
+          // A trigger at or past the target never fires; after the target Trail TP moves the stop.
+          if (at < tR - eps && f >= at - eps) raise(to, mv.to === 0 ? "BE" : "SL shift");
         }
         if (stop != null) {
           if (w.ta != null && w.ta <= stop + eps) return exit(stop, why);
@@ -9293,8 +9295,7 @@
       // target never fires (the target comes first), so those are greyed out.
       const tv = tg ? (pc ? tg.p : tg.r) : null, u = pc ? 'P' : '', txt = pc ? pTxt : rTxt;
       const at = d.mode === 'be' ? d['beAt' + u] : d['shAt' + u], to = d['shTo' + u];
-      // With Trail TP on the target moves up, so a later trigger can still fire.
-      const atOff = x => tv != null && !trailRaw().on && x >= tv - 1e-9;
+      const atOff = x => tv != null && x >= tv - 1e-9;
       bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
       bar.title = "Off: the stop stays where it is. BE: once price reaches the trigger (at), the stop goes to entry. SL shift: once it reaches the trigger, the stop goes to the level you pick (to), e.g. at 1R lock +0.75R. In R with an R target, in % with a % target. It moves from the next candle. Works with every fixed Exit at; Scanner keeps the scanner's own rules.";
       const btn = (k, l) => '<button type="button" data-stop="' + k + '" onclick="setSigStop(\'mode\',\'' + k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (d.mode === k ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + l + '</button>';
@@ -9303,7 +9304,7 @@
       let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (fixed ? '' : ' opacity-60') + '">' + btn('off', 'Off') + btn('be', 'BE') + btn('shift', 'SL shift') + '</div>';
       if (d.mode !== 'off') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', (d.mode === 'be' ? 'beAt' : 'shAt') + u, pc ? STOP_ATS_P : STOP_ATS, at, atOff);
       if (d.mode === 'shift') h += '<span class="text-slate-500">to</span>' + sel('sigStopTo', 'shTo' + u, pc ? STOP_TOS_P : STOP_TOS, to, x => x >= at);
-      if (d.mode !== 'off' && atOff(at)) h += '<span id="sigStopWarn" class="text-amber-300">pick "at" below your ' + esc(tg.k) + ' target: the stop never moves</span>';
+      if (d.mode !== 'off' && atOff(at)) h += '<span id="sigStopWarn" class="text-amber-300">pick "at" below your ' + esc(tg.k) + ' target: the stop never moves' + (trailRaw().on ? ' (after the target, Trail TP moves it)' : '') + '</span>';
       bar.innerHTML = h;
     }
     function renderSigTrailBar() {
@@ -9483,8 +9484,8 @@
         return { tot: sum(rs), avg: avg(rs), wr: w / rs.length * 100 };
       }));
       let best = null;
-      // A trigger at or past the target never fires, unless Trail TP moves the target up.
-      const same = (m, tg) => !trR && m && m.at >= tv(tg) - 1e-9;
+      // A trigger at or past the target never fires (after it, Trail TP moves the stop).
+      const same = (m, tg) => m && m.at >= tv(tg) - 1e-9;
       cells.forEach((row, i) => row.forEach((c, j) => { const m = rules[i], tg = tgs[j]; if (same(m, tg)) return; if (!best || c.tot > best.c.tot) best = { c, i, j }; }));
       const curM = sigTgt() ? (mvR ? mvR.k : "") : null;
       let h = head + '<div class="overflow-x-auto"><table id="sigStopGrid" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Move SL</th>'
@@ -12935,6 +12936,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-07.165', pr: 80, title: 'Move SL: no triggers past the target with Trail TP', pts: ['With Trail TP on, Move SL "at" options at or past your Exit at target are greyed out again', 'Move SL works up to the target; after it, Trail TP moves the stop'] },
       { v: '2026-11-07.164', pr: 79, title: 'Trail TP on Exit at', pts: ['Signals → Trail TP: each time price reaches the target, the target moves up a step and the stop follows (e.g. target 1R, +0.25R, SL 0.25R behind: at 1R the target goes to 1.25R and the stop to +0.75R)', 'In R with an R target, in % with a % target; with Move SL on, the higher stop counts', 'Headline, breakdowns, compare tables and Demo account follow it; By outcome shows Trail TP'] },
       { v: '2026-11-07.163', pr: 78, title: 'Move SL in %, and hold till TP / SL', pts: ['With a % Exit at (1% / 2% / 3%), Move SL\'s "at" and "to" are % moves too (e.g. at +1% move the stop to +0.5%)', 'New Hold: Till TP / SL (default) keeps each trade until its target or stop, however long; 20 candles is the old window with Time exit', 'Trades with neither yet show as still open; NSE gets both from the price job'] },
       { v: '2026-11-07.162', pr: 77, title: 'Move SL: no trigger past the target', pts: ['"at" greys out triggers at or above your R target (at 1.5R: +1.5R to +3R off), since the target comes first and the stop would never move', 'A saved trigger past the target says so in amber', 'Move SL compared shows "same" in those cells'] },
