@@ -2448,7 +2448,52 @@ async function demoAccountRun(seed) {
       .forEach(x => check(t.includes(x), 'default demo should show "' + x + '": ' + t.slice(0, 700)));
     check(/Same alerts, other risk sizes .*2% \$101\.76 \+1\.76%/.test(t), '2% row (100 → 101.7586): ' + t.slice(0, 1400));
     const first = await page.$eval('#sigDemoTrades tbody tr', tr => tr.innerText.replace(/\s+/g, ' ').trim());
-    check(/^7 2026-10-07 10:00 S6USD Long 4H 1\.00% -1\.00R SL \$1\.02 \$101\.96 · 1\.0x -\$1\.02 \$100\.94$/.test(first), 'newest trade first: ' + first);
+    check(/^7 2026-10-07 10:00 S6USD Long 4H 1\.00% -1\.00R SL \$1\.02 \$101\.96 · 1\.0x -\$0\.08 -\$1\.02 \$100\.94$/.test(first), 'newest trade first, with its fee: ' + first);
+    // Fees (lakky, 2026-11-07): on by default at Delta's rates and said in money. Worked out
+    // here apart from the app: each result already carries 0.0826R of fee on a 1% stop, so the
+    // fee paid is risk × 0.0826 and the result before fees is R + 0.0826.
+    const RS = [2, -1, -1, 1, -1, 2, -1];
+    const play = feePct => { let b = 100, f = 0; RS.forEach(r => { const risk = b / 100, fee = risk * feePct; f += fee; b += risk * (r + 0.0826) - fee; }); return { b, f }; };
+    const usd = v => '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const lm = play(0.0826), none = play(0), mm = play(0.118), ll = play(0.0472);
+    t = await text();
+    check(t.includes('Fees on · Delta · limit in, market out: 0.02% maker in + 0.05% taker out + 18% GST = 0.0826% of each position.'), 'fee line says on, broker and rate: ' + t.slice(0, 900));
+    check(t.includes('Paid ' + usd(lm.f) + ' on 7 trades') && t.includes('Without fees: ' + usd(none.b)) && t.includes('Final balance ' + usd(lm.b)) && t.includes('after fees'), 'fees paid ' + usd(lm.f) + ', without ' + usd(none.b) + ': ' + t.slice(0, 900));
+    const feeCol = await page.$$eval('#sigDemoTrades tbody tr', trs => trs.map(tr => tr.children[7].innerText.trim()));
+    check(feeCol.length === 7 && feeCol.every(x => /^-\$0\.0[89]$/.test(x)), 'a fee on every trade: ' + JSON.stringify(feeCol));
+    // Market in and out: 0.05% + 0.05% + GST = 0.118%; limit both: 0.0472%.
+    await page.selectOption('#sigDemoOrders', 'mm');
+    t = await text();
+    check(t.includes('0.05% taker in + 0.05% taker out + 18% GST = 0.1180%') && t.includes('Final balance ' + usd(mm.b)) && t.includes('Paid ' + usd(mm.f)), 'market in and out → ' + usd(mm.b) + ': ' + t.slice(0, 700));
+    await page.selectOption('#sigDemoOrders', 'll');
+    t = await text();
+    check(t.includes('= 0.0472%') && t.includes('Final balance ' + usd(ll.b)), 'limit in and out → ' + usd(ll.b) + ': ' + t.slice(0, 700));
+    await page.selectOption('#sigDemoOrders', 'lm');
+    // CoinDCX: same rates as Delta on lakky's fills, so the same balance; its rates are its own.
+    await page.click('#sigDemo button[data-broker="coindcx"]');
+    t = await text();
+    check(t.includes('Fees on · CoinDCX · limit in') && t.includes('Final balance ' + usd(lm.b)), 'CoinDCX: ' + t.slice(0, 700));
+    await page.fill('#sigDemoTk', '0.1');
+    const dcx = play((0.02 + 0.1) * 1.18);
+    t = await text();
+    check(t.includes('0.02% maker in + 0.1% taker out + 18% GST = 0.1416%') && t.includes('Final balance ' + usd(dcx.b)), 'CoinDCX taker 0.1% → ' + usd(dcx.b) + ': ' + t.slice(0, 700));
+    check(await page.evaluate(() => document.activeElement && document.activeElement.id) === 'sigDemoTk', 'typing a fee keeps focus');
+    await page.click('#sigDemo button[data-broker="delta"]');
+    check(await page.inputValue('#sigDemoTk') === '0.05' && (await text()).includes('Final balance ' + usd(lm.b)), 'Delta keeps its own 0.05% taker');
+    for (const v of ['', '-0.01', '2']) { await page.fill('#sigDemoMk', v); check((await text()).includes('Enter the maker and taker fees'), 'maker "' + v + '" says what is wrong: ' + (await text()).slice(0, 300)); }
+    await page.fill('#sigDemoMk', '0.02');
+    // No fees is the tab's Fees switch: the line says off and what fees would have cost.
+    await page.click('#sigDemo button[data-broker="off"]');
+    t = await text();
+    check(await page.evaluate(() => state.ui.sigNoFee === true) && t.includes('Fees off') && t.includes('Final balance ' + usd(none.b)) && t.includes("With Delta's fees (limit in, market out, 0.0826%): " + usd(lm.b)) && !(await page.$('#sigDemoOrders')), 'no fees: ' + t.slice(0, 700));
+    check(await page.$eval('#sigFeeBar button[data-nofee="1"]', b => b.className.includes('text-amber-400')), 'the tab Fees switch shows Without');
+    await page.click('#sigDemo button:has-text("Charge fees")');
+    t = await text();
+    check(await page.evaluate(() => state.ui.sigNoFee === false) && t.includes('Fees on · Delta') && t.includes('Final balance ' + usd(lm.b)), 'charge fees turns them back on: ' + t.slice(0, 400));
+    // Reset puts the broker, orders and rates back.
+    await page.selectOption('#sigDemoOrders', 'mm'); await page.click('#sigDemo button[data-broker="coindcx"]');
+    await page.click('#sigDemo button:has-text("Reset")');
+    check(await page.inputValue('#sigDemoOrders') === 'lm' && (await text()).includes('Fees on · Delta') && (await page.inputValue('#sigDemoTk')) === '0.05', 'reset: Delta, limit in, market out');
     // A new balance redraws the results and keeps the box focused.
     await page.fill('#sigDemoStart', '1000');
     t = await text();
@@ -2489,11 +2534,20 @@ async function demoAccountRun(seed) {
       const capped = demoRun(rows, { start: 100, mode: 'pct', pct: 5, lev: 2 }), two = demoRun(rows, { start: 100, mode: 'pct', pct: 2, lev: 0 });
       const blown = demoRun([{ r: -1.2, slp: 1 }, { r: -1, slp: 1 }, { r: -1, slp: 1 }], { start: 100, mode: 'fixed', fixed: 50, lev: 0 });
       const all = demoRun([{ r: -1.5, slp: 0.5 }], { start: 100, mode: 'pct', pct: 100, lev: 0 });
-      return { capEnd: capped.end, twoEnd: two.end, capN: capped.capped, capLev: capped.maxLev, blownAt: blown.blownAt, blownEnd: blown.end, blownN: blown.trades.length, allEnd: all.end, allLev: all.maxLev };
+      // A fee: risk 1 on a 0.5% stop = a 200 position; 0.1% of it is 0.2 = 0.2R.
+      const fee = demoRun([{ r: 2, slp: 0.5, fee: 0.2 }, { r: -1, slp: 0.5, fee: 0.2 }], { start: 100, mode: 'fixed', fixed: 1, lev: 0 });
+      // NSE pays 0.1063% whatever the broker; no stop, no fee.
+      const keep = demoRows;
+      demoRows = [{ g: 1, slp: 0.5, nse: true }, { g: 1, slp: 0.5, nse: false }, { g: 1, slp: null, nse: false }];
+      const pl = demoPlay({ feePct: 0.118 }, true).map(x => x.fee), off = demoPlay({ feePct: 0.118 }, false).map(x => x.fee);
+      demoRows = keep;
+      return { feeEnd: fee.end, fees: fee.fees, fee0: fee.trades[0].fee, pl, off, capEnd: capped.end, twoEnd: two.end, capN: capped.capped, capLev: capped.maxLev, blownAt: blown.blownAt, blownEnd: blown.end, blownN: blown.trades.length, allEnd: all.end, allLev: all.maxLev };
     });
     check(Math.abs(p.capEnd - p.twoEnd) < 1e-9 && Math.abs(p.twoEnd - 101.7586070) < 1e-6 && p.capN === 7 && p.capLev === 2, '5% risk capped at 2x on a 1% stop = 2% risk: ' + JSON.stringify(p));
     check(p.blownAt === 1 && p.blownEnd === 0 && p.blownN === 2, 'fixed $50: 100 → 40 → 0, blown on trade 2: ' + JSON.stringify(p));
     check(p.allEnd === 0 && p.allLev === 200, 'a loss past the balance stops at 0; 100% on a 0.5% stop needs 200x: ' + JSON.stringify(p));
+    check(Math.abs(p.feeEnd - 100.6) < 1e-9 && Math.abs(p.fees - 0.4) < 1e-9 && Math.abs(p.fee0 - 0.2) < 1e-9, 'fixed 1 at 0.2R fee: 100 + 1.8 - 1.2 = 100.60, 0.40 paid: ' + JSON.stringify(p));
+    check(Math.abs(p.pl[0] - 0.2126) < 1e-9 && Math.abs(p.pl[1] - 0.236) < 1e-9 && p.pl[2] === 0 && p.off.every(x => x === 0), 'NSE 0.1063% / crypto 0.118% on a 0.5% stop, none without a stop or with fees off: ' + JSON.stringify(p));
     await page.fill('#sigDemoStart', '100'); await page.fill('#sigDemoRisk', '60');
     await page.evaluate(() => { state.signals.forEach(g => { if (g.resultR != null) g.resultR = -1; }); renderAll(); });
     t = await text();

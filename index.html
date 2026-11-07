@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-06.158">
+  <meta name="app-version" content="2026-11-07.159">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -9690,28 +9690,50 @@
     // result in the backtest data"). Each trade risks a share of the balance at that
     // point, or a fixed amount, and makes or loses that risk times the alert's R, so it
     // follows Exit at, Fees and every filter like the Backtest report does.
-    const DEMO_DEF = { start: 100, cur: "USD", mode: "pct", pct: 1, fixed: 1, lev: 0 };
+    // Fees (lakky, 2026-11-07: "issue is fees applied or not ... is these trade on delta
+    // or coindcx"): each trade pays its broker's fee on the position, entry leg + exit
+    // leg + 18% GST, in money, so the total paid can be shown. Rates are lakky's own
+    // fills: Delta and CoinDCX both 0.02% maker / 0.05% taker (editable). Limit in,
+    // market out at those rates is the scanner's 0.0826%, so by default nothing moves.
+    // NSE alerts pay the Indian broker's 0.1063% whatever the broker. The tab's Fees
+    // switch (With / Without) turns them on and off here too.
+    const DEMO_BROKERS = [{ k: "delta", label: "Delta", mk: 0.02, tk: 0.05 }, { k: "coindcx", label: "CoinDCX", mk: 0.02, tk: 0.05 }];
+    const DEMO_ORDERS = [{ k: "lm", label: "Limit in, market out", legs: ["mk", "tk"] }, { k: "mm", label: "Market in and out", legs: ["tk", "tk"] }, { k: "ll", label: "Limit in and out", legs: ["mk", "mk"] }];
+    const DEMO_GST = 18, DEMO_NSE_FEE = 0.1063;
+    const DEMO_DEF = { start: 100, cur: "USD", mode: "pct", pct: 1, fixed: 1, lev: 0, broker: "delta", orders: "lm", mk_delta: 0.02, tk_delta: 0.05, mk_coindcx: 0.02, tk_coindcx: 0.05 };
     const DEMO_LEVS = [0, 2, 5, 10, 20, 25, 50, 100];
     const DEMO_CMP = [0.5, 1, 2, 3, 5];
     let demoRows = [], demoAll = false;
+    function demoBroker(k) { return DEMO_BROKERS.find(b => b.k === k) || DEMO_BROKERS[0]; }
+    function demoOrders(k) { return DEMO_ORDERS.find(o => o.k === k) || DEMO_ORDERS[0]; }
+    // Round trip in % of the position: the two legs' rates + GST on them.
+    function demoFeePct(mk, tk, orders) { const r = { mk, tk }; return demoOrders(orders).legs.reduce((a, l) => a + r[l], 0) * (1 + DEMO_GST / 100); }
     function demoRaw() { const d = state.ui.sigDemo; return Object.assign({}, DEMO_DEF, d && typeof d === "object" ? d : {}); }
     // The settings as numbers, and what is wrong with them.
     function demoCfg() {
       const d = demoRaw(), num = v => (v === "" || v == null) ? NaN : Number(v);
       const start = num(d.start), pct = num(d.pct), fixed = num(d.fixed), lev = num(d.lev);
       const mode = d.mode === "fixed" ? "fixed" : "pct", cur = d.cur === "INR" ? "INR" : "USD";
+      const broker = demoBroker(d.broker).k, orders = demoOrders(d.orders).k, mk = num(d["mk_" + broker]), tk = num(d["tk_" + broker]);
+      const feesOn = state.ui.sigNoFee !== true;
       let err = "", warn = "";
       if (!isFinite(start) || !(start > 0)) err = "Enter a starting balance above 0.";
       else if (start > 1e12) err = "That starting balance is too large. Keep it under 1,000,000,000,000.";
       else if (mode === "pct" && (!isFinite(pct) || !(pct > 0))) err = "Enter the risk per trade as a % above 0.";
       else if (mode === "pct" && pct > 100) err = "Risk per trade can't be more than 100% of the balance.";
       else if (mode === "fixed" && (!isFinite(fixed) || !(fixed > 0))) err = "Enter the risk per trade as an amount above 0.";
-      else if (mode === "fixed" && fixed > start) warn = "The risk per trade is more than the starting balance, so a trade risks the whole balance until it grows.";
-      return { start, cur, mode, pct, fixed, lev: isFinite(lev) && lev > 0 ? lev : 0, err, warn };
+      const feeOk = [mk, tk].every(v => isFinite(v) && v >= 0 && v <= 1);
+      if (!err && feesOn && !feeOk) err = "Enter the maker and taker fees as a % from 0 to 1 (Delta and CoinDCX: 0.02 and 0.05).";
+      else if (!err && mode === "fixed" && fixed > start) warn = "The risk per trade is more than the starting balance, so a trade risks the whole balance until it grows.";
+      // The round trip at the broker's rates, also worked out with fees off for the "with fees" line.
+      const feePct = feeOk ? demoFeePct(mk, tk, orders) : null;
+      return { start, cur, mode, pct, fixed, lev: isFinite(lev) && lev > 0 ? lev : 0, broker, orders, mk, tk, feesOn, feePct, err, warn };
     }
-    // rows: [{ r, slp }] in time order (slp = stop distance in %). Pure, so the test can check it by hand.
+    // rows: [{ r, slp, fee }] in time order: r = the result in R before fees, slp = stop
+    // distance in %, fee = the round trip in R (fee % ÷ stop %, 0 = none). Pure, so the
+    // test can check it by hand.
     function demoRun(rows, cfg) {
-      let bal = cfg.start, peak = cfg.start, low = cfg.start, maxDD = 0, maxDDPct = 0, maxLev = 0, capped = 0, blownAt = null, tooBig = false;
+      let bal = cfg.start, peak = cfg.start, low = cfg.start, maxDD = 0, maxDDPct = 0, maxLev = 0, capped = 0, blownAt = null, tooBig = false, fees = 0;
       const trades = [];
       for (let i = 0; i < rows.length; i++) {
         const x = rows[i], before = bal;
@@ -9720,19 +9742,21 @@
         let lev = x.slp > 0 ? risk / (x.slp / 100) / bal : null, cap = false;
         if (cfg.lev && lev != null && lev > cfg.lev) { risk = bal * cfg.lev * x.slp / 100; lev = cfg.lev; cap = true; capped++; }
         if (lev != null) maxLev = Math.max(maxLev, lev);
-        let pnl = risk * x.r;
+        // The fee is the position × the fee %, i.e. risk × fee in R; it comes off the result.
+        const fee = risk * (x.fee || 0);
+        let pnl = risk * x.r - fee;
         if (bal + pnl < 0) pnl = -bal; // an account loses what it holds, no more
-        bal += pnl;
+        bal += pnl; fees += fee;
         peak = Math.max(peak, bal); low = Math.min(low, bal);
         if (peak - bal > maxDD) maxDD = peak - bal;
         if (peak > 0) maxDDPct = Math.max(maxDDPct, (peak - bal) / peak * 100);
-        trades.push({ i, x, before, risk, pos: x.slp > 0 ? risk / (x.slp / 100) : null, pnl, bal, lev, cap });
+        trades.push({ i, x, before, risk, pos: x.slp > 0 ? risk / (x.slp / 100) : null, fee, pnl, bal, lev, cap });
         if (bal <= cfg.start * 1e-6) { bal = Math.max(0, bal); blownAt = i; break; }
         if (bal > 1e15) { tooBig = true; break; }
       }
       const pick = f => trades.length ? trades.reduce((b, t) => f(t, b) ? t : b) : null;
       return {
-        trades, end: bal, ret: (bal - cfg.start) / cfg.start * 100, peak, low, maxDD, maxDDPct, maxLev, capped, blownAt, tooBig,
+        trades, end: bal, ret: (bal - cfg.start) / cfg.start * 100, peak, low, maxDD, maxDDPct, maxLev, capped, blownAt, tooBig, fees,
         wins: trades.filter(t => t.pnl > 0).length, losses: trades.filter(t => t.pnl < 0).length,
         best: pick((t, b) => t.pnl > b.pnl), worst: pick((t, b) => t.pnl < b.pnl)
       };
@@ -9742,15 +9766,32 @@
       return pairs.map(pr => ({ pr, o: outcomeOf(pr) })).filter(x => x.o)
         .sort((a, b) => sbtWhen(a.pr.signal) < sbtWhen(b.pr.signal) ? -1 : sbtWhen(a.pr.signal) > sbtWhen(b.pr.signal) ? 1 : 0);
     }
+    // Each alert's result before fees (g): the scanner's and Exit at's results carry the
+    // scanner's fee, so it is added back here and the broker's is charged in demoRun.
     function renderSigDemo(pairs) {
-      demoRows = sigGraded(pairs).map(x => ({ r: x.o.r, slp: slPct(x.pr.signal), pr: x.pr, label: x.o.label || x.pr.signal.outcome || "" }));
+      const nf = sigNoFee();
+      demoRows = sigGraded(pairs).map(x => {
+        const sig = x.pr.signal, g = x.o.source === "recorded" || nf ? x.o.r : x.o.r + sigFeeR(sig);
+        return { g, slp: slPct(sig), nse: isNseSig(sig), pr: x.pr, label: x.o.label || sig.outcome || "" };
+      });
       renderSigDemoNow();
+    }
+    // The rows demoRun plays, with this fee setting (on = charge fees).
+    function demoPlay(cfg, on) {
+      return demoRows.map(x => Object.assign({}, x, { r: x.g, fee: on && x.slp > 0 ? (x.nse ? DEMO_NSE_FEE : cfg.feePct) / x.slp : 0 }));
+    }
+    function demoFees(k) {
+      const d = demoRaw();
+      if (k === "off") { setSigNoFee(true); return; }
+      d.broker = demoBroker(k).k; state.ui.sigDemo = d; save();
+      if (state.ui.sigNoFee === true) setSigNoFee(false); else renderSigDemoNow();
     }
     // Settings change: a number only redraws the results, so the box keeps its focus.
     function demoSet(k, v) {
       const d = demoRaw(); d[k] = v; state.ui.sigDemo = d; save();
       if (k === "mode" || k === "cur") renderSigDemoNow(); else demoDrawOut();
     }
+    // Reset puts the demo's own settings back; Fees with / without is the tab's switch.
     function demoReset() { state.ui.sigDemo = Object.assign({}, DEMO_DEF); demoAll = false; save(); renderSigDemoNow(); }
     function demoShowAll() { demoAll = !demoAll; demoDrawOut(); }
     function renderSigDemoNow() {
@@ -9771,9 +9812,20 @@
         + '<div>' + lab('Max leverage') + '<select id="sigDemoLev" onchange="demoSet(\'lev\', this.value)" class="' + box + '">'
         + DEMO_LEVS.map(l => '<option value="' + l + '"' + (cfg.lev === l ? ' selected' : '') + '>' + (l ? l + 'x' : 'No cap') + '</option>').join('') + '</select></div>'
         + '<button type="button" onclick="demoReset()" class="px-2.5 py-1.5 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">Reset</button></div>';
+      // Fees: which broker the trades are on (or none), how orders fill, and its rates.
+      const bk = cfg.broker, on = cfg.feesOn;
+      const fees = '<div id="sigDemoFeeForm" class="flex flex-wrap items-end gap-4 mb-3 pb-3 border-b border-terminal-border">'
+        + '<div>' + lab('Fees: trades on') + seg(DEMO_BROKERS.map(b => segBtn(on && bk === b.k, b.label, "demoFees('" + b.k + "')", 'data-broker="' + b.k + '"')).join('') + segBtn(!on, 'No fees', "demoFees('off')", 'data-broker="off"')) + '</div>'
+        + (on ? '<div>' + lab('Orders') + '<select id="sigDemoOrders" onchange="demoSet(\'orders\', this.value)" class="' + box + '">'
+          + DEMO_ORDERS.map(o => '<option value="' + o.k + '"' + (cfg.orders === o.k ? ' selected' : '') + '>' + o.label + '</option>').join('') + '</select></div>'
+          + '<div>' + lab(esc(demoBroker(bk).label) + ' fee, % of position') + '<div class="flex items-center gap-1.5 text-slate-500">maker'
+          + '<input type="number" id="sigDemoMk" step="any" min="0" max="1" inputmode="decimal" value="' + val(d['mk_' + bk]) + '" oninput="demoSet(\'mk_' + bk + '\', this.value)" style="width:70px" class="' + box + '">taker'
+          + '<input type="number" id="sigDemoTk" step="any" min="0" max="1" inputmode="decimal" value="' + val(d['tk_' + bk]) + '" oninput="demoSet(\'tk_' + bk + '\', this.value)" style="width:70px" class="' + box + '">+ ' + DEMO_GST + '% GST</div></div>'
+          : '<p class="text-slate-500 text-[11px] pb-2">Same switch as Fees above: every result on the tab is without fees.</p>')
+        + '</div>';
       host.innerHTML = '<div class="flex items-center gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Demo account</h3></div>'
-        + '<p class="text-slate-500 text-[11px] mb-3">A pretend account that takes every alert with a result in this view, one after another in the order they fired, and compounds. Results follow the filters above: Exit at, Fees, Type or Level, channel, period and BTC day.</p>'
-        + form + '<div id="sigDemoOut"></div>';
+        + '<p class="text-slate-500 text-[11px] mb-3">A pretend account that takes every alert with a result in this view, one after another in the order they fired, and compounds. Results follow the filters above: Exit at, Type or Level, channel, period and BTC day. Fees are your broker\'s, set below.</p>'
+        + form + fees + '<div id="sigDemoOut"></div>';
       demoDrawOut();
     }
     function demoDrawOut() {
@@ -9783,7 +9835,7 @@
       const tone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
       if (cfg.err) { out.innerHTML = '<p class="text-rose-400">' + esc(cfg.err) + '</p>'; return; }
       if (!demoRows.length) { out.innerHTML = '<p class="text-slate-500">No alerts with a result in this view yet. Widen the period or pick another channel.</p>'; return; }
-      const run = demoRun(demoRows, cfg), T = run.trades, n = T.length;
+      const rows = demoPlay(cfg, cfg.feesOn), run = demoRun(rows, cfg), T = run.trades, n = T.length;
       const first = demoRows[0].pr.signal, last = T[n - 1].x.pr.signal;
       const riskTxt = cfg.mode === 'pct' ? cfg.pct + '% of the balance' : m(cfg.fixed);
       const cell = (l, v, sub, c, tip) => '<div class="bg-[#0A0F18] border border-terminal-border rounded-lg p-2"' + (tip ? ' title="' + esc(tip) + '"' : '') + '><div class="text-[10px] uppercase tracking-wider text-slate-500">' + l + '</div><div class="text-sm font-bold mono-num ' + (c || 'text-slate-100') + '">' + v + '</div>' + (sub ? '<div class="text-[10px] text-slate-500 truncate">' + sub + '</div>' : '') + '</div>';
@@ -9792,10 +9844,27 @@
       if (cfg.warn) notes.push('<p class="text-amber-300 mb-2">' + esc(cfg.warn) + '</p>');
       if (run.blownAt != null) notes.push('<p class="text-rose-400 font-bold mb-2">Account blown on trade ' + (run.blownAt + 1) + ' of ' + demoRows.length + ' (' + esc(last.date + ' ' + (last.time || '')) + '): the balance hit ' + m(0) + '. The rest of the alerts are not counted.</p>');
       if (run.tooBig) notes.push('<p class="text-amber-300 mb-2">Stopped after trade ' + n + ': the balance grew past 1,000,000,000,000,000, too large to count.</p>');
+      // Fees on or off, said in one line with the money paid and the other way's result.
+      const bkl = demoBroker(cfg.broker).label, ord = demoOrders(cfg.orders), rate = { mk: cfg.mk, tk: cfg.tk }, nm = { mk: 'maker', tk: 'taker' };
+      const legs = ord.legs.map((l, j) => rate[l] + '% ' + nm[l] + (j ? ' out' : ' in')).join(' + ') + ' + ' + DEMO_GST + '% GST';
+      const nNse = T.filter(t => t.x.nse).length, noStop = T.filter(t => !(t.x.slp > 0)).length;
+      const alt = cfg.feePct != null ? demoRun(demoPlay(cfg, !cfg.feesOn), cfg) : null;
+      const altTxt = r => '<span class="' + tone(r.ret) + '">' + m(r.end) + ' (' + (pfmt(r.ret) || '0.00%') + ')</span>';
+      const feeLine = '<div id="sigDemoFeeLine" class="rounded-lg border p-2 mb-3 text-[11px] ' + (cfg.feesOn ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/5') + '">'
+        + (cfg.feesOn
+          ? '<b class="text-emerald-400">Fees on</b> · ' + esc(bkl) + ' · ' + esc(ord.label.toLowerCase()) + ': ' + legs + ' = <b class="text-slate-100">' + cfg.feePct.toFixed(4) + '%</b> of each position.'
+            + ' Paid <b class="text-rose-400">' + m(run.fees) + '</b> on ' + n + ' trade' + (n === 1 ? '' : 's') + ' (about ' + m(run.fees / n) + ' a trade).'
+            + (alt ? ' Without fees: ' + altTxt(alt) + '.' : '')
+            + (nNse ? ' NSE alerts pay ' + DEMO_NSE_FEE + '% (Indian broker), whatever the broker.' : '')
+            + (noStop ? ' ' + noStop + ' trade' + (noStop === 1 ? ' has' : 's have') + ' no stop, so no position size and no fee.' : '')
+          : '<b class="text-amber-300">Fees off</b>: Fees above is set to Without, so no trade pays a fee.'
+            + (alt ? ' With ' + esc(bkl) + '\'s fees (' + esc(ord.label.toLowerCase()) + ', ' + cfg.feePct.toFixed(4) + '%): ' + altTxt(alt) + ', ' + m(alt.fees) + ' in fees.' : '')
+            + ' <button type="button" onclick="demoFees(\'' + cfg.broker + '\')" class="underline text-amber-300">Charge fees</button>')
+        + '</div>';
       const stats = '<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">'
         + cell('Start', m(cfg.start), 'risk ' + riskTxt)
         + cell('Final balance', m(run.end), 'peak ' + m(run.peak), tone(run.end - cfg.start))
-        + cell('Return', pfmt(run.ret) || '0.00%', sm(run.end - cfg.start), tone(run.ret))
+        + cell('Return', pfmt(run.ret) || '0.00%', sm(run.end - cfg.start) + (cfg.feesOn ? ' after fees' : ' no fees'), tone(run.ret))
         + cell('Trades', n, run.wins + 'W / ' + run.losses + 'L · ' + pct(run.wins / n * 100) + ' won', '', 'Alerts with a result in this view' + (n < demoRows.length ? ', up to the trade that blew the account' : ''))
         + cell('Max drawdown', run.maxDDPct ? '-' + run.maxDDPct.toFixed(2) + '%' : '0%', run.maxDD ? '-' + m(run.maxDD) + ' at most' : 'never below a high', 'text-rose-400', 'The deepest fall from a high point of the balance, as a % of that high.')
         + cell('Lowest balance', m(run.low), pfmt((run.low - cfg.start) / cfg.start * 100) + ' vs start', tone(run.low - cfg.start))
@@ -9816,29 +9885,30 @@
         + '</tbody></table></div></div>';
 
       // The same alerts at other risk sizes.
-      const cmp = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Same alerts, other risk sizes</div><p class="text-[10px] text-slate-500 mb-1">Starting with ' + m(cfg.start) + ', each a share of the balance' + (cfg.lev ? ', leverage capped at ' + cfg.lev + 'x' : '') + '.</p><div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Risk a trade</th><th class="pr-2 text-right">Final balance</th><th class="pr-2 text-right">Return</th><th class="pr-2 text-right">Max DD</th><th class="text-right">Lowest</th></tr></thead><tbody>'
-        + DEMO_CMP.concat(cfg.mode === 'pct' && !DEMO_CMP.some(p => Math.abs(p - cfg.pct) < 1e-9) ? [cfg.pct] : []).sort((a, b) => a - b).map(p => { const r2 = demoRun(demoRows, Object.assign({}, cfg, { mode: 'pct', pct: p })), mine = cfg.mode === 'pct' && Math.abs(cfg.pct - p) < 1e-9;
+      const cmp = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Same alerts, other risk sizes</div><p class="text-[10px] text-slate-500 mb-1">Starting with ' + m(cfg.start) + ', each a share of the balance' + (cfg.lev ? ', leverage capped at ' + cfg.lev + 'x' : '') + (cfg.feesOn ? ', same fees' : ', no fees') + '.</p><div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Risk a trade</th><th class="pr-2 text-right">Final balance</th><th class="pr-2 text-right">Return</th><th class="pr-2 text-right">Max DD</th><th class="text-right">Lowest</th></tr></thead><tbody>'
+        + DEMO_CMP.concat(cfg.mode === 'pct' && !DEMO_CMP.some(p => Math.abs(p - cfg.pct) < 1e-9) ? [cfg.pct] : []).sort((a, b) => a - b).map(p => { const r2 = demoRun(rows, Object.assign({}, cfg, { mode: 'pct', pct: p })), mine = cfg.mode === 'pct' && Math.abs(cfg.pct - p) < 1e-9;
           return '<tr class="border-t border-terminal-border/60' + (mine ? ' bg-amber-500/10' : '') + '"><td class="py-1 pr-2 text-slate-200">' + p + '%' + (mine ? ' <span class="text-amber-300 text-[10px]">yours</span>' : '') + (r2.blownAt != null ? ' <span class="text-rose-400 text-[10px]">blown</span>' : '') + '</td><td class="pr-2 text-right font-bold ' + tone(r2.ret) + '">' + m(r2.end) + '</td><td class="pr-2 text-right ' + tone(r2.ret) + '">' + (pfmt(r2.ret) || '0.00%') + '</td><td class="pr-2 text-right text-rose-400">-' + r2.maxDDPct.toFixed(2) + '%</td><td class="text-right text-slate-300">' + m(r2.low) + '</td></tr>'; }).join('')
         + '</tbody></table></div></div>';
 
       // Trade by trade, newest first.
       const LIMIT = 30, rowsT = T.slice().reverse(), shown = demoAll ? rowsT : rowsT.slice(0, LIMIT);
-      const list = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">Trade by trade, newest first</div><div class="overflow-x-auto"><table id="sigDemoTrades" class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1.5 pr-3">#</th><th class="pr-3">When</th><th class="pr-3">Alert</th><th class="pr-3 text-right">Stop</th><th class="pr-3 text-right">Result</th><th class="pr-3 text-right">Risk</th><th class="pr-3 text-right">Position</th><th class="pr-3 text-right">P&amp;L</th><th class="text-right">Balance</th></tr></thead><tbody>'
+      const list = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">Trade by trade, newest first</div><div class="overflow-x-auto"><table id="sigDemoTrades" class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1.5 pr-3">#</th><th class="pr-3">When</th><th class="pr-3">Alert</th><th class="pr-3 text-right">Stop</th><th class="pr-3 text-right">Result</th><th class="pr-3 text-right">Risk</th><th class="pr-3 text-right">Position</th><th class="pr-3 text-right">Fee</th><th class="pr-3 text-right">P&amp;L</th><th class="text-right">Balance</th></tr></thead><tbody>'
         + shown.map(t => { const g = t.x.pr.signal;
           return '<tr class="border-t border-terminal-border/60 hover:bg-white/5"><td class="py-1.5 pr-3 text-slate-500">' + (t.i + 1) + '</td><td class="pr-3 whitespace-nowrap text-slate-400">' + esc(g.date + ' ' + (g.time || '')) + '</td>'
             + '<td class="pr-3 whitespace-nowrap text-slate-200">' + esc(g.symbol) + ' <span class="' + (g.side === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.side === 'long' ? 'Long' : 'Short') + '</span> <span class="text-slate-500">' + esc(g.timeframe || chanLabel(chanKey(g))) + '</span></td>'
             + '<td class="pr-3 text-right text-slate-400">' + (t.x.slp != null ? t.x.slp.toFixed(2) + '%' : '—') + '</td>'
-            + '<td class="pr-3 text-right whitespace-nowrap ' + tone(t.x.r) + '">' + rfmt(t.x.r) + (t.x.label ? ' <span class="text-slate-500 text-[10px]">' + esc(t.x.label) + '</span>' : '') + '</td>'
+            + '<td class="pr-3 text-right whitespace-nowrap ' + tone(t.x.r - t.x.fee) + '"' + (t.x.fee ? ' title="' + rfmt(t.x.r) + ' before fees, ' + rfmt(-t.x.fee) + ' fees"' : '') + '>' + rfmt(t.x.r - t.x.fee) + (t.x.label ? ' <span class="text-slate-500 text-[10px]">' + esc(t.x.label) + '</span>' : '') + '</td>'
             + '<td class="pr-3 text-right text-slate-300">' + m(t.risk) + '</td>'
             + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + (t.pos != null ? m(t.pos) + ' · ' + levTxt(t.lev) + (t.cap ? ' <span class="text-amber-300 text-[10px]">cap</span>' : '') : '—') + '</td>'
+            + '<td class="pr-3 text-right text-slate-400">' + (t.fee ? '-' + m(t.fee) : '—') + '</td>'
             + '<td class="pr-3 text-right font-bold ' + tone(t.pnl) + '">' + sm(t.pnl) + '</td><td class="text-right text-slate-200">' + m(t.bal) + '</td></tr>'; }).join('')
         + '</tbody></table></div>'
         + (rowsT.length > LIMIT ? '<div class="text-center mt-2"><button type="button" onclick="demoShowAll()" class="px-3 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">' + (demoAll ? 'Show the newest ' + LIMIT : 'Show all ' + rowsT.length) + '</button></div>' : '') + '</div>';
 
-      out.innerHTML = notes.join('') + stats + curve
+      out.innerHTML = notes.join('') + feeLine + stats + curve
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + prog + cmp + '</div>'
         + list
-        + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. R is the alert\'s result after fees and stop slippage, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
+        + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. Fees come off on top: position × the round trip above (position = risk ÷ stop distance), per trade under Fee; Result is in R after them. Stop slippage (0.05%) counts either way, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
     }
 
     /* =================== FIB LEVELS =================== */
@@ -12428,6 +12498,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-07.159', pr: 74, title: 'Demo account: fees shown, Delta or CoinDCX', pts: ['Fees were always charged (Delta 0.0826% a trade); now a line says Fees on or off, the total paid and the balance without them', 'Pick where the trades are: Delta or CoinDCX, how orders fill (limit or market) and the maker / taker rates', 'Every trade shows its fee; No fees is the same switch as Fees on the tab'] },
       { v: '2026-11-06.158', pr: 73, title: 'Nifty options: lots by account size', pts: ['Type your account size: lots are what it can pay for and what your risk allows, whichever is smaller', 'Risk as a % of the account (0.5% to 10%); each strike shows its cost a lot', 'Too small for a lot near the money: shows the nearest strike it can buy, or says none'] },
       { v: '2026-11-06.157', pr: 72, title: 'Nifty options picker', pts: ['Calculator → Nifty options: type your Nifty entry and stop; it says CALL (CE) or PUT (PE), which strike, which expiry and how many lots', 'What you pay, loss at the stop and profit at the target, fees in; tap any strike to compare', 'Type the premium your app shows and every price matches it'] },
       { v: '2026-11-04.156', pr: 71, title: 'Demo account in Signals', pts: ['New Signals section: start with $100 (or any amount, $ or ₹) and take every alert in the view, compounding', 'Risk a % of the balance or a fixed amount, with an optional leverage cap', 'Final balance, return, max drawdown, balance curve, progress by day / week / month, other risk sizes and every trade'] },
