@@ -15,6 +15,8 @@
 // p / ta = the price path for "Move SL" (breakeven or a stop shift): each new
 // best move in R with the worst move since the one before, and the worst move
 // after the last one (pathRec, the same as the journal's tgtRec).
+// A second summary under "<key>|tp" is for the journal's Hold "Till TP / SL": no
+// window, walked until the stop or the biggest target (3R / 3%), else still open.
 // The window is the scanner's: 20 candles of the alert's own timeframe after
 // the fill, counted in NSE candles (4H = 09:15-13:15 and 13:15-15:30), so
 // weekends and holidays don't count. A candle that touches both the stop and
@@ -61,18 +63,21 @@ export function pathKey(a) { const p = istParts(a.alertMs); return [a.symbol, a.
 
 // Pure: walk one alert's candles ({t ms, h, l, c}, `resMin` long each).
 // Returns the summary, or null while the entry could still come.
-export function walkAlert(a, bars, resMin) {
+// Keep in step with SIG_TGTS in index.html: past the biggest target every target is settled.
+const CAP_R = 3, CAP_PCT = 3;
+export function walkAlert(a, bars, resMin, hold) {
   const s = a.side === 'short' ? -1 : 1, entry = a.entry, stop = a.stop, tfMin = tfMinutes(a.tf), resMs = resMin * 60000;
   const live = bars.filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + resMs > a.alertMs).sort((x, y) => x.t - y.t);
   let idx = -1, last = null;
   live.forEach(k => { const b = tfBucket(k.t, tfMin); if (b !== last) { idx++; last = b; } k.i = idx; });
   const fi = live.findIndex(k => k.i < BARS && (s > 0 ? k.l <= entry : k.h >= entry));
   if (fi < 0) return live.some(k => k.i >= BARS) ? { none: 'entry not reached' } : null;
-  const f = live[fi], end = f.i + BARS, r6 = v => Math.round(v * 1e6) / 1e6;
+  const tp = hold === 'tp', f = live[fi], end = tp ? Infinity : f.i + BARS, r6 = v => Math.round(v * 1e6) / 1e6;
   const hitSl = k => s > 0 ? k.l <= stop : k.h >= stop, mv = p => s * (p - entry) / entry;
   if (hitSl(f)) return { m: 0, sl: 1, e: 0, done: 1, p: [], ta: -1 };
   let m = Math.max(0, mv(f.c)), lastBar = f;
-  const rec = pathRec(Math.abs(entry - stop) / entry, m);
+  const rk = Math.abs(entry - stop) / entry, cap = Math.max(CAP_R * rk, CAP_PCT / 100), rec = pathRec(rk, m);
+  if (tp && m >= cap) return Object.assign({ m: r6(m), sl: 0, e: r6(mv(f.c)), done: 1 }, rec.end());
   for (let i = fi + 1; i < live.length; i++) {
     const k = live[i];
     if (k.i >= end) return Object.assign({ m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 1 }, rec.end());
@@ -81,6 +86,7 @@ export function walkAlert(a, bars, resMin) {
     const best = mv(s > 0 ? k.h : k.l);
     rec.bar(best, mv(s > 0 ? k.l : k.h));
     m = Math.max(m, best);
+    if (tp && m >= cap) return Object.assign({ m: r6(m), sl: 0, e: r6(mv(k.c)), done: 1 }, rec.end());
   }
   return Object.assign({ m: r6(m), sl: 0, e: r6(mv(lastBar.c)), done: 0 }, rec.end());
 }
@@ -138,7 +144,6 @@ function pickRes(a, now) {
   if (tf <= 1440 && age < 700 * DAY) return [60, '60m'];
   return [1440, '1d'];
 }
-const SPAN_DAYS = tf => tf <= 240 ? 45 : tf <= 1440 ? 90 : tf <= 10080 ? 420 : 1300;
 async function yahoo(symbol, interval, from, to) {
   const url = YAHOO_BASE + '/v8/finance/chart/' + encodeURIComponent(symbol + '.NS') + '?interval=' + interval + '&period1=' + Math.floor(from / 1000) + '&period2=' + Math.ceil(to / 1000) + '&includePrePost=false';
   const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (victus-journal nse-paths)' } });
@@ -179,8 +184,10 @@ export async function main(now = Date.now()) {
     const k = pathKey(a);
     if (seen[k]) return; seen[k] = 1;
     const p = paths[k];
-    // Settled, unless it was walked before Move SL kept the path.
-    if (p && (p.none || (p.done && Array.isArray(p.p)))) return;
+    // Settled, unless it was walked before Move SL kept the path, or its "till TP / SL"
+    // walk is still open.
+    const q = paths[k + '|tp'];
+    if (p && (p.none || (p.done && Array.isArray(p.p))) && q && (q.none || q.done)) return;
     const [resMin, interval] = pickRes(a, now);
     const g = todo[a.symbol + '|' + interval] = todo[a.symbol + '|' + interval] || { symbol: a.symbol, interval, resMin, list: [] };
     g.list.push(Object.assign({ key: k }, a));
@@ -191,7 +198,8 @@ export async function main(now = Date.now()) {
     while (groups.length) {
       const g = groups.shift();
       const from = Math.min(...g.list.map(a => a.alertMs)) - DAY;
-      let to = Math.min(now, Math.max(...g.list.map(a => a.alertMs + SPAN_DAYS(tfMinutes(a.tf)) * DAY)));
+      // Up to now: the "till TP / SL" walk has no window.
+      const to = now;
       const start = g.interval === '15m' ? Math.max(from, now - 59 * DAY) : g.interval === '60m' ? Math.max(from, now - 729 * DAY) : from;
       try {
         const bars = await yahoo(g.symbol, g.interval, start, to);
@@ -199,6 +207,8 @@ export async function main(now = Date.now()) {
         g.list.forEach(a => {
           const w = bars.length ? walkAlert(a, bars.map(b => Object.assign({}, b)), g.resMin) : { none: 'no candles on Yahoo' };
           if (w) paths[a.key] = w;
+          const wt = bars.length ? walkAlert(a, bars.map(b => Object.assign({}, b)), g.resMin, 'tp') : { none: 'no candles on Yahoo' };
+          if (wt) paths[a.key + '|tp'] = wt;
         });
       } catch (e) { failed++; console.log('skip ' + g.symbol + ' ' + g.interval + ': ' + e.message); }
     }

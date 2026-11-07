@@ -3969,7 +3969,7 @@ async function exitTargetRun(seed) {
       const sg = (id, sym, side, entry, stop, r, mkt) => ({ id, key: 'k' + id, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: sym, side, score: '', market: mkt || 'CRYPTO', timeframe: '4H', channel: (mkt || 'CRYPTO') + ' 4H',
         filled: true, outcome: r > 0 ? '+1R' : 'SL', resultR: r, hasReportR: true, price: entry, stop, entry });
       state.signals = [sg('a', 'A', 'long', 100, 99, 0.9), sg('b', 'B', 'short', 200, 202, -1), sg('c', 'RELIANCE', 'long', 100, 99, 0.9, 'NSE')];
-      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '' });
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '', sigHold: '20' });
       switchTab('signals'); renderAll();
     });
     await page.waitForFunction(() => /2 of 3 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText) && !/reading/.test(document.getElementById('sigTgtCmp').innerText), null, { timeout: 10000 });
@@ -4043,7 +4043,7 @@ async function stopMoveRun(seed) {
       const sg = (id, sym, side, entry, stop, r) => ({ id, key: 'k' + id, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: sym, side, score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
         filled: true, outcome: r > 0 ? '+1R' : 'SL', resultR: r, hasReportR: true, price: entry, stop, entry });
       state.signals = [sg('a', 'A', 'long', 100, 99, 0.9), sg('b', 'B', 'short', 200, 202, -1)];
-      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '3R', sigNoFee: false, sigStop: { mode: 'be', beAt: 1 } });
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '3R', sigNoFee: false, sigStop: { mode: 'be', beAt: 1 }, sigHold: '20' });
       // A and B are made-up coins (BUSD's real contract is $20,000), so the demo sizes them at any size
       state.ui.sigDemo = Object.assign({}, state.ui.sigDemo || {}, { real: false });
       switchTab('signals'); renderAll();
@@ -4053,7 +4053,7 @@ async function stopMoveRun(seed) {
     // 3R, BE at 1R. A: armed at +1.6R, stopped at entry: 0 - 0.05 - 0.0826 = -0.1326.
     // B: never reached +1R, so as before: time exit 0.3 - 0.0826 = +0.2174. Total +0.0848.
     let st = await strip();
-    check(/exited at 3R \(BE at 1R\)/.test(st) && /Total R \+0\.08R/.test(st), '3R + BE at 1R strip: ' + st);
+    check(/exited at 3R \(BE at 1R, closed after 20 candles\)/.test(st) && /Total R \+0\.08R/.test(st), '3R + BE at 1R strip: ' + st);
     const rows = await page.$$eval('#sigTgtCmp > div > table tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
     // 1R: both as before (A hits 1R before the move matters; B never reaches 1R). 2R: A at +2.1R (low +1R, above entry) = +1.9174.
     const want = ['Scanner 2 50% -0.10R -0.05R 0.90 -0.10%', '1R 2 100% +1.13R +0.57R ∞ +1.13%', '1.5R 2 100% +1.63R +0.82R ∞ +1.63%', '2R best 2 100% +2.13R +1.07R ∞ +2.13%', '3R 2 50% +0.08R +0.04R 1.64 +0.08%', '1% 2 100% +1.13R +0.57R ∞ +1.13%', '2% 2 100% +2.13R +1.07R ∞ +2.13%', '3% 2 50% +0.08R +0.04R 1.64 +0.08%'];
@@ -4063,7 +4063,7 @@ async function stopMoveRun(seed) {
     // The grid: No move vs BE vs shifts, total R on the same alerts.
     const grid = await page.$$eval('#sigStopGrid tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
     const cell = (rule, tgt) => page.$eval(`#sigStopGrid td[data-cell="${tgt}~${rule}"]`, td => td.innerText.trim()).catch(() => null);
-    check(grid[0] === 'No move +1.13R +1.63R +2.13R -0.91R +1.13R +2.13R -0.91R', 'no-move row = fixed stop: ' + grid[0]);
+    check(grid[0] === 'No move +1.13R +1.63R +2.13R -0.91R', 'no-move row = fixed stop (R targets with an R target): ' + grid[0]);
     // shift 1R -> +0.75R at 3R: A 0.75 - 1.0075*0.05 - 0.0826 = +0.6170; B never armed +0.2174 => +0.83R
     check(await cell('shift|1|0.75', '3R') === '+0.83R', 'shift 1R -> +0.75R at 3R: ' + await cell('shift|1|0.75', '3R'));
     // shift 1.5R -> +1R at 2R: the +2.1R candle's low is exactly +1R, so the moved stop
@@ -4085,7 +4085,7 @@ async function stopMoveRun(seed) {
     // Raising the trigger to 0.75R keeps the level under it (0.5R).
     await page.evaluate(() => { setSigSec('edge'); setSigStop('shAt', '0.75'); });
     const raw = await page.evaluate(() => JSON.stringify(stopRaw()));
-    check(raw === '{"mode":"shift","beAt":1,"shAt":0.75,"shTo":0.5}', 'level kept under the trigger: ' + raw);
+    check(raw === '{"mode":"shift","beAt":1,"shAt":0.75,"shTo":0.5,"beAtP":1,"shAtP":1,"shToP":0.5}', 'level kept under the trigger: ' + raw);
     // Scanner keeps its own rules and says so.
     await page.evaluate(() => setSigTgt(''));
     st = await strip();
@@ -4103,9 +4103,10 @@ async function stopMoveRun(seed) {
     const warn = await page.evaluate(() => (document.getElementById('sigStopWarn') || {}).innerText || '');
     check(/below your 1\.5R target/.test(warn), 'trigger past the target is warned: ' + warn);
     check(await cell('be|1', '1R') === 'same' && await cell('be|1', '2R') !== 'same', 'grid: BE at 1R with a 1R target is "same": ' + await cell('be|1', '1R'));
-    await page.evaluate(() => setSigTgt('1%'));
-    const offPct = await page.evaluate(() => [...document.querySelectorAll('#sigStopAt option')].filter(o => o.disabled).length);
-    check(offPct === 0 && !(await page.$('#sigStopWarn')), '% targets keep every trigger: ' + offPct);
+    // A % target: the trigger and level are in % too, greyed out from the target up.
+    await page.evaluate(() => setSigTgt('2%'));
+    const pctBar = await page.evaluate(() => ({ unit: document.getElementById('sigStopAt').dataset.unit, off: [...document.querySelectorAll('#sigStopAt option')].filter(o => o.disabled).map(o => o.value).join(','), txt: document.getElementById('sigStopAt').selectedOptions[0].innerText }));
+    check(pctBar.unit === '%' && pctBar.off === '2,2.5,3' && pctBar.txt === '+1%' && !(await page.$('#sigStopWarn')), '% target: trigger in %, from +2% off: ' + JSON.stringify(pctBar));
     // Pure: the path kept for a long, and outside Signals the scanner result stands.
     const pure = await page.evaluate(() => {
       const sig = { side: 'long', entry: 100, stop: 99, timeframe: '4H', date: '2026-10-01', time: '10:00' };
@@ -4125,6 +4126,72 @@ async function stopMoveRun(seed) {
   await ctx.close();
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals Move SL (BE / SL shift): re-scored by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('move sl: ' + e); });
+}
+// Hold and % Move SL. C: long 100, stop 99 (1%): flat for 330 15m candles (past its
+// 20 4H candles = 320), then +2.2R. D: short 200, stop 202: flat, never stopped, never 2R.
+async function holdPctRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const t0 = Date.parse('2026-10-01T10:00:00+05:30') / 1000, Q = 900;
+  const bars = { CUSD: [[t0, 100.2, 99.9, 100.1]], DUSD: [] };
+  for (let i = 1; i <= 330; i++) bars.CUSD.push([t0 + i * Q, 100.5, 99.8, 100.2]);
+  bars.CUSD.push([t0 + 331 * Q, 102.2, 100.1, 102]);
+  for (let i = 0; i < 400; i++) bars.DUSD.push(i === 0 ? [t0, 200.1, 199.8, 200] : [t0 + i * Q, 200.5, 199.5, 200]);
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const b = bars[new URL(route.request().url()).searchParams.get('symbol')];
+    if (!b) return route.abort();
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: b.map(([time, high, low, close]) => ({ time, open: close, high, low, close })) }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const strip = () => page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => {
+      const sg = (id, sym, side, entry, stop) => ({ id, key: 'k' + id, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: sym, side, score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: true, outcome: '+1R', resultR: 0.9, hasReportR: true, price: entry, stop, entry });
+      state.signals = [sg('c', 'C', 'long', 100, 99), sg('d', 'D', 'short', 200, 202)];
+      delete state.ui.sigHold;
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '2R', sigNoFee: false, sigStop: { mode: 'off' } });
+      switchTab('signals'); renderAll();
+    });
+    // Default hold: till TP / SL. C hits 2R after its 20 candles: +2 - 0.0826; D is still open.
+    await page.waitForFunction(() => /2 of 2 graded alerts have price data/.test(document.getElementById('sigEdgeStrip').innerText) && !/reading/.test(document.getElementById('sigEdgeStrip').innerText), null, { timeout: 10000 });
+    let st = await strip();
+    check(/held till TP or SL/.test(st) && /1 still open \(no TP or SL yet\)/.test(st) && /Total R \+1\.92R/.test(st), 'till TP / SL strip: ' + st);
+    const holdOn = await page.evaluate(() => document.querySelector('#sigHoldBar button[data-hold="tp"]').className);
+    check(/text-amber-400/.test(holdOn), 'Till TP / SL is the default');
+    // 20 candles: C closes at its 20th 4H candle (+0.2R - 0.0826), D too (0 - 0.0826) = +0.03R.
+    await page.click('#sigHoldBar button[data-hold="20"]');
+    await page.waitForFunction(() => /closed after 20 candles/.test(document.getElementById('sigEdgeStrip').innerText) && /2 of 2 graded/.test(document.getElementById('sigEdgeStrip').innerText) && !/reading/.test(document.getElementById('sigEdgeStrip').innerText), null, { timeout: 10000 });
+    st = await strip();
+    check(/Total R \+0\.03R/.test(st) && !/still open/.test(st), '20 candles strip: ' + st);
+    const out = await page.evaluate(() => document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' '));
+    check(/Time exit\s*2\s*50%/.test(out), 'By outcome shows the time exits: ' + out);
+    // % target with % Move SL: the bar and the grid switch to % (20 candles, so every alert has a result).
+    await page.evaluate(() => { setSigTgt('2%'); setSigStop('mode', 'shift'); });
+    st = await strip();
+    const g = await page.evaluate(() => ({ head: [...document.querySelectorAll('#sigStopGrid thead th')].map(t => t.innerText).join(','), rows: [...document.querySelectorAll('#sigStopGrid tbody tr td:first-child')].map(t => t.innerText).slice(0, 3).join(','), title: document.getElementById('sigTgtCmp').innerText.includes('(in %)') }));
+    check(/SL to \+0\.5% at 1%/.test(st), '% shift in the strip: ' + st);
+    check(g.head === 'Move SL,1%,2%,3%' && g.rows === 'No move,BE at 0.5%,BE at 1%' && g.title, '% grid: ' + JSON.stringify(g));
+    // Pure: % moves are % of entry. Long 100, stop 98 (2%): +1% = 0.5R, +0.5% = 0.25R.
+    // Path: +0.6R, then +1.2R with a dip to +0.1R (under +0.25R) => out at +0.25R - 1.005 x 0.05 / 2.
+    const pure = await page.evaluate(() => {
+      const sig = { side: 'long', entry: 100, stop: 98 }, w = { m: 0.024, sl: 1, e: 0, done: 1, p: [[0.6, 0.6], [1.2, 0.1]], ta: -2 };
+      return { p: tgtScore(sig, w, { p: 3 }, true, stopMove('pshift', 1, 0.5)), r: tgtScore(sig, w, { p: 3 }, true, stopMove('shift', 1, 0.5)) };
+    });
+    check(pure.p && pure.p.label === 'SL shift' && Math.abs(pure.p.r - 0.224875) < 1e-9, '% shift: ' + JSON.stringify(pure.p));
+    // The same numbers in R: armed only at +1.2R, then the fall to -2R stops it at +0.5R - 1.01 x 0.05 / 2.
+    check(pure.r && Math.abs(pure.r.r - 0.47475) < 1e-9, 'R shift on the same path: ' + JSON.stringify(pure.r));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals hold (till TP / SL or 20 candles) and Move SL in %: by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('hold / % move: ' + e); });
 }
 // NSE "Exit at": the sync repo's job reads Yahoo candles (a fake one here) and writes
 // nse-paths.json; the journal reads it with its sync token and re-scores NSE alerts.
@@ -4185,6 +4252,8 @@ async function nsePathsRun() {
     file = put && JSON.parse(Buffer.from(put.content, 'base64').toString());
     const p = file && file.paths['ABC|long|98|2026-10-20 10:00'];
     check(p && p.m === 0.031 && p.sl === 1 && p.done === 1, 'ABC walked: ' + JSON.stringify(file && file.paths));
+    const pt = file && file.paths['ABC|long|98|2026-10-20 10:00|tp'];
+    check(pt && pt.sl === 1 && pt.done === 1 && JSON.stringify(pt.p) === JSON.stringify(p.p), 'ABC till TP / SL walk (stopped inside the window, same path): ' + JSON.stringify(pt));
     // Move SL's path: fill close +0.1R, +0.25R (dip -0.25R), +1.55R, then stopped at -1.05R.
     check(p && JSON.stringify(p.p) === '[[0.1,0.1],[0.25,-0.25],[1.55,-0.25]]' && p.ta === -1.05, 'ABC path for Move SL: ' + JSON.stringify(p));
     // A summary kept before Move SL (no path) is walked again on the next run.
@@ -4194,11 +4263,13 @@ async function nsePathsRun() {
     const again = put && JSON.parse(Buffer.from(put.content, 'base64').toString()).paths['ABC|long|98|2026-10-20 10:00'];
     check(again && Array.isArray(again.p) && again.p.length === 3 && put.sha === 'abc', 'old NSE summary walked again: ' + JSON.stringify(again));
     existing = null;
-    check(file && Object.keys(file.paths).length === 1, 'only graded NSE alerts (no crypto, no unfilled, no timeout): ' + JSON.stringify(file && Object.keys(file.paths)));
+    check(file && JSON.stringify(Object.keys(file.paths)) === '["ABC|long|98|2026-10-20 10:00","ABC|long|98|2026-10-20 10:00|tp"]', 'only graded NSE alerts (no crypto, no unfilled, no timeout), both holds: ' + JSON.stringify(file && Object.keys(file.paths)));
     check(JSON.stringify(yahooAsks) === '["ABC.NS 15m"]', 'one 15m read for the one symbol: ' + JSON.stringify(yahooAsks));
     // Window: 20 NSE 4H candles after the fill. A stop on the 11th trading day is outside it.
     const w = tool.walkAlert({ side: 'long', entry: 100, stop: 98, alertMs, tf: '4h' }, bars.map(b => ({ t: b[0] * 1000, h: b[1], l: b[0] * 1000 >= Date.parse('2026-10-27T09:15:00+05:30') ? 100 : b[2], c: b[3] })).concat(['2026-11-02T09:15', '2026-11-02T13:15', '2026-11-03T09:15'].map(x => ({ t: Date.parse(x + ':00+05:30'), h: 100.4, l: x.endsWith('03T09:15') ? 90 : 99.8, c: 100.1 }))), 15);
     check(w && w.sl === 0 && w.done === 1 && w.e === 0.001, 'stop after 20 NSE candles is outside the window: ' + JSON.stringify(w));
+    const wTp = tool.walkAlert({ side: 'long', entry: 100, stop: 98, alertMs, tf: '4h' }, bars.map(b => ({ t: b[0] * 1000, h: b[1], l: b[0] * 1000 >= Date.parse('2026-10-27T09:15:00+05:30') ? 100 : b[2], c: b[3] })).concat(['2026-11-02T09:15', '2026-11-02T13:15', '2026-11-03T09:15'].map(x => ({ t: Date.parse(x + ':00+05:30'), h: 100.4, l: x.endsWith('03T09:15') ? 90 : 99.8, c: 100.1 }))), 15, 'tp');
+    check(wTp && wTp.sl === 1 && wTp.done === 1, 'till TP / SL: the same stop on the 11th day counts: ' + JSON.stringify(wTp));
     check(tool.tfBucket(Date.parse('2026-10-20T13:14:00+05:30'), 240) !== tool.tfBucket(Date.parse('2026-10-20T13:15:00+05:30'), 240), 'NSE 4H candle turns at 13:15');
   } catch (e) { errs.push('tool threw: ' + e.message); }
   fake.close();
@@ -4694,6 +4765,7 @@ await syncSettingsRun(data);
 await keysLockRun(data);
 await exitTargetRun(data);
 await stopMoveRun(data);
+await holdPctRun(data);
 await sigBreakdownRun(data);
 await nsePathsRun();
 await badInputRun(data);

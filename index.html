@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-07.162">
+  <meta name="app-version" content="2026-11-07.163">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -646,6 +646,7 @@
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">BTC day</span><div id="sigMktBar"></div></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Exit at</span><div id="sigTgtBar"></div></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Move SL</span><div id="sigStopBar"></div></div>
+        <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Hold</span><div id="sigHoldBar"></div></div>
         <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Fees</span><div id="sigFeeBar"></div></div>
         <div id="sigLvlWrap" class="flex items-center gap-2"><span class="text-xs text-slate-500">Level</span><div id="sigLvlBar"></div></div>
         <div id="sigTlWrap" class="flex items-center gap-2"><span class="text-xs text-slate-500">Type</span><div id="sigTlBar"></div></div>
@@ -3917,6 +3918,7 @@
       renderMktFilterBar('sigMktBar', 'mktCalSignals');
       renderSigTgtBar();
       renderSigStopBar();
+      renderSigHoldBar();
       renderSigFeeBar();
       renderSigLvlBar(kind);
       renderSigTlBar(kind);
@@ -8934,12 +8936,14 @@
     // The alert's result as a % price move (its R × its stop width).
     function sigOutPct(pr) { const o = outcomeOf(pr); return o ? pctOfR(o.r, slPct(pr.signal)) : null; }
     // ---- "Exit at": every graded alert re-scored as if it closed at one fixed target ----
-    // 1R / 1.5R / 2R / 3R, or a 1% / 2% / 3% price move, with the alert's own stop and
-    // no breakeven move (lakky, 2026-10-28). Read from Delta's public candles (crypto
-    // only; NSE has none there), from the alert until 20 candles of its own timeframe
-    // after the fill, the scanner's window. A candle that touches both the stop and the
-    // target counts as the stop, like the scanner. Neither in 20 candles: closed at the
-    // last candle's close ("Time exit"). Costs as the scanner: 0.0826% round trip, and
+    // 1R / 1.5R / 2R / 3R, or a 1% / 2% / 3% price move, with the alert's own stop
+    // (moved only by Move SL) (lakky, 2026-10-28). Read from Delta's public candles
+    // (crypto; NSE from the sync repo's job). Hold "Till TP / SL" (the default since
+    // 2026-11-07) reads from the alert until now and keeps a trade open until its target
+    // or stop; "20 candles" is the scanner's window, 20 candles of the alert's own
+    // timeframe after the fill, closed at the last candle's close ("Time exit"). The fill
+    // must come within 20 candles either way. A candle that touches both the stop and the
+    // target counts as the stop, like the scanner. Costs as the scanner: 0.0826% round trip, and
     // the stop fills 0.05% past its price. Only alerts the scanner graded are re-scored,
     // so a target and the scanner's own result are measured on the same alerts.
     const SIG_TGTS = [{ k: "", label: "Scanner" }, { k: "1R", r: 1 }, { k: "1.5R", r: 1.5 }, { k: "2R", r: 2 }, { k: "3R", r: 3 }, { k: "1%", p: 1 }, { k: "2%", p: 2 }, { k: "3%", p: 3 }];
@@ -8952,23 +8956,45 @@
     // BE: once price reaches +at R the stop goes to entry. SL shift: once it reaches
     // +at R the stop goes to +to R (e.g. at 1R, lock +0.75R). Works with every fixed
     // target; the scanner's own result keeps the scanner's own stop rules.
+    // With a % target (1% / 2% / 3%) the trigger and the level are % moves from entry
+    // too (lakky, 2026-11-07: "when i choose % then trail sl also depends on %").
     const STOP_ATS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3], STOP_TOS = [-0.5, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5];
-    const STOP_DEF = { mode: "off", beAt: 1, shAt: 1, shTo: 0.75 };
+    const STOP_ATS_P = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3], STOP_TOS_P = [-0.25, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5];
+    const STOP_DEF = { mode: "off", beAt: 1, shAt: 1, shTo: 0.75, beAtP: 1, shAtP: 1, shToP: 0.5 };
     function stopRaw() {
       const d = state.ui.sigStop && typeof state.ui.sigStop === "object" ? state.ui.sigStop : {};
       const pick = (v, list, def) => list.indexOf(Number(v)) !== -1 ? Number(v) : def;
-      const shAt = pick(d.shAt, STOP_ATS, STOP_DEF.shAt);
-      let shTo = pick(d.shTo, STOP_TOS, STOP_DEF.shTo);
+      const shAt = pick(d.shAt, STOP_ATS, STOP_DEF.shAt), shAtP = pick(d.shAtP, STOP_ATS_P, STOP_DEF.shAtP);
+      let shTo = pick(d.shTo, STOP_TOS, STOP_DEF.shTo), shToP = pick(d.shToP, STOP_TOS_P, STOP_DEF.shToP);
       if (shTo >= shAt) shTo = STOP_TOS.filter(x => x < shAt).pop();
-      return { mode: d.mode === "be" || d.mode === "shift" ? d.mode : "off", beAt: pick(d.beAt, STOP_ATS, STOP_DEF.beAt), shAt, shTo };
+      if (shToP >= shAtP) shToP = STOP_TOS_P.filter(x => x < shAtP).pop();
+      return { mode: d.mode === "be" || d.mode === "shift" ? d.mode : "off", beAt: pick(d.beAt, STOP_ATS, STOP_DEF.beAt), shAt, shTo, beAtP: pick(d.beAtP, STOP_ATS_P, STOP_DEF.beAtP), shAtP, shToP };
     }
     function rTxt(v) { return (v > 0 ? "+" : "") + v + "R"; }
+    function pTxt(v) { return (v > 0 ? "+" : "") + v + "%"; }
+    // mode be / shift: in R; pbe / pshift: in % of entry.
     function stopMove(mode, at, to) {
-      if (mode === "be") return { k: "be|" + at, at, to: 0, label: "BE at " + at + "R" };
-      if (mode === "shift") return { k: "shift|" + at + "|" + to, at, to, label: "SL to " + rTxt(to) + " at " + at + "R" };
+      if (mode === "be") return { k: "be|" + at, at, to: 0, unit: "R", label: "BE at " + at + "R" };
+      if (mode === "shift") return { k: "shift|" + at + "|" + to, at, to, unit: "R", label: "SL to " + rTxt(to) + " at " + at + "R" };
+      if (mode === "pbe") return { k: "pbe|" + at, at, to: 0, unit: "%", label: "BE at " + at + "%" };
+      if (mode === "pshift") return { k: "pshift|" + at + "|" + to, at, to, unit: "%", label: "SL to " + pTxt(to) + " at " + at + "%" };
       return null;
     }
-    function sigStopRule() { const d = stopRaw(); return d.mode === "be" ? stopMove("be", d.beAt) : d.mode === "shift" ? stopMove("shift", d.shAt, d.shTo) : null; }
+    // R with an R target (or Scanner), % with a % target.
+    function sigStopUnit() { const tg = sigTgt(); return tg && tg.p != null ? "%" : "R"; }
+    function sigStopRule() {
+      const d = stopRaw(), pc = sigStopUnit() === "%";
+      if (d.mode === "be") return pc ? stopMove("pbe", d.beAtP) : stopMove("be", d.beAt);
+      if (d.mode === "shift") return pc ? stopMove("pshift", d.shAtP, d.shToP) : stopMove("shift", d.shAt, d.shTo);
+      return null;
+    }
+    // Hold (lakky, 2026-11-07): "tp" keeps a trade until its target or stop, however
+    // long it takes (quiet weekends just take longer); "20" is the scanner's window,
+    // 20 candles of the alert's timeframe after the fill, then closed ("Time exit").
+    const SIG_HOLDS = [{ k: "tp", label: "Till TP / SL" }, { k: "20", label: "20 candles" }];
+    function sigHold() { return state.ui.sigHold === "20" ? "20" : "tp"; }
+    function setSigHold(k) { state.ui.sigHold = k === "20" ? "20" : "tp"; save(); renderSignalsTable(); }
+    function holdTxt() { return sigHold() === "tp" ? "held till TP or SL" : "closed after 20 candles"; }
     // The stop move in force: only inside Signals, and only with a fixed target.
     function sigStopMove() { return tgtScope && sigTgt() ? sigStopRule() : null; }
     function setSigStop(k, v) {
@@ -8978,10 +9004,10 @@
     }
     // One click on the compare grid: a target and a stop move together.
     function setSigTgtStop(tk, mk) {
-      const d = stopRaw(), m = String(mk || "").split("|");
-      d.mode = m[0] === "be" || m[0] === "shift" ? m[0] : "off";
-      if (d.mode === "be") d.beAt = Number(m[1]);
-      if (d.mode === "shift") { d.shAt = Number(m[1]); d.shTo = Number(m[2]); }
+      const d = stopRaw(), m = String(mk || "").split("|"), pc = m[0].charAt(0) === "p", md = pc ? m[0].slice(1) : m[0];
+      d.mode = md === "be" || md === "shift" ? md : "off";
+      if (d.mode === "be") d[pc ? "beAtP" : "beAt"] = Number(m[1]);
+      if (d.mode === "shift") { d[pc ? "shAtP" : "shAt"] = Number(m[1]); d[pc ? "shToP" : "shTo"] = Number(m[2]); }
       state.ui.sigStop = d; state.ui.sigStop = stopRaw(); state.ui.sigTgt = tk;
       save(); renderSignalsTable();
     }
@@ -8999,6 +9025,8 @@
     // A "no candles" kept from before the bStocks names were known is read again once.
     function tgtStale(sig, w) { return !!w && w.none === "no candles on Delta" && !w.via && tgtSym(sig.symbol) !== tgtPlain(sig.symbol); }
     function tgtKey(sig) { return [sig.key || sig.symbol + "|" + sig.date + "|" + sig.time, sig.side, signalEntry(sig), sig.stop].join("|"); }
+    // Each hold has its own walk: the 20-candle one (kept under the plain key) and "|tp".
+    function tgtHoldKey(sig, hold) { return tgtKey(sig) + ((hold || sigHold()) === "tp" ? "|tp" : ""); }
     function tgtAlertMs(sig) { return new Date(sig.date + "T" + String(sig.time || "00:00").slice(0, 5).padStart(5, "0") + ":00+05:30").getTime(); }
     // Why an alert can't be re-scored, or "" when it can.
     function tgtWhy(sig) {
@@ -9009,27 +9037,33 @@
     // Pure: walk an alert's candles ({time (s), high, low, close}). Gives m = the best
     // move its way before the stop (fraction of entry), sl = stopped, e = move at the
     // window's last close, done = the window is over; or { none } when it never filled.
-    function tgtWalk(sig, candles, resMin) {
+    // hold "tp": no window, the walk goes on until the stop or the biggest target
+    // (3R / 3%) is reached (then done) or the candles run out (still open).
+    function tgtWalk(sig, candles, resMin, hold) {
       const entry = signalEntry(sig), stop = sig.stop, s = sig.side === "short" ? -1 : 1;
       const tfMs = tfMinutes(sig.timeframe) * 60000, resMs = resMin * 60000, t0 = tgtAlertMs(sig);
       const bars = candles.map(k => ({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close })).filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + resMs > t0).sort((a, b) => a.t - b.t);
       const fi = bars.findIndex(k => k.t < t0 + TGT_BARS * tfMs && (s > 0 ? k.l <= entry : k.h >= entry));
       if (fi < 0) return { none: "entry not reached" };
-      const f = bars[fi], end = f.t + TGT_BARS * tfMs;
+      const tp = hold === "tp", f = bars[fi], end = tp ? Infinity : f.t + TGT_BARS * tfMs;
       const hitSl = k => s > 0 ? k.l <= stop : k.h >= stop, mv = p => s * (p - entry) / entry;
       if (hitSl(f)) return { m: 0, sl: 1, e: 0, done: 1, p: [], ta: -1 };
       // On the fill candle only its close is known to come after the fill.
       let m = Math.max(0, mv(f.c)), last = f;
-      const rec = tgtRec(Math.abs(entry - stop) / entry, m);
+      const rk = Math.abs(entry - stop) / entry, cap = tgtCapFrac(rk), rec = tgtRec(rk, m);
+      if (tp && m >= cap) return Object.assign({ m, sl: 0, e: mv(f.c), done: 1 }, rec.end());
       for (let i = fi + 1; i < bars.length && bars[i].t < end; i++) {
         const k = bars[i]; last = k;
         if (hitSl(k)) return Object.assign({ m, sl: 1, e: 0, done: 1 }, rec.end(mv(s > 0 ? k.l : k.h)));
         const best = mv(s > 0 ? k.h : k.l);
         rec.bar(best, mv(s > 0 ? k.l : k.h));
         m = Math.max(m, best);
+        if (tp && m >= cap) return Object.assign({ m, sl: 0, e: mv(k.c), done: 1 }, rec.end());
       }
-      return Object.assign({ m, sl: 0, e: mv(last.c), done: last.t + resMs >= end ? 1 : 0 }, rec.end());
+      return Object.assign({ m, sl: 0, e: mv(last.c), done: !tp && last.t + resMs >= end ? 1 : 0 }, rec.end());
     }
+    // The biggest target as a fraction of entry: past it every target is settled.
+    function tgtCapFrac(rk) { return Math.max(...SIG_TGTS.filter(x => x.k).map(x => x.r != null ? x.r * rk : x.p / 100)); }
     // Pure: the price path, small enough to keep, for "Move SL". p = each new best
     // move (in R, at least 0.01R past the last one kept) with the worst move since
     // the one before it, in candle order; ta = the worst move after the last one.
@@ -9070,16 +9104,18 @@
       if (mv && mv.at > 0) {
         if (!Array.isArray(w.p)) return null; // kept before Move SL: read again
         const eps = 1e-9, s = sig.side === "short" ? -1 : 1;
-        const moved = () => ({ r: mv.to - (1 + s * mv.to * riskPct / 100) * TGT_SLIP_PCT / riskPct - costR, label: mv.to === 0 ? "BE" : "SL shift" });
+        // A % move is that % of entry, so in R it is % / stop %.
+        const at = mv.unit === "%" ? mv.at / riskPct : mv.at, to = mv.unit === "%" ? mv.to / riskPct : mv.to;
+        const moved = () => ({ r: to - (1 + s * to * riskPct / 100) * TGT_SLIP_PCT / riskPct - costR, label: mv.to === 0 ? "BE" : "SL shift" });
         let armed = false;
         for (let i = 0; i < w.p.length; i++) {
           const f = w.p[i][0], a = w.p[i][1];
-          if (armed && a <= mv.to + eps) return moved();
+          if (armed && a <= to + eps) return moved();
           if (f >= tR - eps) { if (armed) return { r: tR - costR, label: "Target" }; break; }
-          if (!armed && f >= mv.at - eps) armed = true;
+          if (!armed && f >= at - eps) armed = true;
         }
         if (armed) {
-          if (w.ta != null && w.ta <= mv.to + eps) return moved();
+          if (w.ta != null && w.ta <= to + eps) return moved();
           return w.done ? { r: w.e * 100 / riskPct - costR, label: "Time exit" } : null;
         }
       }
@@ -9092,9 +9128,10 @@
       return tgtMem;
     }
     function tgtSave() { try { localStorage.setItem(TGT_KEY, JSON.stringify(tgtCache())); } catch (e) {} }
-    function tgtPath(sig) {
-      if (isNseSig(sig)) return (nsePaths && nsePaths[nseKey(sig)]) || null;
-      const k = tgtKey(sig); return tgtCache()[k] || tgtLive[k] || null;
+    function tgtPath(sig, hold) {
+      const tp = (hold || sigHold()) === "tp";
+      if (isNseSig(sig)) return (nsePaths && nsePaths[nseKey(sig) + (tp ? "|tp" : "")]) || null;
+      const k = tgtHoldKey(sig, hold); return tgtCache()[k] || tgtLive[k] || null;
     }
     // NSE: Delta has no NSE stocks and Yahoo doesn't answer web pages, so a GitHub
     // job in the sync repo (tools/nse-paths.mjs, twice a day) reads each graded NSE
@@ -9119,23 +9156,26 @@
       nseAt = Date.now(); nseBusy = false;
       renderSignalsTable();
     }
-    async function tgtOne(sig) {
-      const tfMin = tfMinutes(sig.timeframe), t0 = tgtAlertMs(sig), span = 2 * TGT_BARS * tfMin * 60000;
+    async function tgtOne(sig, hold) {
+      // 20 candles: the alert's window. Till TP / SL: everything from the alert to now,
+      // in the finest candles that fit one read (an older alert reads coarser ones).
+      const tfMin = tfMinutes(sig.timeframe), t0 = tgtAlertMs(sig), now = Date.now();
+      const span = hold === "tp" ? Math.max(now - t0, 3600000) : 2 * TGT_BARS * tfMin * 60000;
       const r = AI_RES.find(x => span / (x[0] * 60000) <= 1900) || AI_RES[AI_RES.length - 1];
-      const from = t0 - r[0] * 60000, to = Math.min(Date.now(), t0 + span);
+      const from = t0 - r[0] * 60000, to = Math.min(now, t0 + span);
       const sym = tgtSym(sig.symbol), url = DELTA_BASE + "/v2/history/candles?resolution=" + r[1] + "&symbol=" + encodeURIComponent(sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
       const res = await fetch(url);
       const j = await res.json().catch(() => null);
       if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad reply");
-      return j.result.length ? tgtWalk(sig, j.result, r[0]) : Object.assign({ none: "no candles on Delta" }, sym !== tgtPlain(sig.symbol) ? { via: sym } : {});
+      return j.result.length ? tgtWalk(sig, j.result, r[0], hold) : Object.assign({ none: "no candles on Delta" }, sym !== tgtPlain(sig.symbol) ? { via: sym } : {});
     }
     // Reads the candles of every graded alert in view that has none yet, four at a
     // time, and redraws as they come in. Finished windows are kept on this device.
     async function tgtLoad(pairs) {
       if (tgtBusy) return;
-      const seen = {};
+      const seen = {}, hold = sigHold();
       const todo = pairs.map(pr => pr.signal).filter(g => {
-        const k = tgtKey(g), c = tgtCache()[k];
+        const k = tgtHoldKey(g, hold), c = tgtCache()[k];
         // A summary kept before Move SL has no path: read it once more. So is a "no
         // candles" kept before the bStocks names were known (tgtStale).
         if (seen[k] || (c && ((c.none && !tgtStale(g, c)) || Array.isArray(c.p))) || tgtTried[k] || tgtWhy(g) || !outcomeBase({ signal: g })) return false;
@@ -9146,10 +9186,10 @@
       let drawn = Date.now();
       const worker = async () => {
         while (todo.length) {
-          const g = todo.shift(), k = tgtKey(g);
+          const g = todo.shift(), k = tgtHoldKey(g, hold);
           tgtTried[k] = 1;
           try {
-            const w = await tgtOne(g);
+            const w = await tgtOne(g, hold);
             if (w.none || w.sl || w.done) tgtCache()[k] = w; else { tgtLive[k] = w; delete tgtCache()[k]; }
           } catch (e) { tgtFail++; }
           tgtProg.done++;
@@ -9167,6 +9207,11 @@
       const have = graded.filter(pr => { const w = tgtPath(pr.signal); return w && !w.none && (!need || Array.isArray(w.p)); }).length;
       const bits = [`${have} of ${graded.length} graded alerts have price data`];
       if (nse) bits.push(`${nse} NSE ` + (!syncReady() ? "without prices: turn on GitHub sync in Settings to read them" : nseBusy ? "prices loading…" : nseErr ? "without prices: " + nseErr : "without prices yet (the NSE price job runs twice a day)"));
+      const tg = sigTgt();
+      if (tg && sigHold() === "tp") {
+        const mv = sigStopRule(), open = graded.filter(pr => { const w = tgtPath(pr.signal); return w && !w.none && !tgtScore(pr.signal, w, tg, false, mv); }).length;
+        if (open) bits.push(`${open} still open (no TP or SL yet)`);
+      }
       if (tgtProg) bits.push(`reading prices ${tgtProg.done}/${tgtProg.total}…`);
       return { text: bits.join(" · "), fail: !tgtProg && tgtFail ? tgtFail : 0 };
     }
@@ -9189,22 +9234,30 @@
     function renderSigStopBar() {
       const bar = document.getElementById('sigStopBar');
       if (!bar) return;
-      const d = stopRaw(), tg = sigTgt(), fixed = !!tg;
-      // A trigger at or past an R target never fires (the target comes first), so those
-      // are greyed out. A % target is a different R on every alert, so all stay open.
-      const tR = tg && tg.r != null ? tg.r : null, at = d.mode === 'be' ? d.beAt : d.shAt;
-      const atOff = x => tR != null && x >= tR - 1e-9;
+      const d = stopRaw(), tg = sigTgt(), fixed = !!tg, pc = sigStopUnit() === '%';
+      // In R with an R target, in % of entry with a % target. A trigger at or past the
+      // target never fires (the target comes first), so those are greyed out.
+      const tv = tg ? (pc ? tg.p : tg.r) : null, u = pc ? 'P' : '', txt = pc ? pTxt : rTxt;
+      const at = d.mode === 'be' ? d['beAt' + u] : d['shAt' + u], to = d['shTo' + u];
+      const atOff = x => tv != null && x >= tv - 1e-9;
       bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
-      bar.title = "Off: the stop stays where it is. BE: once price reaches the trigger, the stop goes to entry. SL shift: once it reaches the trigger, the stop goes to the level you pick (e.g. at 1R lock +0.75R). It moves from the next candle. Works with every fixed Exit at; Scanner keeps the scanner's own rules.";
+      bar.title = "Off: the stop stays where it is. BE: once price reaches the trigger (at), the stop goes to entry. SL shift: once it reaches the trigger, the stop goes to the level you pick (to), e.g. at 1R lock +0.75R. In R with an R target, in % with a % target. It moves from the next candle. Works with every fixed Exit at; Scanner keeps the scanner's own rules.";
       const btn = (k, l) => '<button type="button" data-stop="' + k + '" onclick="setSigStop(\'mode\',\'' + k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (d.mode === k ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + l + '</button>';
-      const sel = (id, k, list, v, txt, off) => '<select id="' + id + '" onchange="setSigStop(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">'
+      const sel = (id, k, list, v, off) => '<select id="' + id + '" data-unit="' + (pc ? '%' : 'R') + '" onchange="setSigStop(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">'
         + list.map(x => '<option value="' + x + '"' + (x === v ? ' selected' : '') + (off && off(x) ? ' disabled' : '') + '>' + txt(x) + '</option>').join('') + '</select>';
       let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (fixed ? '' : ' opacity-60') + '">' + btn('off', 'Off') + btn('be', 'BE') + btn('shift', 'SL shift') + '</div>';
-      if (d.mode === 'be') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', 'beAt', STOP_ATS, d.beAt, x => '+' + x + 'R', atOff);
-      if (d.mode === 'shift') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', 'shAt', STOP_ATS, d.shAt, x => '+' + x + 'R', atOff)
-        + '<span class="text-slate-500">to</span>' + sel('sigStopTo', 'shTo', STOP_TOS, d.shTo, rTxt, x => x >= d.shAt);
+      if (d.mode !== 'off') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', (d.mode === 'be' ? 'beAt' : 'shAt') + u, pc ? STOP_ATS_P : STOP_ATS, at, atOff);
+      if (d.mode === 'shift') h += '<span class="text-slate-500">to</span>' + sel('sigStopTo', 'shTo' + u, pc ? STOP_TOS_P : STOP_TOS, to, x => x >= at);
       if (d.mode !== 'off' && atOff(at)) h += '<span id="sigStopWarn" class="text-amber-300">pick "at" below your ' + esc(tg.k) + ' target: the stop never moves</span>';
       bar.innerHTML = h;
+    }
+    function renderSigHoldBar() {
+      const bar = document.getElementById('sigHoldBar');
+      if (!bar) return;
+      const cur = sigHold();
+      bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono' + (sigTgt() ? '' : ' opacity-60');
+      bar.title = "Till TP / SL: each trade stays open until its target or stop, however long it takes; one with neither yet has no result. 20 candles: the scanner's window, closed at the 20th candle of the alert's timeframe (Time exit). Works with every fixed Exit at.";
+      bar.innerHTML = SIG_HOLDS.map(x => '<button type="button" data-hold="' + x.k + '" onclick="setSigHold(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + x.label + '</button>').join('');
     }
     function renderSigFeeBar() {
       const bar = document.getElementById('sigFeeBar');
@@ -9331,18 +9384,21 @@
       const fees = nf ? 'No fees (the 0.05% stop slippage still counts).' : 'Fees as the scanner (0.08% round trip) + 0.05% stop slippage.';
       h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row. Fixed target, the alert\'s own stop, '
         + (mvR ? 'moved as Move SL says (' + esc(mvR.label) + ', from the candle after the one that reached it); the Scanner row keeps the scanner\'s own rules' : 'no breakeven move')
-        + '; a candle touching the stop and the target counts as the stop. Not hit in 20 candles of the alert\'s timeframe: closed there. ' + fees + ' Click a row to score the whole tab at that exit.</p>';
+        + '; a candle touching the stop and the target counts as the stop. ' + (sigHold() === 'tp' ? 'Held till the target or the stop; an alert with neither yet is left out. ' : 'Not hit in 20 candles of the alert\'s timeframe: closed there (Time exit). ') + fees + ' Click a row to score the whole tab at that exit.</p>';
       h += renderStopGrid(pairs, tgs, nf, cur, mvR);
       host.innerHTML = h;
     }
     // "Move SL compared": every fixed target with no move, breakeven and stop shifts,
     // total R on the same alerts, so the best mix shows at a glance. Click a cell to
     // score the whole tab with it.
+    // R targets with R moves, or (when a % target is picked) % targets with % moves.
     const STOP_CMP = [["be", 0.5], ["be", 1], ["be", 1.5], ["be", 2], ["shift", 1, 0.5], ["shift", 1, 0.75], ["shift", 1.5, 1], ["shift", 2, 1], ["shift", 2, 1.5]];
-    function renderStopGrid(pairs, tgs, nf, cur, mvR) {
-      const rules = [null].concat(STOP_CMP.map(x => stopMove(x[0], x[1], x[2])));
+    const STOP_CMP_P = [["pbe", 0.5], ["pbe", 1], ["pbe", 1.5], ["pbe", 2], ["pshift", 1, 0.5], ["pshift", 1, 0.75], ["pshift", 1.5, 1], ["pshift", 2, 1], ["pshift", 2, 1.5]];
+    function renderStopGrid(pairs, tgsAll, nf, cur, mvR) {
+      const pc = sigStopUnit() === "%", tgs = tgsAll.filter(tg => pc ? tg.p != null : tg.r != null), tv = tg => pc ? tg.p : tg.r;
+      const rules = [null].concat((pc ? STOP_CMP_P : STOP_CMP).map(x => stopMove(x[0], x[1], x[2])));
       if (mvR && !rules.some(m => m && m.k === mvR.k)) rules.push(mvR);
-      const head = '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Move SL compared</h3><span class="text-[11px] text-slate-500">Total R at each exit and stop move</span></div>';
+      const head = '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Move SL compared' + (pc ? ' <span class="font-normal text-slate-400">(in %)</span>' : '') + '</h3><span class="text-[11px] text-slate-500">Total R at each exit and stop move · ' + holdTxt() + '</span></div>';
       const sets = [];
       pairs.forEach(pr => {
         const w = outcomeBase(pr) && tgtPath(pr.signal);
@@ -9356,7 +9412,7 @@
         return { tot: sum(rs), avg: avg(rs), wr: w / rs.length * 100 };
       }));
       let best = null;
-      cells.forEach((row, i) => row.forEach((c, j) => { const m = rules[i], tg = tgs[j]; if (m && tg.r != null && m.at >= tg.r - 1e-9) return; if (!best || c.tot > best.c.tot) best = { c, i, j }; }));
+      cells.forEach((row, i) => row.forEach((c, j) => { const m = rules[i], tg = tgs[j]; if (m && m.at >= tv(tg) - 1e-9) return; if (!best || c.tot > best.c.tot) best = { c, i, j }; }));
       const curM = sigTgt() ? (mvR ? mvR.k : "") : null;
       let h = head + '<div class="overflow-x-auto"><table id="sigStopGrid" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Move SL</th>'
         + tgs.map(tg => '<th class="pr-2 text-right">' + esc(tg.k) + '</th>').join('') + '</tr></thead><tbody>';
@@ -9366,13 +9422,13 @@
         tgs.forEach((tg, j) => {
           const c = cells[i][j], on = curM === mk && cur === tg.k, top = best.i === i && best.j === j;
           // Trigger at or past an R target: the target comes first, so it is the same as No move.
-          if (m && tg.r != null && m.at >= tg.r - 1e-9) { h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" class="pr-2 py-1 text-right text-slate-600" title="Trigger at or past the ' + esc(tg.k) + ' target: the stop never moves, same as No move">same</td>'; return; }
+          if (m && m.at >= tv(tg) - 1e-9) { h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" class="pr-2 py-1 text-right text-slate-600" title="Trigger at or past the ' + esc(tg.k) + ' target: the stop never moves, same as No move">same</td>'; return; }
           h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" onclick="setSigTgtStop(\'' + tg.k + '\',\'' + mk + '\')" title="' + esc((m ? m.label : 'No move') + ' · exit at ' + tg.k + ': ' + pct(c.wr) + ' won, ' + rfmt(c.avg) + ' a trade. Click to score the whole tab with it.') + '" class="pr-2 py-1 text-right cursor-pointer hover:bg-white/5 '
             + (c.tot >= 0 ? 'text-emerald-400' : 'text-rose-400') + (on ? ' bg-amber-500/15 font-bold' : '') + (top ? ' underline' : '') + '">' + rfmt(c.tot) + '</td>';
         });
         h += '</tr>';
       });
-      return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">"same": the trigger is at or past that target, so the stop never moves. Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. BE: at the trigger the stop goes to entry. SL shift: at the trigger it goes to the level shown. The stop moves from the next candle and slips 0.05% like any stop. Click a cell to use it on the whole tab.</p></div>';
+      return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">' + (pc ? 'Triggers and levels are % moves from entry, like the targets. ' : '') + '"same": the trigger is at or past that target, so the stop never moves. Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. BE: at the trigger the stop goes to entry. SL shift: at the trigger it goes to the level shown. The stop moves from the next candle and slips 0.05% like any stop. Click a cell to use it on the whole tab.</p></div>';
     }
     function sumPct(list) { const v = list.filter(x => x != null && isFinite(x)); return v.length ? sum(v) : null; }
     // The Victus Alert System backtest and paper trading do not take a trade whose
@@ -10344,7 +10400,7 @@
           line.id = 'sigTgtNote';
           line.className = 'col-span-full text-[11px] font-mono text-amber-300';
           const mv = sigStopMove();
-          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (' + (mv ? esc(mv.label) : 'same stop, no breakeven') + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
+          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (' + (mv ? esc(mv.label) : 'same stop, no breakeven') + ', ' + holdTxt() + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
           strip.appendChild(line);
         }
         // Say why numbers are missing instead of leaving dashes unexplained.
@@ -12806,6 +12862,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-07.163', pr: 78, title: 'Move SL in %, and hold till TP / SL', pts: ['With a % Exit at (1% / 2% / 3%), Move SL\'s "at" and "to" are % moves too (e.g. at +1% move the stop to +0.5%)', 'New Hold: Till TP / SL (default) keeps each trade until its target or stop, however long; 20 candles is the old window with Time exit', 'Trades with neither yet show as still open; NSE gets both from the price job'] },
       { v: '2026-11-07.162', pr: 77, title: 'Move SL: no trigger past the target', pts: ['"at" greys out triggers at or above your R target (at 1.5R: +1.5R to +3R off), since the target comes first and the stop would never move', 'A saved trigger past the target says so in amber', 'Move SL compared shows "same" in those cells'] },
       { v: '2026-11-07.161', pr: 76, title: 'Demo account: real orders only', pts: ['Each trade is sized as Delta (or CoinDCX) would take it: whole contracts, rounded down, and no more leverage than the coin allows', 'A trade smaller than 1 contract, a stop under 0.1% or 3 ticks, or a coin the broker doesn\'t list is skipped and says why; or pick Take 1 contract', 'Off (any size) shows the old way; the line says both results. MRVL and other US stocks read Delta\'s bStocks (MRVLBUSD)'] },
       { v: '2026-11-07.160', pr: 75, title: 'Move SL: breakeven or SL shift on Exit at', pts: ['Signals → Move SL next to Exit at: Off, BE (at +0.5R to +3R the stop goes to entry) or SL shift (e.g. at 1R lock +0.75R)', 'Works with every fixed Exit at; the headline, breakdowns, Backtest report and Demo account follow it', 'Edge & breakdowns: new Move SL compared grid, total R for every exit and stop move; click a cell to use it'] },
