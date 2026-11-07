@@ -2417,6 +2417,145 @@ async function sigBacktestRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('signals backtest: ' + e); });
 }
 
+// Signals redesign (v.167): two filter panels that fold to one line, Reset, the Coins
+// filter (Top 3 / Top 5 / Picks, by market cap or most alerts), the Backtest report's
+// "How sure is this?" and "Top coins vs all crypto", worked out by hand. Then the
+// rebuilt history (several MB from 1 Jun) is downloaded once, and fib / trendline
+// records keep the scanner's fill and close times.
+async function sigRedesignRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const H = 3600e3, cutoff = Date.now() - 2 * 24 * H, isoAt = t => new Date(t).toISOString();
+  const sent = Math.floor((cutoff - 30 * H) / 1000);
+  const files = {
+    'fibtl_rebuild_records.jsonl': JSON.stringify({ market: 'crypto', symbol: 'RBFIBUSD', tf: '1d', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
+      id: 'fib|RBFIBUSD@1|rb', key: 'fib|RBFIBUSD', sent_ts: sent, rebuild: true }),
+    'fibtl_rebuild_results.json': JSON.stringify({ 'fib|RBFIBUSD@1|rb': { outcome: '2R', filled: true, resolved: true, r1: true, r2: true, sl: false, be: false, fill_ts: sent + 3600, end_ts: sent + 6 * 3600 } }),
+    'fibtl_rebuild_meta.json': JSON.stringify({ cutoff: isoAt(cutoff), built_at: isoAt(cutoff) }),
+  };
+  const hits = {};
+  await ctx.route(url => !url.href.startsWith(base), async r => {
+    const u = r.request().url();
+    if (!u.includes('/scanner-runtime-state/')) return r.abort();
+    const f = u.split('/').pop().split('?')[0];
+    hits[f] = (hits[f] || 0) + 1;
+    return r.fulfill({ status: 200, body: files[f] != null ? files[f] + '\n' : f.endsWith('.json') ? '{}' : '' });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => (state.signals || []).some(g => g.symbol === 'RBFIBUSD'), null, { timeout: 8000 });
+    // Fill and close times: 1h and 6h after the alert, so 5 hours in the trade.
+    const rb = await page.evaluate(() => { const g = state.signals.find(x => x.symbol === 'RBFIBUSD'); return [g.endTs - g.fillTs, g.outcome]; });
+    check(rb[0] === 5 * 3600 && rb[1] === '+2R', 'rebuilt record keeps fill / close times: ' + JSON.stringify(rb));
+    const once = Object.assign({}, hits);
+    await page.evaluate(() => autoRefreshAlerts(true));
+    await page.evaluate(() => autoRefreshAlerts(true));
+    check(once['fibtl_rebuild_records.jsonl'] === 1 && hits['fibtl_rebuild_records.jsonl'] === 1 && hits['fibtl_rebuild_results.json'] === 1 && hits['zone_rebuild_4h.jsonl'] === 1,
+      'rebuilt history read once while unchanged: ' + JSON.stringify(hits));
+    check(hits['fibtl_rebuild_meta.json'] === 3 && hits['fib_trendline_alert_records.jsonl'] === 3, 'meta and live files read every time: ' + JSON.stringify(hits));
+    // A new rebuild (new built_at) is read again, once.
+    files['fibtl_rebuild_meta.json'] = JSON.stringify({ cutoff: isoAt(cutoff), built_at: isoAt(cutoff + 60e3) });
+    await page.evaluate(() => autoRefreshAlerts(true));
+    await page.evaluate(() => autoRefreshAlerts(true));
+    check(hits['fibtl_rebuild_records.jsonl'] === 2, 'a new rebuild is read once more: ' + JSON.stringify(hits));
+
+    const v = await page.evaluate(() => {
+      const text = id => (document.getElementById(id) || {}).innerText.replace(/\s+/g, ' ');
+      const out = {};
+      out.coins = ['BTCUSD', 'ETHUSD', '1000PEPEUSD', 'TSLAXUSD', 'SOXLBUSD', 'NVDAXUSD', 'MRVL', 'XAUTUSD', 'SLVONUSD', 'TRXUSD', 'S0USD'].map(s => coinOf({ symbol: s, market: 'CRYPTO' }) || '-').join(' ')
+        + ' ' + (coinOf({ symbol: 'RELIANCE', market: 'NSE' }) || '-');
+      // In time order. BTC +2 +2 -1 +2 | ETH +2 -1 +2 | XRP -1 | BNB +2 | SOL -1 -1 | DOGE -1 -1 -1 | ADA -1 +2,
+      // then an xStock, gold and an NSE stock (not coins).
+      const plan = [['BTC', 2], ['BTC', 2], ['BTC', -1], ['BTC', 2], ['ETH', 2], ['ETH', -1], ['ETH', 2], ['XRP', -1], ['BNB', 2], ['SOL', -1], ['SOL', -1],
+        ['DOGE', -1], ['DOGE', -1], ['DOGE', -1], ['ADA', -1], ['ADA', 2], ['TSLAX', 2], ['XAUT', -1], ['RELIANCE', -1]];
+      const hrs = [2, 4, 10, 30];
+      state.signals = plan.map(([c, r], i) => {
+        const nse = c === 'RELIANCE', t0 = Date.parse('2026-10-' + String(i + 1).padStart(2, '0') + 'T10:00:00+05:30') / 1000;
+        const g = { id: 'rd' + i, key: 'rd' + i, kind: 'fib', date: '2026-10-' + String(i + 1).padStart(2, '0'), time: '10:00', symbol: nse ? c : c + 'USD', side: 'long', score: '',
+          market: nse ? 'NSE' : 'CRYPTO', timeframe: '4H', channel: (nse ? 'NSE' : 'CRYPTO') + ' 4H', filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 99, entry: 100 };
+        if (c === 'BTC') { g.fillTs = t0 + 600; g.endTs = g.fillTs + hrs[i] * 3600; }
+        return g;
+      });
+      Object.assign(state.ui, { sigKind: 'fib', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigTgt: '', sigNoFee: false,
+        sigStop: { mode: 'off' }, sigTrail: { on: false }, sigHold: 'tp', sigCoins: '', sigCoinRank: 'cap', sigCoinPicks: undefined, sigFold: {}, sigLvl: '' });
+      switchTab('signals'); renderAll();
+      const alerts = () => text('sigEdgeStrip').match(/Alerts (\d+)/)[1];
+      out.all = alerts();
+      out.panels = [!!document.querySelector('#sigWhichPanel #sigPeriodBar'), !!document.querySelector('#sigRulesPanel #sigTgtBar'), !!document.querySelector('#sigWhichPanel #sigCoinBar')];
+      document.querySelector('#sigCoinBar button[data-coins="top3"]').click();
+      out.top3 = [alerts(), text('sigCoinList'), /Total R \+7\.00R/.test(text('sigEdgeStrip')), text('sigWhichSum'), text('sigPeriodHint')];
+      document.getElementById('sigCoinRank').value = 'alerts'; document.getElementById('sigCoinRank').dispatchEvent(new Event('change'));
+      out.byAlerts = [alerts(), text('sigCoinList')];
+      setSigCoinRank('cap');
+      document.querySelector('#sigCoinBar button[data-coins="picks"]').click();
+      out.picks = [alerts(), [...document.querySelectorAll('#sigCoinPicks .sig-coin.on')].map(b => b.dataset.coin).join(',')];
+      document.querySelector('#sigCoinPicks button[data-coin="SOL"]').click();
+      out.unpick = [alerts(), JSON.stringify(state.ui.sigCoinPicks)];
+      toggleSigCoinPick('SOL');
+      // The report, with Top 3 picked: its numbers are Top 3's, the compare has every group.
+      setSigCoins('top3'); setSigSec('report');
+      out.rep = text('sigBacktest');
+      out.sure = text('sigSure');
+      out.rows = [...document.querySelectorAll('#sigCoinCmp tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').trim());
+      out.cur = (document.querySelector('#sigCoinCmp tr.cur') || {}).innerText;
+      out.verdict = text('sigCoinCmp').match(/Top 3 [^\n]*?(likely real, not luck|maybe: needs more alerts|could be luck|too few alerts to tell)/);
+      out.verdict = out.verdict && out.verdict[1];
+      out.lastTable = (() => { const t = document.querySelectorAll('#sigBacktest table'); return t[t.length - 1].querySelector('thead').innerText.replace(/\s+/g, ' '); })();
+      // Pure figures.
+      const a = [2, 2, 2, -1, 2, 2, 2, -1, 2, 2, 2, -1], b = [-1, -1, 2, -1, -1, -1, 2, -1, -1, -1, -1, -1];
+      out.gap = [sigGapWord(sigGap(a, b)).w, sigGapWord(sigGap(a, a.slice().reverse())).w, sigGapWord(sigGap(a.slice(0, 5), b)).w];
+      out.mean = sigMeanRange(sigRunStats([2, -1, -1, 1, -1, 2, -1]));
+      out.win = sigWinRange(3, 7);
+      // Panels: fold one, it says its settings in one line; Reset inside the title doesn't unfold it.
+      setSigSec('alerts'); setSigCoins('');
+      return out;
+    });
+    check(v.coins === 'BTC ETH 1000PEPE - - - - - - TRX S0 -', 'coins: ' + v.coins);
+    check(v.all === '19' && v.panels.every(Boolean), 'all alerts, panels: ' + JSON.stringify([v.all, v.panels]));
+    check(v.top3[0] === '8' && v.top3[1] === 'BTC, ETH, XRP' && v.top3[2] && /Top 3 \(BTC, ETH, XRP\)/.test(v.top3[3]) && /BTC, ETH, XRP/.test(v.top3[4]), 'Top 3: ' + JSON.stringify(v.top3));
+    check(v.byAlerts[0] === '10' && v.byAlerts[1] === 'BTC, DOGE, ETH', 'Top 3 by most alerts: ' + JSON.stringify(v.byAlerts));
+    check(v.picks[0] === '9' && v.picks[1] === 'BTC,ETH,SOL' && v.unpick[0] === '7' && v.unpick[1] === '["BTC","ETH"]', 'picks: ' + JSON.stringify([v.picks, v.unpick]));
+    // Top 3: 8 results, total +7, 5 wins; BTC's times 2h 4h 10h 30h: median 7h.
+    check(/GRADED ALERTS 8/i.test(v.rep) && /TOTAL R \+7\.00R/i.test(v.rep) && /Too few to trust · 8/.test(v.sure) && /median 7\.0h/.test(v.sure) && /4 trades, fill to close/.test(v.sure), 'report on Top 3: ' + v.sure);
+    const row = k => v.rows.find(r => r.startsWith(k)) || '';
+    check(/^All crypto 7 coins 16 16 44% \+0\.31R .* \+5\.00R/.test(row('All crypto')), 'all crypto row: ' + row('All crypto'));
+    check(/^Top 3 BTC, ETH, XRP 8 8 63% \+0\.88R .* \+7\.00R/.test(row('Top 3')), 'top 3 row: ' + row('Top 3'));
+    check(/^Top 5 BTC, ETH, XRP, BNB, SOL 11 11 55% \+0\.64R .* \+7\.00R/.test(row('Top 5')), 'top 5 row: ' + row('Top 5'));
+    check(/^Other coins not in the top 5 5 5 20% -0\.40R .* -2\.00R/.test(row('Other coins')), 'other coins row: ' + row('Other coins'));
+    check(/^Your picks BTC, ETH, SOL 9 9 56% \+0\.67R .* \+6\.00R/.test(row('Your picks')), 'picks row: ' + row('Your picks'));
+    check(/^BTC 4 4 75% \+1\.25R/.test(row('BTC')) && /^DOGE/.test(row('DOGE')) === false, 'each coin: ' + v.rows.join(' | '));
+    check(/^Top 3/.test(v.cur || '') && v.verdict === 'too few alerts to tell', 'current group and verdict: ' + JSON.stringify([v.cur, v.verdict]));
+    check(/^Channel/i.test(v.lastTable.trim()), 'breakdown table stays last: ' + v.lastTable);
+    check(JSON.stringify(v.gap) === '["likely real, not luck","could be luck","too few alerts to tell"]', 'gap words: ' + JSON.stringify(v.gap));
+    // t(6) = 2.447 from the table: 1/7 ± 2.447 × 1.4639 / √7.
+    check(v.mean && Math.abs(v.mean.lo - (1 / 7 - 2.447 * 1.46385 / Math.sqrt(7))) < 0.02 && Math.abs(v.mean.hi - (1 / 7 + 2.447 * 1.46385 / Math.sqrt(7))) < 0.02, 'mean range: ' + JSON.stringify(v.mean));
+    check(v.win && Math.abs(v.win.lo - 15.82) < 0.05 && Math.abs(v.win.hi - 74.95) < 0.05, 'Wilson 3 of 7: ' + JSON.stringify(v.win));
+    // Fold the rules panel by its title; it says its settings; Reset doesn't unfold it.
+    await page.click('#sigRulesPanel > summary h3');
+    // The details "toggle" event fires on a later task, so wait for it to be saved.
+    await page.waitForFunction(() => state.ui.sigFold && state.ui.sigFold.rules === true, null, { timeout: 5000 }).catch(() => {});
+    await page.evaluate(() => setSigTgt('2R'));
+    const f1 = await page.evaluate(() => ({ open: document.getElementById('sigRulesPanel').open, fold: state.ui.sigFold, sum: document.getElementById('sigRulesSum').innerText, reset: !!document.getElementById('sigRulesResetBtn') }));
+    check(f1.open === false && f1.fold.rules === true && /exit at 2R · stop stays · held till TP or SL · with fees/.test(f1.sum) && f1.reset, 'folded rules: ' + JSON.stringify(f1));
+    await page.click('#sigRulesResetBtn');
+    const f2 = await page.evaluate(() => ({ open: document.getElementById('sigRulesPanel').open, tgt: state.ui.sigTgt, sum: document.getElementById('sigRulesSum').innerText, reset: !!document.getElementById('sigRulesResetBtn') }));
+    check(f2.open === false && f2.tgt === '' && f2.sum === "scanner's own exits · with fees" && !f2.reset, 'after Reset: ' + JSON.stringify(f2));
+    await page.reload({ waitUntil: 'load' });
+    await page.evaluate(() => { switchTab('signals'); renderAll(); });
+    const f3 = await page.evaluate(() => [document.getElementById('sigRulesPanel').open, document.getElementById('sigWhichPanel').open]);
+    check(f3[0] === false && f3[1] === true, 'fold kept after reload: ' + JSON.stringify(f3));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals redesign: panels, Coins filter, top coins compare, how sure, history read once, by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('signals redesign: ' + e); });
+}
+
 // Demo account: $100 that takes every graded alert in order and compounds. The
 // numbers are worked out by hand from seven alerts at a 1% stop: +2 -1 -1 +1 -1 +2 -1.
 async function demoAccountRun(seed) {
@@ -4868,6 +5007,7 @@ await importNowRun(data);
 await deltaImportRun(data);
 await fibTlRun(data);
 await sigBacktestRun(data);
+await sigRedesignRun(data);
 await demoAccountRun(data);
 await demoRealRun(data);
 await cleanupRun(data);

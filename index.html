@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-07.166">
+  <meta name="app-version" content="2026-11-08.167">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -286,6 +286,41 @@
     .bd-top:empty{display:none}
     .bd-same{padding:.15rem .55rem;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
     .bd-same b{color:var(--txt);font-weight:600;margin-left:.2rem}
+    /* Signals filters: "Which alerts" and "How each trade is played", one labelled row per
+       control. A folded panel shows its settings as one line. */
+    .sig-panels{display:grid;grid-template-columns:minmax(0,1fr);gap:.75rem;align-items:start}
+    @media (min-width:1100px){.sig-panels{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr)}}
+    .sig-panel{padding:0 .95rem .45rem}
+    .sig-panel:not([open]){padding-bottom:0}
+    .sig-panel>summary{list-style:none;display:flex;align-items:center;gap:.55rem;padding:.6rem 0;cursor:pointer;user-select:none;min-width:0}
+    .sig-panel>summary::-webkit-details-marker{display:none}
+    .sig-panel>summary h3{font-size:13px;font-weight:600;color:var(--txt);white-space:nowrap}
+    .sig-chev{display:inline-block;width:.8rem;font-size:11px;color:var(--dim);transition:transform .15s;transform:rotate(-90deg)}
+    .sig-panel[open] .sig-chev{transform:none}
+    .sig-sum{flex:1 1 auto;min-width:0;font-size:12px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .sig-panel[open] .sig-sum{display:none}
+    .sig-ph-r{margin-left:auto;font-size:11.5px;color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
+    .sig-panel[open] .sig-ph-r{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis}
+    .sig-ph-r button{color:var(--acc);font-weight:500}
+    .sig-row{display:grid;grid-template-columns:4.4rem minmax(0,1fr);align-items:start;gap:.3rem .7rem;padding:.4rem 0;border-top:1px solid var(--line)}
+    .sig-row.hidden{display:none}
+    .sig-lab{font-size:12px;color:var(--dim);white-space:nowrap;line-height:1.95rem}
+    .sig-ctl{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;min-width:0}
+    .sig-ctl>div{max-width:100%}
+    .sig-ctl .flex{flex-wrap:wrap}
+    .sig-ctl button{white-space:nowrap}
+    .sig-panel:not([open]) #sigPeriodHint{display:none}
+    @media (max-width:639px){.sig-row{grid-template-columns:3.3rem minmax(0,1fr);gap:.3rem .5rem}.sig-ctl .flex{gap:2px}.sig-ctl button{padding-left:.4rem;padding-right:.4rem}}
+    @media (max-width:639px){#sigCoinPicks{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}#sigCoinPicks::-webkit-scrollbar{display:none}#sigCoinPicks .sig-coin{flex:0 0 auto}}
+    .sig-coin{padding:.18rem .55rem;border-radius:999px;border:1px solid var(--line2);font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums}
+    .sig-coin:hover{color:var(--txt)}
+    .sig-coin.on{background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc);border-color:color-mix(in srgb,var(--acc) 45%,transparent);font-weight:600}
+    .sig-coin .cnt{color:var(--dim);margin-left:.25rem;font-weight:400}
+    .sig-cmp td,.sig-cmp th{padding:.3rem .6rem .3rem 0;white-space:nowrap}
+    .sig-cmp tr.grp td{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding-top:.7rem}
+    .sig-cmp tr.cur td:first-child{box-shadow:inset 2px 0 0 var(--acc);padding-left:.4rem}
+    .sig-verdict{display:flex;flex-direction:column;gap:.25rem;font-size:11.5px;margin-top:.5rem}
+    .sig-sure{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.5rem}
 </style>
 </head>
 <body class="bg-terminal-bg text-slate-200 font-sans antialiased min-h-screen flex flex-col selection:bg-amber-500/25 selection:text-amber-200">
@@ -631,27 +666,33 @@
       </div>
 
       <!-- Which alerts: the zone scanner, or the fib / trendline scanner. Each is measured on its own. -->
-      <!-- Filters: scanner, period, channel, BTC day. They apply to every section below. -->
-      <div class="filters">
-        <div id="sigKindBar" class="seg"></div>
-        <div class="flex flex-wrap items-center gap-2">
-          <div id="sigPeriodBar" class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
-          <div id="sigCustomRange" class="hidden flex flex-wrap items-center gap-1.5">
-            <input type="date" id="sigCustomFrom" onchange="setSigPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
-            <span class="text-slate-500 text-xs">to</span>
-            <input type="date" id="sigCustomTo" onchange="setSigPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
-          </div>
-        </div>
-        <div id="sigChanBar" class="flex items-center"></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-slate-500">BTC day</span><div id="sigMktBar"></div></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Exit at</span><div id="sigTgtBar"></div></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Move SL</span><div id="sigStopBar"></div></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Trail TP</span><div id="sigTrailBar"></div></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-slate-500 whitespace-nowrap">Hold</span><div id="sigHoldBar"></div></div>
-        <div class="flex items-center gap-2"><span class="text-xs text-slate-500">Fees</span><div id="sigFeeBar"></div></div>
-        <div id="sigLvlWrap" class="flex items-center gap-2"><span class="text-xs text-slate-500">Level</span><div id="sigLvlBar"></div></div>
-        <div id="sigTlWrap" class="flex items-center gap-2"><span class="text-xs text-slate-500">Type</span><div id="sigTlBar"></div></div>
-        <span id="sigPeriodHint" class="text-xs text-slate-500 ml-auto"></span>
+      <div class="flex flex-wrap items-center gap-2"><div id="sigKindBar" class="seg"></div></div>
+      <!-- Two panels: which alerts are counted, and how each one is played. Both apply to
+           every section below. Folded, each says in one line what it is set to. -->
+      <div class="sig-panels">
+        <details id="sigWhichPanel" class="card sig-panel" data-fold="which" open>
+          <summary><span class="sig-chev">&#9662;</span><h3>Which alerts</h3><span id="sigWhichSum" class="sig-sum"></span><span id="sigPeriodHint" class="sig-ph-r"></span></summary>
+          <div class="sig-row"><span class="sig-lab">Period</span><div class="sig-ctl">
+            <div id="sigPeriodBar" class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
+            <div id="sigCustomRange" class="hidden flex flex-wrap items-center gap-1.5">
+              <input type="date" id="sigCustomFrom" onchange="setSigPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
+              <span class="text-slate-500 text-xs">to</span>
+              <input type="date" id="sigCustomTo" onchange="setSigPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
+            </div></div></div>
+          <div class="sig-row"><span class="sig-lab">Channel</span><div id="sigChanBar" class="sig-ctl"></div></div>
+          <div id="sigCoinWrap" class="sig-row"><span class="sig-lab">Coins</span><div id="sigCoinBar" class="sig-ctl"></div></div>
+          <div id="sigLvlWrap" class="sig-row"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="sigLvlBar"></div></div></div>
+          <div id="sigTlWrap" class="sig-row"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="sigTlBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">BTC day</span><div class="sig-ctl"><div id="sigMktBar"></div></div></div>
+        </details>
+        <details id="sigRulesPanel" class="card sig-panel" data-fold="rules" open>
+          <summary><span class="sig-chev">&#9662;</span><h3>How each trade is played</h3><span id="sigRulesSum" class="sig-sum"></span><span id="sigRulesReset" class="sig-ph-r"></span></summary>
+          <div class="sig-row"><span class="sig-lab">Exit at</span><div class="sig-ctl"><div id="sigTgtBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">Move SL</span><div class="sig-ctl"><div id="sigStopBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">Trail TP</span><div class="sig-ctl"><div id="sigTrailBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">Hold</span><div class="sig-ctl"><div id="sigHoldBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">Fees</span><div class="sig-ctl"><div id="sigFeeBar"></div></div></div>
+        </details>
       </div>
 
       <!-- Headline numbers for whatever the filters select -->
@@ -3876,7 +3917,14 @@
       const hint = document.getElementById('sigPeriodHint');
       if (hint) hint.innerText = state.ui.sigDay ? `Showing ${state.ui.sigDay} only. Click the day again to go back.` : ((range.from || range.to) ? `${range.from || "start"} → ${range.to || "now"}` : "All available history");
       const rawPairs = matchSignals(kind), allPairs = sigLvlPairs(rawPairs);
-      renderSigCalendar(state.ui.sigChan ? allPairs.filter(pr => chanKey(pr.signal) === state.ui.sigChan) : allPairs, range);
+      // Coins: which ones the filter keeps, from the coins in this channel and period.
+      const chanPairs = state.ui.sigChan ? allPairs.filter(pr => chanKey(pr.signal) === state.ui.sigChan) : allPairs;
+      const coinCounts = sigCoinCounts(chanPairs.filter(pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to)));
+      const coinSet = Object.keys(coinCounts).length ? sigCoinSet(coinCounts) : null;
+      const coinKeep = coinSet ? (g => coinSet.indexOf(coinOf(g)) !== -1) : null;
+      renderSigCoinBar(coinCounts, coinSet);
+      renderSigCalendar(coinKeep ? chanPairs.filter(pr => coinKeep(pr.signal)) : chanPairs, range);
+      if (hint && coinSet) hint.innerText += ` · ${coinSet.length ? coinSet.join(", ") : "no coins picked"}`;
       if (hint && mktFilter()) hint.innerText += ` · BTC ${MKT_LABEL[mktFilter()].toLowerCase()} days only`;
       if (hint && sigLvl()) hint.innerText += ` · entered at ${sigLvl()}`;
       if (hint && sigTlType()) hint.innerText += ` · ${sigTlType().label} only`;
@@ -3905,6 +3953,9 @@
       if (chan) pairs = pairs.filter(pr => chanKey(pr.signal) === chan);
       if (range.from) pairs = pairs.filter(pr => pr.signal.date >= range.from);
       if (range.to) pairs = pairs.filter(pr => pr.signal.date <= range.to);
+      // The same alerts before the coin filter, for the report's Top coins compare.
+      let preCoin = pairs;
+      if (coinKeep) pairs = pairs.filter(pr => coinKeep(pr.signal));
       // Market-day filter (bullish / bearish / sideways BTC days) comes last, after the card has seen everything.
       {
         const cur0 = viewCur();
@@ -3925,7 +3976,8 @@
       renderSigLvlBar(kind);
       renderSigTlBar(kind);
       renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
-      if (mfSig) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig);
+      renderSigPanelSums(kind, coinSet);
+      if (mfSig) { pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig); preCoin = preCoin.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig); }
 
       // Alerts whose stop is under 0.2% cannot be traded profitably: the 0.10% round-trip
       // fee alone is over half of R, and stop slippage adds more. They swing the
@@ -3948,7 +4000,9 @@
         }
       }
       sigView.pairs = skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs;
-      if (sigTgt()) { const ps = sigView.pairs; setTimeout(() => { tgtLoad(ps); nseLoad(ps); }, 0); }
+      sigView.preCoin = coinKeep ? (skipTiny ? preCoin.filter(pr => !isTiny(pr)) : preCoin) : sigView.pairs;
+      // The coins in view first, then the rest for the report's Top coins compare.
+      if (sigTgt()) { const ps = sigView.pairs.concat(coinKeep ? sigView.preCoin.filter(pr => !coinKeep(pr.signal)) : []); setTimeout(() => { tgtLoad(ps); nseLoad(ps); }, 0); }
       renderSignalEdgeAnalysis(sigView.pairs);
       drawSigSec(sigCurSec());
 
@@ -3965,6 +4019,7 @@
       if (range.from) orphans = orphans.filter(t => t.date >= range.from);
       if (range.to) orphans = orphans.filter(t => t.date <= range.to);
       if (mfSig) orphans = orphans.filter(t => mktBiasOn(t.date, t.time) === mfSig);
+      if (coinKeep) orphans = orphans.filter(t => coinKeep({ symbol: t.symbol }));
       orphans = orphans.map(hydrate).sort((a, b) => -byWhen(a, b));
 
       const modeBar = document.getElementById('sigModeBar');
@@ -9365,7 +9420,7 @@
       let m = sigLvlMemo.get(sig);
       if (!m) { m = {}; sigLvlMemo.set(sig, m); }
       const ck = [w.entry, w.filled, w.outcome, w.resultR].join('|');
-      if (!m[k] || m[k].ck !== ck) m[k] = { ck, sig: Object.assign({}, sig, { entry: w.entry, filled: w.filled, outcome: w.outcome === "not reached" ? "" : w.outcome, resultR: w.resultR, hasReportR: true, lvlWhatIf: k }) };
+      if (!m[k] || m[k].ck !== ck) m[k] = { ck, sig: Object.assign({}, sig, { entry: w.entry, filled: w.filled, outcome: w.outcome === "not reached" ? "" : w.outcome, resultR: w.resultR, hasReportR: true, lvlWhatIf: k, fillTs: undefined, endTs: undefined }) };
       return m[k].sig;
     }
     // Type (trendline alerts only): the lower line's support alerts (longs) or the
@@ -9420,6 +9475,117 @@
         b.onclick = () => setSigLvl(k);
         bar.appendChild(b);
       });
+    }
+    // ---- Coins (lakky, 2026-11-07: "comparison on top 3-5 cryptos alerts vs all crypto
+    // alerts so i can confirm it better"). Keeps only the biggest coins' alerts, or the
+    // ones you pick, everywhere on the tab; the Backtest report compares them with the
+    // rest. Top 3 / Top 5 are by market cap (stablecoins left out) or by the most alerts
+    // in view. Gold, silver, US stocks and NSE are not coins, so a coin filter leaves them out.
+    const SIG_TOP_CAP = ["BTC", "ETH", "XRP", "BNB", "SOL", "DOGE", "ADA", "HYPE", "LINK", "AVAX"];
+    const SIG_COIN_MODES = [{ k: "", label: "All" }, { k: "top3", label: "Top 3", n: 3 }, { k: "top5", label: "Top 5", n: 5 }, { k: "picks", label: "Picks" }];
+    const SIG_COIN_PICKS = ["BTC", "ETH", "SOL"];
+    const SIG_NOT_COIN = { XAUT: 1, PAXG: 1, SLVON: 1, CL: 1 };
+    const SIG_STOCK_RE = /^(TSLA|META|NVDA|AAPL|GOOGL|GOOG|AMZN|MSFT|NFLX|COIN|CRCL|SPY|QQQ|SOXL|SOXX|SNDK|MRVL|MSTR|HOOD|INTC|NBIS|DELL|AVGO|BABA|IBM|AMD|PLTR|ORCL|MU|TSM)[XB]?$/;
+    const coinMemo = new Map();
+    // The coin an alert is on ("BTC" for BTCUSD), or "" when it is not a crypto coin.
+    function coinOf(sig) {
+      if (!sig || isNseSig(sig)) return "";
+      const raw = String(sig.symbol || "");
+      if (coinMemo.has(raw)) return coinMemo.get(raw);
+      const b = raw.toUpperCase().split(/[\/:]/)[0].replace(/[^A-Z0-9]/g, "").replace(/(USDT|USDC|USD)$/, "");
+      let c = b;
+      if (!b || SIG_NOT_COIN[b]) c = "";
+      else if (!DEMO_DCX[b] && SIG_TOP_CAP.indexOf(b) === -1 && (DEMO_DELTA_ALIAS[b] || DEMO_DELTA_ALIAS[b.slice(0, -1)] || SIG_STOCK_RE.test(b))) c = "";
+      coinMemo.set(raw, c);
+      return c;
+    }
+    function sigCoinMode() { return SIG_COIN_MODES.some(x => x.k === state.ui.sigCoins) ? state.ui.sigCoins : ""; }
+    function sigCoinRank() { return state.ui.sigCoinRank === "alerts" ? "alerts" : "cap"; }
+    function sigCoinPicks() { return Array.isArray(state.ui.sigCoinPicks) ? state.ui.sigCoinPicks.filter(x => typeof x === "string" && x) : SIG_COIN_PICKS.slice(); }
+    // Alerts per coin in these pairs.
+    function sigCoinCounts(pairs) { const n = {}; pairs.forEach(pr => { const c = coinOf(pr.signal); if (c) n[c] = (n[c] || 0) + 1; }); return n; }
+    function sigTopCoins(n, counts) {
+      if (sigCoinRank() === "alerts") return Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)).slice(0, n);
+      return SIG_TOP_CAP.slice(0, n);
+    }
+    // The coins a mode keeps, or null for all.
+    function sigCoinSet(counts, mode) {
+      const m = SIG_COIN_MODES.find(x => x.k === (mode == null ? sigCoinMode() : mode));
+      if (!m || !m.k) return null;
+      return m.n ? sigTopCoins(m.n, counts) : sigCoinPicks();
+    }
+    function setSigCoins(k) { state.ui.sigCoins = k; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
+    function setSigCoinRank(v) { state.ui.sigCoinRank = v === "alerts" ? "alerts" : "cap"; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
+    function toggleSigCoinPick(c) {
+      const p = sigCoinPicks(), i = p.indexOf(c);
+      if (i === -1) p.push(c); else p.splice(i, 1);
+      state.ui.sigCoinPicks = p; sigVisible = SIG_PAGE; save(); renderSignalsTable();
+    }
+    const SEG_ON = 'bg-terminal-card border border-terminal-borderLight text-amber-400', SEG_OFF = 'text-slate-400 hover:text-white';
+    function renderSigCoinBar(counts, set) {
+      const wrap = document.getElementById('sigCoinWrap'), bar = document.getElementById('sigCoinBar');
+      if (!wrap || !bar) return;
+      const cur = sigCoinMode(), coins = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+      wrap.classList.toggle('hidden', !coins.length && !cur);
+      let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="Top 3 / Top 5: only the biggest coins\' alerts (by market cap, or by the most alerts in view). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest.">'
+        + SIG_COIN_MODES.map(x => '<button type="button" data-coins="' + x.k + '" onclick="setSigCoins(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : SEG_OFF) + '">' + x.label + '</button>').join('') + '</div>';
+      if (cur && !coins.length) h += '<span class="text-[11px] text-slate-500">no crypto alerts in this view, so it is off</span>';
+      else if (cur === 'top3' || cur === 'top5') {
+        const rk = sigCoinRank();
+        h += '<select id="sigCoinRank" onchange="setSigCoinRank(this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200 text-[11px] font-mono"><option value="cap"' + (rk === 'cap' ? ' selected' : '') + '>by market cap</option><option value="alerts"' + (rk === 'alerts' ? ' selected' : '') + '>by most alerts</option></select>'
+          + '<span id="sigCoinList" class="text-[11px] text-slate-400 font-mono">' + esc((set || []).join(', ')) + '</span>';
+      } else if (cur === 'picks') {
+        const picks = sigCoinPicks(), list = coins.concat(picks.filter(c => coins.indexOf(c) === -1));
+        h += '<div id="sigCoinPicks" class="flex flex-wrap items-center gap-1">' + list.map(c => '<button type="button" data-coin="' + esc(c) + '" onclick="toggleSigCoinPick(\'' + esc(c) + '\')" class="sig-coin' + (picks.indexOf(c) !== -1 ? ' on' : '') + '">' + esc(c) + '<span class="cnt">' + (counts[c] || 0) + '</span></button>').join('') + '</div>';
+      }
+      bar.innerHTML = h;
+    }
+    // Back to the scanner's own results: no fixed target, stop moves, trail or fee change.
+    function sigRulesDefault() { const d = stopRaw(); return !sigTgt() && d.mode === "off" && !trailRaw().on && sigHold() === "tp" && state.ui.sigNoFee !== true; }
+    function resetSigRules() {
+      const d = stopRaw(); d.mode = "off"; state.ui.sigStop = d;
+      const t = trailRaw(); t.on = false; state.ui.sigTrail = t;
+      state.ui.sigTgt = ""; state.ui.sigHold = "tp"; state.ui.sigNoFee = false;
+      save(); renderSignalsTable();
+    }
+    // One line per panel, shown when it is folded (and the rules' Reset button).
+    function renderSigPanelSums(kind, coinSet) {
+      document.querySelectorAll('.sig-panel[data-fold]').forEach(el => {
+        if (el.dataset.init) return;
+        el.dataset.init = '1';
+        const k = el.dataset.fold, f = state.ui.sigFold && typeof state.ui.sigFold === 'object' ? state.ui.sigFold : {};
+        el.open = !f[k];
+        el.addEventListener('toggle', () => {
+          const g = state.ui.sigFold && typeof state.ui.sigFold === 'object' ? state.ui.sigFold : {};
+          if (!!g[k] === !el.open) return;
+          g[k] = !el.open; state.ui.sigFold = g; save();
+        });
+      });
+      const which = document.getElementById('sigWhichSum');
+      if (which) {
+        const per = state.ui.sigDay ? state.ui.sigDay : (SIG_PERIODS.find(x => x.k === sigPeriod().mode) || SIG_PERIODS[3]).label;
+        const cm = SIG_COIN_MODES.find(x => x.k === sigCoinMode());
+        const bits = [(SIG_KINDS.find(x => x.k === kind) || SIG_KINDS[0]).label, per, state.ui.sigChan ? chanLabel(state.ui.sigChan) : 'all channels'];
+        if (coinSet) bits.push(cm.label + ' (' + coinSet.join(', ') + ')');
+        if (sigLvl()) bits.push(sigLvl());
+        if (sigTlType()) bits.push(sigTlType().label);
+        if (mktFilter()) bits.push('BTC ' + MKT_LABEL[mktFilter()].toLowerCase() + ' days');
+        which.innerText = bits.join(' · ');
+      }
+      const rules = document.getElementById('sigRulesSum');
+      if (rules) {
+        const tg = sigTgt(), mv = sigStopRule(), tr = sigTrailRule(), bits = [];
+        if (tg) {
+          bits.push('exit at ' + tg.k);
+          bits.push(mv ? mv.label : 'stop stays');
+          if (tr) bits.push(tr.label);
+          bits.push(holdTxt());
+        } else bits.push("scanner's own exits");
+        bits.push(state.ui.sigNoFee === true ? 'no fees' : 'with fees');
+        rules.innerText = bits.join(' · ');
+      }
+      const reset = document.getElementById('sigRulesReset');
+      if (reset) reset.innerHTML = sigRulesDefault() ? '' : '<button type="button" id="sigRulesResetBtn" onclick="event.preventDefault();event.stopPropagation();resetSigRules()" title="Back to the scanner\'s own results: Exit at Scanner, Move SL and Trail TP off, Till TP / SL, with fees">Reset</button>';
     }
     // "Exit targets compared": the same alerts at every target, side by side.
     function renderTgtCompare(pairs) {
@@ -9802,6 +9968,114 @@
       };
     }
     function pfFmt(v) { return v == null ? "—" : v === Infinity ? "∞" : v.toFixed(2); }
+    // ---- How sure is a backtest? (lakky, 2026-11-07: "backtest it more precisely and accurately") ----
+    // Student's t for a 95% range with df degrees of freedom (1.96 for large samples;
+    // a small one gets a wider range: 2.36 at df 7, 2.05 at df 29).
+    function sigT95(df) { const z = 1.959964; return df >= 1 ? z + (z ** 3 + z) / (4 * df) + (5 * z ** 5 + 16 * z ** 3 + 3 * z) / (96 * df * df) : Infinity; }
+    // 95% range of the average R: mean ± t × spread ÷ √n. Null under 2 results.
+    function sigMeanRange(st) { if (!st || st.n < 2 || st.sd == null) return null; const h = sigT95(st.n - 1) * st.sd / Math.sqrt(st.n); return { lo: st.avg - h, hi: st.avg + h }; }
+    // Wilson 95% range of a win rate, in %.
+    function sigWinRange(w, n) {
+      if (!n) return null;
+      const z = 1.96, p = w / n, d = 1 + z * z / n, c = (p + z * z / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
+      return { lo: Math.max(0, c - h) * 100, hi: Math.min(1, c + h) * 100 };
+    }
+    // Two sets of results: is the gap in average R more than luck? Welch's t.
+    function sigGap(a, b) {
+      if (a.length < 2 || b.length < 2) return null;
+      const sa = sigRunStats(a), sb = sigRunStats(b), se = Math.sqrt(sa.sd * sa.sd / a.length + sb.sd * sb.sd / b.length), gap = sa.avg - sb.avg;
+      return { gap, t: se > 0 ? gap / se : (gap > 0 ? Infinity : gap < 0 ? -Infinity : 0), a: sa, b: sb };
+    }
+    function sigGapWord(g) {
+      if (!g || g.a.n < 10 || g.b.n < 10) return { w: "too few alerts to tell", c: "text-slate-400" };
+      const t = Math.abs(g.t);
+      if (t >= 2) return { w: "likely real, not luck", c: g.gap > 0 ? "text-emerald-400" : "text-rose-400" };
+      if (t >= 1) return { w: "maybe: needs more alerts", c: "text-amber-300" };
+      return { w: "could be luck", c: "text-slate-400" };
+    }
+    function sigSampleWord(n) {
+      return n < 30 ? ["Too few to trust", "text-rose-400", "under 30 results: one or two trades swing it"] : n < 100 ? ["Early read", "text-amber-300", "30-99 results: the direction, not the size"]
+        : n < 300 ? ["Fair", "text-slate-100", "100-299 results"] : ["Solid", "text-emerald-400", "300+ results"];
+    }
+    function sigHrs(h) { return h == null ? "—" : h < 48 ? h.toFixed(h < 10 ? 1 : 0) + "h" : (h / 24).toFixed(1) + "d"; }
+    function rngTxt(r) { return r ? rfmt(r.lo) + " to " + rfmt(r.hi) : "—"; }
+    // "How sure is this?": sample size, the likely range of the average and win rate,
+    // first half vs second half, months and weeks in profit, time in trade, open trades.
+    function sigSureHtml(graded, pairs, st) {
+      const rs = graded.map(x => x.o.r), tone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+      const sw = sigSampleWord(st.n), mr = sigMeanRange(st), wr = sigWinRange(st.wins, st.n), be = st.payoff ? 100 / (1 + st.payoff) : null;
+      const mrWord = !mr ? "" : mr.lo > 0 ? "above zero, 95% sure" : mr.hi < 0 ? "below zero, 95% sure" : "could still be zero";
+      const half = Math.floor(rs.length / 2), h1 = sigRunStats(rs.slice(0, half)), h2 = sigRunStats(rs.slice(half));
+      const halfWord = rs.length < 10 ? "too few to split" : (h1.avg >= 0) === (h2.avg >= 0) ? "same sign in both halves" : "flips between halves: not steady";
+      const byM = {}, byW = {};
+      graded.forEach(x => { const g = x.pr.signal, m = String(g.date || "").slice(0, 7), w = btWeekOf(g.date); byM[m] = (byM[m] || 0) + x.o.r; byW[w] = (byW[w] || 0) + x.o.r; });
+      const up = o => Object.keys(o).filter(k => o[k] > 0).length;
+      // Time in trade: the scanner's own fill and close times (fib, trendline and 1D+ zone alerts).
+      const scan = !sigTgt();
+      const hrs = scan ? graded.map(x => x.pr.signal).filter(g => g.fillTs != null && g.endTs != null && g.endTs >= g.fillTs).map(g => (g.endTs - g.fillTs) / 3600).sort((a, b) => a - b) : [];
+      const med = hrs.length ? (hrs.length % 2 ? hrs[(hrs.length - 1) / 2] : (hrs[hrs.length / 2 - 1] + hrs[hrs.length / 2]) / 2) : null;
+      // Open trades are not counted anywhere: say how many and, with a fixed target, where they stand.
+      let open = 0, openR = 0, openKnown = 0;
+      const tg = sigTgt();
+      if (tg) {
+        const nf = sigNoFee(), mv = sigStopMove(), tr = sigTrail();
+        pairs.forEach(pr => {
+          if (!outcomeBase(pr)) return;
+          const w = tgtPath(pr.signal);
+          if (!w || w.none || tgtScore(pr.signal, w, tg, nf, mv, tr)) return;
+          open++;
+          const rp = slPct(pr.signal);
+          if (rp > 0 && w.e != null) { openR += w.e * 100 / rp - (nf ? 0 : sigFeePct(pr.signal) / rp); openKnown++; }
+        });
+      } else open = pairs.filter(pr => pr.signal.filled === true && !outcomeBase(pr) && pr.signal.outcome !== "timeout").length;
+      const cell = (l, v, sub, c, tip) => '<div class="bg-[#0A0F18] border border-terminal-border rounded-lg p-2"' + (tip ? ' title="' + esc(tip) + '"' : '') + '><div class="text-[10px] uppercase tracking-wider text-slate-500">' + l + '</div><div class="text-[13px] font-bold mono-num ' + (c || 'text-slate-100') + '">' + v + '</div>' + (sub ? '<div class="text-[10px] text-slate-500">' + sub + '</div>' : '') + '</div>';
+      return '<div id="sigSure" class="mb-3"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">How sure is this?</div><div class="sig-sure">'
+        + cell('Sample', sw[0] + ' · ' + st.n, sw[2], sw[1], 'How many results these numbers rest on. Under 30 a couple of trades decide everything; from 100 on the average starts to mean something.')
+        + cell('Average R, 95% range', rngTxt(mr), mr ? 'average ' + rfmt(st.avg) + ': ' + mrWord : 'needs 2+ results', mr ? (mr.lo > 0 ? 'text-emerald-400' : mr.hi < 0 ? 'text-rose-400' : 'text-amber-300') : '', 'Where the true average per alert most likely sits (mean ± t × spread ÷ √n, t about 2). If the range crosses zero, the edge is not proven yet.')
+        + cell('Win rate, 95% range', wr ? pct(wr.lo) + ' to ' + pct(wr.hi) : '—', (st.n ? 'now ' + pct(st.win) : '') + (be != null ? ' · break-even ' + pct(be) + ' at this payoff' : ''), wr && be != null ? (wr.lo > be ? 'text-emerald-400' : wr.hi < be ? 'text-rose-400' : 'text-amber-300') : '', 'Wilson range of the win rate. Break-even = the win rate that makes zero at this average win and loss.')
+        + cell('First half · second half', '<span class="' + tone(h1.avg) + '">' + rfmt(h1.avg) + '</span> · <span class="' + tone(h2.avg) + '">' + rfmt(h2.avg) + '</span>', h1.n + ' · ' + h2.n + ' alerts per half: ' + halfWord, '', 'The alerts in the order they fired, split in two. An edge that is real should show in both halves.')
+        + cell('Months · weeks in profit', up(byM) + ' of ' + Object.keys(byM).length + ' · ' + up(byW) + ' of ' + Object.keys(byW).length, 'net R above zero', '', 'How often a calendar month or week of these alerts ended above zero.')
+        + cell('Time in trade', hrs.length ? 'median ' + sigHrs(med) : '—', hrs.length ? 'average ' + sigHrs(avg(hrs)) + ' · ' + hrs.length + ' trades, fill to close' : scan ? 'no fill / close times on these alerts' : 'with Exit at Scanner only', '', 'From the fill to the close, from the scanner\'s own grading (fib, trendline and 1D+ zone alerts). Not known for a fixed Exit at.')
+        + cell('Still open', String(open), open ? (tg && openKnown ? 'now ' + rfmt(openR) + ' together at the last price read · not counted' : 'not counted until they close') : 'nothing waiting', open ? 'text-amber-300' : '', 'Filled trades with no stop or target yet. They are left out of every number above until they close.')
+        + '</div></div>';
+    }
+    // "Top coins vs all crypto": the same alerts split by coin, before the Coins filter.
+    function sigCoinCompareHtml(pre) {
+      const all = pre.filter(pr => coinOf(pr.signal));
+      if (!all.length) return '';
+      const graded = sigGraded(all), counts = sigCoinCounts(all);
+      const t3 = sigTopCoins(3, counts), t5 = sigTopCoins(5, counts), picks = sigCoinPicks(), cur = sigCoinMode();
+      const inS = set => c => set.indexOf(c) !== -1, notS = set => c => set.indexOf(c) === -1;
+      const grp = (label, sub, keep, k) => {
+        const rs = graded.filter(x => keep(coinOf(x.pr.signal))).map(x => x.o.r);
+        return { label, sub, k, alerts: all.filter(pr => keep(coinOf(pr.signal))).length, rs, st: sigRunStats(rs) };
+      };
+      const rk = sigCoinRank() === 'alerts' ? 'most alerts' : 'market cap';
+      const groups = [grp('All crypto', Object.keys(counts).length + ' coins', () => true, ''), grp('Top 3', t3.join(', '), inS(t3), 'top3'), grp('Top 5', t5.join(', '), inS(t5), 'top5'), grp('Other coins', 'not in the top 5', notS(t5), null)];
+      if (picks.length) groups.push(grp('Your picks', picks.join(', '), inS(picks), 'picks'));
+      const each = t5.concat(picks.filter(c => t5.indexOf(c) === -1)).map(c => grp(c, '', x => x === c, null));
+      const tone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+      const row = (g, isCur) => {
+        const st = g.st, mr = sigMeanRange(st);
+        return '<tr class="border-t border-terminal-border/60' + (isCur ? ' cur' : '') + '"><td class="text-slate-200">' + esc(g.label) + (g.sub ? ' <span class="text-[10px] text-slate-500">' + esc(g.sub) + '</span>' : '') + '</td>'
+          + '<td class="text-right">' + g.alerts + '</td><td class="text-right">' + st.n + '</td><td class="text-right">' + (st.n ? pct(st.win) : '—') + '</td>'
+          + '<td class="text-right font-bold ' + tone(st.avg) + '">' + rfmt(st.avg) + '</td><td class="text-right text-slate-400">' + (mr ? rngTxt(mr) : '—') + '</td>'
+          + '<td class="text-right ' + tone(st.n ? st.tot : null) + '">' + (st.n ? rfmt(st.tot) : '—') + '</td><td class="text-right">' + (st.n ? pfFmt(st.pf) : '—') + '</td>'
+          + '<td class="text-right text-rose-400">' + (st.n ? '-' + st.maxDD.toFixed(2) + 'R' : '—') + '</td><td class="text-right text-rose-400">' + (st.n ? st.maxLs : '—') + '</td></tr>';
+      };
+      const vs = (label, set) => {
+        if (!set.length) return '';
+        const g = sigGap(graded.filter(x => inS(set)(coinOf(x.pr.signal))).map(x => x.o.r), graded.filter(x => notS(set)(coinOf(x.pr.signal))).map(x => x.o.r)), w = sigGapWord(g);
+        if (!g) return '<span class="text-slate-500">' + esc(label) + ': too few alerts on one side to compare</span>';
+        return '<span><b class="text-slate-200">' + esc(label) + '</b> <span class="' + tone(g.a.avg) + '">' + rfmt(g.a.avg) + '</span> vs <span class="' + tone(g.b.avg) + '">' + rfmt(g.b.avg) + '</span> a trade for the rest (' + g.a.n + ' vs ' + g.b.n + ') · gap ' + rfmt(g.gap) + ' · <span class="' + w.c + '">' + w.w + '</span></span>';
+      };
+      return '<div id="sigCoinCmp" class="mb-3"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-1"><span class="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Top coins vs all crypto</span><span class="text-[10px] text-slate-500">top by ' + rk + ' · same filters, before the Coins filter</span></div>'
+        + '<div class="overflow-x-auto"><table class="sig-cmp w-full text-left mono-num"><thead class="text-slate-500 text-[10px] uppercase"><tr><th>Coins</th><th class="text-right">Alerts</th><th class="text-right">Graded</th><th class="text-right">Win %</th><th class="text-right">Avg R</th><th class="text-right" title="Where the true average most likely sits">95% range</th><th class="text-right">Total R</th><th class="text-right">PF</th><th class="text-right">Max DD</th><th class="text-right" title="Most losses in a row">Loss run</th></tr></thead><tbody>'
+        + groups.map(g => row(g, g.k != null && g.k === cur)).join('')
+        + '<tr class="grp"><td colspan="10">Each coin</td></tr>' + each.map(g => row(g, false)).join('')
+        + '</tbody></table></div><div class="sig-verdict">' + vs('Top 3', t3) + vs('Top 5', t5) + (picks.length ? vs('Your picks', picks) : '') + '</div>'
+        + '<p class="text-[10px] text-slate-500 mt-1">A gap counts as likely real when it is about twice its own uncertainty (Welch t ≥ 2), each side with 10+ results. Pick a group with Coins above to see every number for it alone.</p></div>';
+    }
     const sbtWhen = g => (g.date || "") + " " + (g.time || "");
     // The view the report was last drawn from, so sorting a table or exporting needs no recount.
     let btLast = [], btShowAll = false;
@@ -9951,7 +10225,7 @@
         + '<p class="text-[10px] text-slate-500 mt-1">Click a column to sort. Max DD is the deepest fall inside that group, its alerts in order at 1R. Taken = alerts you traded.</p></div>';
 
       host.innerHTML = head + '<p class="text-slate-500 text-[11px] mb-3">Every alert with a result in this view, in the order they fired, as if each was taken at 1R. Results are after fees, as the scanner prices them.</p>'
-        + stats + curve
+        + stats + sigSureHtml(graded, pairs, st) + curve + sigCoinCompareHtml(sigView && sigView.preCoin ? sigView.preCoin : pairs)
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + hist + mix + '</div>'
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + cutHtml + sweepHtml + '</div>'
         + table;
@@ -10436,15 +10710,18 @@
         const unfilled = pairs.filter(pr => pr.signal.filled === false).length;
         const filledN = pairs.filter(pr => pr.signal.filled === true).length;
         const ungraded = pairs.length - filledN - unfilled;
+        // In the order they fired: the deepest fall and the longest losing run.
+        const run = sigRunStats(sigGraded(pairs).map(x => x.o.r));
+        const bestPr = pick((a, b) => a > b), worstPr = pick((a, b) => a < b);
         const items = [
           { label: "Alerts", val: String(pairs.length), sub: `${taken} taken by you`, color: "text-slate-200" },
-          { label: "Filled", val: String(filledN), sub: `${unfilled} never reached zone · ${ungraded} not graded yet`, color: "text-slate-200" },
+          { label: "Filled", val: String(filledN), sub: `${unfilled} no fill · ${ungraded} waiting`, color: "text-slate-200", tip: `${unfilled} never reached the entry; ${ungraded} have no result yet (see the line under these numbers).` },
           { label: "Win rate", val: scored.length ? pct(wins / scored.length * 100) : "—", sub: `${wins}W / ${scored.length - wins}L`, color: "text-emerald-400" },
           { label: "Total R", val: scored.length ? rfmt(sum(rs)) + pTag(sumPct(psAll)) : "—", sub: "across all signals", color: sum(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
-          { label: "Average R", val: scored.length ? rfmt(avg(rs)) + (psAll.some(x => x != null) ? pTag(sumPct(psAll) / psAll.filter(x => x != null).length) : "") : "—", sub: "per signal", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
+          { label: "Average R", val: scored.length ? rfmt(avg(rs)) + (psAll.some(x => x != null) ? pTag(sumPct(psAll) / psAll.filter(x => x != null).length) : "") : "—", sub: "per alert (expectancy)", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
           { label: "Profit factor", val: gl > 0 ? (gw / gl).toFixed(2) : (gw > 0 ? "∞" : "—"), sub: gw / Math.max(gl, 0.0001) >= 1.5 ? "healthy" : "thin", color: gw >= gl ? "text-emerald-400" : "text-rose-400" },
-          { label: "Best", val: scored.length ? rfmt(Math.max(...rs)) + pTag(pOfPick(pick((a, b) => a > b))) : "—", sub: describe(pick((a, b) => a > b)), tip: tipFor(pick((a, b) => a > b)), color: "text-emerald-400" },
-          { label: "Worst", val: scored.length ? rfmt(Math.min(...rs)) + pTag(pOfPick(pick((a, b) => a < b))) : "—", sub: describe(pick((a, b) => a < b)), tip: tipFor(pick((a, b) => a < b)), color: "text-rose-400" }
+          { label: "Max drawdown", val: scored.length ? (run.maxDD ? "-" + run.maxDD.toFixed(2) + "R" : "0R") : "—", sub: scored.length ? `worst run: ${run.maxLs} loss${run.maxLs === 1 ? "" : "es"} in a row` : "", tip: "The deepest fall from a high of the running total, every alert in the order it fired at 1R. Worst run = the most losses in a row.", color: "text-rose-400" },
+          { label: "Best / worst", val: scored.length ? `<span class="text-emerald-400">${rfmt(Math.max(...rs))}</span> <span class="text-slate-500">/</span> <span class="text-rose-400">${rfmt(Math.min(...rs))}</span>` : "—", sub: bestPr ? `${esc(bestPr.signal.symbol)} · ${esc(worstPr.signal.symbol)}` : "single alert", tip: ["Best: " + describe(bestPr) + (pOfPick(bestPr) != null ? " (" + pfmt(pOfPick(bestPr)) + ")" : ""), "Worst: " + describe(worstPr) + (pOfPick(worstPr) != null ? " (" + pfmt(pOfPick(worstPr)) + ")" : ""), tipFor(worstPr)].filter(Boolean).join(". ").replace(/&middot;|·/g, "-"), color: "text-slate-200" }
         ];
         items.forEach(it => {
           const card = document.createElement('div');
@@ -11116,6 +11393,9 @@
         if (r.rebuild && res[r.id] && res[r.id].news_window) return;
         const ip = istParts(new Date(r.sent_ts * 1000));
         const { filled, outcome, resultR, rank } = price(res[r.id] || null, entry, sl, r.market, r.plan.side);
+        // When it filled and when it closed (seconds), for the Backtest report's time in trade.
+        const xr = res[r.id] || null, fillTs = xr && xr.filled && n(xr.fill_ts) != null ? n(xr.fill_ts) : undefined;
+        const endTs = fillTs != null && xr.resolved && n(xr.end_ts) != null ? n(xr.end_ts) : undefined;
         let whatIf;
         const lv = r.kind === "fib" ? lvRes[r.id] : null;
         if (lv && typeof lv === "object") {
@@ -11139,7 +11419,7 @@
           side: r.plan.side === "short" ? "short" : "long", score: "",
           market, timeframe: tf, channel: market + " " + tf,
           filled, outcome, resultR: resultR != null ? +resultR.toFixed(4) : null, hasReportR: true,
-          price: n(r.price), stop: sl, entry, srcRank: rank, fibWhatIf: whatIf, rb: r.rebuild ? true : undefined,
+          price: n(r.price), stop: sl, entry, srcRank: rank, fibWhatIf: whatIf, rb: r.rebuild ? true : undefined, fillTs, endTs,
           // The line's prices at its two anchors (their times are in the key), so its
           // price at any minute is known: SUPPORT / RESISTANCE / broken for your trades.
           tl: r.kind === "trendline" && Array.isArray(r.from) && Array.isArray(r.to) && n(r.from[0]) != null && n(r.to[0]) != null ? [n(r.from[0]), n(r.to[0])] : undefined
@@ -11339,7 +11619,9 @@
           // new or changed L1 / L2 / L4 what-ifs
           || (r.fibWhatIf && JSON.stringify(r.fibWhatIf) !== JSON.stringify(ex.fibWhatIf || null))
           // a trendline's anchors, for alerts saved before they were kept
-          || (r.tl && !ex.tl)) upgrades.push({ ex, r });
+          || (r.tl && !ex.tl)
+          // when it filled and closed, for alerts saved before those were kept
+          || (r.endTs != null && ex.endTs == null)) upgrades.push({ ex, r });
       });
       return { incoming, fresh, upgrades, staleIds, zrBuiltAt: rebuildStamp(zr, fr), sent: [...sent.values()] };
     }
@@ -11359,6 +11641,9 @@
     // view, and every 10 minutes while it stays open, and adds what is new. A failed
     // read changes nothing and is tried again 2 minutes later.
     const SIG_AUTO_MS = 10 * 60e3, SIG_RETRY_MS = 2 * 60e3;
+    // The rebuilt-history files a refresh can skip once this device has taken them.
+    const RB_BODY_KEYS = ["zr4h", "zrHtf", "zrHtfRes", "ftrRec", "ftrRes"];
+    function appVersion() { return (document.querySelector('meta[name="app-version"]') || {}).content || ""; }
     let sigAutoBusy = false, sigAutoFailAt = 0, sigRenderLater = false;
     // Redrawing while you type would reset the field, so new alerts wait for that.
     function typingNow() { const a = document.activeElement; return !!(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)); }
@@ -11376,13 +11661,21 @@
         if (mk !== "nse") files.push(["c4", "cryptoLive4h"]);
         if (mk !== "crypto") files.push(["n4", "nseLive4h"]);
         const got = {};
-        await Promise.all(files.map(async ([k, f, dflt]) => {
+        const read = async ([k, f, dflt]) => {
           try {
             const res = await fetch(SCANNER_BASE + SCANNER_FILES[f], { cache: "no-store" });
             if (!res.ok) throw new Error("http " + res.status);
             got[k] = await res.text();
           } catch (e) { if (dflt === undefined) throw e; got[k] = dflt; }
-        }));
+        };
+        // The rebuilt history (several MB since it starts on 1 Jun) only changes when the
+        // scanner rebuilds it. Its small meta files say when; a device that already took
+        // this rebuild, in this app version, skips the big files (2026-11-07).
+        const isMeta = x => x[0] === "zrMeta" || x[0] === "ftrMeta";
+        await Promise.all(files.filter(isMeta).map(read));
+        const rbNow = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta)), rbVer = rbNow ? rbNow + "|" + appVersion() : "";
+        const skipRb = !!rbNow && state.ui.rbReadAt === rbVer;
+        await Promise.all(files.filter(x => !isMeta(x)).map(x => skipRb && RB_BODY_KEYS.indexOf(x[0]) !== -1 ? (got[x[0]] = x[2]) : read(x)));
         // From a week before the newest alert this device has (results come in
         // later), or the last month on a device with none.
         const newest = (state.signals || []).map(g => g.date).filter(Boolean).sort().pop();
@@ -11399,6 +11692,7 @@
         const rb = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta));
         const plan = buildScannerPlan(got, iso(d), marketOk, !!(rb && state.ui.zoneRebuildAt !== rb));
         if (rb) state.ui.zoneRebuildAt = rb;
+        if (rb && !skipRb) state.ui.rbReadAt = rbVer;
         let n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
         if (n) applyScannerPlan(plan);
         else if (setSentSigs(plan.sent)) n = 1;
@@ -11531,7 +11825,7 @@
         if (!n) { toast("Nothing new to import"); return false; }
         applyScannerPlan(plan);
         state.ui.sigAutoAt = Date.now();
-        if (plan.zrBuiltAt) state.ui.zoneRebuildAt = plan.zrBuiltAt;
+        if (plan.zrBuiltAt) { state.ui.zoneRebuildAt = plan.zrBuiltAt; state.ui.rbReadAt = plan.zrBuiltAt + "|" + appVersion(); }
         state.ui.sigMkt = document.getElementById('scanMarket') ? document.getElementById('scanMarket').value : state.ui.sigMkt;
         save(); renderAll();
         toast(`Imported ${plan.fresh.length} new, updated ${plan.upgrades.length}`);
@@ -12938,6 +13232,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-08.167', pr: 82, title: 'Signals redesign + Top coins compare', pts: ['Filters in two panels: Which alerts and How each trade is played, one labelled row each; fold a panel to see its settings in one line, Reset goes back to the scanner', 'New Coins filter (All / Top 3 / Top 5 / Picks) and a Backtest report table: top coins vs the other coins vs all crypto, each coin, and whether the gap is likely real or luck', 'Backtest report: How sure is this? (95% ranges, first vs second half, months in profit, time in trade, open trades); history from 1 Jun, downloaded once'] },
       { v: '2026-11-07.166', pr: 81, title: 'Trail TP: the TP is locked once hit', pts: ['Once price reaches your Exit at target, the stop goes to that target and never below it', 'Then it trails the gap behind the highest target reached (e.g. 1.5R, +0.25R, 0.5R behind: SL 1.5R at 1.5R, 1.75R and 2R; 1.75R at 2.25R)', 'New SL gap: 0.75R / 0.75% behind'] },
       { v: '2026-11-07.165', pr: 80, title: 'Move SL: no triggers past the target with Trail TP', pts: ['With Trail TP on, Move SL "at" options at or past your Exit at target are greyed out again', 'Move SL works up to the target; after it, Trail TP moves the stop'] },
       { v: '2026-11-07.164', pr: 79, title: 'Trail TP on Exit at', pts: ['Signals → Trail TP: each time price reaches the target, the target moves up a step and the stop follows (e.g. target 1R, +0.25R, SL 0.25R behind: at 1R the target goes to 1.25R and the stop to +0.75R)', 'In R with an R target, in % with a % target; with Move SL on, the higher stop counts', 'Headline, breakdowns, compare tables and Demo account follow it; By outcome shows Trail TP'] },
