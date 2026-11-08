@@ -1845,8 +1845,16 @@ async function autoKeepRun(seed) {
     check(dispatched.length === 1, 'import started twice inside an hour: ' + dispatched.length);
     // A token without Actions access: the CoinDCX card says what to give it.
     dispatchStatus = 403;
-    await page.clock.runFor(15 * 60e3); await page.waitForTimeout(300);
-    const card = await page.evaluate(() => { switchTab('data'); renderDataView(); return document.getElementById('cdxStatus').innerText; });
+    await page.clock.runFor(15 * 60e3);
+    // The start is a few fetches through the test's routes: on a busy runner 300 ms was not
+    // always enough for the second one to land. Wait for it (up to 5 s), then for the card.
+    for (let i = 0; i < 50 && dispatched.length < 2; i++) await page.waitForTimeout(100);
+    let card = '';
+    for (let i = 0; i < 50; i++) {
+      card = await page.evaluate(() => { switchTab('data'); renderDataView(); return document.getElementById('cdxStatus').innerText; });
+      if (/GitHub said 403/.test(card)) break;
+      await page.waitForTimeout(100);
+    }
     check(dispatched.length === 2 && /GitHub said 403/.test(card) && /Actions: Read and write/.test(card), 'card after a refused start: ' + JSON.stringify({ n: dispatched.length, card }));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
