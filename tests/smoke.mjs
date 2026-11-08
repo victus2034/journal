@@ -3323,13 +3323,15 @@ async function anDemoRun(seed) {
     // 3R: BTC's walk stopped at 1.5R, so it is read on (to now, still open); XRP's already
     // runs to now and ADA's is fresh. ETH and SOL stay stopped.
     await page.click('#anTgtBar button[data-tgt="3R"]');
-    await page.waitForFunction(() => !anDemoBusy && /2 of 6 trades replayed/.test(document.getElementById('anDemoLine').innerText), null, { timeout: 15000 });
+    // "3 still open" only once BTC's later candles are in (until then it is waiting for prices).
+    await page.waitForFunction(() => !anDemoBusy && /2 of 6 trades replayed.*3 still open/.test(document.getElementById('anDemoLine').innerText), null, { timeout: 15000 });
     const r3 = await page.evaluate(() => ({ line: document.getElementById('anDemoLine').innerText, ids: [...document.querySelectorAll('#anDemoTable tbody tr')].map(tr => tr.getAttribute('data-demorow')).sort().join() }));
     check(reads.slice(before).join() === 'BTCUSD 1m,BTCUSD 15m' && /3 still open/.test(r3.line) && r3.ids === 'dETH,dSOL', '3R reads only BTC on: ' + reads.slice(before).join() + ' ' + JSON.stringify(r3));
     // Back to 1.5R: nothing read, the same figures.
     const b15 = reads.length;
     await page.click('#anTgtBar button[data-tgt="1.5R"]');
     await page.waitForFunction(() => !anDemoBusy && /4 of 6 trades replayed/.test(document.getElementById('anDemoLine').innerText), null, { timeout: 15000 });
+    await page.waitForTimeout(300);
     const bt = await page.evaluate(() => [...document.querySelector('#anDemoTable tr[data-demorow="dBTC"]').children].map(td => td.innerText.replace(/\s+/g, ' ').trim()));
     check(reads.length === b15 && bt[2].indexOf('+$2.90') === 0, 'back to 1.5R, nothing read: ' + reads.slice(b15).join() + ' ' + JSON.stringify(bt));
     // Hold 1 day: XRP's 1.5R comes too late, so it closes at the day's price (Time exit).
