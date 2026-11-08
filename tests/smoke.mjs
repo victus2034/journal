@@ -2595,7 +2595,7 @@ async function demoAccountRun(seed) {
     await page.evaluate(() => setSigSec('demo'));
     // 1% of the balance: 100 → 102 → 100.98 → 99.9702 → 100.9699 → 99.9602 → 101.9594 → 100.9398.
     let t = await text();
-    ['Start $100.00', 'Final balance $100.94', 'peak $102.00', 'Return +0.94%', 'Trades 7', '3W / 4L', 'Max drawdown -2.00%', '-$2.04 at most', 'Lowest balance $99.96', 'Leverage needed 1.0x']
+    ['Final balance $100.94', 'from $100.00 · peak $102.00', 'Return +0.94%', 'Trades 7', '3W / 4L', 'Max drawdown -2.00%', '-$2.04 at most', 'Lowest balance $99.96', 'Leverage needed 1.0x']
       .forEach(x => check(t.includes(x), 'default demo should show "' + x + '": ' + t.slice(0, 700)));
     check(/Same alerts, other risk sizes .*2% \$101\.76 \+1\.76%/.test(t), '2% row (100 → 101.7586): ' + t.slice(0, 1400));
     const first = await page.$eval('#sigDemoTrades tbody tr', tr => tr.innerText.replace(/\s+/g, ' ').trim());
@@ -2720,6 +2720,162 @@ async function demoAccountRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('demo account: ' + e); });
 }
 
+// Demo account deep data (lakky, 2026-11-08: "graph does not show proper view ... every day
+// trades and every weeks trades and avg hold time avg top 3-5 cryptos"). Nine alerts on
+// 5-15 Oct, $1 fixed risk on 1% stops at Delta's fees (the fee the scanner's R already
+// carries), so each trade's money is its R:
+//  1 05 Oct BTC +2 held 120m · 2 05 Oct ETH -1 60m · 3 06 Oct XRP +1 300m · 4 07 Oct DOGE -1 30m
+//  5 08 Oct BNB +2 600m · 6 12 Oct SOL -1 90m · 7 13 Oct ADA +1 45m · 8 14 Oct BTC -1 (no times)
+//  9 15 Oct ETH +2 1440m. Balance 100 → 102 → 101 → 102 → 101 → 103 → 102 → 103 → 102 → 104.
+// Hold: 8 timed, avg 2685 / 8 = 335.6m, median 90m. Weeks: 5-11 Oct 5 trades +3 (3 / 2),
+// avg hold 222m; 12-18 Oct 4 trades +1 (2 / 2), 525m. Top 3 (BTC ETH XRP): 5 trades +3,
+// 60% won, avg 480m; Top 5 (+BNB SOL): 7 trades +4; All: 9 trades +4.
+// Exit at times: A long 100 / 99 on 15m candles reaches 1R on the candle 15m after the fill;
+// B short 200 / 202 never does and leaves on time 320 candles (4800m) after its fill.
+async function demoDeepRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, timezoneId: 'Asia/Kolkata' });
+  const t0 = Date.parse('2026-10-01T10:00:00+05:30') / 1000, Q = 900;
+  const bars = { AUSD: [[t0, 100.2, 99.9, 100.1], [t0 + Q, 101.6, 100, 101.5], [t0 + 2 * Q, 102.1, 101, 101.2], [t0 + 3 * Q, 101, 98.9, 99]], BUSD: [] };
+  for (let i = 0; i < 320; i++) bars.BUSD.push(i === 0 ? [t0, 200.1, 199.8, 199.9] : i === 1 ? [t0 + Q, 200.5, 198.5, 199] : [t0 + i * Q, 200, 199, 199.4]);
+  let calls = 0, gone = false;
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const u = new URL(route.request().url()), b = bars[u.searchParams.get('symbol')];
+    if (!b) return route.abort();
+    calls++;
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: gone ? [] : b.map(([time, high, low, close]) => ({ time, open: close, high, low, close })) }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const text = sel => page.evaluate(s => { const el = document.querySelector(s); return el ? el.innerText.replace(/\s+/g, ' ').trim() : null; }, sel);
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    // ---- Pure: walk times, the exit time of each rule, hold, labels, axis steps ----
+    const p = await page.evaluate(t0 => {
+      const sig = { side: 'long', entry: 100, stop: 99, timeframe: '4H', date: '2026-10-01', time: '10:00' }, Q = 900;
+      const w = tgtWalk(sig, [{ time: t0, high: 100.1, low: 99.95, close: 100 }, { time: t0 + Q, high: 100.5, low: 99.9, close: 100.4 }, { time: t0 + 2 * Q, high: 101.2, low: 100.3, close: 101 },
+        { time: t0 + 3 * Q, high: 102.1, low: 101.5, close: 102 }, { time: t0 + 4 * Q, high: 102, low: 98.9, close: 99 }], 15);
+      const at = (tg, mv, tr) => { const o = tgtScore(sig, w, tg, true, mv, tr); return o && [o.label, o.at]; };
+      return { ft: w.ft, te: w.te, pt: w.pt, r1: at({ r: 1 }), r2: at({ r: 2 }), r3: at({ r: 3 }), be: at({ r: 3 }, stopMove('be', 0.5)), trail: at({ r: 1 }, null, trailMove('R', 0.5, 0.5)),
+        fill: tgtWalk(sig, [{ time: t0, high: 100.1, low: 98.5, close: 99 }], 15),
+        h: [demoHoldOf({ source: 'target', at: 45 }, {}), demoHoldOf({ source: 'target' }, { fillTs: 1, endTs: 61 }), demoHoldOf({ source: 'recorded' }, { fillTs: 1000, endTs: 4600 }), demoHoldOf({ source: 'recorded' }, { fillTs: 1000 }), demoHoldOf({ source: 'recorded' }, { fillTs: 5000, endTs: 1000 })],
+        lab: ['+2R', '-1R', '+1.5R', 'SL', 'BE', 'Trail +1.5R'].map(demoLab), ax: niceAxis(80.37, 102.93, 4).ticks, flat: niceAxis(100, 100, 4).ticks.length };
+    }, Date.parse('2026-10-01T04:30:00Z') / 1000);
+    check(p.ft === Date.parse('2026-10-01T04:30:00Z') && p.te === 60 && JSON.stringify(p.pt) === '[[15,15],[30,30],[45,45]]', 'walk keeps the fill time, exit 60m later and each point\'s time: ' + JSON.stringify(p));
+    check(JSON.stringify([p.r1, p.r2, p.r3, p.be]) === '[["Target",30],["Target",45],["SL",60],["BE",60]]', '1R at 30m, 2R at 45m, the stop at 60m, breakeven on the stop candle: ' + JSON.stringify([p.r1, p.r2, p.r3, p.be]));
+    check(p.trail && p.trail[1] === 60, 'Trail TP ends on the stop candle: ' + JSON.stringify(p.trail));
+    check(p.fill.sl === 1 && p.fill.te === 0, 'stopped on the fill candle: held 0m: ' + JSON.stringify(p.fill));
+    check(JSON.stringify(p.h) === '[45,null,60,null,null]', 'hold: Exit at\'s time, else the scanner\'s fill → close, never negative: ' + JSON.stringify(p.h));
+    check(JSON.stringify(p.lab) === '["","","","SL","BE","Trail +1.5R"]', 'an R label is not said twice: ' + JSON.stringify(p.lab));
+    check(JSON.stringify(p.ax) === '[80,90,100,110]' && p.flat >= 2, 'axis in round steps: ' + JSON.stringify(p));
+
+    // ---- The Demo account in scanner mode: 9 alerts by hand ----
+    await page.evaluate(() => {
+      const L = [['2026-10-05', '10:00', 'BTCUSD', 2, 120], ['2026-10-05', '14:00', 'ETHUSD', -1, 60], ['2026-10-06', '09:00', 'XRPUSD', 1, 300], ['2026-10-07', '11:00', 'DOGEUSD', -1, 30], ['2026-10-08', '12:00', 'BNBUSD', 2, 600],
+        ['2026-10-12', '10:00', 'SOLUSD', -1, 90], ['2026-10-13', '15:00', 'ADAUSD', 1, 45], ['2026-10-14', '08:00', 'BTCUSD', -1, null], ['2026-10-15', '20:00', 'ETHUSD', 2, 1440]];
+      state.signals = L.map(([date, time, symbol, r, h], i) => { const f = Date.parse(date + 'T' + time + ':00+05:30') / 1000 + 600;
+        return Object.assign({ id: 'dd' + i, key: 'dd' + i, kind: 'trendline', date, time, symbol, side: i % 3 ? 'long' : 'short', score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H', filled: true,
+          outcome: r > 0 ? '+' + r + 'R' : 'SL', resultR: r, hasReportR: true, price: 100, entry: 100, stop: i % 3 ? 99 : 101 }, h == null ? {} : { fillTs: f, endTs: f + h * 60 }); });
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', mktFilter: '', sigTgt: '', sigNoFee: false, sigCoins: '', sigSec: 'alerts' });
+      state.ui.sigDemo = { start: 100, mode: 'fixed', fixed: 1, real: false };
+      switchTab('signals'); renderAll(); setSigSec('demo');
+    });
+    await page.waitForFunction(() => document.getElementById('sigDemoOut') && /Final balance/.test(document.getElementById('sigDemoOut').innerText));
+    const f = await page.evaluate(() => ({ avg: btHeld(336), med: btHeld(90), w1: btHeld(222), w2: btHeld(525), t3: btHeld(480), t5: btHeld(Math.round((120 + 60 + 300 + 1440 + 600 + 90) / 6)), d5: fmtDay('2026-10-05'), d15: fmtDay('2026-10-15') }));
+    const hold = await text('#sigDemoStats [data-demo="hold"]');
+    check(hold === 'Avg hold ' + f.avg + ' median ' + f.med + ' · 8 of 9 timed', 'Avg hold card (2685 / 8 = 336m, median 90m): ' + hold);
+    check((await text('#sigDemoStats [data-demo="end"]')) === 'Final balance $104.00 from $100.00 · peak $104.00', 'final balance card: ' + (await text('#sigDemoStats [data-demo="end"]')));
+    // The chart: round price steps, five dates from the first trade to the last, the drawdown.
+    const c = await page.evaluate(() => ({ y: [...document.querySelectorAll('#sigDemoChart .dc-y:not(.dc-y2) span')].map(s => s.textContent), x: [...document.querySelectorAll('#sigDemoChart .dc-x span')].map(s => s.textContent),
+      dd: document.querySelector('#sigDemoChart .dc-ddlab').textContent, y2: [...document.querySelectorAll('#sigDemoChart .dc-y2 span')].map(s => s.textContent), start: document.querySelector('#sigDemoChart .dc-startlab').textContent,
+      pts: document.querySelector('#sigDemoPlot polyline').getAttribute('points').split(' ').length }));
+    check(JSON.stringify(c.y) === '["$100","$101","$102","$103","$104"]' && c.start === 'start $100', 'price axis $100-$104 and the start line: ' + JSON.stringify(c));
+    check(c.x.length === 4 && c.x[0] === f.d5 && c.x[3] === f.d15 && c.pts === 10, 'dates from the first trade to the last (a day once), a point per trade and the start: ' + JSON.stringify(c));
+    check(c.dd === 'Drawdown from the last high · max -0.98%' && c.y2[1] === '-1.0%', 'drawdown 1 from 102 = -0.98%: ' + JSON.stringify(c));
+    await page.$eval('#sigDemoPlot', el => el.scrollIntoView({ block: 'center' }));
+    const b = await page.$eval('#sigDemoPlot', el => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+    await page.mouse.move(b.x + b.w - 1, b.y + b.h / 2);
+    const tipEnd = await text('#sigDemoPlot .dc-tip');
+    check(/^#9 · .* ETHUSD Long 4H \+\$2\.00 \+2\.00R Balance \$104\.00 Held 1d 0h$/.test(tipEnd), 'tooltip at the last point is trade 9: ' + tipEnd);
+    await page.mouse.move(b.x + b.w / 9 * 2, b.y + b.h / 2);
+    check(/^#2 · .* ETHUSD Long 4H -\$1\.00 -1\.00R SL Balance \$101\.00 -0\.98% Held 1h 0m$/.test(await text('#sigDemoPlot .dc-tip')), 'trade 2 with its drawdown: ' + (await text('#sigDemoPlot .dc-tip')));
+    await page.mouse.move(b.x + 1, b.y + b.h / 2);
+    check((await text('#sigDemoPlot .dc-tip')) === 'Start $100.00', 'left edge is the start: ' + (await text('#sigDemoPlot .dc-tip')));
+    await page.mouse.move(b.x + b.w / 2, b.y + b.h + 200);
+    check(await page.$eval('#sigDemoPlot .dc-tip', t => t.classList.contains('hidden')), 'tooltip hides when the pointer leaves');
+    // Results by day (11 days of alerts), newest first; a day opens its trades.
+    const rows = () => page.$$eval('#sigDemoBy tbody tr[data-demorow]', trs => trs.map(tr => tr.innerText.replace('▸', '').replace(/\s+/g, ' ').trim()));
+    check(/^Results by day/.test(await text('#sigDemoBy')), 'by day for under two weeks of alerts: ' + (await text('#sigDemoBy')).slice(0, 80));
+    let r = await rows();
+    check(r.length === 8 && /^Thu,? 15 Oct 1 1 \/ 0 \+\$2\.00 \+1\.96% 1d 0h \$104\.00$/.test(r[0]) && /^Mon,? 5 Oct 2 1 \/ 1 \+\$1\.00 \+1\.00% 1h 30m \$101\.00$/.test(r[7]), '8 days, newest first: ' + r.join(' | '));
+    await page.click('#sigDemoBy tr[data-demorow="2026-10-05"]');
+    let sub = await page.$$eval('#sigDemoBy .demo-sub .demo-tl', ls => ls.map(l => l.innerText.replace(/\s+/g, ' ').trim()));
+    check(sub.length === 2 && /^#2 .*ETHUSD Long 4H -1\.00R SL -\$1\.00 held 1h 0m$/.test(sub[0]) && /^#1 .*BTCUSD Short 4H \+2\.00R \+\$2\.00 held 2h 0m$/.test(sub[1]), '5 Oct opens its 2 trades: ' + sub.join(' | '));
+    await page.click('#sigDemoBy tr[data-demorow="2026-10-05"]');
+    check(!(await page.$('#sigDemoBy .demo-sub')), 'tapping again closes it');
+    // By week and month.
+    await page.click('#sigDemoBy button[data-demoby="week"]');
+    r = await rows();
+    check(r.length === 2 && r[0] === '12–18 Oct 4 2 / 2 +$1.00 +0.97% ' + f.w2 + ' $104.00' && r[1] === '5–11 Oct best 5 3 / 2 +$3.00 +3.00% ' + f.w1 + ' $103.00', 'two weeks: ' + r.join(' | '));
+    check(await page.evaluate(() => state.ui.sigDemo.by) === 'week', 'the pick is kept');
+    await page.click('#sigDemoBy button[data-demoby="month"]');
+    r = await rows();
+    check(r.length === 1 && r[0] === 'October 2026 9 5 / 4 +$4.00 +4.00% ' + f.avg + ' $104.00', 'one month: ' + r.join(' | '));
+    // By coin: Top 3 / Top 5 by market cap against all, and every coin.
+    await page.click('#sigDemoBy button[data-demoby="coin"]');
+    const top = await page.$$eval('#sigDemoTop tbody tr', trs => trs.map(tr => tr.innerText.replace('▸', '').replace(/\s+/g, ' ').trim()));
+    check(top.length === 3 && top[0] === 'Top 3 BTC, ETH, XRP 5 60% +$3.00 +$0.60 +0.60R ' + f.t3 && top[1] === 'Top 5 BTC, ETH, XRP, BNB, SOL 7 57% +$4.00 +$0.57 +0.57R ' + f.t5 && top[2] === 'All 9 56% +$4.00 +$0.44 +0.44R ' + f.avg, 'Top 3 / Top 5 / All by hand: ' + top.join(' | '));
+    await page.click('#sigDemoTop tr[data-demorow="#top3"]');
+    sub = await page.$$eval('#sigDemoTop .demo-sub .demo-tl', ls => ls.map(l => l.innerText.replace(/\s+/g, ' ').trim().split(' ')[0]));
+    check(sub.join(',') === '#9,#8,#3,#2,#1', 'Top 3 opens its 5 trades: ' + sub.join(','));
+    const coins = await page.$$eval('#sigDemoCoins tbody tr[data-demorow]', trs => trs.map(tr => tr.dataset.demorow + ' ' + tr.children[3].innerText.trim()));
+    check(coins.join(',') === 'BNB +$2.00,BTC +$1.00,ETH +$1.00,ADA +$1.00,XRP +$1.00,DOGE -$1.00,SOL -$1.00', 'every coin, most money first: ' + coins.join(','));
+    // Phone: no sideways scroll, and an open row's trades stay on screen.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.click('#sigDemoBy button[data-demoby="day"]');
+    await page.click('#sigDemoBy tr[data-demorow="2026-10-05"]');
+    const ph = await page.evaluate(() => { const box = document.querySelector('#sigDemoPeriods').parentElement.getBoundingClientRect();
+      return { sw: document.documentElement.scrollWidth, over: [...document.querySelectorAll('#sigDemoBy .demo-tl > span')].filter(s => s.getBoundingClientRect().right > box.right + 1).length, tbl: document.querySelector('#sigDemoPeriods').scrollWidth - box.width }; });
+    check(ph.sw <= 390 && ph.over === 0 && ph.tbl <= 1, 'phone: no sideways scroll, trades and table fit: ' + JSON.stringify(ph));
+    await page.setViewportSize({ width: 1180, height: 820 });
+
+    // ---- Exit at: hold times from the candles; old walks read again only while this is open ----
+    await page.evaluate(() => {
+      const sg = (id, sym, side, entry, stop) => ({ id, key: 'k' + id, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: sym, side, score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H', filled: true, outcome: 'SL', resultR: -1, hasReportR: true, price: entry, stop, entry });
+      state.signals = [sg('a', 'A', 'long', 100, 99), sg('b', 'B', 'short', 200, 202)];
+      Object.assign(state.ui, { sigTgt: '1R', sigHold: '20', sigSec: 'edge' }); delete state.ui.sigDemo.by; save(); renderAll();
+    });
+    await page.waitForFunction(() => /2 of 2 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText) && !tgtBusy, null, { timeout: 10000 });
+    await page.evaluate(() => setSigSec('demo'));
+    await page.waitForFunction(() => /Avg hold/.test((document.querySelector('#sigDemoStats [data-demo="hold"]') || {}).innerText || ''));
+    const ex = await page.evaluate(() => ({ holds: demoRows.map(x => x.hold), card: document.querySelector('#sigDemoStats [data-demo="hold"]').innerText.replace(/\s+/g, ' '), want: 'Avg hold ' + btHeld(Math.round((15 + 4800) / 2)) }));
+    check(JSON.stringify(ex.holds) === '[15,4800]' && ex.card.startsWith(ex.want), 'Exit at 1R: A 15m, B on time after 4800m: ' + JSON.stringify(ex));
+    // A walk kept before times (no ft): not read again on another section, read once here.
+    const n0 = calls;
+    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; delete w.te; delete w.pt; delete w.tta; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); setSigSec('edge'); renderAll(); });
+    await page.waitForTimeout(400);
+    check(calls === n0, 'no re-read outside the Demo account: ' + (calls - n0));
+    await page.evaluate(() => { setSigSec('demo'); });
+    await page.waitForFunction(n => !tgtBusy && Object.values(tgtCache()).every(w => w.ft != null), n0, { timeout: 10000 }).catch(() => {});
+    check(calls === n0 + 2 && await page.evaluate(() => JSON.stringify(demoRows.map(x => x.hold))) === '[15,4800]', 'each old walk read once for its times: ' + (calls - n0));
+    // Read again with the candles gone: the old walk is kept, not lost.
+    gone = true;
+    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); renderAll(); });
+    await page.waitForFunction(n => !tgtBusy, null, { timeout: 10000 });
+    await page.waitForTimeout(300);
+    const kept = await page.evaluate(() => Object.values(tgtCache()).map(w => Array.isArray(w.p)));
+    check(calls >= n0 + 4 && JSON.stringify(kept) === '[true,true]', 'candles gone on a re-read: the old walks stay: ' + JSON.stringify(kept) + ' calls ' + (calls - n0));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals demo account: graph, results by day / week / coin, hold times');
+  errs.forEach(e => { console.log('     ' + e); failures.push('demo deep data: ' + e); });
+}
+
 // Real orders in the Demo account (lakky, 2026-11-07: "is it possible to have my desire sl
 // ... make it practical ... different and random sl ... check is it showing correct").
 // Part 1, by hand on Delta's own contract sizes (7 Nov 2026): $100 risking 2% a trade.
@@ -2807,7 +2963,7 @@ async function demoRealRun(seed) {
     // (the scanner R is after Delta's default fee, so each trade nets risk × R)
     let b1 = 100;
     [[75, 4, -1], [22.4, 0.5, 2], [4.3, 0.12, -1.5], [14, 2, 1], [90, 2, -1]].forEach(([p, sl, r]) => { b1 += p * sl / 100 * r; });
-    check(t.includes('Test: every trade is 1 contract, whatever it risks') && t.includes('Placed 5 of 8') && t.includes('Final balance ' + usd(b1)) && t.includes('1 contract a trade (test)') && !t.includes('Same alerts, other risk sizes'), 'always 1 contract → ' + usd(b1) + ': ' + t.slice(0, 1600));
+    check(t.includes('Test: every trade is 1 contract, whatever it risks') && t.includes('Placed 5 of 8') && t.includes('Final balance ' + usd(b1)) && (await page.getAttribute('#sigDemoStats [data-demo="end"]', 'title')) === 'Risk 1 contract a trade (test)' && !t.includes('Same alerts, other risk sizes'), 'always 1 contract → ' + usd(b1) + ': ' + t.slice(0, 1600));
     const units = await page.$$eval('#sigDemoTrades tbody tr:not([data-skip])', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
     check(units.length === 5 && /0\.001 BTC min/.test(units[4]) && /0\.01 ETH min/.test(units[3]) && /1 SOL min/.test(units[0]), 'always: 1 contract each: ' + units.join(' | '));
     await page.click('#sigDemo button[data-lot1="skip"]');
@@ -5375,6 +5531,7 @@ await sigBacktestRun(data);
 await sigRedesignRun(data);
 await demoAccountRun(data);
 await demoRealRun(data);
+await demoDeepRun(data);
 await cleanupRun(data);
 await behaviourRun(data);
 await setupLevelRun(data);
