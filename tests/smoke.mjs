@@ -3702,7 +3702,9 @@ async function statRowsRun(seed) {
       await page.evaluate(() => {
         // On days the rupee book has no other trade (the made-up journal's crypto days), so each is its own best / worst day.
         const used = new Set(state.trades.filter(t => t.accountId === 'acc_nse').map(dayOf)), t0 = state.trades.find(t => t.accountId === 'acc_nse');
-        const free = [1, 3, 5, 7, 9, 11].map(n => iso(new Date(Date.now() - n * 864e5))).filter(d => !used.has(d));
+        // The first two past days with no rupee trade. Fixed odd days found none between 00:00 and
+        // 05:30 IST, when the made-up journal (machine clock - 5.5h) and the page's date differ by a day.
+        const free = []; for (let n = 1; free.length < 2 && n < 60; n++) { const d = iso(new Date(Date.now() - n * 864e5)); if (!used.has(d)) free.push(d); }
         state.trades.push(Object.assign({}, t0, { id: 'bigL', date: free[0], exitDate: free[0], entry: 2000, exit: 1785.0898, stop: 1990, qty: 500, direction: 'long', pnl: -107455.2, risk: 5000, r: -21.49 }));
         state.trades.push(Object.assign({}, t0, { id: 'bigW', date: free[1], exitDate: free[1], entry: 2000, exit: 2197.5309, stop: 1990, qty: 500, direction: 'long', pnl: 98765.35, risk: 5000, r: 19.75 }));
         Object.assign(state.ui, { account: 'acc_nse', allCur: 'INR', month: 'all', anPeriod: 'all', anKind: '', anChan: '', anCoins: '', anPair: '' });
