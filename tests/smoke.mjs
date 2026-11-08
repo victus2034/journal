@@ -2423,6 +2423,28 @@ async function sigBacktestRun(seed) {
     check(/CRYPTO 4h 4 100% 4 50% \+0\.25R \+1\.00R 1\.50 -2\.00R/.test(v.rep) && /CRYPTO 1D 5 80% 3 33% \+0\.00R \+0\.00R 1\.00 -1\.00R/.test(v.rep), 'channel rows: ' + v.rep.slice(-700));
     check(/^CRYPTO 4h/.test(v.firstRow.trim()), 'sorted by total R: ' + v.firstRow);
     check(JSON.stringify(v.said) === '["Exported 9 alerts"]', 'CSV export: ' + JSON.stringify(v.said));
+    // The R curve (lakky, 2026-11-08): equity 0 2 1 0 1 0 2 1, so a 0-2R axis in 0.5R steps, the
+    // deepest fall 2R, dates under alerts 1, 2, 4, 5 and 7, and a tip for the alert under the pointer.
+    const c = await page.evaluate(() => ({ y: [...document.querySelectorAll('#sigBtChart .dc-y:not(.dc-y2) span')].map(s => s.textContent), y2: [...document.querySelectorAll('#sigBtChart .dc-y2 span')].map(s => s.textContent),
+      x: [...document.querySelectorAll('#sigBtChart .dc-x span')].map(s => s.textContent), dd: document.querySelector('#sigBtChart .dc-ddlab').textContent, start: document.querySelector('#sigBtChart .dc-startlab').textContent,
+      head: document.querySelector('#sigBtChart .dc-head').innerText.replace(/\s+/g, ' '), days: ['2026-10-01', '2026-10-02', '2026-10-04', '2026-10-05', '2026-10-07'].map(fmtDay) }));
+    check(JSON.stringify(c.y) === '["0R","+0.5R","+1.0R","+1.5R","+2.0R"]' && c.start === 'start 0R' && JSON.stringify(c.y2) === '["0R","-2.0R"]' && c.dd === 'Drawdown from the last high · max -2.00R', 'R curve axis 0-2R, drawdown 2R: ' + JSON.stringify(c));
+    check(JSON.stringify(c.x) === JSON.stringify(c.days) && /^Equity curve, every alert at 1R total \+1\.00R · /.test(c.head), 'dates of alerts 1, 2, 4, 5, 7 and the total: ' + JSON.stringify(c));
+    await page.$eval('#sigBtPlot', el => el.scrollIntoView({ block: 'center' }));
+    const pb = await page.$eval('#sigBtPlot', el => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+    await page.mouse.move(pb.x + pb.w - 1, pb.y + pb.h / 2);
+    const tip7 = await page.$eval('#sigBtPlot .dc-tip', t => t.innerText.replace(/\s+/g, ' ').trim());
+    check(/^#7 · .* 10:00 S6USD Long 1D -1\.00R SL Total \+1\.00R -1\.00R from the high$/.test(tip7), 'tip at the last alert: ' + tip7);
+    // On a phone or iPad a finger lifting also "leaves": the tip stays until a tap elsewhere.
+    const touch = await page.evaluate(() => {
+      const plot = document.getElementById('sigBtPlot'), r = plot.getBoundingClientRect(), tip = plot.querySelector('.dc-tip'), x = r.left + r.width / 7 * 2;
+      const ev = (type, cx, el) => (el || plot).dispatchEvent(new PointerEvent(type, { clientX: cx, clientY: r.top + r.height / 2, pointerType: 'touch', bubbles: true }));
+      ev('pointerdown', x); ev('pointerup', x); ev('pointerleave', x);
+      const after = tip.classList.contains('hidden') ? 'hidden' : tip.innerText.replace(/\s+/g, ' ').trim();
+      ev('pointerdown', 5, document.body);
+      return { after, away: tip.classList.contains('hidden') };
+    });
+    check(/^#2 · .* S1USD Short 4H -1\.00R SL Total \+1\.00R -1\.00R from the high$/.test(touch.after) && touch.away, 'a tap keeps its tip until a tap elsewhere: ' + JSON.stringify(touch));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
@@ -2570,6 +2592,64 @@ async function sigRedesignRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('signals redesign: ' + e); });
 }
 
+// Charts (lakky, 2026-11-08: "anywhere where graph is using or showing make it usable and
+// more informative"). The Dashboard's and the broker report's tips worked out by hand, then the
+// Dashboard chart on the real Chart.js: the same file the page loads from the CDN (same
+// integrity hash), served here from node_modules.
+async function chartsRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const cdn = u => u.href.startsWith('https://cdn.jsdelivr.net/npm/chart.js@');
+  const lib = fs.readFileSync(path.join(ROOT, 'node_modules/chart.js/dist/chart.umd.js'));
+  await ctx.route(cdn, r => r.fulfill({ status: 200, contentType: 'application/javascript', headers: { 'Access-Control-Allow-Origin': '*' }, body: lib }));
+  await ctx.route(url => !url.href.startsWith(base) && !cdn(url), r => r.abort());
+  // Three crypto trades today: +$3, -$1, +$2.
+  const d = new Date(Date.now() - 5.5 * 3600e3), today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const tr = (i, exit, qty) => ({ id: 'ch' + i, accountId: 'acc_cry', date: today, exitDate: today, time: '10:1' + i, exitTime: '11:00', symbol: 'BTCUSD', direction: 'long', entry: 100, exit, stop: 99, qty, fees: 0, leverage: 10, setup: 'Breakout', notes: '', updatedAt: seed.savedAt, pnl: (exit - 100) * qty, risk: qty, r: exit - 100 });
+  const data = Object.assign({}, seed, { trades: [tr(0, 101, 3), tr(1, 99.5, 2), tr(2, 102, 1)] });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(data));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    // By hand: a day that closed at +$10 (+$11 before fees), made +$4 on 3 trades, $2 under a +$12 high.
+    const p = await page.evaluate(() => {
+      const dd = { date: '2026-11-05', n: 3, w: 2, l: 1, pnl: 4, net: 10, gross: 11, dd: -2, peak: 12 };
+      const closed = [{ net: 5, fees: 0.5, held: 90 }, { net: -8, fees: 0, held: null }], data = [0, 5, -3];
+      return { net: eqTipLines(dd, 'net', 'USD'), gross: eqTipLines(dd, 'gross', 'USD'), dd: eqTipLines(dd, 'dd', 'USD'), one: eqTipLines(Object.assign({}, dd, { n: 1, w: 1, l: 0, dd: 0 }), 'net', 'USD'),
+        bt: [0, 1, 2].map(i => btTipLines(closed, data, i, 'USD')), day: longDay('2026-11-05'), held: btHeld(90) };
+    });
+    check(JSON.stringify(p.net) === '["Total +$10.00","That day +$4.00 · 3 trades (2W / 1L)","Under the high by $2.00"]', 'equity tip, net: ' + JSON.stringify(p.net));
+    check(p.gross[0] === 'Total before fees +$11.00' && JSON.stringify(p.dd) === '["Drawdown -$2.00 from a high of +$12.00","That day +$4.00 · 3 trades (2W / 1L)"]', 'equity tip, gross and drawdown: ' + JSON.stringify([p.gross, p.dd]));
+    check(JSON.stringify(p.one) === '["Total +$10.00","That day +$4.00 · 1 trade (1W / 0L)"]', 'one trade, at the high: ' + JSON.stringify(p.one));
+    check(/^Thu,? 5 Nov 2026$/.test(p.day), 'a day in full: ' + p.day);
+    check(JSON.stringify(p.bt) === JSON.stringify(['Start +$0.00', ['Trade +$5.00 (fees $0.50)', 'Held ' + p.held, 'Total +$5.00'], ['Trade -$8.00', 'Total -$3.00', 'Under the high by $8.00']]), 'broker report tip: ' + JSON.stringify(p.bt));
+    // The real chart: hovering anywhere over it picks today and shows what it did.
+    await page.evaluate(() => { state.ui.allCur = 'USD'; switchTab('dashboard'); renderAll(); });
+    await page.waitForFunction(() => typeof Chart !== 'undefined' && mainEquityChartInstance, null, { timeout: 10000 });
+    await page.evaluate(() => { state.ui.allCur = 'USD'; renderAll(); });
+    await page.$eval('#mainEquityChart', el => el.scrollIntoView({ block: 'center' }));
+    const tipOf = async () => {
+      const b = await page.$eval('#mainEquityChart', el => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+      await page.mouse.move(b.x + b.w * 0.3, b.y + b.h * 0.2); await page.mouse.move(b.x + b.w * 0.5, b.y + b.h * 0.9);
+      return page.evaluate(() => { const t = mainEquityChartInstance.tooltip; return { on: !!(t && t.getActiveElements().length), title: t && t.title, body: ((t && t.body) || []).map(x => x.lines).flat(), opts: mainEquityChartInstance.options.interaction }; });
+    };
+    let t = await tipOf();
+    const want = await page.evaluate(day => longDay(day), today);
+    check(t.on && JSON.stringify(t.title) === JSON.stringify([want]) && JSON.stringify(t.body) === '["Total +$4.00","That day +$4.00 · 3 trades (2W / 1L)"]' && t.opts.mode === 'index' && t.opts.intersect === false,
+      'Dashboard chart: hover far from the point still shows today: ' + JSON.stringify(t));
+    await page.evaluate(() => changeChartMetric('dd'));
+    t = await tipOf();
+    check(JSON.stringify(t.body) === '["Drawdown +$0.00 from a high of +$4.00","That day +$4.00 · 3 trades (2W / 1L)"]', 'Drawdown view tip: ' + JSON.stringify(t.body));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Charts: Dashboard and broker report tips by hand, on the real Chart.js');
+  errs.forEach(e => { console.log('     ' + e); failures.push('charts: ' + e); });
+}
+
 // Demo account: $100 that takes every graded alert in order and compounds. The
 // numbers are worked out by hand from seven alerts at a 1% stop: +2 -1 -1 +1 -1 +2 -1.
 async function demoAccountRun(seed) {
@@ -2589,6 +2669,8 @@ async function demoAccountRun(seed) {
     // These made-up coins aren't on Delta, so the money is checked with real orders off
     // (any size); real orders have their own test (demoRealRun).
     state.ui.sigDemo = Object.assign({}, state.ui.sigDemo || {}, { real: false });
+    // The trade list is folded by default; these checks read it, so it starts open here.
+    demoTrOpen = true;
     switchTab('signals'); renderAll();
   });
   const text = () => page.evaluate(() => document.getElementById('sigDemo').innerText.replace(/\s+/g, ' '));
@@ -2839,6 +2921,39 @@ async function demoDeepRun(seed) {
     check(sub.join(',') === '#9,#8,#3,#2,#1', 'Top 3 opens its 5 trades: ' + sub.join(','));
     const coins = await page.$$eval('#sigDemoCoins tbody tr[data-demorow]', trs => trs.map(tr => tr.dataset.demorow + ' ' + tr.children[3].innerText.trim()));
     check(coins.join(',') === 'BNB +$2.00,BTC +$1.00,ETH +$1.00,ADA +$1.00,XRP +$1.00,DOGE -$1.00,SOL -$1.00', 'every coin, most money first: ' + coins.join(','));
+    // Wins, losses and streaks, by hand (every trade risks $1, fees as the scanner's, so P&L = R):
+    // wins 2+1+2+1+2 = $8 over 5, losses 4 × $1; payoff 1.6 needs 100 / 2.6 = 38% won; fees 9 × 0.0826.
+    const keys = await page.$$eval('#sigDemoKeys [data-demo]', cs => cs.map(c => c.dataset.demo + ' ' + c.innerText.replace(/\s+/g, ' ').trim().toLowerCase()));
+    const wantK = ['avgw avg win +$1.60 +1.60r · 5 wins', 'avgl avg loss -$1.00 -1.00r · 4 losses', 'payoff payoff 1.60 break-even at 38% won · you 56%', 'exp expectancy +$0.44 +0.44r a trade',
+      'pf profit factor 2.00 won $8.00 ÷ lost $4.00', 'wstreak win streak 1 won +$2.00 · ' + f.d5.toLowerCase(), 'lstreak losing streak 1 lost -$1.00 (-0.98%) · ' + f.d5.toLowerCase(), 'fees fees $0.74 9% of what winners made'];
+    check(JSON.stringify(keys) === JSON.stringify(wantK), 'wins, losses and streaks by hand: ' + JSON.stringify(keys));
+    // What to improve: groups of 3+; Short = Resistance TL here, so it shows once, by its level / type name.
+    const tips = await page.evaluate(() => ({ bad: document.getElementById('sigDemoBad').innerText.replace(/\s+/g, ' ').trim(), good: [...document.querySelectorAll('#sigDemoGood .demo-tip')].map(b => b.innerText.replace(/\s+/g, ' ').trim()) }));
+    check(tips.bad === 'Costing you No group of 3+ trades lost money.' && JSON.stringify(tips.good) === JSON.stringify(['Level / type Support TL +$2.00 6 trades · 50% won · avg +0.33R', 'Level / type Resistance TL +$2.00 3 trades · 67% won · avg +0.67R']),
+      'what to improve, no group twice: ' + JSON.stringify(tips));
+    await page.click('#sigDemoGood .demo-tip[data-tipk="Support TL"]');
+    const jump = await page.evaluate(() => ({ by: state.ui.sigDemo.by, open: [...document.querySelectorAll('#sigDemoGroups .demo-sub .demo-tl')].length, head: document.querySelector('#sigDemoBy').innerText.slice(0, 30) }));
+    check(jump.by === 'setup' && jump.open === 6 && /^Results by level \/ type/i.test(jump.head), 'a tip opens its group under Results by: ' + JSON.stringify(jump));
+    // The other splits: exit, weekday (Mon first), stop size and time held in their own order.
+    const split = async k => { await page.click('#sigDemoBy button[data-demoby="' + k + '"]'); return page.$$eval('#sigDemoGroups tbody tr[data-demorow]', trs => trs.map(tr => tr.dataset.demorow + ' ' + tr.children[1].innerText.trim() + ' ' + tr.children[3].innerText.trim()).join(', ')); };
+    check(await split('exit') === '+2R 3 +$6.00, +1R 2 +$2.00, SL 4 -$4.00', 'by exit: ' + await split('exit'));
+    check(await split('dow') === 'Mon 3 +$0.00, Tue 2 +$2.00, Wed 2 -$2.00, Thu 2 +$4.00', 'by weekday: ' + await split('dow'));
+    check(await split('stop') === '1 - 2% 9 +$4.00', 'by stop size: ' + await split('stop'));
+    check(await split('hold') === 'under 1h 2 +$0.00, 1 - 4h 3 +$0.00, 4 - 12h 2 +$3.00, 1 - 3 days 1 +$2.00, Not timed 1 -$1.00', 'by time held: ' + await split('hold'));
+    // Trades: folded until opened, with Won / Lost filters.
+    await page.click('#sigDemoBy button[data-demoby="coin"]');
+    const fold = await page.evaluate(() => ({ table: !!document.getElementById('sigDemoTrades'), btn: document.getElementById('sigDemoTradesBtn').innerText.replace(/\s+/g, ' ').trim() }));
+    check(!fold.table && /^▸ Trades 9 placed · 5 won · 4 lost tap to see every trade$/i.test(fold.btn), 'trades folded by default: ' + JSON.stringify(fold));
+    await page.click('#sigDemoTradesBtn');
+    const trRows = () => page.$$eval('#sigDemoTrades tbody tr', trs => trs.map(tr => tr.children[0].innerText.trim() + ' ' + tr.children[9].innerText.trim()).join(','));
+    check(await trRows() === '9 +$2.00,8 -$1.00,7 +$1.00,6 -$1.00,5 +$2.00,4 -$1.00,3 +$1.00,2 -$1.00,1 +$2.00' && !(await page.$('#sigDemoTrF button[data-demotf="skip"]')), 'opened: all 9, newest first, no Skipped chip: ' + await trRows());
+    await page.click('#sigDemoTrF button[data-demotf="lost"]');
+    check(await trRows() === '8 -$1.00,6 -$1.00,4 -$1.00,2 -$1.00', 'Lost: the 4 losses: ' + await trRows());
+    await page.click('#sigDemoTrF button[data-demotf="won"]');
+    check(await trRows() === '9 +$2.00,7 +$1.00,5 +$2.00,3 +$1.00,1 +$2.00', 'Won: the 5 wins: ' + await trRows());
+    await page.click('#sigDemoTrF button[data-demotf="all"]');
+    await page.click('#sigDemoTradesBtn');
+    check(!(await page.$('#sigDemoTrades')), 'tapping Trades again folds it');
     // Phone: no sideways scroll, and an open row's trades stay on screen.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.click('#sigDemoBy button[data-demoby="day"]');
@@ -2934,6 +3049,7 @@ async function demoRealRun(seed) {
         filled: true, outcome: a[4] > 0 ? '+' + a[4] + 'R' : 'SL', resultR: a[4], hasReportR: true, price: a[2], entry: a[2], stop: a[3] }));
       Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', mktFilter: '', sigTgt: '', sigNoFee: false, sigSec: 'demo' });
       state.ui.sigDemo = { start: 100, mode: 'pct', pct: 2 };
+      demoTrOpen = true;
       switchTab('signals'); renderAll();
     }, A);
     let t = await text();
@@ -2953,6 +3069,14 @@ async function demoRealRun(seed) {
       /^2 2026-10-02 10:00 ETHUSD Long 4H 0\.50% \+2\.00R \+2R \$1\.90 \$380\.80 · 3\.8x 0\.17 ETH /,
       /^1 2026-10-01 10:00 BTCUSD Long 4H 4\.00% -1\.00R Skipped: 1 contract \(0\.001 BTC\) = \$75\.00 risks \$3\.00 at this stop, more than the \$2\.00 planned$/];
     want.forEach((re, i) => check(re.test(rows[i] || ''), 'trade row ' + (8 - i) + ' ' + re + ': ' + rows[i]));
+    // What to improve: the 4 skipped would have made -1 +2 -1 +1 = +1R, 2 of them won, by reason.
+    const skips = await page.$eval('#sigDemoSkips', el => [el.innerText.replace(/\s+/g, ' ').trim(), [...el.querySelectorAll('.demo-chip')].map(c => c.textContent)]).catch(() => null);
+    check(skips && skips[0].startsWith('Skipped 4 would have made +1.00R (2 of 4 won)')
+      && JSON.stringify(skips[1]) === JSON.stringify(['1 smaller than 1 contract · -1.00R', '1 stop under 0.1% · +2.00R', '1 stop within 3 ticks · -1.00R', '1 not on Delta · +1.00R']), 'skipped alerts summed by reason: ' + JSON.stringify(skips));
+    // The list's Skipped filter shows only those four.
+    await page.click('#sigDemoTrF button[data-demotf="skip"]');
+    check(JSON.stringify(await page.$$eval('#sigDemoTrades tbody tr', trs => trs.map(tr => tr.dataset.skip))) === '["venue","ticks","tight","lot"]', 'Skipped filter: the 4 skipped');
+    await page.click('#sigDemoTrF button[data-demotf="all"]');
     // Take 1 contract instead: BTC goes in at $75 (risk $3, -1R), the rest re-size from there.
     // 100 -3 = 97; ETH 17 x 22.4, +3.808 = 100.808; RLC 234 x 4.3 = 1006.2, -1.81116 = 98.99684;
     // MRVL 7 x 14, +1.96 = 100.95684; SOL 1 x 90, -1.80 = 99.15684.
@@ -5555,6 +5679,7 @@ await setupLevelRun(data);
 await analysisFiltersRun(data);
 await anDemoRun(data);
 await statRowsRun(data);
+await chartsRun(data);
 await alertPriceMatchRun(data);
 await aiReviewRun(data);
 await layoutRun(data);

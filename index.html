@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.175">
+  <meta name="app-version" content="2026-11-08.176">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -220,6 +220,19 @@
     .demo-tls{position:sticky;left:0;max-width:calc(100vw - 5rem)}
     .demo-tl{display:flex;flex-wrap:wrap;align-items:baseline;gap:.15rem .8rem;padding:.3rem 0;border-bottom:1px dashed var(--line);font-size:11px}
     .demo-tl:last-child{border-bottom:0}
+    .demo-bys{max-width:100%}
+    .demo-chip{display:inline-block;padding:.12rem .55rem;border-radius:999px;border:1px solid var(--line2);color:var(--dim);white-space:nowrap;font-size:11px}
+    .demo-tips{display:grid;grid-template-columns:1fr;gap:.75rem}
+    @media (min-width:640px){.demo-tips{grid-template-columns:1fr 1fr}}
+    .demo-tipcol{display:flex;flex-direction:column;gap:.35rem}
+    .demo-tip{display:grid;grid-template-columns:1fr auto;gap:.1rem .6rem;align-items:baseline;text-align:left;padding:.45rem .6rem;border-radius:.5rem;border:1px solid var(--line);background:var(--inset);font-size:12px;width:100%}
+    .demo-tip:hover,.demo-tip:focus-visible{border-color:var(--line2);background:var(--hover)}
+    .demo-tipname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .demo-tipsub{grid-column:1 / -1;font-size:10px;color:var(--dim)}
+    .demo-skips{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .5rem;margin-top:.6rem;padding:.5rem .6rem;border-radius:.5rem;border:1px dashed rgba(245,158,11,.4);font-size:12px}
+    .demo-trbox{border:1px solid var(--line);border-radius:.6rem;padding:.15rem .6rem}
+    .demo-trhead{display:flex;flex-wrap:wrap;align-items:center;gap:.25rem .6rem;width:100%;padding:.55rem 0;text-align:left}
+    .demo-trbody{padding:.2rem 0 .6rem;border-top:1px solid var(--line)}
     .demo-tl>span{white-space:nowrap}
     @media (min-width:640px){.demo-tl{display:grid;grid-template-columns:2.6rem 7rem minmax(9rem,11.5rem) 6.5rem 5.5rem 1fr;gap:0 .6rem}}
     @media (max-width:639.98px){.demo-tbl .demo-opt{display:none}.demo-tbl td,.demo-tbl th{padding-right:.5rem!important}.demo-coins{display:block;font-size:10px;padding-left:1em}}
@@ -541,7 +554,7 @@
               <div class="flex items-center gap-2">
                 <span class="w-2.5 h-2.5 rounded bg-amber-400 shadow"></span>
                 <h2 class="text-sm font-bold text-white uppercase font-mono tracking-wider">Equity curve</h2>
-                <span id="equitySubtitle" class="text-xs font-mono text-slate-400 hidden sm:inline">Cumulative intraday performance</span>
+                <span id="equitySubtitle" class="text-xs font-mono text-slate-400 hidden sm:inline">A point a day · tap or hover for it</span>
               </div>
 
               <div class="flex items-center gap-1 bg-black/40 p-0.5 rounded border border-terminal-border text-[11px] font-mono">
@@ -1303,7 +1316,7 @@
             <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
               <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
                 <h3 class="font-bold text-white uppercase tracking-wider">Equity curve</h3>
-                <span class="text-slate-500 text-[11px]">Running net P&amp;L after each closed trade.</span>
+                <span class="text-slate-500 text-[11px]">Running net P&amp;L after each closed trade · tap or hover for it.</span>
               </div>
               <div class="relative" style="height:260px"><canvas id="btEquityChart"></canvas></div>
             </div>
@@ -3331,20 +3344,25 @@
       };
       // One point per trading day (the equity at the close of that day), not
       // one per trade — the curve reads at a glance and the axis stays short.
-      const labels = [];
-      let runNet = 0, runGross = 0, peak = 0;
+      // Each day keeps what it did, for the tip: its P&L, trades, wins and losses.
+      const labels = [], days = [];
+      let runNet = 0, runGross = 0, peak = 0, dn = 0, dw = 0, dl = 0, dp = 0;
       const dataNet = [], dataGross = [], dataDD = [];
+      const yrs = ts.length > 1 && String(dayOf(ts[0])).slice(0, 4) !== String(dayOf(ts[ts.length - 1])).slice(0, 4);
 
       ts.forEach((t, i) => {
         runNet += t.pnl;
         runGross += (t.pnl + (t.fees || 0));
+        dn++; dp += t.pnl; if (t.pnl > 0) dw++; else if (t.pnl < 0) dl++;
         const lastOfDay = i === ts.length - 1 || dayOf(ts[i + 1]) !== dayOf(t);
         if (!lastOfDay) return;
         if (runNet > peak) peak = runNet;
-        labels.push(dayLabel(dayOf(t)));
+        labels.push(dayLabel(dayOf(t)) + (yrs ? ' ' + String(dayOf(t)).slice(2, 4) : ''));
         dataNet.push(runNet);
         dataGross.push(runGross);
         dataDD.push(runNet - peak);
+        days.push({ date: dayOf(t), n: dn, w: dw, l: dl, pnl: dp, net: runNet, gross: runGross, dd: runNet - peak, peak });
+        dn = dw = dl = dp = 0;
       });
 
       let dataset = dataNet;
@@ -3371,7 +3389,10 @@
             pointBackgroundColor: stroke,
             pointBorderColor: '#05080E',
             pointBorderWidth: 2,
-            pointRadius: 4,
+            // Many days: the line alone, a dot only where the pointer is.
+            pointRadius: days.length > 40 ? 0 : days.length > 15 ? 2.5 : 4,
+            pointHoverRadius: 6,
+            pointHitRadius: 10,
             tension: 0.2,
             fill: true,
             backgroundColor: grad
@@ -3380,27 +3401,26 @@
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          // Anywhere over the chart (or a tap / drag on a phone) picks the nearest day.
+          interaction: { mode: 'index', intersect: false },
           plugins: {
             legend: { display: false },
-            tooltip: {
-              backgroundColor: '#0D1422',
-              borderColor: '#24344E',
-              borderWidth: 1,
-              titleFont: { family: 'Inter', size: 11 },
-              bodyFont: { family: 'Inter', size: 11 },
+            tooltip: Object.assign(chartTip(), {
               callbacks: {
-                label: ctx => signedMoney(ctx.parsed.y, cur)
+                title: items => { const d = days[items[0].dataIndex]; return d ? longDay(d.date) : ''; },
+                label: c => eqTipLines(days[c.dataIndex], activeChartMetric, cur)
               }
-            }
+            })
           },
           scales: {
             x: {
               grid: { color: gridC() },
-              ticks: { color: '#64748B', font: { family: 'Inter', size: 9 }, maxTicksLimit: 8 }
+              ticks: { color: '#64748B', font: { family: 'Inter', size: 10 }, maxTicksLimit: 7, maxRotation: 0, autoSkip: true }
             },
             y: {
-              grid: { color: gridC() },
-              ticks: { color: '#64748B', font: { family: 'Inter', size: 9 }, callback: v => signedMoney(v, cur) }
+              // Zero (where the month started) drawn stronger than the other lines.
+              grid: { color: c => c.tick && c.tick.value === 0 ? zeroC() : gridC() },
+              ticks: { color: '#64748B', font: { family: 'Inter', size: 10 }, maxTicksLimit: 6, callback: v => signedMoney(v, cur) }
             }
           }
         }
@@ -3412,6 +3432,17 @@
       document.getElementById('chartPeakLabel').innerText = signedMoney(peak, cur);
       document.getElementById('chartTroughLabel').innerText = signedMoney(Math.min(0, ...dataNet), cur);
       updateTopBalance(cur);
+    }
+    // What a day on the equity curve did, for its tip: the running total (or drawdown),
+    // that day's P&L and trades, and how far under the high it closed.
+    function eqTipLines(d, metric, cur) {
+      if (!d) return '';
+      const out = [];
+      if (metric === 'dd') out.push('Drawdown ' + signedMoney(d.dd, cur) + (d.peak > 0 ? ' from a high of ' + signedMoney(d.peak, cur) : ''));
+      else out.push((metric === 'gross' ? 'Total before fees ' + signedMoney(d.gross, cur) : 'Total ' + signedMoney(d.net, cur)));
+      out.push('That day ' + signedMoney(d.pnl, cur) + ' · ' + d.n + ' trade' + (d.n === 1 ? '' : 's') + ' (' + d.w + 'W / ' + d.l + 'L)');
+      if (metric !== 'dd' && d.dd < -0.005) out.push('Under the high by ' + money(-d.dd, cur));
+      return out;
     }
     function updateTopBalance(cur) {
       const curBal = sum(viewBooks().map(a => bookComputedBalance(a) * fxk(a, cur)));
@@ -4600,7 +4631,7 @@
           labels,
           datasets: [
             { label: 'Position ÷ balance', data: asc.map(x => x.xBal != null ? +x.xBal.toFixed(2) : null), borderColor: '#F59E0B', backgroundColor: 'rgba(245,158,11,0.12)', borderWidth: 2, tension: 0.2, fill: true, spanGaps: true, yAxisID: 'y',
-              pointBackgroundColor: over.map(o => o ? '#F43F5E' : '#34D399'), pointBorderColor: '#05080E', pointBorderWidth: 1.5, pointRadius: 4, pointHoverRadius: 6 },
+              pointBackgroundColor: over.map(o => o ? '#F43F5E' : '#34D399'), pointBorderColor: '#05080E', pointBorderWidth: 1.5, pointRadius: asc.length > 80 ? 2 : 4, pointHoverRadius: 6, pointHitRadius: 8 },
             { label: 'Your limit', data: asc.map(x => x.a.maxNotionalX || 3), borderColor: '#F43F5E', borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, fill: false, yAxisID: 'y' },
             { label: 'Balance then', data: asc.map(x => x.before > 0 ? +(x.before * x.k).toFixed(2) : null), borderColor: '#38BDF8', borderWidth: 1.5, pointRadius: 0, tension: 0.2, spanGaps: true, yAxisID: 'y2' }
           ]
@@ -4609,10 +4640,12 @@
           responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
           plugins: {
             legend: { labels: { color: '#94A3B8', font: mono, boxWidth: 12 } },
-            tooltip: {
-              backgroundColor: '#0D1422', borderColor: '#24344E', borderWidth: 1, titleFont: mono, bodyFont: mono,
+            tooltip: Object.assign(chartTip(), {
+              displayColors: true,
               callbacks: {
                 title: items => { const x = asc[items[0].dataIndex]; return x ? x.t.date + ' ' + (x.t.time || '') + '  ' + x.t.symbol + ' ' + x.t.direction : ''; },
+                // What the trade did, under the sizes.
+                footer: items => { const x = asc[items[0].dataIndex]; return x && x.t.pnl != null && isFinite(x.t.pnl) ? 'P&L ' + signedMoney(x.t.pnl, cur) : ''; },
                 label: c => {
                   const x = asc[c.dataIndex];
                   if (c.datasetIndex === 0) return 'Position ' + (x.xBal != null ? x.xBal.toFixed(1) + '× ' : '— ') + (x.notional != null ? '(' + money(x.notional * x.k, cur) + ')' : '(size unknown)') + (over[c.dataIndex] ? '  OVERSIZED' : '');
@@ -4620,10 +4653,10 @@
                   return 'Balance ' + money(c.parsed.y, cur);
                 }
               }
-            }
+            })
           },
           scales: {
-            x: { grid: { color: gridC() }, ticks: { color: '#64748B', font: mono, maxTicksLimit: 8 } },
+            x: { grid: { color: gridC() }, ticks: { color: '#64748B', font: mono, maxTicksLimit: 8, maxRotation: 0, autoSkip: true } },
             y: { position: 'left', beginAtZero: true, grid: { color: gridC() }, ticks: { color: '#64748B', font: mono, callback: v => v + '×' } },
             y2: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#38BDF8', font: mono, callback: v => money(v, cur, 0) } }
           }
@@ -10680,24 +10713,6 @@
       save(); renderSigBacktest(btLast);
     }
     function btShowAllRows() { btShowAll = !btShowAll; renderSigBacktest(btLast); }
-    // A small line chart of the equity curve (cumulative R) with the drawdown under it.
-    function btCurveSvg(rs, label) {
-      if (rs.length < 2) return '';
-      const W = 800, H = 150, D = 50, eq = [0]; rs.forEach(r => eq.push(eq[eq.length - 1] + r));
-      let peak = 0; const dd = eq.map(v => { peak = Math.max(peak, v); return v - peak; });
-      const lo = Math.min(0, ...eq), hi = Math.max(0, ...eq), span = (hi - lo) || 1, ddMin = Math.min(-0.0001, ...dd);
-      const x = i => (i / (eq.length - 1) * W).toFixed(1);
-      const y = v => (4 + (hi - v) / span * (H - 8)).toFixed(1);
-      const yd = v => (H + 6 + v / ddMin * (D - 6)).toFixed(1);
-      const line = eq.map((v, i) => x(i) + ',' + y(v)).join(' ');
-      const area = 'M0,' + (H + 6) + ' L' + dd.map((v, i) => x(i) + ',' + yd(v)).join(' L') + ' L' + W + ',' + (H + 6) + ' Z';
-      const up = eq[eq.length - 1] >= 0;
-      return '<svg viewBox="0 0 ' + W + ' ' + (H + D + 6) + '" preserveAspectRatio="none" class="w-full block" style="height:190px" role="img" aria-label="' + esc(label || 'Equity curve in R with drawdown') + '">'
-        + '<line x1="0" x2="' + W + '" y1="' + y(0) + '" y2="' + y(0) + '" stroke="#334155" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>'
-        + '<polyline points="' + line + '" fill="none" stroke="' + (up ? '#34d399' : '#fb7185') + '" stroke-width="1.6" vector-effect="non-scaling-stroke"/>'
-        + '<line x1="0" x2="' + W + '" y1="' + (H + 6) + '" y2="' + (H + 6) + '" stroke="#334155" vector-effect="non-scaling-stroke"/>'
-        + '<path d="' + area + '" fill="rgba(244,63,94,0.35)" stroke="none"/></svg>';
-    }
     const BT_BUCKETS = [
       { label: "-1.5R or less", lo: -Infinity, hi: -1.5 }, { label: "-1.5 to -1R", lo: -1.5, hi: -1 }, { label: "-1 to -0.5R", lo: -1, hi: -0.5 },
       { label: "-0.5 to 0R", lo: -0.5, hi: 0 }, { label: "0 to +0.5R", lo: 0, hi: 0.5 }, { label: "+0.5 to +1R", lo: 0.5, hi: 1 },
@@ -10736,9 +10751,22 @@
         + cell('SQN', st.sqn != null ? st.sqn.toFixed(2) : '—', st.sqn == null ? '' : st.sqn >= 2 ? 'good' : st.sqn >= 1 ? 'fair' : 'weak', tone(st.sqn), 'System quality number: √n × expectancy ÷ spread. Under 1 weak, 1-2 fair, 2+ good.')
         + cell('Alerts a day', (pairs.length / days).toFixed(1), (st.n / days).toFixed(1) + ' graded · ' + days + ' day' + (days === 1 ? '' : 's'), '', first + ' → ' + last) + '</div>';
 
-      // Equity curve
-      const curve = '<div class="mb-3"><div class="flex flex-wrap justify-between gap-2 text-[10px] uppercase tracking-wider mb-1"><span class="text-amber-300 font-bold">Equity curve, every alert at 1R</span><span class="text-slate-500 normal-case">red below: drawdown from the last high (deepest -' + st.maxDD.toFixed(2) + 'R)</span></div>'
-        + btCurveSvg(rs) + '<div class="flex justify-between text-[10px] text-slate-500 mt-1"><span>' + esc(first) + '</span><span class="' + tone(st.tot) + '">' + rfmt(st.tot) + '</span><span>' + esc(last) + '</span></div></div>';
+      // Equity curve: every alert at 1R in the order it fired, drawdown in R below; a point tells its alert.
+      let eqR = 0, peakR = 0;
+      const EQ = [0].concat(rs.map(r => (eqR += r))), DDR = EQ.map(v => { peakR = Math.max(peakR, v); return v - peakR; });
+      const rAxis = (v, step) => { const d = step >= 1 ? 0 : step >= 0.1 ? 1 : 2, t = Math.abs(v).toFixed(d); return +t === 0 ? '0R' : (v > 0 ? '+' : '-') + t + 'R'; };
+      const curve = curveHtml({
+        id: 'sigBt', title: 'Equity curve, every alert at 1R', what: 'an alert', side: 'total <span class="' + tone(st.tot) + '">' + rfmt(st.tot) + '</span>', vals: EQ,
+        fmt: rAxis, startLab: () => 'start 0R', dd: DDR, ddFmt: v => v ? v.toFixed(1) + 'R' : '0R',
+        ddLab: 'Drawdown from the last high' + (st.maxDD ? ' · max -' + st.maxDD.toFixed(2) + 'R' : ': none'),
+        date: i => fmtDay(graded[i - 1].pr.signal.date),
+        tip: i => {
+          if (!i) return '<b>Start</b><div>0R</div>';
+          const x = graded[i - 1], lb = x.o.label || x.pr.signal.outcome, word = lb ? demoLab(demoExitOf(lb)) : '';
+          return curveTipHead(i, x.pr.signal) + '<div><span class="' + tone(rs[i - 1]) + ' font-semibold">' + rfmt(rs[i - 1]) + '</span>' + (word ? ' <span class="text-slate-400">' + esc(word) + '</span>' : '') + '</div>'
+            + '<div class="text-slate-300">Total ' + rfmt(EQ[i]) + (DDR[i] < 0 ? ' <span class="text-rose-400">' + rfmt(DDR[i]) + ' from the high</span>' : '') + '</div>';
+        }
+      });
 
       // How results spread, and the outcome mix
       const counts = BT_BUCKETS.map(b => rs.filter(r => r >= b.lo && r < b.hi || (b.hi === Infinity && r >= b.lo)).length);
@@ -10823,6 +10851,7 @@
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + hist + mix + '</div>'
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + cutHtml + sweepHtml + '</div>'
         + table;
+      curveBind('sigBt');
     }
     // The alerts in the current view as a spreadsheet, results included.
     function exportSigBacktestCsv() {
@@ -11070,7 +11099,7 @@
     }
     // Reset puts the demo's own settings back; Fees with / without is the tab's switch.
     function demoReset() { state.ui.sigDemo = Object.assign({}, DEMO_DEF); demoAll = false; save(); renderSigDemoNow(); }
-    function demoShowAll() { demoAll = !demoAll; demoDrawOut(); }
+    function demoShowAll() { demoAll = !demoAll; demoTrDraw(); }
     function renderSigDemoNow() {
       const host = document.getElementById('sigDemo');
       if (!host) return;
@@ -11119,10 +11148,13 @@
       if (rl && bk === 'delta') demoSpecsLoad();
       demoDrawOut();
     }
-    // ---- Demo account: the balance chart (lakky, 2026-11-08: "graph does not show proper view") ----
-    // Balance after every trade on a price axis, dates under it, the start balance dashed,
-    // drawdown from the last high below it. Hover (or tap / drag on a phone) shows the trade.
-    let demoPts = [], demoLast = null, demoOpen = {};
+    // ---- Line charts with real axes (lakky, 2026-11-08: "graph does not show proper view",
+    // "anywhere where graph is using or showing make it usable and more informative") ----
+    // Round steps on the left, dates under it, the start dashed, drawdown from the last high
+    // below it. Hover (or tap / drag on a phone) shows the point: what that trade or alert did.
+    // The Demo account's balance and the Backtest report's R curve both draw with it.
+    let demoLast = null, demoOpen = {};
+    const curveReg = {};
     // Round steps for an axis: 4-6 lines from lo to hi.
     function niceAxis(lo, hi, n) {
       if (!(hi > lo)) { const pad = Math.abs(hi) * 0.01 || 1; lo -= pad; hi += pad; }
@@ -11132,76 +11164,139 @@
       for (let v = a; v <= b + step * 1e-6; v += step) ticks.push(+v.toPrecision(12));
       return { lo: a, hi: b, step, ticks };
     }
-    function demoChartHtml(T, cfg) {
-      const cur = cfg.cur, n = T.length;
-      if (!n) return '';
-      // Point 0 is the start; point i the balance after trade i.
-      let peak = cfg.start;
-      demoPts = [{ bal: cfg.start, dd: 0 }].concat(T.map(t => { peak = Math.max(peak, t.bal); return { bal: t.bal, dd: peak > 0 ? (t.bal - peak) / peak * 100 : 0, t }; }));
-      const bals = demoPts.map(p => p.bal), ax = niceAxis(Math.min(...bals), Math.max(...bals), 4);
-      const ddMin = Math.min(...demoPts.map(p => p.dd)), dax = { lo: ddMin < 0 ? ddMin : -1 };
+    // o: id (the chart is #<id>Chart, its plot #<id>Plot), title, side (text right of the title),
+    // vals (point 0 the start), fmt(v, step) for the axis, startLab(step), dd (per point, 0 or less),
+    // ddFmt(v), ddLab, date(i) for point i >= 1, tip(i) the html for point i, aria.
+    function curveHtml(o) {
+      const n = o.vals.length - 1;
+      if (n < 1) return '';
+      const ax = niceAxis(Math.min(...o.vals), Math.max(...o.vals), 4);
+      curveReg[o.id] = { o, ax };
+      const ddMin = Math.min(0, ...o.dd), ddLo = ddMin < 0 ? ddMin : -1;
       const W = 1000, H = 200, D = 60, X = i => (i / n * W).toFixed(1);
-      const Y = v => ((ax.hi - v) / (ax.hi - ax.lo) * H).toFixed(1), YD = v => ((0 - v) / (0 - dax.lo) * D).toFixed(1);
+      const Y = v => ((ax.hi - v) / (ax.hi - ax.lo) * H).toFixed(1), YD = v => (v / ddLo * D).toFixed(1);
       const yPct = v => ((ax.hi - v) / (ax.hi - ax.lo) * 100).toFixed(2) + '%';
-      const dp = ax.step >= 1 ? 0 : 2, up = T[n - 1].bal >= cfg.start, col = up ? '#34d399' : '#fb7185';
-      const line = demoPts.map((p, i) => X(i) + ',' + Y(p.bal)).join(' ');
-      const area = 'M0,' + H + ' L' + demoPts.map((p, i) => X(i) + ',' + Y(p.bal)).join(' L') + ' L' + W + ',' + H + ' Z';
-      const ddArea = 'M0,0 L' + demoPts.map((p, i) => X(i) + ',' + YD(p.dd)).join(' L') + ' L' + W + ',0 Z';
+      const v0 = o.vals[0], up = o.vals[n] >= v0, col = up ? '#34d399' : '#fb7185', fill = 'dcFill' + o.id;
+      const pts = o.vals.map((v, i) => X(i) + ',' + Y(v));
+      const area = 'M0,' + H + ' L' + pts.join(' L') + ' L' + W + ',' + H + ' Z';
+      const ddArea = 'M0,0 L' + o.dd.map((v, i) => X(i) + ',' + YD(v)).join(' L') + ' L' + W + ',0 Z';
       const grid = ax.ticks.map(v => '<line x1="0" x2="' + W + '" y1="' + Y(v) + '" y2="' + Y(v) + '" class="dc-grid" vector-effect="non-scaling-stroke"/>').join('');
-      // Dates: the first and last trade and up to 3 between, each at its trade.
-      const idx = n <= 4 ? T.map((_, i) => i + 1) : [1, Math.round(n * 0.25), Math.round(n * 0.5), Math.round(n * 0.75), n];
-      const seenD = {}, dates = [...new Set(idx)].filter(i => { const d = fmtDay(demoPts[i].t.x.pr.signal.date); return seenD[d] ? false : (seenD[d] = 1); })
-        .map((i, j, all) => '<span style="left:' + (i / n * 100).toFixed(2) + '%" class="' + (j === 0 && i / n < 0.08 ? 'l' : j === all.length - 1 && i / n > 0.92 ? 'r' : '') + '">' + esc(fmtDay(demoPts[i].t.x.pr.signal.date)) + '</span>').join('');
-      return '<div id="sigDemoChart" class="dc mb-4">'
-        + '<div class="dc-head"><span class="text-amber-300 font-bold">Balance after each trade</span><span class="text-slate-500">' + (matchMedia('(hover: hover)').matches ? 'Hover' : 'Tap or drag') + ' to see a trade</span></div>'
+      // Dates: the first and last point and up to 3 between, each under its point, a day once.
+      const idx = n <= 4 ? o.vals.slice(1).map((_, i) => i + 1) : [1, Math.round(n * 0.25), Math.round(n * 0.5), Math.round(n * 0.75), n];
+      const seenD = {}, dates = [...new Set(idx)].filter(i => { const d = o.date(i); return !d || seenD[d] ? false : (seenD[d] = 1); })
+        .map((i, j, all) => '<span style="left:' + (i / n * 100).toFixed(2) + '%" class="' + (j === 0 && i / n < 0.08 ? 'l' : j === all.length - 1 && i / n > 0.92 ? 'r' : '') + '">' + esc(o.date(i)) + '</span>').join('');
+      return '<div id="' + o.id + 'Chart" class="dc mb-4">'
+        + '<div class="dc-head"><span class="text-amber-300 font-bold">' + o.title + '</span><span class="text-slate-500">' + (o.side ? o.side + ' · ' : '') + (matchMedia('(hover: hover)').matches ? 'Hover' : 'Tap or drag') + ' to see ' + (o.what || 'a point') + '</span></div>'
         + '<div class="dc-body">'
-        + '<div class="dc-y">' + ax.ticks.map(v => '<span style="top:' + yPct(v) + '">' + esc(money(v, cur, dp)) + '</span>').join('') + '</div>'
-        + '<div class="dc-plot" id="sigDemoPlot"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="Demo account balance after each trade">'
-        + '<defs><linearGradient id="dcFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="' + col + '" stop-opacity=".28"/><stop offset="1" stop-color="' + col + '" stop-opacity="0"/></linearGradient></defs>'
-        + grid + '<path d="' + area + '" fill="url(#dcFill)"/>'
-        + '<line x1="0" x2="' + W + '" y1="' + Y(cfg.start) + '" y2="' + Y(cfg.start) + '" class="dc-start" vector-effect="non-scaling-stroke"/>'
-        + '<polyline points="' + line + '" fill="none" stroke="' + col + '" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>'
-        + '<span class="dc-startlab" style="top:' + yPct(cfg.start) + '">start ' + esc(money(cfg.start, cur, dp)) + '</span>'
+        + '<div class="dc-y">' + ax.ticks.map(v => '<span style="top:' + yPct(v) + '">' + esc(o.fmt(v, ax.step)) + '</span>').join('') + '</div>'
+        + '<div class="dc-plot" id="' + o.id + 'Plot"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="' + esc(o.aria || o.title) + '">'
+        + '<defs><linearGradient id="' + fill + '" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="' + col + '" stop-opacity=".28"/><stop offset="1" stop-color="' + col + '" stop-opacity="0"/></linearGradient></defs>'
+        + grid + '<path d="' + area + '" fill="url(#' + fill + ')"/>'
+        + '<line x1="0" x2="' + W + '" y1="' + Y(v0) + '" y2="' + Y(v0) + '" class="dc-start" vector-effect="non-scaling-stroke"/>'
+        + '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + col + '" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>'
+        + '<span class="dc-startlab" style="top:' + yPct(v0) + '">' + esc(o.startLab(ax.step)) + '</span>'
         + '<div class="dc-guide hidden"></div><div class="dc-dot hidden"></div><div class="dc-tip hidden"></div></div>'
-        + '<div class="dc-y dc-y2"><span style="top:0">0%</span>' + (ddMin < 0 ? '<span style="top:100%">' + ddMin.toFixed(ddMin <= -10 ? 0 : 1) + '%</span>' : '') + '</div>'
+        + '<div class="dc-y dc-y2"><span style="top:0">' + esc(o.ddFmt(0)) + '</span>' + (ddMin < 0 ? '<span style="top:100%">' + esc(o.ddFmt(ddMin)) + '</span>' : '') + '</div>'
         + '<div class="dc-dd"><svg viewBox="0 0 ' + W + ' ' + D + '" preserveAspectRatio="none" aria-hidden="true"><path d="' + ddArea + '" class="dc-ddfill"/><line x1="0" x2="' + W + '" y1="0" y2="0" class="dc-grid" vector-effect="non-scaling-stroke"/></svg>'
-        + '<span class="dc-ddlab">Drawdown from the last high' + (ddMin < 0 ? ' · max ' + ddMin.toFixed(2) + '%' : ': none') + '</span></div>'
+        + '<span class="dc-ddlab">' + o.ddLab + '</span></div>'
         + '<div></div><div class="dc-x">' + dates + '</div>'
         + '</div></div>';
     }
-    // The point under the pointer: a guide line, a dot and what that trade did.
-    function demoChartBind() {
-      const plot = document.getElementById('sigDemoPlot');
-      if (!plot || demoPts.length < 2 || !demoLast) return;
-      const guide = plot.querySelector('.dc-guide'), dot = plot.querySelector('.dc-dot'), tip = plot.querySelector('.dc-tip');
-      const cur = demoLast.cfg.cur, n = demoPts.length - 1, bals = demoPts.map(p => p.bal), ax = niceAxis(Math.min(...bals), Math.max(...bals), 4);
+    // The point under the pointer: a guide line, a dot and the tip.
+    function curveBind(id) {
+      const plot = document.getElementById(id + 'Plot'), reg = curveReg[id];
+      if (!plot || !reg) return;
+      const { o, ax } = reg, n = o.vals.length - 1, guide = plot.querySelector('.dc-guide'), dot = plot.querySelector('.dc-dot'), tip = plot.querySelector('.dc-tip');
       const show = ev => {
-        const r = plot.getBoundingClientRect(), x = Math.min(Math.max(ev.clientX - r.left, 0), r.width), i = Math.round(x / r.width * n), p = demoPts[i];
-        const px = i / n * r.width, py = (ax.hi - p.bal) / (ax.hi - ax.lo) * r.height;
+        const r = plot.getBoundingClientRect(), x = Math.min(Math.max(ev.clientX - r.left, 0), r.width), i = Math.round(x / r.width * n);
+        const px = i / n * r.width, py = (ax.hi - o.vals[i]) / (ax.hi - ax.lo) * r.height;
         guide.style.left = px + 'px'; dot.style.left = px + 'px'; dot.style.top = py + 'px';
-        if (!p.t) tip.innerHTML = '<b>Start</b><div>' + esc(money(p.bal, cur)) + '</div>';
-        else {
-          const t = p.t, g = t.x.pr.signal;
-          tip.innerHTML = '<div class="text-slate-400">#' + (i) + ' · ' + esc(fmtDay(g.date) + ' ' + (g.time || '')) + '</div>'
-            + '<div><b>' + esc(btSym(g.symbol)) + '</b> <span class="' + (g.side === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.side === 'long' ? 'Long' : 'Short') + '</span> <span class="text-slate-400">' + esc(g.timeframe || '') + '</span></div>'
-            + '<div><span class="' + (t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400') + ' font-semibold">' + esc(signedMoney(t.pnl, cur)) + '</span> <span class="text-slate-400">' + rfmt(t.x.r - t.x.fee) + (demoLab(t.x.label) ? ' ' + esc(demoLab(t.x.label)) : '') + '</span></div>'
-            + '<div class="text-slate-300">Balance ' + esc(money(p.bal, cur)) + (p.dd < 0 ? ' <span class="text-rose-400">' + p.dd.toFixed(2) + '%</span>' : '') + '</div>'
-            + (t.x.hold != null ? '<div class="text-slate-400">Held ' + esc(btHeld(Math.round(t.x.hold))) + '</div>' : '');
-        }
+        tip.innerHTML = o.tip(i);
         [guide, dot, tip].forEach(el => el.classList.remove('hidden'));
         const tw = tip.offsetWidth;
         tip.style.left = Math.min(Math.max(px - tw / 2, 0), r.width - tw) + 'px';
         tip.style.top = (py > r.height * 0.45 ? 4 : r.height - tip.offsetHeight - 4) + 'px';
       };
-      const hide = () => [guide, dot, tip].forEach(el => el.classList.add('hidden'));
+      // A mouse leaving hides it. A finger lifting fires "leave" too (iPad), so a tap's tip
+      // stays until a tap somewhere else (curveTapAway).
       plot.addEventListener('pointermove', show);
       plot.addEventListener('pointerdown', show);
-      plot.addEventListener('pointerleave', hide);
+      plot.addEventListener('pointerleave', ev => { if (ev.pointerType === 'mouse') curveHide(plot); });
+      if (!curveTapAway.on) { curveTapAway.on = true; document.addEventListener('pointerdown', curveTapAway, true); }
     }
+    function curveHide(plot) { plot.querySelectorAll('.dc-guide, .dc-dot, .dc-tip').forEach(el => el.classList.add('hidden')); }
+    function curveTapAway(ev) { document.querySelectorAll('.dc-plot').forEach(p => { if (!p.contains(ev.target)) curveHide(p); }); }
+    // A trade or alert in a tip: when, what, its result.
+    function curveTipHead(i, g) {
+      return '<div class="text-slate-400">#' + i + ' · ' + esc(fmtDay(g.date) + ' ' + (g.time || '')) + '</div>'
+        + '<div><b>' + esc(btSym(g.symbol)) + '</b> <span class="' + (g.side === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.side === 'long' ? 'Long' : 'Short') + '</span> <span class="text-slate-400">' + esc(g.timeframe || '') + '</span></div>';
+    }
+    // The Demo account's balance after each trade, drawdown as a % of the last high.
+    function demoChartHtml(T, cfg) {
+      const cur = cfg.cur, n = T.length;
+      if (!n) return '';
+      let peak = cfg.start;
+      const P = [{ bal: cfg.start, dd: 0 }].concat(T.map(t => { peak = Math.max(peak, t.bal); return { bal: t.bal, dd: peak > 0 ? (t.bal - peak) / peak * 100 : 0, t }; }));
+      const ddMin = Math.min(...P.map(p => p.dd)), dp = st => st >= 1 ? 0 : 2;
+      return curveHtml({
+        id: 'sigDemo', title: 'Balance after each trade', what: 'a trade', aria: 'Demo account balance after each trade', vals: P.map(p => p.bal),
+        fmt: (v, st) => money(v, cur, dp(st)), startLab: st => 'start ' + money(cfg.start, cur, dp(st)),
+        dd: P.map(p => p.dd), ddFmt: v => v ? v.toFixed(v <= -10 ? 0 : 1) + '%' : '0%',
+        ddLab: 'Drawdown from the last high' + (ddMin < 0 ? ' · max ' + ddMin.toFixed(2) + '%' : ': none'),
+        date: i => fmtDay(P[i].t.x.pr.signal.date),
+        tip: i => {
+          const p = P[i];
+          if (!p.t) return '<b>Start</b><div>' + esc(money(p.bal, cur)) + '</div>';
+          const t = p.t;
+          return curveTipHead(i, t.x.pr.signal)
+            + '<div><span class="' + (t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400') + ' font-semibold">' + esc(signedMoney(t.pnl, cur)) + '</span> <span class="text-slate-400">' + rfmt(t.x.r - t.x.fee) + (demoLab(t.x.label) ? ' ' + esc(demoLab(t.x.label)) : '') + '</span></div>'
+            + '<div class="text-slate-300">Balance ' + esc(money(p.bal, cur)) + (p.dd < 0 ? ' <span class="text-rose-400">' + p.dd.toFixed(2) + '%</span>' : '') + '</div>'
+            + (t.x.hold != null ? '<div class="text-slate-400">Held ' + esc(btHeld(Math.round(t.x.hold))) + '</div>' : '');
+        }
+      });
+    }
+    function demoChartBind() { curveBind('sigDemo'); }
     // A result's label beside its R: "+2R" says the R again, so only a word (SL, BE, …) is kept.
     function demoLab(l) { l = String(l || '').trim(); return /^[+-]?\d+(\.\d+)?R$/i.test(l) ? '' : l; }
-    // ---- Demo account: results by day, week, month or coin; a row opens its trades ----
-    const DEMO_BYS = [{ k: "day", label: "Day" }, { k: "week", label: "Week" }, { k: "month", label: "Month" }, { k: "coin", label: "Coin" }];
+    // ---- Demo account: results by day, week, month, coin or any other split; a row opens its trades ----
+    const DEMO_BYS = [{ k: "day", label: "Day" }, { k: "week", label: "Week" }, { k: "month", label: "Month" }, { k: "coin", label: "Coin" },
+      { k: "exit", label: "Exit" }, { k: "side", label: "Side" }, { k: "setup", label: "Level / type" }, { k: "tf", label: "Timeframe" },
+      { k: "stop", label: "Stop size" }, { k: "dow", label: "Weekday" }, { k: "hold", label: "Time held" }];
+    const DEMO_TIME_BYS = ["day", "week", "month"];
+    // Stop sizes and times held in bands, weekdays Monday first: these keep their own order.
+    const DEMO_STOPS = [[0, 1, "under 1%"], [1, 2, "1 - 2%"], [2, 3, "2 - 3%"], [3, 5, "3 - 5%"], [5, 8, "5 - 8%"], [8, Infinity, "8% or more"]];
+    const DEMO_HOLDS = [[0, 60, "under 1h"], [60, 240, "1 - 4h"], [240, 720, "4 - 12h"], [720, 1440, "12 - 24h"], [1440, 4320, "1 - 3 days"], [4320, Infinity, "3 days or more"]];
+    const DEMO_DOWS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    // Fib level (L1-L4) or trendline type, as the Level and Type filters name them.
+    function demoSetupOf(g) {
+      if (g.kind === "fib") { const k = g.lvlWhatIf || (fibGeom(g) || {}).entryLevel; return k ? "Fib " + k : "Fib"; }
+      if (g.kind === "trendline") { const tg = tlGeom(g), t = tg && SIG_TL_TYPES.find(x => x.k && x.line === tg.line && x.side === (g.side === "short" ? "short" : "long")); return t ? t.label : "Trendline"; }
+      return "Zone";
+    }
+    // How a trade ended, in words: Exit at's own names, or the scanner's outcomes.
+    const DEMO_EXITS = { "2R": "+2R", "1R": "+1R", timeout: "Time exit", open: "Open" };
+    function demoExitOf(l) { l = String(l || "").trim(); return DEMO_EXITS[l] || l || "Not stated"; }
+    // The group a placed trade falls in, for one way of splitting them.
+    function demoKeyOf(t, by) {
+      const g = t.x.pr.signal, band = (v, B) => { const b = B.find(x => v >= x[0] && v < x[1]); return b ? b[2] : null; };
+      if (by === "coin") return coinOf(g) || btSym(g.symbol);
+      if (by === "exit") return demoExitOf(t.x.label);
+      if (by === "side") return g.side === "short" ? "Short" : "Long";
+      if (by === "setup") return demoSetupOf(g);
+      if (by === "tf") return g.timeframe || "No timeframe";
+      if (by === "stop") return t.x.slp > 0 ? band(t.x.slp, DEMO_STOPS) : "No stop";
+      if (by === "hold") return t.x.hold != null ? band(t.x.hold, DEMO_HOLDS) : "Not timed";
+      if (by === "dow") { const d = btDate(g.date); return d ? DEMO_DOWS[(d.getDay() + 6) % 7] : "No date"; }
+      return "";
+    }
+    function demoGroups(T, by) {
+      const m = {};
+      T.forEach(t => { const k = demoKeyOf(t, by); (m[k] = m[k] || []).push(t); });
+      const out = Object.keys(m).map(k => ({ k, ts: m[k], st: demoStat(m[k]) }));
+      const ord = by === "stop" ? DEMO_STOPS.map(b => b[2]).concat(["No stop"]) : by === "hold" ? DEMO_HOLDS.map(b => b[2]).concat(["Not timed"]) : by === "dow" ? DEMO_DOWS.concat(["No date"]) : null;
+      // Most money first (to the cent, then more trades, then the name), or the bands' own order.
+      return ord ? out.sort((a, b) => ord.indexOf(a.k) - ord.indexOf(b.k)) : out.sort((a, b) => Math.round(b.st.pnl * 100) - Math.round(a.st.pnl * 100) || b.st.n - a.st.n || a.k.localeCompare(b.k));
+    }
     function demoBy() {
       const k = demoRaw().by;
       if (DEMO_BYS.some(x => x.k === k)) return k;
@@ -11213,18 +11308,25 @@
     function demoSetBy(k) { const d = demoRaw(); d.by = k; state.ui.sigDemo = d; demoOpen = {}; save(); demoByDraw(); }
     function demoToggle(k) { demoOpen[k] = !demoOpen[k]; demoByDraw(); }
     function demoByDraw() { const el = document.getElementById('sigDemoBy'); if (el) el.innerHTML = demoByHtml(); }
+    // From What to improve: that split, with the group's trades open.
+    function demoJump(by, k) {
+      const d = demoRaw(); d.by = by; state.ui.sigDemo = d; save();
+      demoOpen = {}; demoOpen[k] = true; demoByDraw();
+      const row = [...document.querySelectorAll('#sigDemoBy tr[data-demorow]')].find(tr => tr.dataset.demorow === k);
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: 'center' });
+    }
     // Stats of a set of placed trades: count, won, money, average R and hold.
     function demoStat(ts) {
-      const n = ts.length, w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length, pnl = ts.reduce((a, t) => a + t.pnl, 0);
+      const n = ts.length, w = ts.filter(t => t.pnl > 0).length, l = ts.filter(t => t.pnl < 0).length, sum = ts.reduce((a, t) => a + t.pnl, 0), pnl = Math.abs(sum) < 1e-9 ? 0 : sum;
       const hs = ts.map(t => t.x.hold).filter(h => h != null), rs = ts.map(t => t.x.r - t.x.fee);
       return { n, w, l, pnl, avg: n ? pnl / n : 0, avgR: n ? rs.reduce((a, b) => a + b, 0) / n : null, hold: hs.length ? hs.reduce((a, b) => a + b, 0) / hs.length : null, from: n ? ts[0].before : 0, to: n ? ts[n - 1].bal : 0 };
     }
     function demoByHtml() {
       if (!demoLast) return '';
       const { T, cfg, held } = demoLast, cur = cfg.cur, by = demoBy(), m = v => money(v, cur), sm = v => signedMoney(v, cur);
-      const tone = v => v >= 0 ? 'text-emerald-400' : 'text-rose-400';
-      const seg = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono">' + DEMO_BYS.map(x => '<button type="button" data-demoby="' + x.k + '" onclick="demoSetBy(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === by ? SEG_ON : SEG_OFF) + '">' + x.label + '</button>').join('') + '</div>';
-      const head = '<div class="flex flex-wrap items-center justify-between gap-2 mb-2"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Results by ' + by + '</div>' + seg + '</div>';
+      const tone = v => v >= 0 ? 'text-emerald-400' : 'text-rose-400', byLab = DEMO_BYS.find(x => x.k === by).label;
+      const seg = '<div class="demo-bys flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono">' + DEMO_BYS.map(x => '<button type="button" data-demoby="' + x.k + '" onclick="demoSetBy(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === by ? SEG_ON : SEG_OFF) + '">' + x.label + '</button>').join('') + '</div>';
+      const head = '<div class="flex flex-wrap items-center justify-between gap-2 mb-2"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Results by ' + esc(byLab.toLowerCase()) + '</div>' + seg + '</div>';
       // A trade on one line, for a row that is open.
       const tradeLine = t => { const g = t.x.pr.signal;
         return '<div class="demo-tl"><span class="text-slate-500">#' + (t.i + 1) + '</span><span class="text-slate-400">' + esc(fmtDay(g.date) + ' ' + (g.time || '')) + '</span>'
@@ -11232,26 +11334,32 @@
           + '<span class="' + tone(t.x.r - t.x.fee) + '">' + rfmt(t.x.r - t.x.fee) + (demoLab(t.x.label) ? ' <span class="text-slate-500">' + esc(demoLab(t.x.label)) + '</span>' : '') + '</span>'
           + '<span class="font-semibold ' + tone(t.pnl) + '">' + esc(sm(t.pnl)) + '</span><span class="text-slate-400">' + (t.x.hold != null ? 'held ' + esc(held(t.x.hold)) : '') + '</span></div>'; };
       const th = (l, r, opt) => '<th class="py-1.5 pr-3' + (r ? ' text-right' : '') + (opt ? ' demo-opt' : '') + '">' + l + '</th>';
+      const sub = (k, ts) => demoOpen[k] ? '<tr class="demo-sub"><td colspan="7"><div class="demo-tls">' + ts.slice().reverse().map(tradeLine).join('') + '</div></td></tr>' : '';
+      // A group's row (any split but day / week / month): trades, won, money, averages; tap for its trades.
+      const row = (lab, st, k, extra, ts) => '<tr class="border-t border-terminal-border/60' + (k ? ' cursor-pointer hover:bg-white/5' : '') + '"' + (k ? ' data-demorow="' + esc(k) + '" onclick="demoToggle(this.dataset.demorow)"' : '') + '>'
+        + '<td class="py-1.5 pr-3 whitespace-nowrap">' + (k ? '<span class="demo-chev">' + (demoOpen[k] ? '▾' : '▸') + '</span>' : '') + lab + (extra || '') + '</td>'
+        + '<td class="pr-3 text-right">' + st.n + '</td><td class="pr-3 text-right text-slate-400">' + (st.n ? pct(st.w / st.n * 100) : '—') + '</td>'
+        + '<td class="pr-3 text-right font-bold ' + tone(st.pnl) + '">' + esc(sm(st.pnl)) + '</td><td class="pr-3 text-right demo-opt ' + tone(st.avg) + '">' + (st.n ? esc(sm(st.avg)) : '—') + '</td>'
+        + '<td class="pr-3 text-right ' + (st.avgR == null ? 'text-slate-500' : tone(st.avgR)) + '">' + (st.avgR == null ? '—' : rfmt(st.avgR)) + '</td><td class="text-right text-slate-300">' + held(st.hold) + '</td></tr>'
+        + (k ? sub(k, ts || []) : '');
+      const cols = l => '<thead class="text-slate-500 text-[10px] uppercase"><tr>' + th(l) + th('Trades', 1) + th('Won', 1) + th('P&amp;L', 1) + th('Avg a trade', 1, 1) + th('Avg R', 1) + '<th class="text-right">Avg hold</th></tr></thead>';
+      const table = (id, l, body) => '<div class="overflow-x-auto"><table id="' + id + '" class="demo-tbl w-full text-left text-[11px]">' + cols(l) + '<tbody>' + body + '</tbody></table></div>';
       if (by === 'coin') {
         // Every coin, best first; and Top 3 / Top 5 coins against all (lakky: "avg top 3-5 cryptos").
-        const byC = {}; T.forEach(t => { const c = coinOf(t.x.pr.signal) || btSym(t.x.pr.signal.symbol); (byC[c] = byC[c] || []).push(t); });
-        const counts = {}; Object.keys(byC).forEach(c => { if (coinOf(byC[c][0].x.pr.signal)) counts[c] = byC[c].length; });
+        const counts = {}; T.forEach(t => { const c = coinOf(t.x.pr.signal); if (c) counts[c] = (counts[c] || 0) + 1; });
         const rank = sigCoinRank(), top = k => sigTopCoins(k, counts, rank), inSet = set => T.filter(t => set.indexOf(coinOf(t.x.pr.signal)) !== -1);
-        const row = (lab, st, k, extra) => '<tr class="border-t border-terminal-border/60' + (k ? ' cursor-pointer hover:bg-white/5' : '') + '"' + (k ? ' data-demorow="' + esc(k) + '" onclick="demoToggle(\'' + esc(k) + '\')"' : '') + '>'
-          + '<td class="py-1.5 pr-3 whitespace-nowrap">' + (k ? '<span class="demo-chev">' + (demoOpen[k] ? '▾' : '▸') + '</span>' : '') + lab + (extra || '') + '</td>'
-          + '<td class="pr-3 text-right">' + st.n + '</td><td class="pr-3 text-right text-slate-400">' + (st.n ? pct(st.w / st.n * 100) : '—') + '</td>'
-          + '<td class="pr-3 text-right font-bold ' + tone(st.pnl) + '">' + esc(sm(st.pnl)) + '</td><td class="pr-3 text-right demo-opt ' + tone(st.avg) + '">' + (st.n ? esc(sm(st.avg)) : '—') + '</td>'
-          + '<td class="pr-3 text-right ' + (st.avgR == null ? 'text-slate-500' : tone(st.avgR)) + '">' + (st.avgR == null ? '—' : rfmt(st.avgR)) + '</td><td class="text-right text-slate-300">' + held(st.hold) + '</td></tr>'
-          + (k && demoOpen[k] ? '<tr class="demo-sub"><td colspan="7"><div class="demo-tls">' + (k === '#top3' ? inSet(top(3)) : k === '#top5' ? inSet(top(5)) : byC[k] || []).slice().reverse().map(tradeLine).join('') + '</div></td></tr>' : '');
-        const cols = '<thead class="text-slate-500 text-[10px] uppercase"><tr>' + th('Coin') + th('Trades', 1) + th('Won', 1) + th('P&amp;L', 1) + th('Avg a trade', 1, 1) + th('Avg R', 1) + '<th class="text-right">Avg hold</th></tr></thead>';
-        const coins = Object.keys(byC).map(c => ({ c, st: demoStat(byC[c]) })).sort((a, b) => Math.round(b.st.pnl * 100) - Math.round(a.st.pnl * 100) || b.st.n - a.st.n || a.c.localeCompare(b.c));
-        const t3 = top(3), t5 = top(5), any = Object.keys(counts).length;
-        const cmp = any ? '<div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Top coins vs all · by ' + (rank === 'alerts' ? 'most alerts' : 'market cap') + '</div><div class="overflow-x-auto mb-3"><table id="sigDemoTop" class="demo-tbl w-full text-left text-[11px]">' + cols.replace('>Coin<', '>Coins<') + '<tbody>'
-          + row('Top 3', demoStat(inSet(t3)), '#top3', ' <span class="demo-coins text-slate-500">' + esc(t3.join(', ')) + '</span>')
-          + row('Top 5', demoStat(inSet(t5)), '#top5', ' <span class="demo-coins text-slate-500">' + esc(t5.join(', ')) + '</span>')
-          + row('All', demoStat(T), '') + '</tbody></table></div>' : '';
-        return head + cmp + '<div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Every coin, most money first · tap one for its trades</div><div class="overflow-x-auto"><table id="sigDemoCoins" class="demo-tbl w-full text-left text-[11px]">' + cols + '<tbody>'
-          + coins.map(x => row('<b class="text-slate-200">' + esc(x.c) + '</b>', x.st, x.c)).join('') + '</tbody></table></div>';
+        const t3 = top(3), t5 = top(5), s3 = inSet(t3), s5 = inSet(t5);
+        const cmp = Object.keys(counts).length ? '<div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Top coins vs all · by ' + (rank === 'alerts' ? 'most alerts' : 'market cap') + '</div><div class="mb-3">' + table('sigDemoTop', 'Coins',
+          row('Top 3', demoStat(s3), '#top3', ' <span class="demo-coins text-slate-500">' + esc(t3.join(', ')) + '</span>', s3)
+          + row('Top 5', demoStat(s5), '#top5', ' <span class="demo-coins text-slate-500">' + esc(t5.join(', ')) + '</span>', s5)
+          + row('All', demoStat(T), '')) + '</div>' : '';
+        return head + cmp + '<div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Every coin, most money first · tap one for its trades</div>'
+          + table('sigDemoCoins', 'Coin', demoGroups(T, 'coin').map(x => row('<b class="text-slate-200">' + esc(x.k) + '</b>', x.st, x.k, '', x.ts)).join(''));
+      }
+      if (DEMO_TIME_BYS.indexOf(by) === -1) {
+        const gs = demoGroups(T, by);
+        return head + table('sigDemoGroups', esc(byLab), gs.map(x => row('<b class="text-slate-200">' + esc(x.k) + '</b>', x.st, x.k, '', x.ts)).join(''))
+          + '<p class="text-[10px] text-slate-500 mt-1">' + (demoOrder(by) ? 'In order of ' + esc(byLab.toLowerCase()) : 'Most money first') + '. Tap a row to see its trades.</p>';
       }
       // Day, week or month, newest first.
       const keyOf = g => by === 'day' ? g.date : by === 'week' ? btWeekOf(g.date) : String(g.date || '').slice(0, 7);
@@ -11264,14 +11372,120 @@
       T.forEach(t => { const k = keyOf(t.x.pr.signal); (byK[k] = byK[k] || { k, ts: [] }).ts.push(t); });
       const groups = Object.values(byK).sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0);
       const best = groups.reduce((b, g) => { const p = g.ts.reduce((a, t) => a + t.pnl, 0); return !b || p > b.p + 0.005 ? { k: g.k, p } : b; }, null);
-      return head + '<div class="overflow-x-auto"><table id="sigDemoPeriods" class="demo-tbl w-full text-left text-[11px]"><thead class="text-slate-500 text-[10px] uppercase"><tr>' + th(by === 'day' ? 'Day' : by === 'week' ? 'Week' : 'Month') + th('Trades', 1) + th('W / L', 1) + th('P&amp;L', 1) + th('Return', 1, 1) + th('Avg hold', 1) + '<th class="text-right demo-opt">Balance</th></tr></thead><tbody>'
+      return head + '<div class="overflow-x-auto"><table id="sigDemoPeriods" class="demo-tbl w-full text-left text-[11px]"><thead class="text-slate-500 text-[10px] uppercase"><tr>' + th(byLab) + th('Trades', 1) + th('W / L', 1) + th('P&amp;L', 1) + th('Return', 1, 1) + th('Avg hold', 1) + '<th class="text-right demo-opt">Balance</th></tr></thead><tbody>'
         + groups.slice().reverse().map(g => { const st = demoStat(g.ts), k = g.k;
-          return '<tr class="border-t border-terminal-border/60 cursor-pointer hover:bg-white/5" data-demorow="' + esc(k) + '" onclick="demoToggle(\'' + esc(k) + '\')"><td class="py-1.5 pr-3 whitespace-nowrap text-slate-200"><span class="demo-chev">' + (demoOpen[k] ? '▾' : '▸') + '</span>' + esc(label(k)) + (best && best.k === k && groups.length > 1 && best.p > 0 ? ' <span class="text-emerald-400 text-[10px]">best</span>' : '') + '</td>'
+          return '<tr class="border-t border-terminal-border/60 cursor-pointer hover:bg-white/5" data-demorow="' + esc(k) + '" onclick="demoToggle(this.dataset.demorow)"><td class="py-1.5 pr-3 whitespace-nowrap text-slate-200"><span class="demo-chev">' + (demoOpen[k] ? '▾' : '▸') + '</span>' + esc(label(k)) + (best && best.k === k && groups.length > 1 && best.p > 0 ? ' <span class="text-emerald-400 text-[10px]">best</span>' : '') + '</td>'
             + '<td class="pr-3 text-right">' + st.n + '</td><td class="pr-3 text-right text-slate-400">' + st.w + ' / ' + st.l + '</td>'
             + '<td class="pr-3 text-right font-bold ' + tone(st.pnl) + '">' + esc(sm(st.pnl)) + '</td><td class="pr-3 text-right demo-opt ' + tone(st.pnl) + '">' + (st.from > 0 ? pfmt(st.pnl / st.from * 100) : '—') + '</td>'
             + '<td class="pr-3 text-right text-slate-300">' + held(st.hold) + '</td><td class="text-right text-slate-200 demo-opt">' + esc(m(st.to)) + '</td></tr>'
-            + (demoOpen[k] ? '<tr class="demo-sub"><td colspan="7"><div class="demo-tls">' + g.ts.slice().reverse().map(tradeLine).join('') + '</div></td></tr>' : ''); }).join('')
+            + sub(k, g.ts); }).join('')
         + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-1">Tap a ' + by + ' to see its trades.</p>';
+    }
+    function demoOrder(by) { return by === "stop" || by === "hold" || by === "dow"; }
+    // ---- What to improve: the groups that cost the most and made the most, and what was skipped ----
+    const DEMO_TIP_BYS = ["coin", "setup", "tf", "side", "stop", "dow", "hold"];
+    function demoTipsHtml() {
+      if (!demoLast) return '';
+      const { T, cfg, run, one1 } = demoLast, n = T.length, sm = v => signedMoney(v, cfg.cur);
+      const lab = by => DEMO_BYS.find(x => x.k === by).label;
+      let body = '';
+      if (n >= 6) {
+        // A group needs a few trades to say anything (3, or 5% of them), and one holding every trade says nothing.
+        // The same trades under two names (every short a Resistance TL) show once, by the first split.
+        const minN = Math.max(3, Math.ceil(n * 0.05)), all = [], seen = {};
+        DEMO_TIP_BYS.forEach(by => demoGroups(T, by).forEach(g => { const sig = g.ts.map(t => t.i).join(','); if (g.st.n >= minN && g.st.n < n && !/^(No |Not )/.test(g.k) && !seen[sig]) { seen[sig] = 1; all.push(Object.assign({ by }, g)); } }));
+        const bad = all.filter(g => g.st.pnl < -0.005).sort((a, b) => a.st.pnl - b.st.pnl).slice(0, 4);
+        const good = all.filter(g => g.st.pnl > 0.005).sort((a, b) => b.st.pnl - a.st.pnl).slice(0, 4);
+        const line = g => '<button type="button" class="demo-tip" data-tipby="' + g.by + '" data-tipk="' + esc(g.k) + '" onclick="demoJump(this.dataset.tipby, this.dataset.tipk)">'
+          + '<span class="demo-tipname"><span class="text-slate-500">' + esc(lab(g.by)) + '</span> <b class="text-slate-100">' + esc(g.k) + '</b></span>'
+          + '<b class="' + (g.st.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + esc(sm(g.st.pnl)) + '</b>'
+          + '<span class="demo-tipsub">' + g.st.n + ' trades · ' + pct(g.st.w / g.st.n * 100) + ' won · avg ' + rfmt(g.st.avgR) + '</span></button>';
+        const col = (id, title, cls, list, none) => '<div id="' + id + '" class="demo-tipcol"><div class="text-[11px] font-semibold mb-1 ' + cls + '">' + title + '</div>' + (list.length ? list.map(line).join('') : '<p class="text-[11px] text-slate-500">' + none + '</p>') + '</div>';
+        body = '<div class="demo-tips">' + col('sigDemoBad', 'Costing you', 'text-rose-300', bad, 'No group of ' + minN + '+ trades lost money.') + col('sigDemoGood', 'Working for you', 'text-emerald-300', good, 'No group of ' + minN + '+ trades made money.') + '</div>'
+          + '<p class="text-[10px] text-slate-500 mt-1">Groups of ' + minN + '+ trades by coin, level / type, timeframe, side, stop size, weekday and time held; tap one for its trades. The balance compounds, so leaving a group out would not add back exactly its money: read these as where to look first.</p>';
+      }
+      // Skipped alerts (real orders): what they would have made, by reason.
+      const sk = run.skips;
+      if (sk.length) {
+        const why = { venue: 'not on ' + demoBroker(cfg.broker).label, lot: cfg.lot1 === 'always' ? 'over the leverage at 1 ' + one1 : 'smaller than 1 ' + one1, big: '1 ' + one1 + ' risks too much', tight: 'stop under ' + cfg.minStop + '%', ticks: 'stop within ' + DEMO_MIN_TICKS + ' ticks' };
+        const by = {}; sk.forEach(k => { (by[k.why] = by[k.why] || []).push(k.x.r - k.x.fee); });
+        const tot = sk.reduce((a, k) => a + k.x.r - k.x.fee, 0), won = sk.filter(k => k.x.r - k.x.fee > 0).length;
+        body += '<div id="sigDemoSkips" class="demo-skips"><b class="text-amber-300">Skipped ' + sk.length + '</b> <span class="text-slate-400">would have made</span> <b class="' + (tot >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(tot) + '</b> <span class="text-slate-400">(' + won + ' of ' + sk.length + ' won)</span>'
+          + Object.keys(by).map(k => '<span class="demo-chip">' + by[k].length + ' ' + esc(why[k] || k) + ' · ' + rfmt(by[k].reduce((a, b) => a + b, 0)) + '</span>').join('') + '</div>';
+      }
+      return body ? '<div id="sigDemoTips" class="mb-4"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">What to improve</div>' + body + '</div>' : '';
+    }
+    // ---- Wins, losses and streaks: the second row of numbers ----
+    function demoKeysHtml(card) {
+      const { T, cfg, run } = demoLast, n = T.length, sm = v => signedMoney(v, cfg.cur), m = v => money(v, cfg.cur);
+      if (n < 2) return '';
+      const R = t => t.x.r - t.x.fee, wins = T.filter(t => t.pnl > 0), losses = T.filter(t => t.pnl < 0);
+      const sumP = ts => ts.reduce((a, t) => a + t.pnl, 0), avgR = ts => ts.length ? ts.reduce((a, t) => a + R(t), 0) / ts.length : null;
+      const gw = sumP(wins), gl = -sumP(losses), avgW = wins.length ? gw / wins.length : null, avgL = losses.length ? -gl / losses.length : null;
+      const payoff = avgW != null && avgL ? avgW / -avgL : null, be = payoff ? 100 / (1 + payoff) : null, wr = wins.length / n * 100;
+      // Longest runs of wins and of losses, in the order taken, with their money and dates.
+      const runOf = up => { let best = null, cur = null; T.forEach(t => { if (up ? t.pnl > 0 : t.pnl < 0) { cur = cur || { n: 0, p: 0, a: t, from: t.before }; cur.n++; cur.p += t.pnl; cur.b = t; if (!best || cur.n > best.n || (cur.n === best.n && Math.abs(cur.p) > Math.abs(best.p))) best = Object.assign({}, cur); } else cur = null; }); return best; };
+      const ws = runOf(true), ls = runOf(false), when = r => esc(fmtDay(r.a.x.pr.signal.date)) + (r.n > 1 ? ' – ' + esc(fmtDay(r.b.x.pr.signal.date)) : '');
+      const tone = v => v == null ? '' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+      return '<div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Wins, losses and streaks</div><div id="sigDemoKeys" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow mb-4">'
+        + card('Avg win', avgW == null ? '—' : sm(avgW), wins.length ? rfmt(avgR(wins)) + ' · ' + wins.length + ' wins' : 'no wins', 'text-emerald-400', 'What a winning trade made on average.', 'avgw')
+        + card('Avg loss', avgL == null ? '—' : sm(avgL), losses.length ? rfmt(avgR(losses)) + ' · ' + losses.length + ' losses' : 'no losses', 'text-rose-400', 'What a losing trade cost on average.', 'avgl')
+        + card('Payoff', payoff == null ? '—' : payoff.toFixed(2), be == null ? 'avg win ÷ avg loss' : 'break-even at ' + pct(be) + ' won · you ' + pct(wr), payoff == null ? '' : be <= wr ? 'text-emerald-400' : 'text-rose-400', 'Average win ÷ average loss. With this payoff you need the break-even win rate to make money.', 'payoff')
+        + card('Expectancy', sm(sumP(T) / n), rfmt(avgR(T)) + ' a trade', tone(sumP(T)), 'What one trade made on average, after fees.', 'exp')
+        + card('Profit factor', gl > 0 ? (gw / gl).toFixed(2) : gw > 0 ? '∞' : '—', 'won ' + m(gw) + ' ÷ lost ' + m(gl), gl > 0 ? (gw >= gl ? 'text-emerald-400' : 'text-rose-400') : '', 'Money won ÷ money lost. Above 1 makes money.', 'pf')
+        + card('Win streak', ws ? ws.n + ' won' : '—', ws ? sm(ws.p) + ' · ' + when(ws) : 'no wins', 'text-emerald-400', 'The most wins in a row.', 'wstreak')
+        + card('Losing streak', ls ? ls.n + ' lost' : '—', ls ? sm(ls.p) + (ls.from > 0 ? ' (' + pfmt(ls.p / ls.from * 100) + ')' : '') + ' · ' + when(ls) : 'no losses', 'text-rose-400', 'The most losses in a row, and what they took from the balance they started on.', 'lstreak')
+        + card('Fees', cfg.feesOn ? m(run.fees) : 'off', cfg.feesOn ? (gw > 0 ? pct(run.fees / gw * 100) + ' of what winners made' : 'no wins to pay them') : 'Fees above is Without', cfg.feesOn ? 'text-amber-300' : '', 'All fees paid, against the money the winning trades made.', 'fees')
+        + '</div>';
+    }
+    // ---- Trades: every placed and skipped alert, folded until opened, with Won / Lost / Skipped filters ----
+    let demoTrOpen = false, demoTrF = 'all';
+    function demoTrDraw() { const el = document.getElementById('sigDemoTradesBox'); if (el) el.innerHTML = demoTradesHtml(); }
+    function demoTrToggle() { demoTrOpen = !demoTrOpen; demoAll = false; demoTrDraw(); }
+    function demoTrFilter(k) { demoTrF = k; demoAll = false; demoTrDraw(); }
+    function demoTradesHtml() {
+      if (!demoLast) return '';
+      const { T, cfg, run, one1 } = demoLast, cur = cfg.cur, m = v => money(v, cur), sm = v => signedMoney(v, cur), bkl = demoBroker(cfg.broker).label;
+      const tone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+      const levTxt = v => v == null ? '—' : (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + 'x';
+      // Trade by trade, newest first, with the alerts that could not be placed.
+      const sizeTxt = t => t.units == null ? '—' : t.x.spec && t.x.spec.unit === 'share' ? t.units + ' share' + (t.units === 1 ? '' : 's') : (+t.units.toPrecision(6)) + ' ' + esc(t.x.spec ? t.x.spec.unit : '');
+      const skipTxt = k => {
+        const sp = k.x.spec;
+        if (k.why === 'venue') return esc(k.x.pr.signal.symbol) + ' is not on ' + esc(bkl);
+        if (k.why === 'tight') return 'stop ' + k.x.slp.toFixed(3) + '% is under the ' + cfg.minStop + '% min';
+        if (k.why === 'ticks') return 'stop ' + k.x.slp.toFixed(3) + '% is within ' + DEMO_MIN_TICKS + ' ticks (1 tick = ' + sp.tickPct.toFixed(4) + '%)';
+        const q = Math.round(k.minPos / sp.step) * sp.qty;
+        return (sp.unit === 'share' ? '1 share = ' : '1 ' + one1 + ' (' + (+q.toPrecision(6)) + ' ' + esc(sp.unit) + ') = ') + m(k.minPos)
+          + (k.over ? ', more than ' + k.over + 'x leverage on ' + m(k.before) : ' risks ' + m(k.need) + ' at this stop, more than ' + (k.why === 'big' ? k.capR + '× the ' : 'the ') + m(k.want) + ' planned');
+      };
+      const all = T.concat(run.skips).sort((a, b) => b.i - a.i), sk = run.skips.length, won = T.filter(t => t.pnl > 0).length, lost = T.filter(t => t.pnl < 0).length;
+      const F = demoTrF === 'skip' && !sk ? 'all' : demoTrF, keep = { all: () => true, won: t => !t.why && t.pnl > 0, lost: t => !t.why && t.pnl < 0, skip: t => !!t.why }[F] || (() => true);
+      const LIMIT = 30, rowsT = all.filter(keep), shown = demoAll ? rowsT : rowsT.slice(0, LIMIT);
+      // Folded until opened (lakky: "i dont need to see all trades all time").
+      const chip = (k, l, c) => '<button type="button" data-demotf="' + k + '" onclick="demoTrFilter(\'' + k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (F === k ? SEG_ON : SEG_OFF) + '">' + l + ' <span class="text-slate-500">' + c + '</span></button>';
+      const headBtn = '<button type="button" id="sigDemoTradesBtn" onclick="demoTrToggle()" aria-expanded="' + demoTrOpen + '" class="demo-trhead"><span class="demo-chev">' + (demoTrOpen ? '▾' : '▸') + '</span><b class="text-amber-300 uppercase tracking-wider text-[10px]">Trades</b>'
+        + '<span class="text-slate-400 text-[11px]">' + T.length + ' placed' + (sk ? ' · ' + sk + ' skipped' : '') + ' · ' + won + ' won · ' + lost + ' lost</span><span class="text-slate-500 text-[10px] ml-auto">' + (demoTrOpen ? 'tap to fold' : 'tap to see every trade') + '</span></button>';
+      if (!demoTrOpen) return headBtn;
+      const head = (when, alert) => '<td class="py-1.5 pr-3 text-slate-500">' + when + '</td>' + alert;
+      return headBtn + '<div class="demo-trbody"><div class="flex flex-wrap items-center justify-between gap-2 mb-2"><span class="text-[10px] text-slate-500">Newest first' + (F !== 'all' ? ' · ' + rowsT.length + ' of ' + all.length : '') + '</span><div id="sigDemoTrF" class="flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono">'
+        + chip('all', 'All', all.length) + chip('won', 'Won', won) + chip('lost', 'Lost', lost) + (sk ? chip('skip', 'Skipped', sk) : '') + '</div></div><div class="overflow-x-auto"><table id="sigDemoTrades" class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1.5 pr-3">#</th><th class="pr-3">When</th><th class="pr-3">Alert</th><th class="pr-3 text-right">Stop</th><th class="pr-3 text-right">Result</th><th class="pr-3 text-right">Risk</th><th class="pr-3 text-right">Position</th><th class="pr-3 text-right">Size</th><th class="pr-3 text-right">Fee</th><th class="pr-3 text-right">P&amp;L</th><th class="text-right">Balance</th></tr></thead><tbody>'
+        + shown.map(t => { const g = t.x.pr.signal;
+          const lead = head(t.i + 1, '<td class="pr-3 whitespace-nowrap text-slate-400">' + esc(g.date + ' ' + (g.time || '')) + '</td>'
+            + '<td class="pr-3 whitespace-nowrap text-slate-200">' + esc(g.symbol) + ' <span class="' + (g.side === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.side === 'long' ? 'Long' : 'Short') + '</span> <span class="text-slate-500">' + esc(g.timeframe || chanLabel(chanKey(g))) + '</span></td>'
+            + '<td class="pr-3 text-right text-slate-400">' + (t.x.slp != null ? t.x.slp.toFixed(2) + '%' : '—') + '</td>');
+          if (t.why) return '<tr class="border-t border-terminal-border/60 text-slate-500" data-skip="' + t.why + '">' + lead
+            + '<td class="pr-3 text-right whitespace-nowrap">' + rfmt(t.x.r - t.x.fee) + '</td><td colspan="6" class="pr-3 text-amber-300/80">Skipped: ' + skipTxt(t) + '</td></tr>';
+          return '<tr class="border-t border-terminal-border/60 hover:bg-white/5">' + lead
+            + '<td class="pr-3 text-right whitespace-nowrap ' + tone(t.x.r - t.x.fee) + '"' + (t.x.fee ? ' title="' + rfmt(t.x.r) + ' before fees, ' + rfmt(-t.x.fee) + ' fees"' : '') + '>' + rfmt(t.x.r - t.x.fee) + (t.x.label ? ' <span class="text-slate-500 text-[10px]">' + esc(t.x.label) + '</span>' : '') + '</td>'
+            + '<td class="pr-3 text-right ' + (t.one && t.risk > t.want * (1 + 1e-9) ? 'text-amber-300' : 'text-slate-300') + '"' + (t.one ? ' title="1 ' + one1 + (t.risk > t.want * (1 + 1e-9) ? ' risks more than the ' + esc(m(t.want)) + ' planned' : '') + '"' : '') + '>' + m(t.risk) + '</td>'
+            + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + (t.pos != null ? m(t.pos) + ' · ' + levTxt(t.lev) + (t.cap ? ' <span class="text-amber-300 text-[10px]">' + (t.cap === 'coin' ? 'max' : 'cap') + '</span>' : '') : '—') + '</td>'
+            + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + sizeTxt(t) + (t.one ? ' <span class="text-amber-300 text-[10px]">min</span>' : '') + '</td>'
+            + '<td class="pr-3 text-right text-slate-400">' + (t.fee ? '-' + m(t.fee) : '—') + '</td>'
+            + '<td class="pr-3 text-right font-bold ' + tone(t.pnl) + '">' + sm(t.pnl) + '</td><td class="text-right text-slate-200">' + m(t.bal) + '</td></tr>'; }).join('')
+        + '</tbody></table></div>'
+        + (rowsT.length ? '' : '<p class="text-[11px] text-slate-500 py-2">None in this view.</p>')
+        + (rowsT.length > LIMIT ? '<div class="text-center mt-2"><button type="button" onclick="demoShowAll()" class="px-3 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">' + (demoAll ? 'Show the newest ' + LIMIT : 'Show all ' + rowsT.length) + '</button></div>' : '') + '</div>';
     }
     function demoDrawOut() {
       const out = document.getElementById('sigDemoOut');
@@ -11344,8 +11558,9 @@
         + card('Leverage needed', levTxt(run.maxLev || null), run.capped ? run.capped + ' trade' + (run.capped === 1 ? '' : 's') + ' capped' + (run.capCoin === run.capped ? ' at the coin\'s max' : cfg.lev && !run.capCoin ? ' at ' + cfg.lev + 'x' : '') : cfg.lev ? 'none over ' + cfg.lev + 'x' : 'highest of any trade', run.capped ? 'text-amber-300' : '', 'Position = risk ÷ stop distance. Leverage = position ÷ balance. A trade that needs more than the coin allows' + (cfg.lev ? ' or your cap' : '') + ' is taken at that leverage, so it risks less.', 'lev')
         + '</div>';
       const curve = demoChartHtml(T, cfg);
-      demoLast = { T, cfg, held, first, last, one1 };
+      demoLast = { T, cfg, held, first, last, one1, run };
       const prog = '<div id="sigDemoBy" class="mb-4">' + demoByHtml() + '</div>';
+      const trades = '<div id="sigDemoTradesBox" class="demo-trbox mb-2">' + demoTradesHtml() + '</div>';
 
       // The same alerts at other risk sizes.
       const cmp = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Same alerts, other risk sizes</div><p class="text-[10px] text-slate-500 mb-1">Starting with ' + m(cfg.start) + ', each a share of the balance' + (cfg.lev ? ', leverage capped at ' + cfg.lev + 'x' : '') + (cfg.feesOn ? ', same fees' : ', no fees') + '.</p><div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-2">Risk a trade</th><th class="pr-2 text-right">Final balance</th><th class="pr-2 text-right">Return</th><th class="pr-2 text-right">Max DD</th><th class="text-right">Lowest</th>' + (cfg.real ? '<th class="pl-2 text-right">Placed</th>' : '') + '</tr></thead><tbody>'
@@ -11353,40 +11568,10 @@
           return '<tr class="border-t border-terminal-border/60' + (mine ? ' bg-amber-500/10' : '') + '"><td class="py-1 pr-2 text-slate-200">' + p + '%' + (mine ? ' <span class="text-amber-300 text-[10px]">yours</span>' : '') + (r2.blownAt != null ? ' <span class="text-rose-400 text-[10px]">blown</span>' : '') + '</td><td class="pr-2 text-right font-bold ' + tone(r2.ret) + '">' + m(r2.end) + '</td><td class="pr-2 text-right ' + tone(r2.ret) + '">' + (pfmt(r2.ret) || '0.00%') + '</td><td class="pr-2 text-right text-rose-400">-' + r2.maxDDPct.toFixed(2) + '%</td><td class="text-right text-slate-300">' + m(r2.low) + '</td>' + (cfg.real ? '<td class="pl-2 text-right text-slate-400" title="Placed as real orders, of the alerts">' + r2.trades.length + ' / ' + (r2.trades.length + r2.skips.length) + '</td>' : '') + '</tr>'; }).join('')
         + '</tbody></table></div></div>';
 
-      // Trade by trade, newest first, with the alerts that could not be placed.
-      const sizeTxt = t => t.units == null ? '—' : t.x.spec && t.x.spec.unit === 'share' ? t.units + ' share' + (t.units === 1 ? '' : 's') : (+t.units.toPrecision(6)) + ' ' + esc(t.x.spec ? t.x.spec.unit : '');
-      const skipTxt = k => {
-        const sp = k.x.spec;
-        if (k.why === 'venue') return esc(k.x.pr.signal.symbol) + ' is not on ' + esc(bkl);
-        if (k.why === 'tight') return 'stop ' + k.x.slp.toFixed(3) + '% is under the ' + cfg.minStop + '% min';
-        if (k.why === 'ticks') return 'stop ' + k.x.slp.toFixed(3) + '% is within ' + DEMO_MIN_TICKS + ' ticks (1 tick = ' + sp.tickPct.toFixed(4) + '%)';
-        const q = Math.round(k.minPos / sp.step) * sp.qty;
-        return (sp.unit === 'share' ? '1 share = ' : '1 ' + one1 + ' (' + (+q.toPrecision(6)) + ' ' + esc(sp.unit) + ') = ') + m(k.minPos)
-          + (k.over ? ', more than ' + k.over + 'x leverage on ' + m(k.before) : ' risks ' + m(k.need) + ' at this stop, more than ' + (k.why === 'big' ? k.capR + '× the ' : 'the ') + m(k.want) + ' planned');
-      };
-      const LIMIT = 30, rowsT = T.concat(run.skips).sort((a, b) => b.i - a.i), shown = demoAll ? rowsT : rowsT.slice(0, LIMIT);
-      const head = (when, alert) => '<td class="py-1.5 pr-3 text-slate-500">' + when + '</td>' + alert;
-      const list = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-2">Trade by trade, newest first</div><div class="overflow-x-auto"><table id="sigDemoTrades" class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1.5 pr-3">#</th><th class="pr-3">When</th><th class="pr-3">Alert</th><th class="pr-3 text-right">Stop</th><th class="pr-3 text-right">Result</th><th class="pr-3 text-right">Risk</th><th class="pr-3 text-right">Position</th><th class="pr-3 text-right">Size</th><th class="pr-3 text-right">Fee</th><th class="pr-3 text-right">P&amp;L</th><th class="text-right">Balance</th></tr></thead><tbody>'
-        + shown.map(t => { const g = t.x.pr.signal;
-          const lead = head(t.i + 1, '<td class="pr-3 whitespace-nowrap text-slate-400">' + esc(g.date + ' ' + (g.time || '')) + '</td>'
-            + '<td class="pr-3 whitespace-nowrap text-slate-200">' + esc(g.symbol) + ' <span class="' + (g.side === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.side === 'long' ? 'Long' : 'Short') + '</span> <span class="text-slate-500">' + esc(g.timeframe || chanLabel(chanKey(g))) + '</span></td>'
-            + '<td class="pr-3 text-right text-slate-400">' + (t.x.slp != null ? t.x.slp.toFixed(2) + '%' : '—') + '</td>');
-          if (t.why) return '<tr class="border-t border-terminal-border/60 text-slate-500" data-skip="' + t.why + '">' + lead
-            + '<td class="pr-3 text-right whitespace-nowrap">' + rfmt(t.x.r - t.x.fee) + '</td><td colspan="6" class="pr-3 text-amber-300/80">Skipped: ' + skipTxt(t) + '</td></tr>';
-          return '<tr class="border-t border-terminal-border/60 hover:bg-white/5">' + lead
-            + '<td class="pr-3 text-right whitespace-nowrap ' + tone(t.x.r - t.x.fee) + '"' + (t.x.fee ? ' title="' + rfmt(t.x.r) + ' before fees, ' + rfmt(-t.x.fee) + ' fees"' : '') + '>' + rfmt(t.x.r - t.x.fee) + (t.x.label ? ' <span class="text-slate-500 text-[10px]">' + esc(t.x.label) + '</span>' : '') + '</td>'
-            + '<td class="pr-3 text-right ' + (t.one && t.risk > t.want * (1 + 1e-9) ? 'text-amber-300' : 'text-slate-300') + '"' + (t.one ? ' title="1 ' + one1 + (t.risk > t.want * (1 + 1e-9) ? ' risks more than the ' + esc(m(t.want)) + ' planned' : '') + '"' : '') + '>' + m(t.risk) + '</td>'
-            + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + (t.pos != null ? m(t.pos) + ' · ' + levTxt(t.lev) + (t.cap ? ' <span class="text-amber-300 text-[10px]">' + (t.cap === 'coin' ? 'max' : 'cap') + '</span>' : '') : '—') + '</td>'
-            + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + sizeTxt(t) + (t.one ? ' <span class="text-amber-300 text-[10px]">min</span>' : '') + '</td>'
-            + '<td class="pr-3 text-right text-slate-400">' + (t.fee ? '-' + m(t.fee) : '—') + '</td>'
-            + '<td class="pr-3 text-right font-bold ' + tone(t.pnl) + '">' + sm(t.pnl) + '</td><td class="text-right text-slate-200">' + m(t.bal) + '</td></tr>'; }).join('')
-        + '</tbody></table></div>'
-        + (rowsT.length > LIMIT ? '<div class="text-center mt-2"><button type="button" onclick="demoShowAll()" class="px-3 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">' + (demoAll ? 'Show the newest ' + LIMIT : 'Show all ' + rowsT.length) + '</button></div>' : '') + '</div>';
-
-      if (!n) { out.innerHTML = notes.join('') + realLine + feeLine + '<p class="text-amber-300 mb-3">None of these ' + rows.length + ' alerts can be placed as real ' + esc(bkl) + ' orders at this balance and risk. Raise the balance or the risk, ' + (cfg.lot1 === 'skip' ? 'pick Take 1 if too small' : cfg.lot1 === 'one' && cfg.lot1Cap ? 'raise the Take 1 limit' : 'pick another broker') + ' above, or turn real orders off.</p>' + list; return; }
-      out.innerHTML = notes.join('') + realLine + feeLine + stats + curve + prog
+      if (!n) { out.innerHTML = notes.join('') + realLine + feeLine + '<p class="text-amber-300 mb-3">None of these ' + rows.length + ' alerts can be placed as real ' + esc(bkl) + ' orders at this balance and risk. Raise the balance or the risk, ' + (cfg.lot1 === 'skip' ? 'pick Take 1 if too small' : cfg.lot1 === 'one' && cfg.lot1Cap ? 'raise the Take 1 limit' : 'pick another broker') + ' above, or turn real orders off.</p>' + demoTipsHtml() + trades; return; }
+      out.innerHTML = notes.join('') + realLine + feeLine + stats + curve + demoKeysHtml(card) + demoTipsHtml() + prog
         + (cfg.real && cfg.lot1 === 'always' ? '' : '<div class="mb-4">' + cmp + '</div>')
-        + list
+        + trades
         + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. Fees come off on top: position × the round trip above (position = risk ÷ stop distance), per trade under Fee; Result is in R after them. With real orders on, the position is rounded down to whole contracts (Size), so a trade can risk a little less than planned, never more unless Take 1 is picked. Stop slippage (0.05%) counts either way, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
       demoChartBind(); watchStatRows(out);
     }
@@ -13585,24 +13770,32 @@
         data: {
           // Over more than one year the day alone repeats, so each label gets its year.
           labels: ["Start"].concat(closed.map(t => btWhen(t.end) + (closed[0].end.slice(0, 4) !== closed[closed.length - 1].end.slice(0, 4) ? " " + t.end.slice(0, 4) : "") + " · " + btSym(t.sym))),
-          datasets: [{ data, borderColor: "#F59E0B", borderWidth: 2, pointRadius: closed.length > 60 ? 0 : 3, pointBackgroundColor: ["#64748B"].concat(closed.map(t => t.net >= 0 ? "#10B981" : "#F43F5E")), tension: 0.15, fill: true, backgroundColor: "rgba(245, 158, 11, 0.12)" }]
+          datasets: [{ data, borderColor: "#F59E0B", borderWidth: 2, pointRadius: closed.length > 60 ? 0 : 3, pointHoverRadius: 6, pointHitRadius: 10, pointBackgroundColor: ["#64748B"].concat(closed.map(t => t.net >= 0 ? "#10B981" : "#F43F5E")), tension: 0.15, fill: true, backgroundColor: "rgba(245, 158, 11, 0.12)" }]
         },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false,
+          // Anywhere over the chart (or a tap / drag) picks the nearest trade.
+          interaction: { mode: "index", intersect: false },
           plugins: {
             legend: { display: false },
-            tooltip: {
-              backgroundColor: "#0D1422", borderColor: "#24344E", borderWidth: 1,
-              titleFont: { family: "Inter", size: 11 }, bodyFont: { family: "Inter", size: 11 },
-              callbacks: { label: c => c.dataIndex ? `Trade ${signedMoney(closed[c.dataIndex - 1].net, cur)} · total ${signedMoney(c.parsed.y, cur)}` : "Start" }
-            }
+            tooltip: Object.assign(chartTip(), { callbacks: { label: c => btTipLines(closed, data, c.dataIndex, cur) } })
           },
           scales: {
-            x: { grid: { color: gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 9 }, maxTicksLimit: 8, callback: function (v) { return String(this.getLabelForValue(v)).split(" · ")[0]; } } },
-            y: { grid: { color: gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 9 }, callback: v => signedMoney(v, cur, 0) } }
+            x: { grid: { color: gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 10 }, maxTicksLimit: 7, maxRotation: 0, autoSkip: true, callback: function (v) { return String(this.getLabelForValue(v)).split(" · ")[0]; } } },
+            y: { grid: { color: c => c.tick && c.tick.value === 0 ? zeroC() : gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 10 }, maxTicksLimit: 6, callback: v => signedMoney(v, cur, 0) } }
           }
         }
       });
+    }
+    // A trade on the broker report's curve: its P&L, fees and time held, the total, how far under the high.
+    function btTipLines(closed, data, i, cur) {
+      if (!i) return "Start " + signedMoney(0, cur);
+      const t = closed[i - 1], hi = Math.max(0, ...data.slice(0, i + 1)), out = [];
+      out.push("Trade " + signedMoney(t.net, cur) + (t.fees ? " (fees " + money(t.fees, cur) + ")" : ""));
+      if (t.held != null) out.push("Held " + btHeld(t.held));
+      out.push("Total " + signedMoney(data[i], cur));
+      if (data[i] < hi - 0.005) out.push("Under the high by " + money(hi - data[i], cur));
+      return out;
     }
     function renderBacktestTable() {
       const body = document.getElementById("btBody"), more = document.getElementById("btMoreBar");
@@ -13999,6 +14192,14 @@
     }
     // Chart grid lines: faint in either theme.
     function gridC() { return document.documentElement.classList.contains('light') ? 'rgba(15,23,42,0.07)' : 'rgba(255,255,255,0.05)'; }
+    function zeroC() { return document.documentElement.classList.contains('light') ? 'rgba(15,23,42,0.28)' : 'rgba(148,163,184,0.35)'; }
+    // Chart tips: bigger text than the axes, no colour box, room to read on an iPad.
+    function chartTip() {
+      return { backgroundColor: '#0D1422', borderColor: '#24344E', borderWidth: 1, padding: 10, displayColors: false,
+        titleFont: { family: 'Inter', size: 12, weight: '600' }, bodyFont: { family: 'Inter', size: 12 }, footerFont: { family: 'Inter', size: 11, weight: '400' }, footerColor: '#94A3B8', bodySpacing: 3 };
+    }
+    // "Thu, 5 Nov 2026" from "2026-11-05".
+    function longDay(date) { const d = btDate(date); return d ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : String(date || ''); }
 
     // Chart.js loads on its own (async), so a slow CDN never holds up the journal.
     // When it arrives after the first render, draw again to fill in the charts.
@@ -14006,6 +14207,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-08.176', pr: 91, title: 'Demo account: what to improve; charts you can tap', pts: ['Demo account: trades fold into their own Trades section (All / Won / Lost / Skipped); new What to improve (groups costing you and working for you, skipped alerts) and Wins, losses and streaks', 'Results by also splits by exit, side, level / type, timeframe, stop size, weekday and time held', 'Charts: tap or hover anywhere for a point. Dashboard shows the day\'s P&L and trades, the Signals backtest curve has axes, dates and tips; a tap\'s tip stays on iPad'] },
       { v: '2026-11-08.175', pr: 90, title: 'Fix: Edge & breakdowns empty with Exit at', pts: ['Edge & breakdowns drew nothing when an alert the scanner called "no fill" was filled later by Exit at', 'The Scanner row in Exit targets compared leaves those alerts out and says how many'] },
       { v: '2026-11-08.174', pr: 89, title: 'Demo account: clearer chart, results by day / week / coin, hold time', pts: ['Balance chart with a price axis, dates and the drawdown under it; hover or tap it to see each trade', 'Results by day, week, month or coin: tap a row to see its trades; Top 3 / Top 5 coins vs all', 'Avg hold time (fill to exit) on the cards, per day / week / coin and on every trade'] },
       { v: '2026-11-08.173', pr: 88, title: 'Number cards easy to read on iPad and phone', pts: ['Number rows (Dashboard, Signals, Analysis, report) show 4 across on an iPad or laptop, 8 only on a wide screen; no more cut-off values or "…"', 'Best / worst (and Best / worst day on the Dashboard) shows both figures, one under the other, with the coin or day', 'Demo: the rules are short chips, what was replayed is one line, and Demo vs you shows Plan made / You made / Your exits cost'] },
