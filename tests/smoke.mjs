@@ -450,7 +450,7 @@ async function backtestRun(seed) {
 
     // Files live in Settings → Connections: Analysis has no Files tab, the Data tab lists them.
     // A report book has one row of sections: its Report first, then the ones every book has.
-    check(/^Report Overview Review( \d+)? Position size Trades Market days AI review$/.test((await page.innerText('#anSecBar')).replace(/\s+/g, ' ').trim()) && !(await page.$('[data-btsec]')), 'report book sections: ' + await page.innerText('#anSecBar'));
+    check(/^Report Overview Demo vs you Review( \d+)? Position size Trades Market days AI review$/.test((await page.innerText('#anSecBar')).replace(/\s+/g, ' ').trim()) && !(await page.$('[data-btsec]')), 'report book sections: ' + await page.innerText('#anSecBar'));
     const dataFiles = await page.evaluate(() => { switchTab('data'); return document.getElementById('btFiles').innerText; });
     check(/Delete CoinDCX's report data/.test(dataFiles) && /Remove/.test(dataFiles), 'Sync & Settings does not list the report files: ' + JSON.stringify(dataFiles.slice(0, 400)));
     await page.evaluate(() => switchTab('analysis'));
@@ -1845,8 +1845,16 @@ async function autoKeepRun(seed) {
     check(dispatched.length === 1, 'import started twice inside an hour: ' + dispatched.length);
     // A token without Actions access: the CoinDCX card says what to give it.
     dispatchStatus = 403;
-    await page.clock.runFor(15 * 60e3); await page.waitForTimeout(300);
-    const card = await page.evaluate(() => { switchTab('data'); renderDataView(); return document.getElementById('cdxStatus').innerText; });
+    await page.clock.runFor(15 * 60e3);
+    // The start is a few fetches through the test's routes: on a busy runner 300 ms was not
+    // always enough for the second one to land. Wait for it (up to 5 s), then for the card.
+    for (let i = 0; i < 50 && dispatched.length < 2; i++) await page.waitForTimeout(100);
+    let card = '';
+    for (let i = 0; i < 50; i++) {
+      card = await page.evaluate(() => { switchTab('data'); renderDataView(); return document.getElementById('cdxStatus').innerText; });
+      if (/GitHub said 403/.test(card)) break;
+      await page.waitForTimeout(100);
+    }
     check(dispatched.length === 2 && /GitHub said 403/.test(card) && /Actions: Read and write/.test(card), 'card after a refused start: ' + JSON.stringify({ n: dispatched.length, card }));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
@@ -2746,6 +2754,8 @@ async function demoRealRun(seed) {
     ['RLCUSD', 'long', 0.43, 0.43 * (1 - 0.0012), -1.5], ['MAGICUSD', 'long', 0.1, 0.098, 1], ['MRVL', 'long', 140, 137.2, 1], ['SOLUSD', 'short', 90, 91.8, -1]];
   try {
     await page.goto(base, { waitUntil: 'load' });
+    // The alerts and price data load from IndexedDB after the page: let them land first.
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded, null, { timeout: 5000 });
     await page.evaluate(A => {
       state.signals = A.map((a, i) => ({ id: 'rl' + i, key: 'r' + i, kind: 'trendline', date: '2026-10-0' + (i + 1), time: '10:00', symbol: a[0], side: a[1], score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
         filled: true, outcome: a[4] > 0 ? '+' + a[4] + 'R' : 'SL', resultR: a[4], hasReportR: true, price: a[2], entry: a[2], stop: a[3] }));
@@ -2757,6 +2767,8 @@ async function demoRealRun(seed) {
     // 100 -> +3.808 -> -1.86534 -> +1.96 -> -1.80 = 102.10266
     check(t.includes('Real orders on · Delta: whole contracts, rounded down') && t.includes('Placed 4 of 8, skipped 4: 1 smaller than 1 contract, 1 stop under 0.1%, 1 stop within 3 ticks, 1 not on Delta.') && t.includes('1 sized down to the coin\'s max leverage.'), 'real orders line: ' + t.slice(0, 1600));
     check(t.includes('Final balance $102.10') && t.includes('Trades 4 +4 skipped'), 'real orders by hand → $102.10: ' + t.slice(0, 1800));
+    // innerText needs the table laid out (hidden, its cells run together): wait for it to show.
+    await page.waitForFunction(() => { const t = document.getElementById('sigDemoTrades'); return t && t.offsetParent !== null; }, null, { timeout: 5000 }).catch(() => {});
     const rows = await page.$$eval('#sigDemoTrades tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
     const want = [
       /^8 2026-10-08 10:00 SOLUSD Short 4H 2\.00% -1\.00R SL \$1\.80 \$90\.00 · 0\.9x 1 SOL /,
@@ -3135,7 +3147,7 @@ async function analysisFiltersRun(seed) {
       const brk = document.querySelector('#anBrokers tr[data-anbroker="acct:acc_cry"]');
       return { n: checked ? +checked.querySelector('.mono-num').innerText : 0, net: card('net'), cnt, brk: brk ? brk.children[2].innerText.trim() : '',
         lvl: !document.getElementById('anLvlWrap').classList.contains('hidden'), tl: !document.getElementById('anTlWrap').classList.contains('hidden'),
-        chans: [...document.querySelectorAll('#anChanSel option')].map(o => o.innerText), hint: document.getElementById('anFilterHint').innerText };
+        chans: [...document.querySelectorAll('#anChanSel option')].map(o => o.innerText), hint: document.getElementById('anFilterHint').innerText, rules: document.getElementById('anRulesSum').innerText };
     }, ui);
     const all = await read({});
     check(JSON.stringify(all.cnt) === JSON.stringify({ all: 18, zone: 1, fib: 1, trendline: 5, none: 11 }), 'alert type counts: ' + JSON.stringify(all.cnt));
@@ -3154,7 +3166,7 @@ async function analysisFiltersRun(seed) {
     check(c4.n === 5 && c1.n === 1, 'channels: ' + JSON.stringify([c4.n, c1.n]));
     // a1 made 0.70 before a 0.10 fee, z1 made 0.80: 1.40 with fees, 1.50 without.
     const w = await read({ anKind: 'trendline', anTlType: 'support' }), wo = await read({ anKind: 'trendline', anTlType: 'support', anNoFee: true });
-    check(/\+\$1\.40/.test(w.net) && /\+\$1\.50/.test(wo.net) && /before fees/.test(wo.hint), 'fees with / without: ' + JSON.stringify([w.net, wo.net, wo.hint]));
+    check(/\+\$1\.40/.test(w.net) && /\+\$1\.50/.test(wo.net) && /no fees/.test(wo.rules) && /with fees/.test(w.rules), 'fees with / without: ' + JSON.stringify([w.net, wo.net, wo.rules]));
     const day1 = await read({ anPeriod: '1d' });
     const cust = await read({ anPeriod: 'custom', anCustom: { from: d, to: d } });
     const swap = await read({ anPeriod: 'custom', anCustom: { from: d, to: '2000-01-01' } });
@@ -3166,7 +3178,7 @@ async function analysisFiltersRun(seed) {
     // Clicking through the bar works too.
     await page.evaluate(() => { Object.assign(state.ui, { anKind: '', anPeriod: 'all' }); renderAnalysis(); });
     await page.click('#anKindBar button[data-ankind="fib"]');
-    await page.selectOption('#anLvlSel', 'L2');
+    await page.click('#anLvlBar button[data-lvl="L2"]');
     const clicked = await page.evaluate(() => [state.ui.anKind, state.ui.anLvl, document.getElementById('anFilterHint').innerText, !document.getElementById('anReset').classList.contains('hidden')]);
     check(clicked[0] === 'fib' && clicked[1] === 'L2' && /fib L2/.test(clicked[2]) && clicked[3], 'clicking the bars: ' + JSON.stringify(clicked));
     // Overview insights: setups by result, and a click on one filters the tab to it.
@@ -3182,10 +3194,10 @@ async function analysisFiltersRun(seed) {
     // Delta / All books get the broker report's view: 8 numbers, equity, pairs, days.
     // Support TL is a1 (+0.60 after a 0.10 fee) and z1 (+0.80), both on TLAUSD.
     const rep = await page.evaluate(() => { state.ui.anSec = 'report'; renderAnalysis();
-      const card = l => (document.querySelector('#anRepStrip [data-repcard="' + l + '"] .mono-num') || {}).innerText;
-      return { head: !document.getElementById('anRepHead').classList.contains('hidden'), net: card('Net P&L'), win: card('Win rate'), fees: card('Fees / funding'), bw: card('Best / worst'), n: document.querySelectorAll('#anRepStrip > div').length,
+      const card = l => (document.querySelector('#anStrip [data-ancard="' + l + '"] .mono-num') || {}).innerText;
+      return { head: !document.getElementById('anRepHead').classList.contains('hidden'), net: card('net'), win: card('win'), fees: document.getElementById('anRepSub').innerText, bw: card('bw'), n: document.querySelectorAll('#anStrip > div').length,
         pairs: [...document.querySelectorAll('#btPairs [data-anpair]')].map(b => b.getAttribute('data-anpair')), days: document.querySelectorAll('#btDays > div').length, sel: [...document.querySelectorAll('#anPairSel option')].map(o => o.value) }; });
-    check(rep.head && rep.n === 8 && /\+\$1\.40/.test(rep.net) && rep.win === '100%' && /\$0/.test(rep.fees) && /\+\$0\.80 \/ \+\$0\.60/.test(rep.bw) && rep.pairs.join() === 'TLAUSD' && rep.days === 1 && rep.sel.indexOf('TLAUSD') !== -1, 'journal report: ' + JSON.stringify(rep));
+    check(rep.head && rep.n === 8 && /\+\$1\.40/.test(rep.net) && rep.win === '100%' && /fees \$0\.10/.test(rep.fees) && /\+\$0\.80 \/ \+\$0\.60/.test(rep.bw) && rep.pairs.join() === 'TLAUSD' && rep.days === 1 && rep.sel.indexOf('TLAUSD') !== -1, 'journal report: ' + JSON.stringify(rep));
     const onePair = await page.evaluate(() => { state.ui.anKind = ''; state.ui.anTlType = ''; state.ui.anPair = 'ZZUSD'; renderAnalysis(); const n = +[...document.querySelectorAll('#anStrip > div')].find(x => /Trades checked/i.test(x.innerText)).querySelector('.mono-num').innerText; state.ui.anPair = ''; return n; });
     check(onePair === 1, 'pair filter on a journal book: ' + onePair);
   } catch (e) {
@@ -3194,6 +3206,177 @@ async function analysisFiltersRun(seed) {
   await ctx.close();
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Analysis filters: alert type, period, channel, level, trendline type, fees');
   errs.forEach(e => { console.log('     ' + e); failures.push('analysis filters: ' + e); });
+}
+
+// Analysis in Signals' design, and its demo mode (lakky, 2026-11-08: "check what mistakes
+// i did if i go with the tp and sl not with amount i saw and exit"): each trade with a
+// stop is replayed from its own entry on (fake) Delta candles with the panel's target,
+// then set beside the exit taken. Every plan figure below is worked out by hand.
+async function anDemoRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  // Three days ago, 10:00 IST: every trade opens then.
+  const d0 = new Date(Date.now() - 3 * 864e5 + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const T0 = Date.parse(d0 + 'T10:00:00+05:30'), H = 3600e3;
+  // Each coin: a flat price, and a few moves at given times after the entry.
+  const PATHS = {
+    BTCUSD: { base: 100, ev: [[0.5 * H, 'h', 101.6]] },               // long 100 / 99: reaches 1.5R at 10:30
+    ETHUSD: { base: 200, ev: [[0.3 * H, 'h', 202.5]] },               // short 200 / 202: stopped at 10:18
+    SOLUSD: { base: 50, ev: [[0.6 * H, 'l', 48.9]] },                 // long 50 / 49: stopped at 10:36
+    XRPUSD: { base: 1, ev: [[40 * H, 'h', 1.016]] },                  // long 1 / 0.99: 1.5R only after 40 h (15m candles)
+    ADAUSD: { base: 10, ev: [] }                                      // long 10 / 9.9: never moves, still open
+  };
+  const reads = [];
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const u = new URL(route.request().url()), sym = u.searchParams.get('symbol'), p = PATHS[sym];
+    const res = u.searchParams.get('resolution'), ms = { '1m': 60e3, '15m': 900e3, '4h': 4 * H }[res];
+    // BTC days (1d / 1h) are not the demo's: refused, like the other tests do.
+    if (!ms) return route.abort();
+    reads.push(sym + ' ' + res);
+    if (!p) return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: [] }) });
+    const from = +u.searchParams.get('start') * 1000, to = Math.min(+u.searchParams.get('end') * 1000, Date.now()), out = [];
+    for (let t = Math.ceil(from / ms) * ms; t < to; t += ms) {
+      let h = p.base * 1.0005, l = p.base * 0.9995;
+      p.ev.forEach(([at, k, v]) => { const e = T0 + at; if (e >= t && e < t + ms) { if (k === 'h') h = Math.max(h, v); else l = Math.min(l, v); } });
+      out.push({ time: t / 1000, open: p.base, high: h, low: l, close: p.base });
+    }
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: out.reverse() }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady, null, { timeout: 5000 });
+    await page.evaluate(d => {
+      const tr = (id, sym, dir, entry, exit, stop, qty, extra) => Object.assign({ id, accountId: 'acc_cry', date: d, time: '10:00', exitDate: d, exitTime: '11:00', symbol: sym, direction: dir, entry, exit, stop, qty, fees: 0.1, setup: '', rules: [], notes: '' }, extra || {});
+      state.trades = state.trades.filter(t => t.accountId !== 'acc_cry').concat([
+        tr('dBTC', 'BTCUSD', 'long', 100, 100.5, 99, 2),     // you +0.9, plan +1.5R = 3 - 0.1 = +2.9
+        tr('dETH', 'ETHUSD', 'short', 200, 203, 202, 1),     // you -3.1, plan SL -1.0505R = -2.101 - 0.1 = -2.201
+        tr('dSOL', 'SOLUSD', 'long', 50, 49.6, 49, 2),       // you -0.9, plan SL -1.0245R = -2.049 - 0.1 = -2.149
+        tr('dXRP', 'XRPUSD', 'long', 1, 1.004, 0.99, 100),   // you +0.3, plan +1.5R = 1.5 - 0.1 = +1.4
+        tr('dADA', 'ADAUSD', 'long', 10, 10.05, 9.9, 1),     // still open on the plan
+        tr('dNo', 'DOGEUSD', 'long', 0.2, 0.21, 0, 100)      // no stop: not replayed
+      ]);
+      state.signals = [];
+      Object.assign(state.ui, { account: 'acc_cry', allCur: 'USD', anSec: 'overview', anKind: '', anChan: '', anLvl: '', anTlType: '', anCoins: '', anNoFee: false, anPeriod: 'all', mktFilter: '', anPair: '' });
+      delete state.ui.anPlay;
+      save(); renderAll(); switchTab('analysis');
+    }, d0);
+    // The Signals design: two folding panels, 8 cards, and no candle read without the demo.
+    const look = await page.evaluate(() => ({ which: !!document.querySelector('#anWhichPanel[open] #anPeriodBar'), rules: !!document.querySelector('#anRulesPanel[open] #anTgtBar'),
+      exits: [...document.querySelectorAll('#anTgtBar button')].map(b => b.innerText).join(), cards: document.querySelectorAll('#anStrip > div').length,
+      coins: [...document.querySelectorAll('#anCoinBar button[data-coins]')].map(b => b.innerText).join(), line: document.getElementById('anDemoLine').classList.contains('hidden') }));
+    check(look.which && look.rules && look.exits === 'My exit,1R,1.5R,2R,3R,1%,2%,3%' && look.cards === 8 && look.coins === 'All,Top 3,Top 5,Picks' && look.line, 'Signals-style panels: ' + JSON.stringify(look));
+    await page.waitForTimeout(300);
+    check(reads.length === 0, 'no candles read with My exit: ' + reads.join());
+    // Fold a panel: it says in one line what it is set to, and stays folded after a reload.
+    await page.click('#anWhichPanel > summary h3');
+    await page.waitForTimeout(100);
+    const sum = await page.evaluate(() => ({ open: document.getElementById('anWhichPanel').open, sum: document.getElementById('anWhichSum').innerText, fold: state.ui.sigFold }));
+    check(!sum.open && /All trades · All · all channels/.test(sum.sum) && sum.fold && sum.fold.anWhich === true, 'folded Which trades: ' + JSON.stringify(sum));
+    await page.click('#anWhichPanel > summary h3');
+    // Demo at 1.5R: the Demo section opens and every trade with a stop is read.
+    await page.click('#anTgtBar button[data-tgt="1.5R"]');
+    await page.waitForFunction(() => !anDemoBusy && /4 of 6 trades replayed/.test(document.getElementById('anDemoLine').innerText), null, { timeout: 15000 });
+    const v = await page.evaluate(() => {
+      const card = k => (document.querySelector('#anStrip [data-ancard="' + k + '"]') || {}).innerText || '';
+      const rows = {}; document.querySelectorAll('#anDemoTable tbody tr').forEach(tr => { rows[tr.getAttribute('data-demorow')] = [...tr.children].map(td => td.innerText.replace(/\s+/g, ' ').trim()); });
+      return { sec: state.ui.anSec, shown: !document.querySelector('[data-ansec="demo"]').classList.contains('hidden'), line: document.getElementById('anDemoLine').innerText,
+        n: card('demo-n'), net: card('net'), diff: card('diff'), win: card('win'), avgr: card('avgr'), rows, head: document.getElementById('anDemoHead').innerText, habit: (document.getElementById('anDemoHabit') || {}).innerText || '',
+        groups: [...document.querySelectorAll('#anDemoGroups [data-verdict]')].map(b => b.getAttribute('data-verdict') + ':' + b.innerText.replace(/\s+/g, ' ')),
+        rules: document.getElementById('anRulesSum').innerText };
+    });
+    check(v.sec === 'demo' && v.shown, 'picking a target opens Demo vs you: ' + v.sec);
+    check(/2 with no stop|1 with no stop/.test(v.line) && /1 still open/.test(v.line), 'demo line counts the trades it could not play: ' + v.line);
+    // Plan: +2.90 -2.201 -2.149 +1.40 = -0.05; you: +0.90 -3.10 -0.90 +0.30 = -2.80; plan vs you +2.75.
+    check(/-\$0\.05/.test(v.net) && /you -\$2\.80/.test(v.net), 'demo net vs yours: ' + v.net);
+    check(/\+\$2\.75/.test(v.diff) && /what your exits cost/.test(v.diff), 'plan vs you: ' + v.diff);
+    check(/50%/.test(v.win) && /you 50%/.test(v.win), 'win rate: ' + v.win);
+    const row = (id, you, plan, how, diff, what) => {
+      const r = v.rows[id];
+      check(r && r[1].indexOf(you) === 0 && r[2].indexOf(plan) === 0 && r[2].indexOf(how) !== -1 && r[3] === diff && r[4] === what, id + ': ' + JSON.stringify(r));
+    };
+    row('dBTC', '+$0.90', '+$2.90', 'Target', '+$2.00', 'Closed before the TP');
+    row('dETH', '-$3.10', '-$2.20', 'SL', '+$0.90', 'Lost past the stop');
+    row('dSOL', '-$0.90', '-$2.15', 'SL', '-$1.25', 'Cut before the stop');
+    row('dXRP', '+$0.30', '+$1.40', 'Target', '+$1.10', 'Closed before the TP');
+    check(!v.rows.dADA && !v.rows.dNo, 'open and stop-less trades are not in the table: ' + Object.keys(v.rows).join());
+    check(/Costliest habit: Closed before the TP on 2 trades, \$3\.10 less/.test(v.habit), 'costliest habit: ' + v.habit);
+    check(v.groups.length === 3 && /^early:/.test(v.groups[0]) && v.groups.some(g => /^saved:/.test(g)), 'groups: ' + JSON.stringify(v.groups));
+    check(/demo: exit at 1\.5R/.test(v.rules), 'rules summary: ' + v.rules);
+    // Candles: 1m first, and no more once 1.5R closes the trade. ETH and SOL are stopped and
+    // BTC reaches 1.5R within the day: 1m only. XRP's 1.5R comes after 40 h, so it reads 15m
+    // candles too; ADA (open) reads on up to now. DOGE (no stop) is never read.
+    const rd = reads.join();
+    check(/BTCUSD 1m/.test(rd) && !/BTCUSD 15m/.test(rd) && !/ETHUSD 15m/.test(rd) && !/SOLUSD 15m/.test(rd) && /XRPUSD 15m/.test(rd) && /ADAUSD 15m/.test(rd) && !/DOGE/.test(rd) && !/4h/.test(rd) && reads.length === 7, 'candle reads: ' + rd);
+    // A group click lists only its trades.
+    await page.click('#anDemoGroups [data-verdict="saved"]');
+    const only = await page.evaluate(() => [...document.querySelectorAll('#anDemoTable tbody tr')].map(tr => tr.getAttribute('data-demorow')));
+    check(only.join() === 'dSOL', 'group filter: ' + only.join());
+    // Redraws read nothing again, and neither does a reload: the trades 1.5R closes are kept,
+    // and ADA, still open, was read under 15 minutes ago.
+    const before = reads.length;
+    await page.evaluate(() => renderAnalysis());
+    await page.waitForTimeout(400);
+    check(reads.length === before, 'no new reads on a redraw: ' + reads.slice(before).join());
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady, null, { timeout: 5000 });
+    await page.evaluate(() => switchTab('analysis'));
+    await page.waitForFunction(() => document.getElementById('anDemoLine') && /4 of 6 trades replayed/.test(document.getElementById('anDemoLine').innerText) && !anDemoBusy, null, { timeout: 15000 });
+    await page.waitForTimeout(300);
+    check(reads.length === before, 'nothing read again after a reload: ' + reads.slice(before).join());
+    // 3R: BTC's walk stopped at 1.5R, so it is read on (to now, still open); XRP's already
+    // runs to now and ADA's is fresh. ETH and SOL stay stopped.
+    await page.click('#anTgtBar button[data-tgt="3R"]');
+    // "3 still open" only once BTC's later candles are in (until then it is waiting for prices).
+    await page.waitForFunction(() => !anDemoBusy && /2 of 6 trades replayed.*3 still open/.test(document.getElementById('anDemoLine').innerText), null, { timeout: 15000 });
+    const r3 = await page.evaluate(() => ({ line: document.getElementById('anDemoLine').innerText, ids: [...document.querySelectorAll('#anDemoTable tbody tr')].map(tr => tr.getAttribute('data-demorow')).sort().join() }));
+    check(reads.slice(before).join() === 'BTCUSD 1m,BTCUSD 15m' && /3 still open/.test(r3.line) && r3.ids === 'dETH,dSOL', '3R reads only BTC on: ' + reads.slice(before).join() + ' ' + JSON.stringify(r3));
+    // Back to 1.5R: nothing read, the same figures.
+    const b15 = reads.length;
+    await page.click('#anTgtBar button[data-tgt="1.5R"]');
+    await page.waitForFunction(() => !anDemoBusy && /4 of 6 trades replayed/.test(document.getElementById('anDemoLine').innerText), null, { timeout: 15000 });
+    await page.waitForTimeout(300);
+    const bt = await page.evaluate(() => [...document.querySelector('#anDemoTable tr[data-demorow="dBTC"]').children].map(td => td.innerText.replace(/\s+/g, ' ').trim()));
+    check(reads.length === b15 && bt[2].indexOf('+$2.90') === 0, 'back to 1.5R, nothing read: ' + reads.slice(b15).join() + ' ' + JSON.stringify(bt));
+    // Hold 1 day: XRP's 1.5R comes too late, so it closes at the day's price (Time exit).
+    await page.click('#anHoldBar button[data-hold="1d"]');
+    await page.waitForFunction(() => !anDemoBusy && document.querySelector('#anDemoTable tr[data-demorow="dXRP"]'), null, { timeout: 15000 });
+    await page.waitForTimeout(300);
+    const x1 = await page.evaluate(() => [...document.querySelector('#anDemoTable tr[data-demorow="dXRP"]').children].map(td => td.innerText.replace(/\s+/g, ' ').trim()));
+    check(/Time exit/.test(x1[2]) && x1[2].indexOf('-$0.10') === 0, 'XRP held 1 day: ' + JSON.stringify(x1));
+    // Coins: Top 3 by market cap keeps BTC, ETH and XRP.
+    await page.click('#anHoldBar button[data-hold="tp"]');
+    await page.click('#anCoinBar button[data-coins="top3"]');
+    await page.waitForFunction(() => !anDemoBusy, null, { timeout: 15000 });
+    const top = await page.evaluate(() => ({ ids: [...document.querySelectorAll('#anDemoTable tbody tr')].map(tr => tr.getAttribute('data-demorow')).sort().join(), list: (document.getElementById('anCoinList') || {}).innerText }));
+    check(top.ids === 'dBTC,dETH,dXRP' && top.list === 'BTC, ETH, XRP', 'Top 3 coins: ' + JSON.stringify(top));
+    // Reset puts back My exit: no demo line, the usual cards.
+    await page.click('#anRulesResetBtn');
+    const off = await page.evaluate(() => ({ line: document.getElementById('anDemoLine').classList.contains('hidden'), checked: [...document.querySelectorAll('#anStrip > div')].some(d => /Trades checked/.test(d.innerText)), tgt: anTgt(), quick: document.querySelectorAll('#anDemoQuick button').length }));
+    check(off.line && off.checked && !off.tgt && off.quick === 7, 'reset to my exits: ' + JSON.stringify(off));
+    // Pure: the walk across candle sizes. 1m then 15m candles; the fill is the candle the entry is in.
+    const pure = await page.evaluate(() => {
+      const px = { side: 'long', entry: 100, stop: 99, inMs: 600000 };
+      const m = (t, h, l, c, r) => ({ t, h, l, c, r });
+      const a = anWalk(px, [m(540000, 100.2, 98.5, 100, 60000), m(600000, 100.3, 99.5, 100.2, 60000), m(660000, 100.4, 99.8, 100.1, 60000), m(900000, 101.6, 100, 101.5, 900000)], Infinity);
+      const b = anWalk(px, [m(600000, 100.3, 98.9, 100.2, 60000)], Infinity);
+      const c = anWalk(px, [m(0, 1, 1, 1, 60000)], Infinity);
+      const sc = w => { const o = tgtScore({ entry: 100, stop: 99, side: 'long', market: '' }, w, { k: '1.5R', r: 1.5 }, true, null, null); return o && [+o.r.toFixed(4), o.label]; };
+      return { a: sc(a), b: sc(b), c: c.none || '' };
+    });
+    // a: the 98.5 dip came before the entry minute, so it doesn't count; 1.5R is reached on the 15m candle.
+    check(JSON.stringify(pure.a) === '[1.5,"Target"]' && JSON.stringify(pure.b) === '[-1.0495,"SL"]' && /no candles/.test(pure.c), 'pure walk: ' + JSON.stringify(pure));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'Analysis: Signals-style panels and demo mode (plan TP / SL vs your exit)';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
 // A trade goes to the alert whose entry is closest to its own (lakky, 2026-11-03).
@@ -3565,7 +3748,7 @@ async function layoutRun(seed) {
     });
     check(JSON.stringify(v.order) === '[0,0,1,2,3]' && v.today === 'goal|today', 'dashboard order (goal + today, month, numbers, sections): ' + JSON.stringify([v.order, v.today]));
     check(v.dash === "Equity & calendar|Day's trades|Week & grade|Time & habits", 'dashboard sections: ' + v.dash);
-    check(/^Report\|Overview\|Review(\s*\d+)?\|Position size\|Trades\|Market days\|AI review$/.test(v.anSecs), 'analysis sections: ' + v.anSecs);
+    check(/^Report\|Overview\|Demo vs you\|Review(\s*\d+)?\|Position size\|Trades\|Market days\|AI review$/.test(v.anSecs), 'analysis sections: ' + v.anSecs);
     check(v.bar === 'All books|Test NSE|Test Crypto' && v.lines.join(',') === 'Test 8,Test 8', 'empty book left out of Analysis: ' + JSON.stringify([v.bar, v.lines]));
     check(v.total[0] === 'Total' && v.total[1] === v.want.net && v.total[2] === v.want.n, 'results by broker total: ' + JSON.stringify([v.total, v.want]));
     check(v.brokersShown && !v.aiShown && v.aiOnly, 'AI review has its own section: ' + JSON.stringify([v.brokersShown, v.aiShown, v.aiOnly]));
@@ -3649,7 +3832,7 @@ async function cleanRun(seed) {
     });
     check(v.bar === '40%' && /bg-emerald-500/.test(v.barCls) && v.barTxt === '40% of $2.50' && v.pnl === '-$1.00', 'loss bar at 40%: ' + JSON.stringify([v.bar, v.barCls, v.barTxt, v.pnl]));
     check(v.bar2[0] === '80%' && /bg-amber-500/.test(v.bar2[1]), 'loss bar at 80% turns amber: ' + JSON.stringify(v.bar2));
-    check(/^\*Equity & calendar\|Day's trades\|Week & grade\|Time & habits$/.test(v.tabs) && /^Report\|Overview\|Review\(\d+\)\|Position size/.test(v.anTabs), 'dashboard and analysis tabs: ' + v.tabs + ' / ' + v.anTabs);
+    check(/^\*Equity & calendar\|Day's trades\|Week & grade\|Time & habits$/.test(v.tabs) && /^Report\|Overview\|Demo vs you\|Review\(\d+\)\|Position size/.test(v.anTabs), 'dashboard and analysis tabs: ' + v.tabs + ' / ' + v.anTabs);
     check(v.opts === 'All channels (3)|CRYPTO 4h (1)|CRYPTO 1D (2)' && v.chipsLeft === 0, 'channel dropdown: ' + JSON.stringify([v.opts, v.chipsLeft]));
     check(v.chan === 'CRYPTO 4H' && v.picked === 'CRYPTO 4H', 'channel picked from the dropdown: ' + JSON.stringify([v.chan, v.picked]));
     check(/^\*Zone alerts 3\|Fib alerts 0\|Trendline alerts 0$/.test(v.kind), 'scanner switch: ' + v.kind);
@@ -5129,6 +5312,7 @@ await cleanupRun(data);
 await behaviourRun(data);
 await setupLevelRun(data);
 await analysisFiltersRun(data);
+await anDemoRun(data);
 await alertPriceMatchRun(data);
 await aiReviewRun(data);
 await layoutRun(data);

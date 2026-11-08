@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.170">
+  <meta name="app-version" content="2026-11-08.172">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -312,7 +312,14 @@
     .sig-panel:not([open]) #sigPeriodHint{display:none}
     #sigDemoRealForm button{white-space:nowrap}#sigDemoRealForm .flex{flex-wrap:wrap}
     @media (max-width:639px){.sig-row{grid-template-columns:3.3rem minmax(0,1fr);gap:.3rem .5rem}.sig-ctl .flex{gap:2px}.sig-ctl button{padding-left:.4rem;padding-right:.4rem}}
-    @media (max-width:639px){#sigCoinPicks{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}#sigCoinPicks::-webkit-scrollbar{display:none}#sigCoinPicks .sig-coin{flex:0 0 auto}}
+    @media (max-width:639px){.coin-picks{flex-wrap:nowrap!important;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}.coin-picks::-webkit-scrollbar{display:none}.coin-picks .sig-coin{flex:0 0 auto}}
+    .sig-panel:not([open]) #anFilterHint{display:none}
+    #anReset{color:var(--acc);font-weight:500;margin-left:.4rem}
+    .demo-vs{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.5rem}
+    @media (max-width:639px){.demo-vs{grid-template-columns:repeat(2,minmax(0,1fr))}.demo-vs>button{padding:.45rem .55rem}}
+    .demo-vs>button{text-align:left;border:1px solid var(--line);border-radius:10px;padding:.55rem .7rem;background:var(--inset)}
+    .demo-vs>button:hover{border-color:var(--line2)}
+    .demo-vs>button.on{border-color:color-mix(in srgb,var(--acc) 55%,transparent);background:color-mix(in srgb,var(--acc) 8%,transparent)}
     .sig-coin{padding:.18rem .55rem;border-radius:999px;border:1px solid var(--line2);font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums}
     .sig-coin:hover{color:var(--txt)}
     .sig-coin.on{background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc);border-color:color-mix(in srgb,var(--acc) 45%,transparent);font-weight:600}
@@ -1153,37 +1160,51 @@
         <button type="button" onclick="pickBacktestFile()" title="Upload a broker's Excel or CSV trade report, such as CoinDCX" class="px-3 py-1.5 rounded-lg border border-terminal-border text-xs text-slate-300 hover:text-white hover:border-amber-500">+ Upload broker report</button>
         <input type="file" id="btFileInput" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" class="hidden" onchange="handleBacktestFile(this)">
       </div>
-      <!-- Filters: what to look at (book, setup, period), then narrow it down -->
-      <div class="filters text-xs">
+      <!-- Book and alert type, then two panels like Signals: which trades are counted,
+           and how each one is played (your own exit, or the demo's fixed TP and SL). -->
+      <div class="flex flex-wrap items-center gap-2">
         <div id="anBrokerBar" class="flex flex-wrap gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
         <div id="anKindBar" class="seg"></div>
-        <div class="flex flex-wrap items-center gap-2">
-          <div id="anPeriodBar" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
-          <div id="anCustomRange" class="hidden flex flex-wrap items-center gap-1.5">
-            <input type="date" id="anCustomFrom" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
-            <span class="text-slate-500 text-xs">to</span>
-            <input type="date" id="anCustomTo" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
-          </div>
-        </div>
       </div>
-      <div class="filters an-sub text-xs">
-        <label class="fsel"><span>Channel</span><span id="anChanBar"></span></label>
-        <label id="anLvlWrap" class="fsel hidden"><span>Level</span><span id="anLvlBar"></span></label>
-        <label id="anTlWrap" class="fsel hidden"><span>Type</span><span id="anTlBar"></span></label>
-        <label id="anMktRow" class="fsel"><span>BTC day</span><span id="anMktBar"></span></label>
-        <label id="anFeeRow" class="fsel"><span>Fees</span><span id="anFeeBar"></span></label>
-        <button type="button" id="anReset" class="hidden text-[12px] text-amber-300 hover:text-amber-200 underline" onclick="anResetFilters()">Clear filters</button>
-        <span id="anFilterHint" class="text-xs text-slate-500 ml-auto"></span>
-        <details id="anHowLive" class="text-[11px] text-slate-500">
-          <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How this is worked out</summary>
-          <p class="leading-relaxed mt-1.5" id="anAssumptions"></p>
+      <div class="sig-panels">
+        <details id="anWhichPanel" class="card sig-panel" data-fold="anWhich" open>
+          <summary><span class="sig-chev">&#9662;</span><h3>Which trades</h3><span id="anWhichSum" class="sig-sum"></span><span class="sig-ph-r"><span id="anFilterHint"></span> <button type="button" id="anReset" class="hidden" onclick="event.preventDefault();event.stopPropagation();anResetFilters()" title="Back to every trade: all history, every alert type, channel and coin, all days">Clear</button></span></summary>
+          <div class="sig-row"><span class="sig-lab">Period</span><div class="sig-ctl">
+            <div id="anPeriodBar" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
+            <div id="anCustomRange" class="hidden flex flex-wrap items-center gap-1.5">
+              <input type="date" id="anCustomFrom" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
+              <span class="text-slate-500 text-xs">to</span>
+              <input type="date" id="anCustomTo" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
+            </div></div></div>
+          <div class="sig-row"><span class="sig-lab">Channel</span><div id="anChanBar" class="sig-ctl fsel"></div></div>
+          <div id="anCoinWrap" class="sig-row"><span class="sig-lab">Coins</span><div id="anCoinBar" class="sig-ctl"></div></div>
+          <div id="anLvlWrap" class="sig-row hidden"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="anLvlBar"></div></div></div>
+          <div id="anTlWrap" class="sig-row hidden"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="anTlBar"></div></div></div>
+          <div id="anMktRow" class="sig-row"><span class="sig-lab">BTC day</span><div class="sig-ctl"><div id="anMktBar"></div></div></div>
         </details>
-        <details id="anHowReport" class="hidden text-[11px] text-slate-500">
-          <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How trades are built from a broker report</summary>
-          <p class="leading-relaxed mt-1.5">The report lists events, not trades: orders, and funding paid or received every few hours while a position is open. Rows are grouped by pair in time order. An order with no P&amp;L (only a fee) opens a trade or adds to it; an order with P&amp;L closes part or all of it. The next fee-only order after a close starts a new trade. Funding goes to the trade open on that pair at the time. Net P&amp;L is the report's own net column (gross plus settlement, less fees). A trade with no closing order yet counts as open and stays out of the win rate. Times are as written in the report. Closed trades also count on the Dashboard, in goals and in the book's balance, on the day they closed; open ones wait for their close.</p>
+        <details id="anRulesPanel" class="card sig-panel" data-fold="anRules" open>
+          <summary><span class="sig-chev">&#9662;</span><h3>How each trade is played</h3><span id="anRulesSum" class="sig-sum"></span><span id="anRulesReset" class="sig-ph-r"></span></summary>
+          <div class="sig-row"><span class="sig-lab">Exit at</span><div class="sig-ctl"><div id="anTgtBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">Move SL</span><div class="sig-ctl"><div id="anStopBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">Trail TP</span><div class="sig-ctl"><div id="anTrailBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">Hold</span><div class="sig-ctl"><div id="anHoldBar"></div></div></div>
+          <div id="anFeeRow" class="sig-row"><span class="sig-lab">Fees</span><div class="sig-ctl"><div id="anFeeBar"></div></div></div>
         </details>
       </div>
 
+      <!-- Headline numbers for whatever the panels select (the demo's, with yours beside them, in demo mode) -->
+      <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="anStrip"></section>
+      <div id="anDemoLine" class="hidden text-[11px] font-mono text-amber-300"></div>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+        <details id="anHowLive">
+          <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How this is worked out</summary>
+          <p class="leading-relaxed mt-1.5 max-w-5xl" id="anAssumptions"></p>
+        </details>
+        <details id="anHowReport" class="hidden">
+          <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How trades are built from a broker report</summary>
+          <p class="leading-relaxed mt-1.5 max-w-5xl">The report lists events, not trades: orders, and funding paid or received every few hours while a position is open. Rows are grouped by pair in time order. An order with no P&amp;L (only a fee) opens a trade or adds to it; an order with P&amp;L closes part or all of it. The next fee-only order after a close starts a new trade. Funding goes to the trade open on that pair at the time. Net P&amp;L is the report's own net column (gross plus settlement, less fees). A trade with no closing order yet counts as open and stays out of the win rate. Times are as written in the report. Closed trades also count on the Dashboard, in goals and in the book's balance, on the day they closed; open ones wait for their close.</p>
+        </details>
+      </div>
 
 
       <div id="anReport" class="hidden space-y-4">
@@ -1221,7 +1242,6 @@
                 <div class="flex items-center gap-2 text-xs"><span class="text-slate-500">Pair</span><span id="anPairBar" class="fsel"></span></div>
                 <span id="anRepSub" class="text-slate-500 text-[11px]"></span>
               </div>
-              <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="anRepStrip"></section>
             </div>
             <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs">
               <div class="flex flex-wrap items-baseline justify-between gap-2 mb-2">
@@ -1245,7 +1265,6 @@
           </section>
 
       <section data-ansec="overview" class="space-y-4">
-        <section class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 statrow" id="anStrip"></section>
         <!-- What the numbers say: what to keep, what to drop, what to change -->
         <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
           <div id="anInsights" class="card p-4 lg:col-span-2"></div>
@@ -1266,6 +1285,11 @@
         </div>
         <!-- One line per broker: journal books and uploaded broker reports -->
         <div id="anBrokers" class="bg-terminal-card border border-terminal-border rounded-xl overflow-hidden font-mono text-xs"></div>
+      </section>
+
+      <!-- Demo vs you: every trade replayed with the panel's TP and SL from its own entry -->
+      <section data-ansec="demo" class="space-y-4 hidden">
+        <div id="anDemo" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
       </section>
 
       <section data-ansec="size" class="space-y-4 hidden">
@@ -4206,7 +4230,7 @@
     // Same periods as the Signals tab (lakky, 2026-10-31).
     const AN_PERIODS = [{ k: "1d", label: "1 Day" }, { k: "7d", label: "7 Days" }, { k: "1m", label: "1 Month" }, { k: "all", label: "All" }, { k: "custom", label: "Custom" }];
     const AN_PAGE = 10;
-    let anVisible = AN_PAGE, anFilter = null;
+    let anVisible = AN_PAGE, anFilter = null, anDemoVisible = AN_PAGE, anDemoPick = null;
     function anPeriodMode() { return AN_PERIODS.some(p => p.k === state.ui.anPeriod) ? state.ui.anPeriod : "all"; }
     // First and last trading day in view ("" = open ended).
     function anRangeFull() {
@@ -4245,7 +4269,8 @@
     function anTlType() { return anKind() === "trendline" ? SIG_TL_TYPES.find(x => x.k && x.k === state.ui.anTlType) || null : null; }
     function anNoFee() { return state.ui.anNoFee === true; }
     function anResetFilters() {
-      Object.assign(state.ui, { anKind: "", anChan: "", anLvl: "", anTlType: "", anNoFee: false, anPeriod: "all", mktFilter: "", anPair: "" });
+      // Fees are a rule of play now: the other panel's Reset puts them back.
+      Object.assign(state.ui, { anKind: "", anChan: "", anLvl: "", anTlType: "", anCoins: "", anPeriod: "all", mktFilter: "", anPair: "" });
       anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis();
     }
     function anSet(k, v) { state.ui[k] = v; anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis(); }
@@ -4291,6 +4316,26 @@
         return Object.assign({}, t, { pnl: (t.pnl || 0) + (t.fees || 0), fees: 0, noFee: true, orig: o2 });
       });
     }
+    // Coins on your trades, like Signals' Coins row: "BTC" for BTCUSD or B-BTC_USDT;
+    // NSE, gold, silver and US stocks are not coins.
+    function anCoinOf(t) { const a = acct(t.accountId); return coinOf({ symbol: aiDeltaSym(t.symbol), market: a && a.market === "nse" ? "NSE" : "" }); }
+    function anCoinMode() { return SIG_COIN_MODES.some(x => x.k === state.ui.anCoins) ? state.ui.anCoins : ""; }
+    function anCoinRank() { return state.ui.anCoinRank === "alerts" ? "alerts" : "cap"; }
+    function anCoinPicks() { return Array.isArray(state.ui.anCoinPicks) ? state.ui.anCoinPicks.filter(x => typeof x === "string" && x) : SIG_COIN_PICKS.slice(); }
+    function setAnCoins(k) { anSet('anCoins', SIG_COIN_MODES.some(x => x.k === k) ? k : ""); }
+    function setAnCoinRank(v) { anSet('anCoinRank', v === "alerts" ? "alerts" : "cap"); }
+    function toggleAnCoinPick(c) { const p = anCoinPicks(), i = p.indexOf(c); if (i === -1) p.push(c); else p.splice(i, 1); anSet('anCoinPicks', p); }
+    // The coins the Coins row keeps (null: every trade), from the trades in view.
+    let anCoinCur = null;
+    function anPassCoin(t) { return !anCoinCur || anCoinCur.indexOf(anCoinOf(t)) !== -1; }
+    // A row of buttons; fn is called with the picked key.
+    function anSegBar(id, items, cur, fn, attr, title) {
+      const bar = document.getElementById(id);
+      if (!bar) return;
+      bar.className = 'flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+      if (title) bar.title = title;
+      bar.innerHTML = items.map(([k, l]) => '<button type="button" data-' + attr + '="' + esc(k) + '" onclick="' + fn + '(\'' + esc(k) + '\')" class="px-2 py-1 rounded-md font-semibold ' + (k === cur ? SEG_ON : SEG_OFF) + '">' + esc(l) + '</button>').join('');
+    }
     function renderAnFilters(map, base) {
       // base: trades in the period (before the type / channel / level filters), with their setup.
       const kind = anKind();
@@ -4315,8 +4360,9 @@
       }
       // Channel: the alerts behind the trades of this alert type.
       const cb = document.getElementById('anChanBar');
+      const pool = base.filter(x => anPassSetup(x.s, true));
       if (cb) {
-        const pool = base.filter(x => anPassSetup(x.s, true)), cnt = {};
+        const cnt = {};
         pool.forEach(x => { if (x.s.chan) cnt[x.s.chan] = (cnt[x.s.chan] || 0) + 1; });
         const chan = state.ui.anChan || "";
         const keys = SIG_CHANNELS.concat(FIBTL_CHANNELS).concat(Object.keys(cnt)).filter((k, i, a) => a.indexOf(k) === i && (cnt[k] || k === chan));
@@ -4331,35 +4377,52 @@
         if (chan) sel.className += ' set';
         cb.innerHTML = ''; cb.appendChild(sel);
       }
-      // Small dropdowns: one line, highlighted when set.
-      const dd = (id, items, cur, onPick, title) => {
-        const host = document.getElementById(id);
-        if (!host) return;
-        const sel = document.createElement('select');
-        sel.id = id.replace(/Bar$/, 'Sel');
-        if (title) sel.title = title;
-        items.forEach(([k, l]) => { const o = document.createElement('option'); o.value = k; o.innerText = l; if (k === cur) o.selected = true; sel.appendChild(o); });
-        if (cur !== items[0][0]) sel.className = 'set';
-        sel.onchange = () => onPick(sel.value);
-        host.innerHTML = ''; host.appendChild(sel);
-      };
-      dd('anFeeBar', [["with", "With fees"], ["without", "Without fees"]], anNoFee() ? "without" : "with", k => anSet('anNoFee', k === "without"), "Without: each trade's fees added back");
+      // Coins: from the trades of this type and channel in the period.
+      const coinCnt = {};
+      pool.filter(x => anPassSetup(x.s)).forEach(x => { const c = anCoinOf(x.t); if (c) coinCnt[c] = (coinCnt[c] || 0) + 1; });
+      anCoinCur = Object.keys(coinCnt).length ? sigCoinSet(coinCnt, null, COINS.an) : null;
+      renderCoinBar(COINS.an, coinCnt, anCoinCur);
       document.getElementById('anLvlWrap').classList.toggle('hidden', kind !== 'fib');
-      dd('anLvlBar', [["", "All levels"]].concat(FIB_LEVEL_KEYS.map(k => [k, k])), anLvl(), k => anSet('anLvl', k), "The fib level the trade was taken at");
+      anSegBar('anLvlBar', [["", "All"]].concat(FIB_LEVEL_KEYS.map(k => [k, k])), anLvl(), "setAnLvl", "lvl", "The fib level the trade was taken at");
       document.getElementById('anTlWrap').classList.toggle('hidden', kind !== 'trendline');
-      dd('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.k ? x.label : "All types"]), anTlType() ? anTlType().k : "", k => anSet('anTlType', k), "Support / resistance bounce, or a break of the line");
-      dd('anMktBar', [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]], mktFilter(), v => setMktFilter('mktCalAnalysis', v), "BTC's daily candle on the trade's day");
-      const anyOn = !!(anKind() || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anNoFee() || mktFilter() || anPeriodMode() !== "all");
+      anSegBar('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.k ? x.label : "All"]), anTlType() ? anTlType().k : "", "setAnTlType", "tltype", "Support / resistance bounce, or a break of the line");
+      renderMktFilterBar('anMktBar', 'mktCalAnalysis');
+      renderPlayTgtBar(PLAY.an); renderPlayStopBar(PLAY.an); renderPlayTrailBar(PLAY.an); renderPlayHoldBar(PLAY.an); renderPlayFeeBar(PLAY.an);
+      const anyOn = !!(anKind() || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anCoinMode() || mktFilter() || anPeriodMode() !== "all");
       document.getElementById('anReset').classList.toggle('hidden', !anyOn);
       const r = anRangeFull(), hint = [];
       hint.push(r.from || r.to ? (r.from || "start") + " → " + (r.to || "now") : "All history");
       if (state.ui.anChan) hint.push(chanLabel(state.ui.anChan));
+      if (anCoinCur) hint.push(anCoinCur.length ? anCoinCur.join(", ") : "no coins picked");
       if (anLvl()) hint.push("fib " + anLvl());
       if (anTlType()) hint.push(anTlType().label);
       if (mktFilter()) hint.push("BTC " + MKT_LABEL[mktFilter()].toLowerCase() + " days");
-      if (anNoFee()) hint.push("before fees");
       const h = document.getElementById('anFilterHint'); if (h) h.innerText = hint.join(" · ");
+      // Folded panels say in one line what they are set to.
+      initPanelFolds();
+      const ws = document.getElementById('anWhichSum');
+      if (ws) {
+        const cm = SIG_COIN_MODES.find(x => x.k === anCoinMode());
+        const bits = [(AN_KINDS.find(x => x.k === kind) || AN_KINDS[0]).label, (AN_PERIODS.find(p => p.k === mode) || AN_PERIODS[3]).label, state.ui.anChan ? chanLabel(state.ui.anChan) : "all channels"];
+        if (anCoinCur) bits.push(cm.label + " (" + anCoinCur.join(", ") + ")");
+        if (anLvl()) bits.push(anLvl());
+        if (anTlType()) bits.push(anTlType().label);
+        if (mktFilter()) bits.push("BTC " + MKT_LABEL[mktFilter()].toLowerCase() + " days");
+        ws.innerText = bits.join(" · ");
+      }
+      const rs = document.getElementById('anRulesSum');
+      if (rs) {
+        const tg = anTgt(), mv = anStopRule(), tr = anTrailRule(), bits = [];
+        if (tg) { bits.push("demo: exit at " + tg.k); bits.push(mv ? mv.label : "stop stays"); if (tr) bits.push(tr.label); bits.push(anHoldTxt()); }
+        else bits.push("your own exits");
+        bits.push(anNoFee() ? "no fees" : "with fees");
+        rs.innerText = bits.join(" · ");
+      }
+      const rr = document.getElementById('anRulesReset');
+      if (rr) rr.innerHTML = anRulesDefault() ? '' : '<button type="button" id="anRulesResetBtn" onclick="event.preventDefault();event.stopPropagation();resetAnRules()" title="Back to your own exits: My exit, Move SL and Trail TP off, Till TP / SL, with fees">Reset</button>';
     }
+    function setAnLvl(k) { anSet('anLvl', FIB_LEVEL_KEYS.indexOf(k) !== -1 ? k : ""); }
+    function setAnTlType(k) { anSet('anTlType', SIG_TL_TYPES.some(x => x.k === k) ? k : ""); }
     // Every trade, in order, with the balance you had when you entered it. Past
     // balances are rebuilt from the trades and anchored to the balance the broker
     // reports today (Delta's live balance, CoinDCX's wallet). Deposits,
@@ -4402,7 +4465,7 @@
             // Only an alert's stop, on the fills' prices (in dollars), taken into the book's money.
             const px = o.px;
             if (px && sig && typeof sig.stop === "number" && stopOk({ entry: px.entry, direction: px.direction, stop: sig.stop })) {
-              stopSrc = "alert stop";
+              stopSrc = "alert stop"; stopUsed = sig.stop;
               riskAmt = Math.abs(px.entry - sig.stop) * px.qty * (notional != null ? notional / (px.entry * px.qty) : 1 / fxk(a, "USD"));
             }
           } else {
@@ -4445,7 +4508,8 @@
           // A report trade can only meet an alert once its fills give its side and time.
           if (firstSig && t.date >= firstSig && !sig && (!o.rep || o.px)) flags.push("noAlert");
           // k takes before and notional into t's currency for display.
-          rows.push({ t, a, before, notional, xBal, riskPct, lossPct, r, stopSrc, flags, k, revenge });
+          // stopPx / riskAmt (book's money): what the demo replays the trade with.
+          rows.push({ t, a, before, notional, xBal, riskPct, lossPct, r, stopSrc, stopPx: riskAmt > 0 ? stopUsed : null, riskAmt: riskAmt > 0 ? riskAmt : null, flags, k, revenge });
           dayDone.push({ exitMs: myEntry + (heldMins(t) || 0) * 60000, pnl: o.pnl, notional });
           run += o.pnl; dayPnl += o.pnl;
           prev = { t, notional, exitMs: entryMs(t) + (heldMins(t) || 0) * 60000 };
@@ -4550,7 +4614,7 @@
       // ---- results by broker, each converted into the currency on screen ----
       const vc = viewCur();
       // The filters at the top narrow this table too.
-      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktBiasOn(t.date, t.time) === mfB) && anPassSetup(anTradeSetup(t, map))).map(t => toView(t, vc))), open = reportBooks().open;
+      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktBiasOn(t.date, t.time) === mfB) && anPassSetup(anTradeSetup(t, map)) && anPassCoin(t)).map(t => toView(t, vc))), open = reportBooks().open;
       const lines = books.map(a => {
         const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
         const files = a.reportBroker ? btState().files.filter(f => f.broker === a.reportBroker) : [];
@@ -4678,6 +4742,126 @@
         el.onclick = () => { const st = g && g.ex; if (!st) return; Object.assign(state.ui, { anKind: st.kind || "none", anLvl: st.kind === "fib" ? st.level : "", anTlType: st.kind === "trendline" ? st.level : "", anChan: "" }); anVisible = AN_PAGE; save(); renderAnalysis(); };
       });
     }
+    // ---- The numbers row at the top (8 cards, like Signals) ----
+    // Your trades as taken; in demo mode the demo's figures, with yours beside them.
+    function anCard(c) {
+      return '<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors"' + (c.id ? ' data-ancard="' + c.id + '"' : '') + (c.tip ? ' title="' + esc(c.tip) + '"' : '') + '>'
+        + '<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">' + esc(c.label) + '</span>'
+        + '<div class="my-0.5"><div class="text-base sm:text-lg font-bold ' + c.color + ' mono-num whitespace-nowrap">' + c.val + '</div><div class="text-[10px] text-slate-400 truncate">' + esc(c.sub) + '</div></div></div>';
+    }
+    // Money results in the order they closed: total, wins, drawdown, streaks.
+    function anMoneyRun(vals) { return sigRunStats(vals); }
+    function renderAnStrip(rows, cur, extra) {
+      const strip = document.getElementById('anStrip');
+      if (!strip) return;
+      const pos = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
+      const asc = rows.slice().reverse(), sm = v => esc(signedMoney(v, cur));
+      const line = document.getElementById('anDemoLine');
+      if (!anDemoOn()) {
+        line.classList.add('hidden');
+        const res = computeStats(rows.map(x => x.t)), rsAn = rows.map(x => x.r).filter(r => r != null && isFinite(r));
+        // Drawdown in the order trades closed, like the broker report.
+        const byClose = rows.map(x => ({ x, end: anRepTrade(x.t).end })).sort((a, b) => a.end < b.end ? -1 : a.end > b.end ? 1 : 0);
+        const run = anMoneyRun(byClose.map(z => z.x.t.pnl || 0)), wins = rows.filter(x => x.t.pnl > 0), losses = rows.filter(x => x.t.pnl < 0);
+        const best = rows.reduce((b, x) => !b || x.t.pnl > b.t.pnl ? x : b, null), worst = rows.reduce((b, x) => !b || x.t.pnl < b.t.pnl ? x : b, null);
+        const { brokeOne, over, xs } = extra;
+        strip.innerHTML = [
+          { label: "Net P&L" + (anNoFee() ? " (no fees)" : ""), val: sm(res.net), sub: `${res.wins}W / ${res.losses}L` + (anNoFee() ? " · before fees" : " · fees " + money(sum(rows.map(x => x.t.fees || 0)), cur)), color: pos(res.net), id: "net" },
+          { label: "Win rate", val: pct(res.winRate), sub: `avg ${wins.length ? signedMoney(avg(wins.map(x => x.t.pnl)), cur) : "—"} / ${losses.length ? signedMoney(avg(losses.map(x => x.t.pnl)), cur) : "—"}`, tip: "Average win / average loss", color: res.winRate >= 50 ? "text-emerald-400" : "text-amber-400", id: "win" },
+          { label: "Average R", val: rsAn.length ? rfmt(avg(rsAn)) : "—", sub: rsAn.length ? `${rsAn.length} with a stop · total ${rfmt(sum(rsAn))}` : "no stop known", color: !rsAn.length ? "text-slate-200" : pos(avg(rsAn)), id: "avgr" },
+          { label: "Profit factor", val: !res.n ? "—" : res.pf === Infinity ? "∞" : res.pf.toFixed(2), sub: "won ÷ lost", tip: "Money won ÷ money lost: above 1 makes money", color: res.pf >= 1 ? "text-emerald-400" : "text-rose-400", id: "pf" },
+          { label: "Max drawdown", val: esc(money(-run.maxDD, cur)), sub: `worst run: ${run.maxLs} loss${run.maxLs === 1 ? "" : "es"} in a row`, color: run.maxDD > 0 ? "text-rose-400" : "text-slate-200", id: "dd", tip: "The deepest fall of your running P&L from a high, trades in the order you took them." },
+          { label: "Best / worst", val: `<span class="text-emerald-400">${sm(best.t.pnl)}</span> <span class="text-slate-500">/</span> <span class="text-rose-400">${sm(worst.t.pnl)}</span>`, sub: `${btSym(best.t.symbol)} · ${btSym(worst.t.symbol)}`, color: "text-slate-200", id: "bw" },
+          { label: "Trades checked", val: String(rows.length), sub: `${brokeOne.length} (${pct(brokeOne.length / rows.length * 100)}) broke a rule`, color: "text-slate-200" },
+          { label: "Oversized", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} · biggest ${xs.length ? Math.max(...xs).toFixed(1) + "×" : "—"}`, color: over.length ? "text-rose-400" : "text-emerald-400" }
+        ].map(anCard).join('');
+        return;
+      }
+      // Demo: the trades it could replay, the plan's money and yours on the same trades.
+      const tg = anTgt(), note = anDemoNote(rows);
+      const played = asc.map(x => ({ x, d: anDemoOf(x) })).filter(z => z.d && !z.d.why);
+      const plan = played.map(z => z.d.money), you = played.map(z => z.d.you), pr = played.map(z => z.d.r), yr = played.map(z => z.d.youR);
+      const P = anMoneyRun(plan), Y = anMoneyRun(you), diff = P.tot - Y.tot, n = played.length;
+      const pf = st => st.pf == null ? "—" : st.pf === Infinity ? "∞" : st.pf.toFixed(2);
+      const better = played.filter(z => z.d.diff > 0).length, worse = played.filter(z => z.d.diff < 0).length;
+      const bestZ = played.reduce((b, z) => !b || z.d.money > b.d.money ? z : b, null), worstZ = played.reduce((b, z) => !b || z.d.money < b.d.money ? z : b, null);
+      strip.innerHTML = [
+        { label: "Replayed", val: String(n), sub: `of ${rows.length} trade${rows.length === 1 ? "" : "s"}` + (note.n.open ? ` · ${note.n.open} open` : "") + (note.n.nostop ? ` · ${note.n.nostop} no stop` : ""), color: "text-slate-200", id: "demo-n", tip: note.text },
+        { label: "Demo net P&L", val: n ? sm(P.tot) : "—", sub: n ? `you ${signedMoney(Y.tot, cur)} on these` : "no trade replayed yet", color: pos(P.tot), id: "net" },
+        { label: "Plan vs you", val: n ? sm(diff) : "—", sub: n ? (diff >= 0 ? "what your exits cost" : "your exits made more") : "", color: !n ? "text-slate-200" : diff > 0 ? "text-rose-400" : "text-emerald-400", id: "diff", tip: "The demo's P&L minus yours on the same trades. Above zero: your exits cost that much against the plan. " + better + " trades did better on the plan, " + worse + " did better your way." },
+        { label: "Win rate", val: n ? pct(P.win) : "—", sub: n ? `you ${pct(Y.win)} · ${P.wins}W / ${P.losses}L` : "", color: n && P.win >= 50 ? "text-emerald-400" : "text-amber-400", id: "win" },
+        { label: "Average R", val: n ? rfmt(avg(pr)) : "—", sub: n ? `you ${rfmt(avg(yr))} · total ${rfmt(sum(pr))}` : "", color: n ? pos(avg(pr)) : "text-slate-200", id: "avgr" },
+        { label: "Profit factor", val: n ? pf(P) : "—", sub: n ? `you ${pf(Y)}` : "", color: n && (P.pf == null || P.pf >= 1) ? "text-emerald-400" : "text-rose-400", id: "pf" },
+        { label: "Max drawdown", val: n ? esc(money(-P.maxDD, cur)) : "—", sub: n ? `you ${money(-Y.maxDD, cur)}` : "", color: P.maxDD > 0 ? "text-rose-400" : "text-slate-200", id: "dd" },
+        { label: "Best / worst", val: n ? `<span class="text-emerald-400">${sm(bestZ.d.money)}</span> <span class="text-slate-500">/</span> <span class="text-rose-400">${sm(worstZ.d.money)}</span>` : "—", sub: n ? `${btSym(bestZ.x.t.symbol)} · ${btSym(worstZ.x.t.symbol)}` : "", color: "text-slate-200", id: "bw" }
+      ].map(anCard).join('');
+      const mv = anStopRule(), tr = anTrailRule();
+      line.classList.remove('hidden');
+      line.innerHTML = 'Demo: every trade with a stop held to exit at ' + esc(tg.k) + (mv ? ', ' + esc(mv.label) : '') + (tr ? ', ' + esc(tr.label) : '') + ', ' + esc(anHoldTxt()) + ', instead of the exit you took · ' + esc(note.text)
+        + (note.fail ? ' · ' + note.fail + ' could not be read <button type="button" class="underline" onclick="anDemoRetry()">Retry</button>' : '')
+        + ' · <button type="button" class="underline" onclick="setAnTgt(\'\')">back to my exits</button>';
+    }
+    // ---- Demo vs you: where the plan and your exits part ----
+    function setAnDemoPick(k) { anDemoPick = anDemoPick === k ? null : k; anDemoVisible = AN_PAGE; renderAnalysis(); }
+    function renderAnDemo(rows, cur) {
+      const host = document.getElementById('anDemo');
+      if (!host) return;
+      const quick = AN_TGTS.filter(x => x.k).map(x => '<button type="button" data-demotgt="' + x.k + '" onclick="setAnTgt(\'' + x.k + '\')" class="px-2.5 py-1 rounded-md border border-terminal-border text-slate-300 hover:border-amber-500 hover:text-white">' + esc(x.k) + '</button>').join('');
+      if (!anDemoOn()) {
+        host.innerHTML = '<h3 class="text-sm font-semibold text-white">Demo vs you</h3>'
+          + '<p class="text-slate-400 text-[12px] mt-1 leading-relaxed max-w-3xl">Replay your own trades with a fixed TP and SL instead of the exit you took, to see what closing early (on the money you saw) or holding past the stop cost you. Each trade with a stop is played from its own entry on Delta\'s candles. Pick a target, then fine-tune Move SL, Trail TP and Hold in <b>How each trade is played</b>.</p>'
+          + '<div id="anDemoQuick" class="flex flex-wrap gap-1.5 mt-3">' + quick + '</div>';
+        return;
+      }
+      const tg = anTgt(), note = anDemoNote(rows), mv = anStopRule(), tr = anTrailRule();
+      const played = rows.map(x => ({ x, d: anDemoOf(x) })).filter(z => z.d && !z.d.why);
+      let h = '<div class="flex flex-wrap items-baseline justify-between gap-2"><h3 class="text-sm font-semibold text-white">Demo vs you <span class="text-amber-300 font-normal text-[12px]">· exit at ' + esc(tg.k) + (mv ? ' · ' + esc(mv.label) : '') + (tr ? ' · ' + esc(tr.label) : '') + ' · ' + esc(anHoldTxt()) + '</span></h3>'
+        + '<span id="anDemoCover" class="text-[11px] text-slate-500">' + esc(note.text) + (note.fail ? ' · ' + note.fail + ' could not be read <button type="button" class="underline" onclick="anDemoRetry()">Retry</button>' : '') + '</span></div>';
+      if (!played.length) {
+        host.innerHTML = h + '<p class="text-slate-500 mt-3">' + (anDemoProg || note.n.loading ? 'Reading prices…' : note.n.nostop === rows.length && rows.length ? 'None of these trades has a stop (yours or an alert\'s), so there is nothing to replay. Add a stop to a trade, or load the scanner\'s alerts.' : 'No trade here could be replayed yet.') + '</p>';
+        return;
+      }
+      const planNet = sum(played.map(z => z.d.money)), youNet = sum(played.map(z => z.d.you)), diff = planNet - youNet;
+      const dR = avg(played.map(z => z.d.r - z.d.youR));
+      h += '<p id="anDemoHead" class="text-[13px] text-slate-200 mt-2 leading-relaxed">Held to the plan, these ' + played.length + ' trade' + (played.length === 1 ? '' : 's') + ' make <b class="' + (planNet >= 0 ? 'text-emerald-300' : 'text-rose-300') + '">' + esc(signedMoney(planNet, cur)) + '</b>; you made <b class="' + (youNet >= 0 ? 'text-emerald-300' : 'text-rose-300') + '">' + esc(signedMoney(youNet, cur)) + '</b> on them. '
+        + (Math.abs(diff) < 0.005 ? 'The same.' : diff > 0 ? 'The plan makes <b class="text-rose-300">' + esc(money(diff, cur)) + ' more</b> (' + rfmt(dR) + ' a trade): that is what your exits cost.' : 'Your exits made <b class="text-emerald-300">' + esc(money(-diff, cur)) + ' more</b> (' + rfmt(-dR) + ' a trade) than the plan.') + '</p>';
+      // What happened, grouped: the habits that cost money first.
+      const groups = Object.keys(AN_VERDICTS).map(k => { const g = played.filter(z => z.d.verdict === k); return { k, g, diff: sum(g.map(z => z.d.diff)) }; }).filter(x => x.g.length)
+        .sort((a, b) => AN_VERDICTS[b.k].bad - AN_VERDICTS[a.k].bad || b.diff - a.diff);
+      const worstHabit = groups.filter(x => AN_VERDICTS[x.k].bad > 0 && x.diff > 0).sort((a, b) => b.diff - a.diff)[0];
+      if (worstHabit) h += '<p id="anDemoHabit" class="text-[12px] text-slate-300 mt-1">Costliest habit: <b class="text-rose-300">' + esc(AN_VERDICTS[worstHabit.k].label) + '</b> on ' + worstHabit.g.length + ' trade' + (worstHabit.g.length === 1 ? '' : 's') + ', ' + esc(money(worstHabit.diff, cur)) + ' less than the plan.</p>';
+      h += '<div id="anDemoGroups" class="demo-vs mt-3">' + groups.map(x => {
+        const v = AN_VERDICTS[x.k], tone = v.bad > 0 ? 'text-rose-300' : v.bad < 0 ? 'text-emerald-300' : 'text-slate-300';
+        return '<button type="button" data-verdict="' + x.k + '" onclick="setAnDemoPick(\'' + x.k + '\')" class="' + (anDemoPick === x.k ? 'on' : '') + '" title="' + esc(v.why) + '">'
+          + '<div class="flex items-baseline justify-between gap-2"><span class="font-semibold ' + tone + '">' + esc(v.label) + '</span><span class="text-slate-400">' + x.g.length + '</span></div>'
+          + '<div class="text-[11px] text-slate-500 mt-0.5">plan vs you <span class="' + (x.diff > 0 ? 'text-rose-300' : x.diff < 0 ? 'text-emerald-300' : 'text-slate-400') + '">' + esc(signedMoney(x.diff, cur)) + '</span></div></button>';
+      }).join('') + '</div>';
+      // Trade by trade, newest first.
+      const pick = anDemoPick && groups.some(x => x.k === anDemoPick) ? anDemoPick : null;
+      const list = pick ? played.filter(z => z.d.verdict === pick) : played;
+      const vis = Math.min(anDemoVisible, list.length);
+      const dp = v => cleanNum(+(+v).toPrecision(6));
+      h += '<div class="overflow-x-auto mt-3"><table id="anDemoTable" class="w-full text-left text-xs font-mono"><thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border"><tr>'
+        + '<th class="py-2 px-2">Trade</th><th class="py-2 px-2 text-right">You</th><th class="py-2 px-2 text-right">Plan</th><th class="py-2 px-2 text-right" title="The plan\'s P&L minus yours: above zero, your exit cost that much">Plan vs you</th><th class="py-2 px-2">What happened</th></tr></thead><tbody>'
+        + list.slice(0, vis).map(z => {
+          const t = z.x.t, o = t.orig || t, d = z.d, v = AN_VERDICTS[d.verdict];
+          const exitPx = o.rep ? (o.px && o.px.exit) : o.exit;
+          return '<tr data-demorow="' + esc(t.id) + '" class="border-t border-terminal-border/60 hover:bg-white/5 cursor-pointer">'
+            + '<td class="py-2 px-2 whitespace-nowrap"><div><span class="text-white font-semibold">' + esc(btSym(t.symbol)) + '</span> <span class="' + (d.px.side === 'long' ? 'text-emerald-400' : 'text-rose-400') + '">' + (d.px.side === 'long' ? 'Long' : 'Short') + '</span></div>'
+            + '<div class="text-[10px] text-slate-500">' + esc(t.date) + ' ' + esc(t.time || '') + ' · in ' + dp(d.px.entry) + ' · SL ' + dp(d.px.stop) + '</div></td>'
+            + '<td class="py-2 px-2 text-right whitespace-nowrap"><div class="' + (d.you >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + esc(signedMoney(d.you, cur)) + '</div><div class="text-[10px] text-slate-500">' + rfmt(d.youR) + (exitPx > 0 ? ' · out ' + dp(exitPx) : '') + '</div></td>'
+            + '<td class="py-2 px-2 text-right whitespace-nowrap"><div class="' + (d.money >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + esc(signedMoney(d.money, cur)) + '</div><div class="text-[10px] text-slate-500">' + rfmt(d.r) + ' · ' + esc(d.label) + '</div></td>'
+            + '<td class="py-2 px-2 text-right font-semibold whitespace-nowrap ' + (d.diff > 0 ? 'text-rose-300' : d.diff < 0 ? 'text-emerald-300' : 'text-slate-400') + '">' + esc(signedMoney(d.diff, cur)) + '</td>'
+            + '<td class="py-2 px-2 whitespace-nowrap ' + (v.bad > 0 ? 'text-rose-300' : v.bad < 0 ? 'text-emerald-300' : 'text-slate-400') + '" title="' + esc(v.why) + '">' + esc(v.label) + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+      if (list.length > AN_PAGE) {
+        h += '<div id="anDemoMore" class="flex flex-wrap items-center justify-center gap-3 pt-3"><span class="text-[11px] text-slate-500">Showing ' + vis + ' of ' + list.length + '</span>'
+          + (vis < list.length ? '<button type="button" onclick="anDemoVisible+=AN_PAGE;renderAnalysis()" class="px-4 py-1.5 rounded-md bg-terminal-surface border border-terminal-border hover:border-amber-500 text-slate-200 text-[11px]">Show ' + Math.min(AN_PAGE, list.length - vis) + ' more</button><button type="button" onclick="anDemoVisible=' + list.length + ';renderAnalysis()" class="px-4 py-1.5 rounded-md bg-terminal-surface border border-terminal-border hover:border-amber-500 text-slate-200 text-[11px]">Show all</button>' : '')
+          + (vis > AN_PAGE ? '<button type="button" onclick="anDemoVisible=AN_PAGE;renderAnalysis()" class="px-4 py-1.5 rounded-md bg-terminal-surface border border-terminal-border hover:border-amber-500 text-slate-200 text-[11px]">Show latest 10</button>' : '') + '</div>';
+      }
+      host.innerHTML = h;
+      host.querySelectorAll('[data-demorow]').forEach(tr => { const z = list.find(q => q.x.t.id === tr.getAttribute('data-demorow')); if (z) tr.onclick = () => openInspector(z.x.t); });
+    }
     // ---- Report for a journal book (Delta, All books) ----
     // The broker report's numbers, equity curve, pairs and days, worked out from
     // the trades the filters pick. Journal trades are closed trades: Open shows
@@ -4693,8 +4877,7 @@
       return { closed: true, net: t.pnl || 0, sym: t.symbol, day: dayOf(t), end: endD + "T" + String(endT).slice(0, 5), fees: t.fees || 0, funding: t.funding || 0, held, id: t.id, orig: o };
     }
     function renderAnJournalReport(rows, cur, pool) {
-      const strip = document.getElementById('anRepStrip');
-      if (!strip) return;
+      if (!document.getElementById('anPairBar')) return;
       const pos = v => v >= 0 ? "text-emerald-400" : "text-rose-400";
       // Pair dropdown: every pair in view, with its count.
       const cnt = {}; (pool || rows).forEach(x => { cnt[x.t.symbol] = (cnt[x.t.symbol] || 0) + 1; });
@@ -4706,21 +4889,10 @@
       sel.onchange = () => { state.ui.anPair = sel.value; anVisible = AN_PAGE; save(); renderAnalysis(); };
       host.innerHTML = ''; host.appendChild(sel);
       const ts = rows.map(x => anRepTrade(x.t)).sort((a, b) => a.end < b.end ? -1 : a.end > b.end ? 1 : 0);
-      const s = btStats(ts), rs = rows.map(x => x.r).filter(r => r != null && isFinite(r));
-      document.getElementById('anRepSub').innerText = ts.length ? ts.length + " closed trade" + (ts.length === 1 ? "" : "s") + " · " + fmtDay(ts[0].day) + " to " + fmtDay(ts[ts.length - 1].day) + (anNoFee() ? " · before fees" : "") : "";
-      const cards = [
-        { label: "Net P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, repDp(cur))}`, color: pos(s.net) },
-        { label: "Win rate", val: s.n ? pct(s.winRate) : "—", sub: `${s.wins} won · ${s.losses} lost`, color: s.winRate >= 50 ? "text-emerald-400" : "text-amber-400" },
-        { label: "Profit factor", val: s.pf === Infinity ? "∞" : s.n ? s.pf.toFixed(2) : "—", sub: "won ÷ lost", color: s.pf >= 1 ? "text-emerald-400" : "text-rose-400" },
-        { label: "Avg win / loss", val: `${signedMoney(s.avgWin, cur, repDp(cur))} / ${signedMoney(s.avgLoss, cur, repDp(cur))}`, sub: "per trade", color: "text-slate-200" },
-        { label: "Best / worst", val: `${signedMoney(s.best, cur, repDp(cur))} / ${signedMoney(s.worst, cur, repDp(cur))}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
-        { label: "Max drawdown", val: money(-s.maxDD, cur), sub: "from a running peak", color: s.maxDD > 0 ? "text-rose-400" : "text-slate-200" },
-        { label: "Fees / funding", val: `${money(s.fees, cur, repDp(cur))} / ${signedMoney(s.funding, cur, repDp(cur))}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
-        { label: "Average R", val: rs.length ? rfmt(avg(rs)) : "—", sub: rs.length ? `${rs.length} with a stop · total ${rfmt(sum(rs))}` : "no stop known", color: !rs.length ? "text-slate-200" : pos(avg(rs)) }
-      ];
-      strip.innerHTML = cards.map(c => `<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors" data-repcard="${esc(c.label)}">
-          <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${esc(c.label)}</span>
-          <div class="my-0.5"><div class="${c.val.length > 11 ? "text-sm" : "text-base sm:text-lg"} font-bold ${c.color} mono-num whitespace-nowrap">${esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${esc(c.sub)}</div></div></div>`).join("");
+      const s = btStats(ts);
+      // The headline numbers are the row at the top of the tab; the rest of the report's are here.
+      document.getElementById('anRepSub').innerText = ts.length ? ts.length + " closed trade" + (ts.length === 1 ? "" : "s") + " · " + fmtDay(ts[0].day) + " to " + fmtDay(ts[ts.length - 1].day)
+        + " · fees " + money(s.fees, cur, repDp(cur)) + (s.funding ? " · funding " + signedMoney(s.funding, cur, repDp(cur)) : "") + " · avg hold " + btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld)) + (anNoFee() ? " · before fees" : "") : "";
       renderBacktestChart(s.closed, cur);
       // By pair: click one to filter the tab to it.
       const byPair = {};
@@ -5267,8 +5439,8 @@
       renderAiReview();
       // One row of sections for every book; a report with no rows yet shows only how to add one.
       const live = !rep || document.getElementById('btEmpty').classList.contains('hidden');
-      ['anLive', 'anMktRow', 'anHowLive'].forEach(id => document.getElementById(id).classList.toggle('hidden', !live));
-      if (!live) return;
+      ['anLive', 'anMktRow', 'anHowLive', 'anStrip'].forEach(id => document.getElementById(id).classList.toggle('hidden', !live));
+      if (!live) { document.getElementById('anDemoLine').classList.add('hidden'); return; }
       renderSecBar('anSecBar', anSecList(), 'data-ansec', anCurSec(), setAnSec);
       const cur = viewCur();
       const rqHost = document.getElementById('reviewQueuePanel');
@@ -5278,12 +5450,12 @@
       const pairPick = rep ? (state.ui.btPair && state.ui.btPair !== "all" ? btSym(state.ui.btPair) : null) : (state.ui.anPair || null);
       // Balances need every trade, so the filters apply after the analysis.
       const all = analyzeTrades(anFeeView(statScoped()));
-      const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassSetup(anTradeSetup(x.t, anMap))).sort((a, b) => -byWhen(a.t, b.t));
+      const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t)).sort((a, b) => -byWhen(a.t, b.t));
       const mfAn = mktFilter();
       const rows = mfAn ? inPeriod.filter(x => mktBiasOn(x.t.date, x.t.time) === mfAn) : inPeriod;
       rows.anchored = all.anchored;
       // Pair list for the report's dropdown: every pair before the pair filter.
-      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassSetup(anTradeSetup(x.t, anMap)) && (!mfAn || mktBiasOn(x.t.date, x.t.time) === mfAn)));
+      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t) && (!mfAn || mktBiasOn(x.t.date, x.t.time) === mfAn)));
       document.getElementById('anRepHead').classList.toggle('hidden', !!rep);
 
       const assume = document.getElementById('anAssumptions');
@@ -5291,7 +5463,8 @@
       assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's and CoinDCX's wallets, read by your PC's imports). " : "Balances before each trade are your starting balance plus the trades before it; once your PC imports Delta, they're anchored to its wallet. ")
         + "Deposits, withdrawals and funding can't be seen, so older balances are estimates. "
         + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Settings → Books & rules → Trading Books.`
-        + (state.accounts.some(a => a.reportBroker) ? " A broker-report trade (CoinDCX) has no stop or prices of its own: its side and position value are worked out from its fees (or fills), its balance from the broker's wallet, and a trade whose fees don't add up shows — for size." : "");
+        + (state.accounts.some(a => a.reportBroker) ? " A broker-report trade (CoinDCX) has no stop or prices of its own: its side and position value are worked out from its fees (or fills), its balance from the broker's wallet, and a trade whose fees don't add up shows — for size." : "")
+        + (anDemoOn() ? " Demo: each trade with a stop (yours, else its alert's) is replayed from its own entry time and price on Delta's candles (1-minute for the first day, then 15-minute, then 4-hour), same size, with the target and stop rules picked above. A candle that touches the stop and the target counts as the stop; a stop fills 0.05% past its price; the demo pays the trade's own fees. NSE trades have no candles here." : "");
 
       renderJournalArchive();
       renderMarketCalendar('mktCalAnalysis', { pairs: matchSignals().filter(pr => anInRange(pr.signal.date, anRg)), trades: inPeriod.map(x => x.t), cur, rerender: renderAnalysis, scope: from || anRg.to ? (from || 'start') + ' to ' + (anRg.to || 'now') : 'all history' });
@@ -5302,7 +5475,9 @@
         document.getElementById('anBuckets').innerHTML = '<div class="text-slate-500 text-center py-4">No trades in this period.</div>';
         document.getElementById('anFlags').innerHTML = '';
         ['anInsights', 'anBreakdown'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
-        if (!rep) { ['anRepStrip', 'btPairs', 'btDays'].forEach(id => { document.getElementById(id).innerHTML = ''; }); if (btChartInstance) { btChartInstance.destroy(); btChartInstance = null; } }
+        if (!rep) { ['btPairs', 'btDays'].forEach(id => { document.getElementById(id).innerHTML = ''; }); if (btChartInstance) { btChartInstance.destroy(); btChartInstance = null; } }
+        document.getElementById('anDemoLine').classList.add('hidden');
+        renderAnDemo([], cur);
         document.getElementById('anBody').innerHTML = '';
         document.getElementById('anMoreBar').innerHTML = '';
         document.getElementById('anFilterChip').innerHTML = '';
@@ -5317,25 +5492,10 @@
       const brokeOne = rows.filter(x => AN_RULES.some(r => (!r.applies || r.applies(x)) && r.broke(x)));
       const over = rows.filter(x => x.flags.indexOf("oversize") !== -1);
       const xs = rows.map(x => x.xBal).filter(v => v != null);
-      // Results of the trades the filters picked: how you trade this setup.
-      const res = computeStats(rows.map(x => x.t)), rsAn = rows.map(x => x.r).filter(r => r != null && isFinite(r));
-      const cards = [
-        { label: "Net P&L" + (anNoFee() ? " (no fees)" : ""), val: signedMoney(res.net, cur), sub: `${res.wins}W / ${res.losses}L` + (anNoFee() ? " · before fees" : " · fees " + money(sum(rows.map(x => x.t.fees || 0)), cur)), color: res.net >= 0 ? "text-emerald-400" : "text-rose-400", id: "net" },
-        { label: "Win rate", val: pct(res.winRate), sub: `${rows.length} trade${rows.length === 1 ? "" : "s"}`, color: res.winRate >= 50 ? "text-emerald-400" : "text-amber-400", id: "win" },
-        { label: "Average R", val: rsAn.length ? rfmt(avg(rsAn)) : "—", sub: rsAn.length ? `${rsAn.length} with a stop · total ${rfmt(sum(rsAn))}` : "no stop known", color: !rsAn.length ? "text-slate-200" : avg(rsAn) >= 0 ? "text-emerald-400" : "text-rose-400", id: "avgr" },
-        { label: "Profit factor", val: !res.n ? "—" : res.pf === Infinity ? "∞" : res.pf.toFixed(2), sub: "won ÷ lost · above 1 makes money", color: res.pf >= 1 ? "text-emerald-400" : "text-rose-400", id: "pf" },
-        { label: "Trades checked", val: String(rows.length), sub: `${brokeOne.length} (${pct(brokeOne.length / rows.length * 100)}) broke a rule`, color: "text-slate-200" },
-        { label: "Oversized", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} of trades · biggest ${xs.length ? Math.max(...xs).toFixed(1) + "×" : "—"}`, color: over.length ? "text-rose-400" : "text-emerald-400" }
-      ];
-      strip.innerHTML = '';
-      cards.forEach(c => {
-        const d = document.createElement('div');
-        d.className = 'bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors';
-        if (c.id) d.dataset.ancard = c.id;
-        d.innerHTML = `<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${esc(c.label)}</span>
-          <div class="my-0.5"><div class="text-base sm:text-lg font-bold ${c.color} mono-num">${esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${esc(c.sub)}</div></div>`;
-        strip.appendChild(d);
-      });
+      renderAnStrip(rows, cur, { brokeOne, over, xs });
+      renderAnDemo(rows, cur);
+      // Demo: read the candles of the trades in view that have none yet.
+      if (anDemoOn()) setTimeout(() => anDemoLoad(rows), 0);
 
       renderRuleScorecard(rows, cur);
       rows.forEach(x => { x.s = anTradeSetup(x.t, anMap); });
@@ -6963,6 +7123,7 @@
     window.addEventListener("online", syncPull);
     // Back online: read the prices the drop left unread.
     window.addEventListener("online", () => { if (state && !document.getElementById('view-signals').classList.contains('hidden')) { if (tgtFail) tgtRetry(); else renderSignalsTable(); } });
+    window.addEventListener("online", () => { if (state && anDemoOn() && !document.getElementById('view-analysis').classList.contains('hidden')) { if (anDemoFail) anDemoRetry(); else renderAnalysis(); } });
     setInterval(syncPull, 120000);
     // Two open tabs share one saved copy but each keeps its own in memory, so
     // the one that saved second would quietly undo the first. Follow the other
@@ -9037,8 +9198,9 @@
     const STOP_ATS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3], STOP_TOS = [-0.5, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5];
     const STOP_ATS_P = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3], STOP_TOS_P = [-0.25, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5];
     const STOP_DEF = { mode: "off", beAt: 1, shAt: 1, shTo: 0.75, beAtP: 1, shAtP: 1, shToP: 0.5 };
-    function stopRaw() {
-      const d = state.ui.sigStop && typeof state.ui.sigStop === "object" ? state.ui.sigStop : {};
+    // src: the stored settings (Signals' by default; Analysis passes its own).
+    function stopRaw(src) {
+      const v = src !== undefined ? src : state.ui.sigStop, d = v && typeof v === "object" ? v : {};
       const pick = (v, list, def) => list.indexOf(Number(v)) !== -1 ? Number(v) : def;
       const shAt = pick(d.shAt, STOP_ATS, STOP_DEF.shAt), shAtP = pick(d.shAtP, STOP_ATS_P, STOP_DEF.shAtP);
       let shTo = pick(d.shTo, STOP_TOS, STOP_DEF.shTo), shToP = pick(d.shToP, STOP_TOS_P, STOP_DEF.shToP);
@@ -9058,8 +9220,10 @@
     }
     // R with an R target (or Scanner), % with a % target.
     function sigStopUnit() { const tg = sigTgt(); return tg && tg.p != null ? "%" : "R"; }
-    function sigStopRule() {
-      const d = stopRaw(), pc = sigStopUnit() === "%";
+    function sigStopRule() { return stopRuleOf(stopRaw(), sigTgt()); }
+    // The stop move for these settings and target: in % with a % target, else in R.
+    function stopRuleOf(d, tg) {
+      const pc = !!(tg && tg.p != null);
       if (d.mode === "be") return pc ? stopMove("pbe", d.beAtP) : stopMove("be", d.beAt);
       if (d.mode === "shift") return pc ? stopMove("pshift", d.shAtP, d.shToP) : stopMove("shift", d.shAt, d.shTo);
       return null;
@@ -9082,8 +9246,8 @@
     // a "Till TP / SL" walk past the biggest target stops once price falls back this far.
     const TRAIL_MAX = Math.max(...TRAIL_STEPS) + Math.max(...TRAIL_GAPS);
     const TRAIL_DEF = { on: false, step: 0.25, gap: 0.25, stepP: 0.25, gapP: 0.25 };
-    function trailRaw() {
-      const d = state.ui.sigTrail && typeof state.ui.sigTrail === "object" ? state.ui.sigTrail : {};
+    function trailRaw(src) {
+      const v = src !== undefined ? src : state.ui.sigTrail, d = v && typeof v === "object" ? v : {};
       const pick = (v, list, def) => list.indexOf(Number(v)) !== -1 ? Number(v) : def;
       return { on: d.on === true, step: pick(d.step, TRAIL_STEPS, TRAIL_DEF.step), gap: pick(d.gap, TRAIL_GAPS, TRAIL_DEF.gap), stepP: pick(d.stepP, TRAIL_STEPS, TRAIL_DEF.stepP), gapP: pick(d.gapP, TRAIL_GAPS, TRAIL_DEF.gapP) };
     }
@@ -9092,8 +9256,9 @@
       const u = unit === "%" ? "%" : "R";
       return { k: (u === "%" ? "ptrail|" : "trail|") + step + "|" + gap, step, gap, unit: u, label: "Trail TP +" + step + u + ", SL " + (gap ? gap + u + " behind, TP locked" : "at the TP reached") };
     }
-    function sigTrailRule() {
-      const d = trailRaw(), pc = sigStopUnit() === "%";
+    function sigTrailRule() { return trailRuleOf(trailRaw(), sigTgt()); }
+    function trailRuleOf(d, tg) {
+      const pc = !!(tg && tg.p != null);
       return d.on ? (pc ? trailMove("%", d.stepP, d.gapP) : trailMove("R", d.step, d.gap)) : null;
     }
     function sigTrail() { return tgtScope && sigTgt() ? sigTrailRule() : null; }
@@ -9156,7 +9321,15 @@
       // Not reached yet while the fill window is still open: "wait", read again later.
       const seenTo = bars.length ? bars[bars.length - 1].t + resMs : 0;
       if (fi < 0) return seenTo < t0 + TGT_BARS * tfMs ? { none: "entry not reached", wait: 1 } : { none: "entry not reached" };
-      const tp = hold === "tp", f = bars[fi], end = tp ? Infinity : f.t + TGT_BARS * tfMs;
+      const tp = hold === "tp";
+      return walkFrom(entry, stop, s, bars, fi, tp ? Infinity : bars[fi].t + TGT_BARS * tfMs, resMs);
+    }
+    // Pure: the walk itself, from the fill candle bars[fi] until end (Infinity: till
+    // the stop, or settled past the biggest target). Shared with Analysis's demo of
+    // your own trades (anWalk), whose candles can mix sizes: a candle's own size is
+    // k.r (ms) when it has one, else resMs.
+    function walkFrom(entry, stop, s, bars, fi, end, resMs) {
+      const tp = end === Infinity, f = bars[fi];
       const hitSl = k => s > 0 ? k.l <= stop : k.h >= stop, mv = p => s * (p - entry) / entry;
       const T = tp ? { tr: 1 } : {};
       if (hitSl(f)) return Object.assign({ m: 0, sl: 1, e: 0, done: 1, p: [], ta: -1 }, T);
@@ -9173,7 +9346,7 @@
         if (best > m) { m = best; since = Infinity; } else since = Math.min(since, adv);
         if (tp && m >= cap && since <= m - back) return Object.assign({ m, sl: 0, e: mv(k.c), done: 1 }, rec.end(), T);
       }
-      return Object.assign({ m, sl: 0, e: mv(last.c), done: !tp && last.t + resMs >= end ? 1 : 0 }, rec.end(), T);
+      return Object.assign({ m, sl: 0, e: mv(last.c), done: !tp && last.t + (last.r || resMs) >= end ? 1 : 0 }, rec.end(), T);
     }
     // The biggest target as a fraction of entry: past it every target is settled.
     function tgtCapFrac(rk) { return Math.max(...SIG_TGTS.filter(x => x.k).map(x => x.r != null ? x.r * rk : x.p / 100)); }
@@ -9270,6 +9443,7 @@
         tgtReady = true;
         if (local) tgtSave();
         if (state && !document.getElementById('view-signals').classList.contains('hidden')) renderSignalsTable();
+        if (state && anDemoOn() && !document.getElementById('view-analysis').classList.contains('hidden')) renderAnalysis();
       };
       return idbGet(TGT_KEY).then(v => done(tgtObj(v)), () => { tgtIdb = false; done(null); });
     }
@@ -9380,80 +9554,290 @@
       if (navigator.onLine === false) bits.push("offline: prices load once the connection is back");
       return { text: bits.join(" · "), fail: !tgtProg && tgtFail ? tgtFail : 0 };
     }
-    function renderSigTgtBar() {
-      const bar = document.getElementById('sigTgtBar');
-      if (!bar) return;
-      const cur = sigTgt() ? sigTgt().k : "";
-      bar.className = 'flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
-      bar.title = "What if every alert closed at one fixed target, with its own stop (moved only if Move SL is on)? Scanner = the scanner's own result. Crypto from Delta's candles; NSE from the sync repo's price job.";
-      bar.innerHTML = '';
-      SIG_TGTS.forEach(x => {
-        const b = document.createElement('button'); b.type = 'button';
-        b.dataset.tgt = x.k;
-        b.className = 'px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
-        b.innerText = x.label || x.k;
-        b.onclick = () => setSigTgt(x.k);
-        bar.appendChild(b);
-      });
+    // ---- Analysis demo mode (lakky, 2026-11-08: "add demo mode so i can check what
+    // mistakes i did if i go with the tp and sl not with amount i saw and exit") ----
+    // Each of your trades with a stop (yours, else its alert's) is replayed from its own
+    // entry, on Delta's candles, with the target, Move SL, Trail TP and Hold picked in
+    // Analysis's "How each trade is played", the same rules and walk as Signals' Exit at.
+    // The plan's result is then set beside the exit you took. Same size and fees as the
+    // real trade (its own fees stand in for the plan's), and a stop fills 0.05% past its
+    // price like Signals. "My exit" = no demo: every figure is the trades as taken.
+    const AN_TGTS = [{ k: "", label: "My exit" }].concat(SIG_TGTS.filter(x => x.k));
+    const AN_HOLDS = [{ k: "tp", label: "Till TP / SL" }, { k: "1d", label: "1 day", ms: 864e5 }, { k: "7d", label: "1 week", ms: 7 * 864e5 }];
+    // Settings, kept apart from Signals'. Until first changed, Move SL and Trail TP
+    // start as Signals has them, so a strategy set there carries over.
+    function anPlayRaw() {
+      const d = state.ui.anPlay && typeof state.ui.anPlay === "object" ? state.ui.anPlay : null;
+      return d || { tgt: "", stop: state.ui.sigStop, trail: state.ui.sigTrail, hold: "tp" };
     }
-    function renderSigStopBar() {
-      const bar = document.getElementById('sigStopBar');
+    function anTgt() { const k = anPlayRaw().tgt; return SIG_TGTS.find(x => x.k && x.k === k) || null; }
+    function anDemoOn() { return !!anTgt(); }
+    function anStopRaw() { return stopRaw(anPlayRaw().stop || {}); }
+    function anTrailRaw() { return trailRaw(anPlayRaw().trail || {}); }
+    function anHold() { const k = anPlayRaw().hold; return AN_HOLDS.some(x => x.k === k) ? k : "tp"; }
+    function anHoldTxt() { const h = anHold(); return h === "tp" ? "held till TP or SL" : "closed after " + AN_HOLDS.find(x => x.k === h).label; }
+    function anStopRule() { return stopRuleOf(anStopRaw(), anTgt()); }
+    function anTrailRule() { return trailRuleOf(anTrailRaw(), anTgt()); }
+    function anPlaySet(fn) {
+      const d = Object.assign({}, anPlayRaw(), { stop: anStopRaw(), trail: anTrailRaw(), hold: anHold() });
+      d.tgt = anTgt() ? anTgt().k : "";
+      fn(d);
+      d.stop = stopRaw(d.stop); d.trail = trailRaw(d.trail);
+      state.ui.anPlay = d; anVisible = AN_PAGE; anDemoVisible = AN_PAGE;
+      save(); renderAnalysis();
+    }
+    // Picking a target from "My exit" opens the Demo section, where the comparison is.
+    function setAnTgt(k) {
+      const ok = SIG_TGTS.some(x => x.k && x.k === k) ? k : "";
+      if (ok && !anDemoOn()) state.ui.anSec = "demo";
+      anPlaySet(d => { d.tgt = ok; });
+    }
+    function setAnStop(k, v) { anPlaySet(d => { d.stop[k] = k === "mode" ? v : Number(v); }); }
+    function setAnTrail(k, v) { anPlaySet(d => { d.trail[k] = k === "on" ? v === true || v === "true" : Number(v); }); }
+    function setAnHold(k) { anPlaySet(d => { d.hold = AN_HOLDS.some(x => x.k === k) ? k : "tp"; }); }
+    function setAnNoFee(v) { anSet('anNoFee', v === true || v === "true"); }
+    function anRulesDefault() { return !anTgt() && anStopRaw().mode === "off" && !anTrailRaw().on && anHold() === "tp" && !anNoFee(); }
+    function resetAnRules() {
+      state.ui.anNoFee = false;
+      anPlaySet(d => { d.tgt = ""; d.stop.mode = "off"; d.trail.on = false; d.hold = "tp"; });
+    }
+    // Where and how a trade is replayed, or { why } when it can't be.
+    function anDemoPx(x) {
+      const t = x.t, o = t.orig || t;
+      if (x.a && x.a.market === "nse") return { why: "nse" };
+      if (!(x.stopPx > 0)) return { why: "nostop" };
+      const ms = (d, tm) => { const m = /^(\d{1,2}):(\d{2})/.exec(String(tm || "")); return DATE_RE.test(d || "") && m ? istMs(d, m[1].padStart(2, "0") + ":" + m[2]) : NaN; };
+      let side, entry, inMs;
+      if (o.rep) { const p = o.px; if (!p || !(p.entry > 0)) return { why: "noprice" }; side = p.direction; entry = p.entry; inMs = ms(p.openDate || o.openDate, p.openTime || o.openTime); }
+      else { side = o.direction; entry = o.entry; inMs = ms(o.date, o.time); }
+      if (!(side === "long" || side === "short") || !(entry > 0) || !isFinite(inMs) || !stopOk({ entry, direction: side, stop: x.stopPx })) return { why: "noprice" };
+      return { side, entry, stop: x.stopPx, inMs, sym: tgtSym(o.symbol) };
+    }
+    function anDemoKey(x, px, hold) { return ["an", x.t.id, px.sym, px.side, px.entry, px.stop, px.inMs, hold || anHold()].join("|"); }
+    // Pure: one trade replayed from its entry. bars = [{ t, h, l, c, r }] (ms; any mix
+    // of candle sizes, in time order, no overlaps); the fill is the candle the entry
+    // falls in. end = when Hold closes it (Infinity: till TP or SL).
+    function anWalk(px, bars, end) {
+      const fi = bars.findIndex(k => k.t + k.r > px.inMs);
+      if (fi < 0) return { none: "no candles after the entry" };
+      return walkFrom(px.entry, px.stop, px.side === "short" ? -1 : 1, bars, fi, end, bars[fi].r);
+    }
+    // Fine candles first, coarser ones only while the trade is still open: 1m for the
+    // first day (1,900 candles), then 15m for ~20 days, then 4h. Each read ends on a
+    // boundary of the next size, so the candles meet without a gap or an overlap.
+    // settled(w): the rules picked now already close the trade, so the rest is not read
+    // (part: read again only if the rules change).
+    const AN_SEGS = [[1, "1m", 15], [15, "15m", 240], [240, "4h", 0]];
+    async function anDemoRead(px, hold, settled) {
+      const h = AN_HOLDS.find(x => x.k === hold), end = h && h.ms ? px.inMs + h.ms : Infinity, now = Date.now();
+      let bars = [], from = Math.floor(px.inMs / 60000) * 60000 - 60000, w = null;
+      for (let i = 0; i < AN_SEGS.length; i++) {
+        const [m, res, nx] = AN_SEGS[i], ms = m * 60000;
+        from = Math.floor(from / ms) * ms;
+        let to = from + 1900 * ms;
+        if (nx) to = Math.floor(to / (nx * 60000)) * nx * 60000;
+        to = Math.min(to, now);
+        const url = DELTA_BASE + "/v2/history/candles?resolution=" + res + "&symbol=" + encodeURIComponent(px.sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
+        const r = await fetch(url);
+        const j = await r.json().catch(() => null);
+        if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad reply");
+        const seg = j.result.map(k => ({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close, r: ms })).filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t >= from && k.t < to).sort((a, b) => a.t - b.t);
+        // None at all: a coin Delta doesn't list (kept), or a trade so fresh its candles aren't out yet (read again later).
+        if (!i && !seg.length) return Object.assign({ none: "no " + px.sym + " candles on Delta" }, now - px.inMs < 3 * 3600e3 ? { fresh: 1 } : {});
+        bars = bars.concat(seg);
+        w = anWalk(px, bars, end);
+        if (w.none || w.sl || w.done || to >= now || to >= end) return w;
+        if (settled && settled(w)) return Object.assign(w, { part: 1 });
+        from = to;
+      }
+      return w;
+    }
+    // lakky, 2026-11-08: "its taking soo much time". Eight reads at a time, a trade's
+    // later candles only while the rules picked leave it open, and a trade still open
+    // is kept for AN_OPEN_MS (so a reload or a tab switch reads nothing new).
+    const AN_WORKERS = 8, AN_OPEN_MS = 15 * 60000;
+    let anDemoBusy = false, anDemoProg = null, anDemoFail = 0;
+    async function anDemoLoad(rows) {
+      if (anDemoBusy || !tgtReady || navigator.onLine === false) return;
+      const hold = anHold(), seen = {}, now = Date.now(), tg = anTgt(), mv = anStopRule(), tr = anTrailRule();
+      if (!tg) return;
+      // With Trail TP on, "Target" only means the walk stopped a hair short of the target's
+      // rounded level: not final, read on (a longer walk ends it as Trail TP).
+      const settled = (px, w) => { const o = tgtScore({ entry: px.entry, stop: px.stop, side: px.side, market: "" }, w, tg, true, mv, tr); return !!o && !(tr && tr.step > 0 && o.label === "Target"); };
+      const todo = [];
+      rows.forEach(x => {
+        const px = anDemoPx(x);
+        if (px.why) return;
+        const k = anDemoKey(x, px, hold), c = tgtCache()[k];
+        // Kept: finished, closed by these rules, or open and read in the last 15 minutes.
+        if (seen[k] || tgtTried[k] || (c && (c.none || c.sl || c.done || settled(px, c) || (!c.part && now - (c.at || 0) < AN_OPEN_MS)))) return;
+        seen[k] = 1; todo.push({ px, k });
+      });
+      if (!todo.length) return;
+      anDemoBusy = true; anDemoProg = { done: 0, total: todo.length };
+      let drawn = Date.now(), ok = 0, missed = 0;
+      const worker = async () => {
+        while (todo.length) {
+          if (navigator.onLine === false || (!ok && missed >= 12)) { todo.forEach(x => { tgtTried[x.k] = 1; }); anDemoFail += todo.length; todo.length = 0; break; }
+          const it = todo.shift();
+          tgtTried[it.k] = 1;
+          try {
+            const w = await anDemoRead(it.px, hold, w => settled(it.px, w));
+            ok++;
+            // Kept on this device: a finished walk for good, an open one with when it was
+            // read, one cut short (part) until other rules need more of it.
+            if (w.none && w.fresh) tgtLive[it.k] = w;
+            else {
+              if (!(w.none || w.sl || w.done)) w.at = Date.now();
+              tgtCache()[it.k] = w; delete tgtLive[it.k];
+              if (w.part) delete tgtTried[it.k];
+            }
+          } catch (e) { anDemoFail++; missed++; }
+          anDemoProg.done++;
+          if (Date.now() - drawn > 1500) { drawn = Date.now(); tgtSave(); renderAnalysis(); }
+        }
+      };
+      try { await Promise.all(Array.from({ length: AN_WORKERS }, worker)); } finally { anDemoBusy = false; anDemoProg = null; tgtSave(); renderAnalysis(); }
+    }
+    function anDemoRetry() { Object.keys(tgtTried).forEach(k => { if (k.indexOf("an|") === 0) delete tgtTried[k]; }); anDemoFail = 0; renderAnalysis(); }
+    // What the plan made on one trade, beside what you made. Money is in the book's own
+    // currency (x.riskAmt), shown in the currency on screen (x.k). { why } when there is
+    // no plan result: nse / nostop / noprice / loading / nodata / open.
+    const anDemoMemo = new WeakMap();
+    function anDemoOf(x) {
+      const tg = anTgt();
+      if (!tg) return null;
+      const px = anDemoPx(x);
+      if (px.why) return { why: px.why };
+      const k = anDemoKey(x, px), w = tgtCache()[k] || tgtLive[k];
+      if (!w) return { why: tgtTried[k] && !anDemoBusy ? "nodata" : "loading" };
+      if (w.none) return { why: "nodata", none: w.none };
+      const ck = [k, tg.k, JSON.stringify(anPlayRaw().stop || null), JSON.stringify(anPlayRaw().trail || null), anNoFee(), w.m, w.sl, w.done, w.part, w.at, (w.p || []).length].join("|");
+      const hit = anDemoMemo.get(x);
+      if (hit && hit.ck === ck) return hit.v;
+      const o = tgtScore({ entry: px.entry, stop: px.stop, side: px.side, market: "" }, w, tg, true, anStopRule(), anTrailRule());
+      let v;
+      // Cut short for other rules: its later candles are on the way.
+      if (!o) v = { why: w.part && !(tgtTried[k] && !anDemoBusy) ? "loading" : "open" };
+      else {
+        const t = x.t, orig = t.orig || t, risk = x.riskAmt, fees = orig.fees || 0;
+        const plan = o.r * risk - fees, you = orig.pnl || 0;
+        v = { label: o.label, r: plan / risk, youR: you / risk, money: plan * x.k, you: you * x.k, diff: (plan - you) * x.k, px };
+        v.verdict = anVerdict(v);
+      }
+      anDemoMemo.set(x, { ck, v });
+      return v;
+    }
+    // What the difference says about the exit you took.
+    const AN_VERDICTS = {
+      early: { label: "Closed before the TP", bad: 1, why: "The plan reached its target (or trailed past it), but you closed with less." },
+      past: { label: "Lost past the stop", bad: 1, why: "You lost more than the plan's stop would have." },
+      kept: { label: "Plan kept more", bad: 1, why: "The plan's moved stop or time exit kept more than your exit." },
+      same: { label: "About the same", bad: 0, why: "Within 0.1R of the plan." },
+      saved: { label: "Cut before the stop", bad: -1, why: "The plan was stopped out; your exit lost less." },
+      beat: { label: "Beat the plan", bad: -1, why: "You made more than the plan." }
+    };
+    function anVerdict(v) {
+      const d = v.r - v.youR;
+      if (Math.abs(d) < 0.1) return "same";
+      if (d > 0) return v.label === "Target" || v.label === "Trail TP" ? "early" : v.label === "SL" ? "past" : "kept";
+      return v.label === "SL" ? "saved" : "beat";
+    }
+    // One line on what the demo covers, for the strip and the Demo section.
+    function anDemoNote(rows) {
+      const n = { nse: 0, nostop: 0, noprice: 0, loading: 0, nodata: 0, open: 0, ok: 0 };
+      rows.forEach(x => { const d = anDemoOf(x); if (d) n[d.why || "ok"]++; });
+      const bits = [n.ok + " of " + rows.length + " trades replayed"];
+      if (n.nostop) bits.push(n.nostop + " with no stop (yours or an alert's)");
+      if (n.open) bits.push(n.open + " still open (no TP or SL yet)");
+      if (n.nse) bits.push(n.nse + " NSE (no candles)");
+      if (n.noprice) bits.push(n.noprice + " without prices");
+      if (n.nodata) bits.push(n.nodata + " with no Delta candles");
+      if (anDemoProg) bits.push("reading prices " + anDemoProg.done + "/" + anDemoProg.total + "…");
+      else if (n.loading && navigator.onLine === false) bits.push("offline: prices load once the connection is back");
+      else if (n.loading) bits.push(n.loading + " waiting for prices");
+      return { n, text: bits.join(" · "), fail: !anDemoProg && anDemoFail ? anDemoFail : 0 };
+    }
+    // ---- The "How each trade is played" controls, shared by Signals and Analysis ----
+    // P: whose settings (PLAY.sig / PLAY.an) and the functions that change them.
+    const PLAY = {
+      sig: { id: "sig", tgts: SIG_TGTS, holds: SIG_HOLDS, tgt: () => sigTgt(), stop: () => stopRaw(), trail: () => trailRaw(), hold: () => sigHold(), noFee: () => state.ui.sigNoFee === true,
+        fn: { tgt: "setSigTgt", stop: "setSigStop", trail: "setSigTrail", hold: "setSigHold", fee: "setSigNoFee" },
+        tgtTip: "What if every alert closed at one fixed target, with its own stop (moved only if Move SL is on)? Scanner = the scanner's own result. Crypto from Delta's candles; NSE from the sync repo's price job.",
+        holdTip: "Till TP / SL: each trade stays open until its target or stop, however long it takes; one with neither yet has no result. 20 candles: the scanner's window, closed at the 20th candle of the alert's timeframe (Time exit). Works with every fixed Exit at.",
+        feeTip: "With fees: the scanner's 0.0826% round trip (0.02% maker in + 0.05% taker out + 18% GST; NSE 0.1063%). No fees: the same results with that added back. Stop slippage (0.05%) counts in both.",
+        offWhat: "Scanner keeps the scanner's own rules" },
+      an: { id: "an", tgts: AN_TGTS, holds: AN_HOLDS, tgt: () => anTgt(), stop: () => anStopRaw(), trail: () => anTrailRaw(), hold: () => anHold(), noFee: () => anNoFee(),
+        fn: { tgt: "setAnTgt", stop: "setAnStop", trail: "setAnTrail", hold: "setAnHold", fee: "setAnNoFee" },
+        tgtTip: "My exit: your trades as you closed them. A target turns on the demo: every trade with a stop (yours, else its alert's) replayed from its own entry on Delta's candles, closing at that target or its stop (moved by Move SL / Trail TP), set beside the exit you took. Crypto only.",
+        holdTip: "Till TP / SL: the demo trade stays open until its target or stop, however long it takes. 1 day / 1 week: closed at the price then if neither was hit (Time exit).",
+        feeTip: "With: each trade's own fees (the demo pays the same fees as the real trade). Without: fees added back, for your trades and the demo alike.",
+        offWhat: "My exit shows your trades as taken" }
+    };
+    const PLAY_ON = 'bg-terminal-card border border-terminal-borderLight text-amber-400', PLAY_OFF = 'text-slate-400 hover:text-white';
+    function renderPlayTgtBar(P) {
+      const bar = document.getElementById(P.id + 'TgtBar');
       if (!bar) return;
-      const d = stopRaw(), tg = sigTgt(), fixed = !!tg, pc = sigStopUnit() === '%';
+      const cur = P.tgt() ? P.tgt().k : "";
+      bar.className = 'flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+      bar.title = P.tgtTip;
+      bar.innerHTML = P.tgts.map(x => '<button type="button" data-tgt="' + x.k + '" onclick="' + P.fn.tgt + '(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? PLAY_ON : PLAY_OFF) + '">' + esc(x.label || x.k) + '</button>').join('');
+    }
+    function renderPlayStopBar(P) {
+      const bar = document.getElementById(P.id + 'StopBar');
+      if (!bar) return;
+      const d = P.stop(), tg = P.tgt(), fixed = !!tg, pc = !!(tg && tg.p != null);
       // In R with an R target, in % of entry with a % target. A trigger at or past the
       // target never fires (the target comes first), so those are greyed out.
       const tv = tg ? (pc ? tg.p : tg.r) : null, u = pc ? 'P' : '', txt = pc ? pTxt : rTxt;
       const at = d.mode === 'be' ? d['beAt' + u] : d['shAt' + u], to = d['shTo' + u];
       const atOff = x => tv != null && x >= tv - 1e-9;
       bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
-      bar.title = "Off: the stop stays where it is. BE: once price reaches the trigger (at), the stop goes to entry. SL shift: once it reaches the trigger, the stop goes to the level you pick (to), e.g. at 1R lock +0.75R. In R with an R target, in % with a % target. It moves from the next candle. Works with every fixed Exit at; Scanner keeps the scanner's own rules.";
-      const btn = (k, l) => '<button type="button" data-stop="' + k + '" onclick="setSigStop(\'mode\',\'' + k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (d.mode === k ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + l + '</button>';
-      const sel = (id, k, list, v, off) => '<select id="' + id + '" data-unit="' + (pc ? '%' : 'R') + '" onchange="setSigStop(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">'
+      bar.title = "Off: the stop stays where it is. BE: once price reaches the trigger (at), the stop goes to entry. SL shift: once it reaches the trigger, the stop goes to the level you pick (to), e.g. at 1R lock +0.75R. In R with an R target, in % with a % target. It moves from the next candle. Works with every fixed Exit at; " + P.offWhat + ".";
+      const btn = (k, l) => '<button type="button" data-stop="' + k + '" onclick="' + P.fn.stop + '(\'mode\',\'' + k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (d.mode === k ? PLAY_ON : PLAY_OFF) + '">' + l + '</button>';
+      const sel = (id, k, list, v, off) => '<select id="' + P.id + id + '" data-unit="' + (pc ? '%' : 'R') + '" onchange="' + P.fn.stop + '(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">'
         + list.map(x => '<option value="' + x + '"' + (x === v ? ' selected' : '') + (off && off(x) ? ' disabled' : '') + '>' + txt(x) + '</option>').join('') + '</select>';
       let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (fixed ? '' : ' opacity-60') + '">' + btn('off', 'Off') + btn('be', 'BE') + btn('shift', 'SL shift') + '</div>';
-      if (d.mode !== 'off') h += '<span class="text-slate-500">at</span>' + sel('sigStopAt', (d.mode === 'be' ? 'beAt' : 'shAt') + u, pc ? STOP_ATS_P : STOP_ATS, at, atOff);
-      if (d.mode === 'shift') h += '<span class="text-slate-500">to</span>' + sel('sigStopTo', 'shTo' + u, pc ? STOP_TOS_P : STOP_TOS, to, x => x >= at);
-      if (d.mode !== 'off' && atOff(at)) h += '<span id="sigStopWarn" class="text-amber-300">pick "at" below your ' + esc(tg.k) + ' target: the stop never moves' + (trailRaw().on ? ' (after the target, Trail TP moves it)' : '') + '</span>';
+      if (d.mode !== 'off') h += '<span class="text-slate-500">at</span>' + sel('StopAt', (d.mode === 'be' ? 'beAt' : 'shAt') + u, pc ? STOP_ATS_P : STOP_ATS, at, atOff);
+      if (d.mode === 'shift') h += '<span class="text-slate-500">to</span>' + sel('StopTo', 'shTo' + u, pc ? STOP_TOS_P : STOP_TOS, to, x => x >= at);
+      if (d.mode !== 'off' && atOff(at)) h += '<span id="' + P.id + 'StopWarn" class="text-amber-300">pick "at" below your ' + esc(tg.k) + ' target: the stop never moves' + (P.trail().on ? ' (after the target, Trail TP moves it)' : '') + '</span>';
       bar.innerHTML = h;
     }
-    function renderSigTrailBar() {
-      const bar = document.getElementById('sigTrailBar');
+    function renderPlayTrailBar(P) {
+      const bar = document.getElementById(P.id + 'TrailBar');
       if (!bar) return;
-      const d = trailRaw(), pc = sigStopUnit() === '%', u = pc ? 'P' : '', unit = pc ? '%' : 'R';
+      const d = P.trail(), tg = P.tgt(), pc = !!(tg && tg.p != null), u = pc ? 'P' : '', unit = pc ? '%' : 'R';
       bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
       bar.title = "On: each time price reaches the target, the target moves up a step and the stop goes to the gap behind the target just reached, but never below your first target (once hit, the TP is locked). E.g. target 1.5R, TP +0.25R, SL 0.5R behind: at 1.5R the stop goes to +1.5R; at 1.75R and 2R it stays there; at 2.25R it goes to +1.75R; the trade ends when the stop is hit. In R with an R target, in % with a % target. With Move SL on, the higher stop counts. It moves from the next candle.";
-      const btn = (v, l) => '<button type="button" data-trail="' + v + '" onclick="setSigTrail(\'on\',' + v + ')" class="px-2 py-1 rounded-md font-semibold ' + (d.on === v ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + (v ? 'On' : 'Off') + '</button>';
-      const sel = (id, k, list, v, txt) => '<select id="' + id + '" data-unit="' + unit + '" onchange="setSigTrail(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">'
+      const btn = (v, l) => '<button type="button" data-trail="' + v + '" onclick="' + P.fn.trail + '(\'on\',' + v + ')" class="px-2 py-1 rounded-md font-semibold ' + (d.on === v ? PLAY_ON : PLAY_OFF) + '">' + (v ? 'On' : 'Off') + '</button>';
+      const sel = (id, k, list, v, txt) => '<select id="' + P.id + id + '" data-unit="' + unit + '" onchange="' + P.fn.trail + '(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">'
         + list.map(x => '<option value="' + x + '"' + (x === v ? ' selected' : '') + '>' + txt(x) + '</option>').join('') + '</select>';
-      let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (sigTgt() ? '' : ' opacity-60') + '">' + btn(false) + btn(true) + '</div>';
-      if (d.on) h += '<span class="text-slate-500">TP</span>' + sel('sigTrailStep', 'step' + u, TRAIL_STEPS, d['step' + u], x => '+' + x + unit)
-        + '<span class="text-slate-500">SL</span>' + sel('sigTrailGap', 'gap' + u, TRAIL_GAPS, d['gap' + u], x => x ? x + unit + ' behind' : 'at the TP');
+      let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (tg ? '' : ' opacity-60') + '">' + btn(false) + btn(true) + '</div>';
+      if (d.on) h += '<span class="text-slate-500">TP</span>' + sel('TrailStep', 'step' + u, TRAIL_STEPS, d['step' + u], x => '+' + x + unit)
+        + '<span class="text-slate-500">SL</span>' + sel('TrailGap', 'gap' + u, TRAIL_GAPS, d['gap' + u], x => x ? x + unit + ' behind' : 'at the TP');
       bar.innerHTML = h;
     }
-    function renderSigHoldBar() {
-      const bar = document.getElementById('sigHoldBar');
+    function renderPlayHoldBar(P) {
+      const bar = document.getElementById(P.id + 'HoldBar');
       if (!bar) return;
-      const cur = sigHold();
-      bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono' + (sigTgt() ? '' : ' opacity-60');
-      bar.title = "Till TP / SL: each trade stays open until its target or stop, however long it takes; one with neither yet has no result. 20 candles: the scanner's window, closed at the 20th candle of the alert's timeframe (Time exit). Works with every fixed Exit at.";
-      bar.innerHTML = SIG_HOLDS.map(x => '<button type="button" data-hold="' + x.k + '" onclick="setSigHold(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + x.label + '</button>').join('');
+      const cur = P.hold();
+      bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono' + (P.tgt() ? '' : ' opacity-60');
+      bar.title = P.holdTip;
+      bar.innerHTML = P.holds.map(x => '<button type="button" data-hold="' + x.k + '" onclick="' + P.fn.hold + '(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? PLAY_ON : PLAY_OFF) + '">' + x.label + '</button>').join('');
     }
-    function renderSigFeeBar() {
-      const bar = document.getElementById('sigFeeBar');
+    function renderPlayFeeBar(P) {
+      const bar = document.getElementById(P.id + 'FeeBar');
       if (!bar) return;
-      const off = state.ui.sigNoFee === true;
+      const off = P.noFee();
       bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
-      bar.title = "With fees: the scanner's 0.0826% round trip (0.02% maker in + 0.05% taker out + 18% GST; NSE 0.1063%). No fees: the same results with that added back. Stop slippage (0.05%) counts in both.";
-      bar.innerHTML = '';
-      [[false, "With"], [true, "Without"]].forEach(([v, l]) => {
-        const b = document.createElement('button'); b.type = 'button';
-        b.dataset.nofee = v ? '1' : '0';
-        b.className = 'px-2 py-1 rounded-md font-semibold ' + (v === off ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white');
-        b.innerText = l;
-        b.onclick = () => setSigNoFee(v);
-        bar.appendChild(b);
-      });
+      bar.title = P.feeTip;
+      bar.innerHTML = [[false, "With"], [true, "Without"]].map(([v, l]) => '<button type="button" data-nofee="' + (v ? 1 : 0) + '" onclick="' + P.fn.fee + '(' + v + ')" class="px-2 py-1 rounded-md font-semibold ' + (v === off ? PLAY_ON : PLAY_OFF) + '">' + l + '</button>').join('');
     }
+    function renderSigTgtBar() { renderPlayTgtBar(PLAY.sig); }
+    function renderSigStopBar() { renderPlayStopBar(PLAY.sig); }
+    function renderSigTrailBar() { renderPlayTrailBar(PLAY.sig); }
+    function renderSigHoldBar() { renderPlayHoldBar(PLAY.sig); }
+    function renderSigFeeBar() { renderPlayFeeBar(PLAY.sig); }
     // Level (fib alerts only): every fib alert scored as if it entered at one level,
     // so each level can be backtested on its own. An alert that entered there keeps
     // its own result; one that entered at another level takes the scanner's what-if
@@ -9556,15 +9940,16 @@
     function sigCoinPicks() { return Array.isArray(state.ui.sigCoinPicks) ? state.ui.sigCoinPicks.filter(x => typeof x === "string" && x) : SIG_COIN_PICKS.slice(); }
     // Alerts per coin in these pairs.
     function sigCoinCounts(pairs) { const n = {}; pairs.forEach(pr => { const c = coinOf(pr.signal); if (c) n[c] = (n[c] || 0) + 1; }); return n; }
-    function sigTopCoins(n, counts) {
-      if (sigCoinRank() === "alerts") return Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)).slice(0, n);
+    function sigTopCoins(n, counts, rank) {
+      if ((rank || sigCoinRank()) === "alerts") return Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)).slice(0, n);
       return SIG_TOP_CAP.slice(0, n);
     }
-    // The coins a mode keeps, or null for all.
-    function sigCoinSet(counts, mode) {
-      const m = SIG_COIN_MODES.find(x => x.k === (mode == null ? sigCoinMode() : mode));
+    // The coins a mode keeps, or null for all. C: whose settings (COINS.sig / COINS.an).
+    function sigCoinSet(counts, mode, C) {
+      C = C || COINS.sig;
+      const m = SIG_COIN_MODES.find(x => x.k === (mode == null ? C.mode() : mode));
       if (!m || !m.k) return null;
-      return m.n ? sigTopCoins(m.n, counts) : sigCoinPicks();
+      return m.n ? sigTopCoins(m.n, counts, C.rank()) : C.picks();
     }
     function setSigCoins(k) { state.ui.sigCoins = k; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
     function setSigCoinRank(v) { state.ui.sigCoinRank = v === "alerts" ? "alerts" : "cap"; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
@@ -9574,21 +9959,29 @@
       state.ui.sigCoinPicks = p; sigVisible = SIG_PAGE; save(); renderSignalsTable();
     }
     const SEG_ON = 'bg-terminal-card border border-terminal-borderLight text-amber-400', SEG_OFF = 'text-slate-400 hover:text-white';
-    function renderSigCoinBar(counts, set) {
-      const wrap = document.getElementById('sigCoinWrap'), bar = document.getElementById('sigCoinBar');
+    // The Coins row, for Signals' alerts and Analysis's trades alike.
+    const COINS = {
+      sig: { id: "sig", mode: () => sigCoinMode(), rank: () => sigCoinRank(), picks: () => sigCoinPicks(), fn: { mode: "setSigCoins", rank: "setSigCoinRank", pick: "toggleSigCoinPick" }, what: "alerts",
+        tip: "Top 3 / Top 5: only the biggest coins' alerts (by market cap, or by the most alerts in view). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest." },
+      an: { id: "an", mode: () => anCoinMode(), rank: () => anCoinRank(), picks: () => anCoinPicks(), fn: { mode: "setAnCoins", rank: "setAnCoinRank", pick: "toggleAnCoinPick" }, what: "trades",
+        tip: "Top 3 / Top 5: only your trades on the biggest coins (by market cap, or the coins you trade most). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on." }
+    };
+    function renderSigCoinBar(counts, set) { renderCoinBar(COINS.sig, counts, set); }
+    function renderCoinBar(C, counts, set) {
+      const wrap = document.getElementById(C.id + 'CoinWrap'), bar = document.getElementById(C.id + 'CoinBar');
       if (!wrap || !bar) return;
-      const cur = sigCoinMode(), coins = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+      const cur = C.mode(), coins = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
       wrap.classList.toggle('hidden', !coins.length && !cur);
-      let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="Top 3 / Top 5: only the biggest coins\' alerts (by market cap, or by the most alerts in view). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest.">'
-        + SIG_COIN_MODES.map(x => '<button type="button" data-coins="' + x.k + '" onclick="setSigCoins(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : SEG_OFF) + '">' + x.label + '</button>').join('') + '</div>';
-      if (cur && !coins.length) h += '<span class="text-[11px] text-slate-500">no crypto alerts in this view, so it is off</span>';
+      let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="' + esc(C.tip) + '">'
+        + SIG_COIN_MODES.map(x => '<button type="button" data-coins="' + x.k + '" onclick="' + C.fn.mode + '(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : SEG_OFF) + '">' + x.label + '</button>').join('') + '</div>';
+      if (cur && !coins.length) h += '<span class="text-[11px] text-slate-500">no crypto ' + C.what + ' in this view, so it is off</span>';
       else if (cur === 'top3' || cur === 'top5') {
-        const rk = sigCoinRank();
-        h += '<select id="sigCoinRank" onchange="setSigCoinRank(this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200 text-[11px] font-mono"><option value="cap"' + (rk === 'cap' ? ' selected' : '') + '>by market cap</option><option value="alerts"' + (rk === 'alerts' ? ' selected' : '') + '>by most alerts</option></select>'
-          + '<span id="sigCoinList" class="text-[11px] text-slate-400 font-mono">' + esc((set || []).join(', ')) + '</span>';
+        const rk = C.rank();
+        h += '<select id="' + C.id + 'CoinRank" onchange="' + C.fn.rank + '(this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200 text-[11px] font-mono"><option value="cap"' + (rk === 'cap' ? ' selected' : '') + '>by market cap</option><option value="alerts"' + (rk === 'alerts' ? ' selected' : '') + '>by most ' + C.what + '</option></select>'
+          + '<span id="' + C.id + 'CoinList" class="text-[11px] text-slate-400 font-mono">' + esc((set || []).join(', ')) + '</span>';
       } else if (cur === 'picks') {
-        const picks = sigCoinPicks(), list = coins.concat(picks.filter(c => coins.indexOf(c) === -1));
-        h += '<div id="sigCoinPicks" class="flex flex-wrap items-center gap-1">' + list.map(c => '<button type="button" data-coin="' + esc(c) + '" onclick="toggleSigCoinPick(\'' + esc(c) + '\')" class="sig-coin' + (picks.indexOf(c) !== -1 ? ' on' : '') + '">' + esc(c) + '<span class="cnt">' + (counts[c] || 0) + '</span></button>').join('') + '</div>';
+        const picks = C.picks(), list = coins.concat(picks.filter(c => coins.indexOf(c) === -1));
+        h += '<div id="' + C.id + 'CoinPicks" class="coin-picks flex flex-wrap items-center gap-1">' + list.map(c => '<button type="button" data-coin="' + esc(c) + '" onclick="' + C.fn.pick + '(\'' + esc(c) + '\')" class="sig-coin' + (picks.indexOf(c) !== -1 ? ' on' : '') + '">' + esc(c) + '<span class="cnt">' + (counts[c] || 0) + '</span></button>').join('') + '</div>';
       }
       bar.innerHTML = h;
     }
@@ -9600,8 +9993,8 @@
       state.ui.sigTgt = ""; state.ui.sigHold = "tp"; state.ui.sigNoFee = false;
       save(); renderSignalsTable();
     }
-    // One line per panel, shown when it is folded (and the rules' Reset button).
-    function renderSigPanelSums(kind, coinSet) {
+    // Folded or open, per panel (Signals' and Analysis's), kept on this device.
+    function initPanelFolds() {
       document.querySelectorAll('.sig-panel[data-fold]').forEach(el => {
         if (el.dataset.init) return;
         el.dataset.init = '1';
@@ -9613,6 +10006,10 @@
           g[k] = !el.open; state.ui.sigFold = g; save();
         });
       });
+    }
+    // One line per panel, shown when it is folded (and the rules' Reset button).
+    function renderSigPanelSums(kind, coinSet) {
+      initPanelFolds();
       const which = document.getElementById('sigWhichSum');
       if (which) {
         const per = state.ui.sigDay ? state.ui.sigDay : (SIG_PERIODS.find(x => x.k === sigPeriod().mode) || SIG_PERIODS[3]).label;
@@ -11147,7 +11544,7 @@
     // The Review tab shows how many trades are waiting.
     function dashSecList() { return DASH_SECS; }
     function setDashSec(k) { state.ui.dashSec = k; save(); renderDashboard(); }
-    const AN_SECS = [{ k: "overview", label: "Overview" }, { k: "review", label: "Review" }, { k: "size", label: "Position size" }, { k: "trades", label: "Trades" }, { k: "market", label: "Market days" }, { k: "ai", label: "AI review" }];
+    const AN_SECS = [{ k: "overview", label: "Overview" }, { k: "demo", label: "Demo vs you" }, { k: "review", label: "Review" }, { k: "size", label: "Position size" }, { k: "trades", label: "Trades" }, { k: "market", label: "Market days" }, { k: "ai", label: "AI review" }];
     // A broker-report book (CoinDCX) adds its own report first: the broker's numbers,
     // equity, pairs and days. The other sections run the journal's checks on its trades.
     // Review carries the number of trades still waiting, e.g. "Review (5)".
@@ -13304,7 +13701,9 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
-      { v: '2026-11-08.170', pr: 86, title: 'Exit at: alerts that filled after the scanner gave up now count', pts: ['With a fixed Exit at, every crypto alert is walked on its own candles: filled within 20 candles of the alert counts, even when the scanner (5-candle wait on fibs) said no fill', 'Filled / no fill / waiting follow that walk; an alert not reached yet is read again until its 20 candles are over', 'E.g. BTC L4 1D of 15 Oct filled on 30 Oct and was stopped: it was missing from the results'] },
+      { v: '2026-11-08.172', pr: 86, title: 'Exit at: alerts that filled after the scanner gave up now count', pts: ['With a fixed Exit at, every crypto alert is walked on its own candles: filled within 20 candles of the alert counts, even when the scanner (5-candle wait on fibs) said no fill', 'Filled / no fill / waiting follow that walk; an alert not reached yet is read again until its 20 candles are over', 'E.g. BTC L4 1D of 15 Oct filled on 30 Oct and was stopped: it was missing from the results'] },
+      { v: '2026-11-08.171', pr: 87, title: 'Demo mode loads faster', pts: ['Reads 8 trades at a time, and stops reading a trade once your TP / SL rules have closed it', 'Opening Analysis again reads nothing new: closed trades are kept, and a trade still open is read again only after 15 minutes'] },
+      { v: '2026-11-08.170', pr: 85, title: 'Analysis: Signals design + demo mode', pts: ['Analysis has Signals\' two folding panels (Which trades, with a new Coins filter; How each trade is played) and its 8-number row', 'Demo mode: pick a target in Exit at and every trade with a stop is replayed with that TP and SL from its own entry, set beside the exit you took', 'Demo vs you: what your exits cost, your costliest habit (e.g. closed before the TP), and every trade side by side'] },
       { v: '2026-11-08.169', pr: 84, title: 'Demo account: order size options', pts: ['Order size: Max within risk (as many lots as your risk allows, never more), Take 1 if too small (only up to 1.5× / 2× / 3× / 5× your risk, or any), or Always 1 lot (test)', 'A trade over the Take 1 limit is skipped and says what it would have risked'] },
       { v: '2026-11-08.168', pr: 83, title: 'Weekly check: price data kept safely', pts: ['Exit at price data now lives with the alerts (IndexedDB), so it can no longer fill the space your trades need', 'Offline, no price reads: it says so and reads them once you are back online', 'With Delta unreachable it stops after a few failed reads; Retry reads the rest'] },
       { v: '2026-11-08.167', pr: 82, title: 'Signals redesign + Top coins compare', pts: ['Filters in two panels: Which alerts and How each trade is played, one labelled row each; fold a panel to see its settings in one line, Reset goes back to the scanner', 'New Coins filter (All / Top 3 / Top 5 / Picks) and a Backtest report table: top coins vs the other coins vs all crypto, each coin, and whether the gap is likely real or luck', 'Backtest report: How sure is this? (95% ranges, first vs second half, months in profit, time in trade, open trades); history from 1 Jun, downloaded once'] },
