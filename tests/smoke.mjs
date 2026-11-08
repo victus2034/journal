@@ -2423,6 +2423,9 @@ async function sigBacktestRun(seed) {
     check(/CRYPTO 4h 4 100% 4 50% \+0\.25R \+1\.00R 1\.50 -2\.00R/.test(v.rep) && /CRYPTO 1D 5 80% 3 33% \+0\.00R \+0\.00R 1\.00 -1\.00R/.test(v.rep), 'channel rows: ' + v.rep.slice(-700));
     check(/^CRYPTO 4h/.test(v.firstRow.trim()), 'sorted by total R: ' + v.firstRow);
     check(JSON.stringify(v.said) === '["Exported 9 alerts"]', 'CSV export: ' + JSON.stringify(v.said));
+    // The % beside Total R / Average R is the price move (R × the 1% stops), and says so (v.177).
+    const strip = await page.evaluate(() => { const el = document.getElementById('sigEdgeStrip'); return { t: el.innerText.replace(/\s+/g, ' '), tip: (el.querySelector('span[title*="price move"]') || {}).title || '' }; });
+    check(/Total R \+1\.00R \(\+1\.00% price move\)/i.test(strip.t) && /Average R \+0\.14R \(\+0\.14% price move\)/i.test(strip.t) && /not an account return/.test(strip.tip), 'price move label: ' + JSON.stringify(strip));
     // The R curve (lakky, 2026-11-08): equity 0 2 1 0 1 0 2 1, so a 0-2R axis in 0.5R steps, the
     // deepest fall 2R, dates under alerts 1, 2, 4, 5 and 7, and a tip for the alert under the pointer.
     const c = await page.evaluate(() => ({ y: [...document.querySelectorAll('#sigBtChart .dc-y:not(.dc-y2) span')].map(s => s.textContent), y2: [...document.querySelectorAll('#sigBtChart .dc-y2 span')].map(s => s.textContent),
@@ -2463,10 +2466,13 @@ async function sigRedesignRun(seed) {
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
   const H = 3600e3, cutoff = Date.now() - 2 * 24 * H, isoAt = t => new Date(t).toISOString();
-  const sent = Math.floor((cutoff - 30 * H) / 1000);
+  const sent = Math.floor((cutoff - 30 * H) / 1000), sentOld = Math.floor((cutoff - 60 * 24 * H) / 1000);
   const files = {
+    // One rebuilt alert from 2 days back, one from 2 months back (older than any refresh window).
     'fibtl_rebuild_records.jsonl': JSON.stringify({ market: 'crypto', symbol: 'RBFIBUSD', tf: '1d', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
-      id: 'fib|RBFIBUSD@1|rb', key: 'fib|RBFIBUSD', sent_ts: sent, rebuild: true }),
+      id: 'fib|RBFIBUSD@1|rb', key: 'fib|RBFIBUSD', sent_ts: sent, rebuild: true }) + '\n'
+      + JSON.stringify({ market: 'crypto', symbol: 'RBOLDUSD', tf: '1d', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
+      id: 'fib|RBOLDUSD@1|rb', key: 'fib|RBOLDUSD', sent_ts: sentOld, rebuild: true }),
     'fibtl_rebuild_results.json': JSON.stringify({ 'fib|RBFIBUSD@1|rb': { outcome: '2R', filled: true, resolved: true, r1: true, r2: true, sl: false, be: false, fill_ts: sent + 3600, end_ts: sent + 6 * 3600 } }),
     'fibtl_rebuild_meta.json': JSON.stringify({ cutoff: isoAt(cutoff), built_at: isoAt(cutoff) }),
   };
@@ -2498,6 +2504,22 @@ async function sigRedesignRun(seed) {
     await page.evaluate(() => autoRefreshAlerts(true));
     await page.evaluate(() => autoRefreshAlerts(true));
     check(hits['fibtl_rebuild_records.jsonl'] === 2, 'a new rebuild is read once more: ' + JSON.stringify(hits));
+    // lakky, 2026-11-09 (Fib 608 -> 531 on one PC): after "Delete all signals" the device took
+    // back only the last days, and "Load scanner alerts" (Last 1 month) only a month, while it
+    // still counted the rebuild as taken. The whole rebuilt history must come back either way.
+    const syms = () => page.evaluate(() => (state.signals || []).filter(g => g.rb).map(g => g.symbol).sort().join(','));
+    check(await syms() === 'RBFIBUSD,RBOLDUSD', 'both rebuilt alerts held: ' + await syms());
+    await page.evaluate(() => { state.signals = []; save(); return autoRefreshAlerts(true); });
+    check(await syms() === 'RBFIBUSD,RBOLDUSD', 'after Delete all signals the rebuilt history comes back: ' + await syms());
+    check(hits['fibtl_rebuild_records.jsonl'] === 3, 'read again because the device lost it: ' + JSON.stringify(hits));
+    await page.evaluate(() => autoRefreshAlerts(true));
+    check(hits['fibtl_rebuild_records.jsonl'] === 3, 'then skipped again while held: ' + JSON.stringify(hits));
+    await page.evaluate(() => { state.signals = []; save(); openScannerImport(); });
+    await page.waitForFunction(() => /alerts/.test((document.getElementById('scanStatus') || {}).innerText || '') && !/Fetching/.test(document.getElementById('scanStatus').innerText), null, { timeout: 8000 });
+    const st = await page.evaluate(() => document.getElementById('scanStatus').innerText);
+    check(/with the scanner's rebuilt history/.test(st), 'Load scanner alerts says it brings the rebuilt history: ' + st);
+    await page.click('#modalSheetSaveBtn'); await page.waitForTimeout(300);
+    check(await syms() === 'RBFIBUSD,RBOLDUSD', 'Load scanner alerts (Last 1 month) brings the whole rebuilt history: ' + await syms());
 
     const v = await page.evaluate(() => {
       const text = id => (document.getElementById(id) || {}).innerText.replace(/\s+/g, ' ');
@@ -3699,7 +3721,9 @@ async function statRowsRun(seed) {
       await page.evaluate(() => {
         // On days the rupee book has no other trade (the made-up journal's crypto days), so each is its own best / worst day.
         const used = new Set(state.trades.filter(t => t.accountId === 'acc_nse').map(dayOf)), t0 = state.trades.find(t => t.accountId === 'acc_nse');
-        const free = [1, 3, 5, 7, 9, 11].map(n => iso(new Date(Date.now() - n * 864e5))).filter(d => !used.has(d));
+        // The first two past days with no rupee trade. Fixed odd days found none between 00:00 and
+        // 05:30 IST, when the made-up journal (machine clock - 5.5h) and the page's date differ by a day.
+        const free = []; for (let n = 1; free.length < 2 && n < 60; n++) { const d = iso(new Date(Date.now() - n * 864e5)); if (!used.has(d)) free.push(d); }
         state.trades.push(Object.assign({}, t0, { id: 'bigL', date: free[0], exitDate: free[0], entry: 2000, exit: 1785.0898, stop: 1990, qty: 500, direction: 'long', pnl: -107455.2, risk: 5000, r: -21.49 }));
         state.trades.push(Object.assign({}, t0, { id: 'bigW', date: free[1], exitDate: free[1], entry: 2000, exit: 2197.5309, stop: 1990, qty: 500, direction: 'long', pnl: 98765.35, risk: 5000, r: 19.75 }));
         Object.assign(state.ui, { account: 'acc_nse', allCur: 'INR', month: 'all', anPeriod: 'all', anKind: '', anChan: '', anCoins: '', anPair: '' });
