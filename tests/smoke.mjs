@@ -2746,6 +2746,8 @@ async function demoRealRun(seed) {
     ['RLCUSD', 'long', 0.43, 0.43 * (1 - 0.0012), -1.5], ['MAGICUSD', 'long', 0.1, 0.098, 1], ['MRVL', 'long', 140, 137.2, 1], ['SOLUSD', 'short', 90, 91.8, -1]];
   try {
     await page.goto(base, { waitUntil: 'load' });
+    // The alerts and price data load from IndexedDB after the page: let them land first.
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded, null, { timeout: 5000 });
     await page.evaluate(A => {
       state.signals = A.map((a, i) => ({ id: 'rl' + i, key: 'r' + i, kind: 'trendline', date: '2026-10-0' + (i + 1), time: '10:00', symbol: a[0], side: a[1], score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
         filled: true, outcome: a[4] > 0 ? '+' + a[4] + 'R' : 'SL', resultR: a[4], hasReportR: true, price: a[2], entry: a[2], stop: a[3] }));
@@ -2757,6 +2759,8 @@ async function demoRealRun(seed) {
     // 100 -> +3.808 -> -1.86534 -> +1.96 -> -1.80 = 102.10266
     check(t.includes('Real orders on · Delta: whole contracts, rounded down') && t.includes('Placed 4 of 8, skipped 4: 1 smaller than 1 contract, 1 stop under 0.1%, 1 stop within 3 ticks, 1 not on Delta.') && t.includes('1 sized down to the coin\'s max leverage.'), 'real orders line: ' + t.slice(0, 1600));
     check(t.includes('Final balance $102.10') && t.includes('Trades 4 +4 skipped'), 'real orders by hand → $102.10: ' + t.slice(0, 1800));
+    // innerText needs the table laid out (hidden, its cells run together): wait for it to show.
+    await page.waitForFunction(() => { const t = document.getElementById('sigDemoTrades'); return t && t.offsetParent !== null; }, null, { timeout: 5000 }).catch(() => {});
     const rows = await page.$$eval('#sigDemoTrades tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
     const want = [
       /^8 2026-10-08 10:00 SOLUSD Short 4H 2\.00% -1\.00R SL \$1\.80 \$90\.00 · 0\.9x 1 SOL /,
@@ -3295,17 +3299,17 @@ async function anDemoRun(seed) {
     check(/Costliest habit: Closed before the TP on 2 trades, \$3\.10 less/.test(v.habit), 'costliest habit: ' + v.habit);
     check(v.groups.length === 3 && /^early:/.test(v.groups[0]) && v.groups.some(g => /^saved:/.test(g)), 'groups: ' + JSON.stringify(v.groups));
     check(/demo: exit at 1\.5R/.test(v.rules), 'rules summary: ' + v.rules);
-    // Candles: 1m first. ETH and SOL are stopped within the day: 1m only. XRP's 1.5R comes
-    // after 40 h, so it reads 15m candles too; ADA (and BTC, past its target but not settled
-    // for Trail TP) read on up to now. DOGE (no stop) is never read.
+    // Candles: 1m first, and no more once 1.5R closes the trade. ETH and SOL are stopped and
+    // BTC reaches 1.5R within the day: 1m only. XRP's 1.5R comes after 40 h, so it reads 15m
+    // candles too; ADA (open) reads on up to now. DOGE (no stop) is never read.
     const rd = reads.join();
-    check(/BTCUSD 1m/.test(rd) && !/ETHUSD 15m/.test(rd) && !/SOLUSD 15m/.test(rd) && /XRPUSD 15m/.test(rd) && /ADAUSD 15m/.test(rd) && !/DOGE/.test(rd) && !/4h/.test(rd), 'candle reads: ' + rd);
+    check(/BTCUSD 1m/.test(rd) && !/BTCUSD 15m/.test(rd) && !/ETHUSD 15m/.test(rd) && !/SOLUSD 15m/.test(rd) && /XRPUSD 15m/.test(rd) && /ADAUSD 15m/.test(rd) && !/DOGE/.test(rd) && !/4h/.test(rd) && reads.length === 7, 'candle reads: ' + rd);
     // A group click lists only its trades.
     await page.click('#anDemoGroups [data-verdict="saved"]');
     const only = await page.evaluate(() => [...document.querySelectorAll('#anDemoTable tbody tr')].map(tr => tr.getAttribute('data-demorow')));
     check(only.join() === 'dSOL', 'group filter: ' + only.join());
-    // Redraws read nothing again; a reload reads only the trades whose walk is not over
-    // (ADA, and BTC / XRP, past the target but not yet settled for Trail TP); never ETH or SOL.
+    // Redraws read nothing again, and neither does a reload: the trades 1.5R closes are kept,
+    // and ADA, still open, was read under 15 minutes ago.
     const before = reads.length;
     await page.evaluate(() => renderAnalysis());
     await page.waitForTimeout(400);
@@ -3314,8 +3318,20 @@ async function anDemoRun(seed) {
     await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady, null, { timeout: 5000 });
     await page.evaluate(() => switchTab('analysis'));
     await page.waitForFunction(() => document.getElementById('anDemoLine') && /4 of 6 trades replayed/.test(document.getElementById('anDemoLine').innerText) && !anDemoBusy, null, { timeout: 15000 });
-    const again = reads.slice(before).map(x => x.split(' ')[0]).filter((x, i, a) => a.indexOf(x) === i).sort();
-    check(again.join() === 'ADAUSD,BTCUSD,XRPUSD', 'after a reload only the unsettled trades are read again: ' + reads.slice(before).join());
+    await page.waitForTimeout(300);
+    check(reads.length === before, 'nothing read again after a reload: ' + reads.slice(before).join());
+    // 3R: BTC's walk stopped at 1.5R, so it is read on (to now, still open); XRP's already
+    // runs to now and ADA's is fresh. ETH and SOL stay stopped.
+    await page.click('#anTgtBar button[data-tgt="3R"]');
+    await page.waitForFunction(() => !anDemoBusy && /2 of 6 trades replayed/.test(document.getElementById('anDemoLine').innerText), null, { timeout: 15000 });
+    const r3 = await page.evaluate(() => ({ line: document.getElementById('anDemoLine').innerText, ids: [...document.querySelectorAll('#anDemoTable tbody tr')].map(tr => tr.getAttribute('data-demorow')).sort().join() }));
+    check(reads.slice(before).join() === 'BTCUSD 1m,BTCUSD 15m' && /3 still open/.test(r3.line) && r3.ids === 'dETH,dSOL', '3R reads only BTC on: ' + reads.slice(before).join() + ' ' + JSON.stringify(r3));
+    // Back to 1.5R: nothing read, the same figures.
+    const b15 = reads.length;
+    await page.click('#anTgtBar button[data-tgt="1.5R"]');
+    await page.waitForFunction(() => !anDemoBusy && /4 of 6 trades replayed/.test(document.getElementById('anDemoLine').innerText), null, { timeout: 15000 });
+    const bt = await page.evaluate(() => [...document.querySelector('#anDemoTable tr[data-demorow="dBTC"]').children].map(td => td.innerText.replace(/\s+/g, ' ').trim()));
+    check(reads.length === b15 && bt[2].indexOf('+$2.90') === 0, 'back to 1.5R, nothing read: ' + reads.slice(b15).join() + ' ' + JSON.stringify(bt));
     // Hold 1 day: XRP's 1.5R comes too late, so it closes at the day's price (Time exit).
     await page.click('#anHoldBar button[data-hold="1d"]');
     await page.waitForFunction(() => !anDemoBusy && document.querySelector('#anDemoTable tr[data-demorow="dXRP"]'), null, { timeout: 15000 });

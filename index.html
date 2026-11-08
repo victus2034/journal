@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.170">
+  <meta name="app-version" content="2026-11-08.171">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -9605,8 +9605,10 @@
     // Fine candles first, coarser ones only while the trade is still open: 1m for the
     // first day (1,900 candles), then 15m for ~20 days, then 4h. Each read ends on a
     // boundary of the next size, so the candles meet without a gap or an overlap.
+    // settled(w): the rules picked now already close the trade, so the rest is not read
+    // (part: read again only if the rules change).
     const AN_SEGS = [[1, "1m", 15], [15, "15m", 240], [240, "4h", 0]];
-    async function anDemoRead(px, hold) {
+    async function anDemoRead(px, hold, settled) {
       const h = AN_HOLDS.find(x => x.k === hold), end = h && h.ms ? px.inMs + h.ms : Infinity, now = Date.now();
       let bars = [], from = Math.floor(px.inMs / 60000) * 60000 - 60000, w = null;
       for (let i = 0; i < AN_SEGS.length; i++) {
@@ -9625,20 +9627,30 @@
         bars = bars.concat(seg);
         w = anWalk(px, bars, end);
         if (w.none || w.sl || w.done || to >= now || to >= end) return w;
+        if (settled && settled(w)) return Object.assign(w, { part: 1 });
         from = to;
       }
       return w;
     }
+    // lakky, 2026-11-08: "its taking soo much time". Eight reads at a time, a trade's
+    // later candles only while the rules picked leave it open, and a trade still open
+    // is kept for AN_OPEN_MS (so a reload or a tab switch reads nothing new).
+    const AN_WORKERS = 8, AN_OPEN_MS = 15 * 60000;
     let anDemoBusy = false, anDemoProg = null, anDemoFail = 0;
     async function anDemoLoad(rows) {
       if (anDemoBusy || !tgtReady || navigator.onLine === false) return;
-      const hold = anHold(), seen = {};
+      const hold = anHold(), seen = {}, now = Date.now(), tg = anTgt(), mv = anStopRule(), tr = anTrailRule();
+      if (!tg) return;
+      // With Trail TP on, "Target" only means the walk stopped a hair short of the target's
+      // rounded level: not final, read on (a longer walk ends it as Trail TP).
+      const settled = (px, w) => { const o = tgtScore({ entry: px.entry, stop: px.stop, side: px.side, market: "" }, w, tg, true, mv, tr); return !!o && !(tr && tr.step > 0 && o.label === "Target"); };
       const todo = [];
       rows.forEach(x => {
         const px = anDemoPx(x);
         if (px.why) return;
-        const k = anDemoKey(x, px, hold);
-        if (seen[k] || tgtCache()[k] || tgtTried[k]) return;
+        const k = anDemoKey(x, px, hold), c = tgtCache()[k];
+        // Kept: finished, closed by these rules, or open and read in the last 15 minutes.
+        if (seen[k] || tgtTried[k] || (c && (c.none || c.sl || c.done || settled(px, c) || (!c.part && now - (c.at || 0) < AN_OPEN_MS)))) return;
         seen[k] = 1; todo.push({ px, k });
       });
       if (!todo.length) return;
@@ -9650,16 +9662,22 @@
           const it = todo.shift();
           tgtTried[it.k] = 1;
           try {
-            const w = await anDemoRead(it.px, hold);
+            const w = await anDemoRead(it.px, hold, w => settled(it.px, w));
             ok++;
-            // Finished walks are kept on this device; one still open is read again next time.
-            if ((w.none && !w.fresh) || w.sl || w.done) tgtCache()[it.k] = w; else { tgtLive[it.k] = w; delete tgtCache()[it.k]; }
+            // Kept on this device: a finished walk for good, an open one with when it was
+            // read, one cut short (part) until other rules need more of it.
+            if (w.none && w.fresh) tgtLive[it.k] = w;
+            else {
+              if (!(w.none || w.sl || w.done)) w.at = Date.now();
+              tgtCache()[it.k] = w; delete tgtLive[it.k];
+              if (w.part) delete tgtTried[it.k];
+            }
           } catch (e) { anDemoFail++; missed++; }
           anDemoProg.done++;
           if (Date.now() - drawn > 1500) { drawn = Date.now(); tgtSave(); renderAnalysis(); }
         }
       };
-      try { await Promise.all([1, 2, 3, 4].map(worker)); } finally { anDemoBusy = false; anDemoProg = null; tgtSave(); renderAnalysis(); }
+      try { await Promise.all(Array.from({ length: AN_WORKERS }, worker)); } finally { anDemoBusy = false; anDemoProg = null; tgtSave(); renderAnalysis(); }
     }
     function anDemoRetry() { Object.keys(tgtTried).forEach(k => { if (k.indexOf("an|") === 0) delete tgtTried[k]; }); anDemoFail = 0; renderAnalysis(); }
     // What the plan made on one trade, beside what you made. Money is in the book's own
@@ -9674,12 +9692,13 @@
       const k = anDemoKey(x, px), w = tgtCache()[k] || tgtLive[k];
       if (!w) return { why: tgtTried[k] && !anDemoBusy ? "nodata" : "loading" };
       if (w.none) return { why: "nodata", none: w.none };
-      const ck = [k, tg.k, JSON.stringify(anPlayRaw().stop || null), JSON.stringify(anPlayRaw().trail || null), anNoFee(), w.m, w.sl, w.done, (w.p || []).length].join("|");
+      const ck = [k, tg.k, JSON.stringify(anPlayRaw().stop || null), JSON.stringify(anPlayRaw().trail || null), anNoFee(), w.m, w.sl, w.done, w.part, w.at, (w.p || []).length].join("|");
       const hit = anDemoMemo.get(x);
       if (hit && hit.ck === ck) return hit.v;
       const o = tgtScore({ entry: px.entry, stop: px.stop, side: px.side, market: "" }, w, tg, true, anStopRule(), anTrailRule());
       let v;
-      if (!o) v = { why: "open" };
+      // Cut short for other rules: its later candles are on the way.
+      if (!o) v = { why: w.part && !(tgtTried[k] && !anDemoBusy) ? "loading" : "open" };
       else {
         const t = x.t, orig = t.orig || t, risk = x.riskAmt, fees = orig.fees || 0;
         const plan = o.r * risk - fees, you = orig.pnl || 0;
@@ -13662,6 +13681,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-08.171', pr: 86, title: 'Demo mode loads faster', pts: ['Reads 8 trades at a time, and stops reading a trade once your TP / SL rules have closed it', 'Opening Analysis again reads nothing new: closed trades are kept, and a trade still open is read again only after 15 minutes'] },
       { v: '2026-11-08.170', pr: 85, title: 'Analysis: Signals design + demo mode', pts: ['Analysis has Signals\' two folding panels (Which trades, with a new Coins filter; How each trade is played) and its 8-number row', 'Demo mode: pick a target in Exit at and every trade with a stop is replayed with that TP and SL from its own entry, set beside the exit you took', 'Demo vs you: what your exits cost, your costliest habit (e.g. closed before the TP), and every trade side by side'] },
       { v: '2026-11-08.169', pr: 84, title: 'Demo account: order size options', pts: ['Order size: Max within risk (as many lots as your risk allows, never more), Take 1 if too small (only up to 1.5× / 2× / 3× / 5× your risk, or any), or Always 1 lot (test)', 'A trade over the Take 1 limit is skipped and says what it would have risked'] },
       { v: '2026-11-08.168', pr: 83, title: 'Weekly check: price data kept safely', pts: ['Exit at price data now lives with the alerts (IndexedDB), so it can no longer fill the space your trades need', 'Offline, no price reads: it says so and reads them once you are back online', 'With Delta unreachable it stops after a few failed reads; Retry reads the rest'] },
