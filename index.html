@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.167">
+  <meta name="app-version" content="2026-11-08.168">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -6960,6 +6960,8 @@
       syncNow({ quiet: true });
     });
     window.addEventListener("online", syncPull);
+    // Back online: read the prices the drop left unread.
+    window.addEventListener("online", () => { if (state && !document.getElementById('view-signals').classList.contains('hidden')) { if (tgtFail) tgtRetry(); else renderSignalsTable(); } });
     setInterval(syncPull, 120000);
     // Two open tabs share one saved copy but each keeps its own in memory, so
     // the one that saved second would quietly undo the first. Follow the other
@@ -9233,11 +9235,34 @@
       if (w.sl) return { r: -1 - (sig.stop / entry) * TGT_SLIP_PCT / riskPct - costR, label: "SL" };
       return w.done ? { r: w.e * 100 / riskPct - costR, label: "Time exit" } : null;
     }
-    function tgtCache() {
-      if (!tgtMem) { try { const v = JSON.parse(localStorage.getItem(TGT_KEY) || "null"); tgtMem = v && typeof v === "object" ? v : {}; } catch (e) { tgtMem = {}; } }
-      return tgtMem;
+    // The candle summaries live in IndexedDB beside the alerts (weekly audit, 2026-11-08):
+    // one per alert and hold, they grow past a megabyte, and in localStorage they would
+    // eat the ~5 MB the trades need. An older build's localStorage copy moves across.
+    // Without IndexedDB they stay in localStorage, but only while they are small.
+    const TGT_LOCAL_MAX = 1000000;
+    let tgtReady = false, tgtIdb = true;
+    function tgtCache() { if (!tgtMem) tgtMem = {}; return tgtMem; }
+    function tgtObj(v) { try { const o = typeof v === "string" ? JSON.parse(v) : null; return o && typeof o === "object" && !Array.isArray(o) ? o : null; } catch (e) { return null; } }
+    function tgtBoot() {
+      const local = tgtObj((() => { try { return localStorage.getItem(TGT_KEY); } catch (e) { return null; } })());
+      const done = stored => {
+        // Newest wins: what was read this session, then IndexedDB, then the old copy.
+        tgtMem = Object.assign({}, local || {}, stored || {}, tgtMem || {});
+        tgtReady = true;
+        if (local) tgtSave();
+        if (state && !document.getElementById('view-signals').classList.contains('hidden')) renderSignalsTable();
+      };
+      return idbGet(TGT_KEY).then(v => done(tgtObj(v)), () => { tgtIdb = false; done(null); });
     }
-    function tgtSave() { try { localStorage.setItem(TGT_KEY, JSON.stringify(tgtCache())); } catch (e) {} }
+    function tgtLocal(json) {
+      try { if (json.length > TGT_LOCAL_MAX) localStorage.removeItem(TGT_KEY); else localStorage.setItem(TGT_KEY, json); } catch (e) {}
+    }
+    function tgtSave() {
+      if (!tgtReady) return;
+      const json = JSON.stringify(tgtCache());
+      if (!tgtIdb || !sigIdbOk) { tgtLocal(json); return; }
+      idbPut(TGT_KEY, json).then(() => { try { localStorage.removeItem(TGT_KEY); } catch (e) {} }, () => { tgtIdb = false; tgtLocal(json); });
+    }
     // A "Till TP / SL" walk kept before Trail TP stopped at the biggest target (no tr):
     // read again, so it is left out until then.
     function tgtPath(sig, hold) {
@@ -9284,7 +9309,8 @@
     // Reads the candles of every graded alert in view that has none yet, four at a
     // time, and redraws as they come in. Finished windows are kept on this device.
     async function tgtLoad(pairs) {
-      if (tgtBusy) return;
+      // Offline, every read would fail: wait for the connection (the "online" event redraws).
+      if (tgtBusy || !tgtReady || navigator.onLine === false) return;
       const seen = {}, hold = sigHold();
       const todo = pairs.map(pr => pr.signal).filter(g => {
         const k = tgtHoldKey(g, hold), c = tgtCache()[k];
@@ -9296,15 +9322,19 @@
       });
       if (!todo.length) return;
       tgtBusy = true; tgtProg = { done: 0, total: todo.length };
-      let drawn = Date.now();
+      let drawn = Date.now(), ok = 0, missed = 0;
       const worker = async () => {
         while (todo.length) {
+          // The connection dropped mid-read (or Delta is unreachable): stop instead of
+          // firing thousands of reads that all fail. The rest stays unread for Retry.
+          if (navigator.onLine === false || (!ok && missed >= 12)) { todo.forEach(x => { tgtTried[tgtHoldKey(x, hold)] = 1; }); tgtFail += todo.length; todo.length = 0; break; }
           const g = todo.shift(), k = tgtHoldKey(g, hold);
           tgtTried[k] = 1;
           try {
             const w = await tgtOne(g, hold);
+            ok++;
             if (w.none || w.sl || w.done) tgtCache()[k] = w; else { tgtLive[k] = w; delete tgtCache()[k]; }
-          } catch (e) { tgtFail++; }
+          } catch (e) { tgtFail++; missed++; }
           tgtProg.done++;
           if (Date.now() - drawn > 1500) { drawn = Date.now(); tgtSave(); renderSignalsTable(); }
         }
@@ -9326,6 +9356,7 @@
         if (open) bits.push(`${open} still open (no TP or SL yet)`);
       }
       if (tgtProg) bits.push(`reading prices ${tgtProg.done}/${tgtProg.total}…`);
+      if (navigator.onLine === false) bits.push("offline: prices load once the connection is back");
       return { text: bits.join(" · "), fail: !tgtProg && tgtFail ? tgtFail : 0 };
     }
     function renderSigTgtBar() {
@@ -13232,6 +13263,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-08.168', pr: 83, title: 'Weekly check: price data kept safely', pts: ['Exit at price data now lives with the alerts (IndexedDB), so it can no longer fill the space your trades need', 'Offline, no price reads: it says so and reads them once you are back online', 'With Delta unreachable it stops after a few failed reads; Retry reads the rest'] },
       { v: '2026-11-08.167', pr: 82, title: 'Signals redesign + Top coins compare', pts: ['Filters in two panels: Which alerts and How each trade is played, one labelled row each; fold a panel to see its settings in one line, Reset goes back to the scanner', 'New Coins filter (All / Top 3 / Top 5 / Picks) and a Backtest report table: top coins vs the other coins vs all crypto, each coin, and whether the gap is likely real or luck', 'Backtest report: How sure is this? (95% ranges, first vs second half, months in profit, time in trade, open trades); history from 1 Jun, downloaded once'] },
       { v: '2026-11-07.166', pr: 81, title: 'Trail TP: the TP is locked once hit', pts: ['Once price reaches your Exit at target, the stop goes to that target and never below it', 'Then it trails the gap behind the highest target reached (e.g. 1.5R, +0.25R, 0.5R behind: SL 1.5R at 1.5R, 1.75R and 2R; 1.75R at 2.25R)', 'New SL gap: 0.75R / 0.75% behind'] },
       { v: '2026-11-07.165', pr: 80, title: 'Move SL: no triggers past the target with Trail TP', pts: ['With Trail TP on, Move SL "at" options at or past your Exit at target are greyed out again', 'Move SL works up to the target; after it, Trail TP moves the stop'] },
@@ -13334,6 +13366,7 @@
       if (pill && ver) { pill.innerHTML = 'v<span class="vp-date">' + ver.slice(5, 11) + '</span>' + ver.slice(11); pill.title = 'This copy: ' + ver + '. Tap to see what\'s new.'; }
       state = load();
       signalsReady = loadSignalsStore();
+      tgtBoot();
       migrateConfidence();
       // The last Delta figure survives a reload: it holds until a newer one arrives.
       if (state.delta && state.delta.liveBalance && typeof state.delta.liveBalance.value === "number") liveDeltaBalance = state.delta.liveBalance;

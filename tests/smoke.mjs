@@ -4120,7 +4120,7 @@ async function exitTargetRun(seed) {
     // Pick 2R: the whole tab re-scores, and By outcome speaks in targets.
     await page.click('#sigTgtBar button[data-tgt="2R"]');
     const v = await page.evaluate(() => ({ strip: document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '), out: document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' '),
-      on: document.querySelector('#sigTgtCmp tr[data-tgt="2R"]').className, kept: Object.keys(JSON.parse(localStorage.getItem('tapeAndTarget.sigTgt') || '{}')).length,
+      on: document.querySelector('#sigTgtCmp tr[data-tgt="2R"]').className, kept: Object.keys(tgtCache()).length, keptLocal: localStorage.getItem('tapeAndTarget.sigTgt'),
       // Pure: a candle that touches both the target and the stop counts as the stop.
       both: tgtScore({ side: 'long', entry: 100, stop: 99, timeframe: '4H', date: '2026-10-01', time: '10:00' }, tgtWalk({ side: 'long', entry: 100, stop: 99, timeframe: '4H', date: '2026-10-01', time: '10:00' }, [{ time: 1790829000, high: 100.1, low: 99.95, close: 100 }, { time: 1790829900, high: 102.5, low: 98.5, close: 100 }], 15), { r: 2 }),
       analysisSame: (() => { tgtScope = false; const o = outcomeOf({ signal: state.signals[0] }); return o.r; })() }));
@@ -4981,6 +4981,76 @@ async function optionsRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Weekly audit, 2026-11-08: the candle summaries behind "Exit at" live in IndexedDB,
+// not in the ~5 MB of localStorage the trades need; an old copy moves across. Offline
+// (or with Delta unreachable) the price reads stop instead of firing one per alert.
+async function tgtStoreRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  let calls = 0, deltaUp = false;
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    if (!/history\/candles.*symbol=C\d/.test(route.request().url())) return route.abort(); // the alerts' candles only (not the BTC day)
+    calls++;
+    if (!deltaUp) return route.abort();
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: [] }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); localStorage.setItem('tapeAndTarget.sigTgt', JSON.stringify({ 'old|long|100|99': { m: 0.021, sl: 1, e: 0, done: 1 } })); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => tgtReady, null, { timeout: 5000 });
+    await page.waitForTimeout(300);
+    const moved = await page.evaluate(async () => ({ local: localStorage.getItem('tapeAndTarget.sigTgt'), idb: Object.keys(JSON.parse(await idbGet('tapeAndTarget.sigTgt') || '{}')), mem: Object.keys(tgtCache()) }));
+    check(moved.local === null && moved.idb.indexOf('old|long|100|99') !== -1 && moved.mem.indexOf('old|long|100|99') !== -1, 'old copy not moved to IndexedDB: ' + JSON.stringify(moved));
+    // Over two megabytes of summaries: the trades still save, and nothing lands in localStorage.
+    const big = await page.evaluate(async () => {
+      for (let i = 0; i < 12000; i++) tgtCache()['big' + i + '|long|100|99'] = { m: 0.02, sl: 0, e: 0.01, done: 1, p: Array.from({ length: 12 }, (_, j) => [j / 10, -j / 20]), ta: 0.5 };
+      tgtSave(); await new Promise(r => setTimeout(r, 800));
+      state.trades.push(Object.assign({}, state.trades[0], { id: 'after-big', symbol: 'AFTERBIG' })); const ok = save();
+      return { ok, local: localStorage.getItem('tapeAndTarget.sigTgt'), size: JSON.stringify(tgtCache()).length, broken: storageBroken };
+    });
+    check(big.ok && big.local === null && big.size > 2e6 && !big.broken, 'big candle cache vs trades: ' + JSON.stringify(Object.assign({}, big, { local: big.local && big.local.length })));
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => tgtReady, null, { timeout: 5000 });
+    const back = await page.evaluate(() => ({ n: Object.keys(tgtCache()).length, trade: state.trades.some(t => t.symbol === 'AFTERBIG') }));
+    check(back.n >= 12001 && back.trade, 'after reload: ' + JSON.stringify(back));
+    // 40 graded alerts, Exit at 1R. Offline: no reads at all, and the strip says why.
+    await page.evaluate(() => { tgtMem = {}; });
+    await ctx.setOffline(true);
+    await page.evaluate(() => {
+      const sg = i => ({ id: 'o' + i, key: 'ko' + i, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: 'C' + i, side: 'long', score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: true, outcome: 'SL', resultR: -1, hasReportR: true, price: 100, stop: 99, entry: 100 });
+      state.signals = Array.from({ length: 40 }, (_, i) => sg(i));
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigTgt: '1R', sigHold: '20', sigCoins: '' });
+      switchTab('signals'); renderAll();
+    });
+    await page.waitForTimeout(1500);
+    const off = await page.evaluate(() => document.getElementById('view-signals').innerText);
+    check(calls === 0 && /offline: prices load once the connection is back/.test(off), 'offline reads: ' + calls + ' ' + (off.match(/What if[^\n]*/) || [''])[0]);
+    // Online but Delta unreachable: it gives up after a dozen failed reads, not 40.
+    await ctx.setOffline(false);
+    await page.waitForFunction(() => !tgtBusy && tgtFail > 0, null, { timeout: 10000 });
+    await page.waitForTimeout(500);
+    const failed = calls;
+    check(failed >= 12 && failed <= 16, 'reads with Delta down: ' + failed);
+    // Delta back, Retry reads the rest.
+    deltaUp = true;
+    await page.evaluate(() => tgtRetry());
+    await page.waitForFunction(() => !tgtBusy && !tgtProg, null, { timeout: 10000 });
+    await page.waitForTimeout(500);
+    check(calls - failed === 40, 'Retry read every alert: ' + (calls - failed));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'Exit at prices: kept in IndexedDB, none read offline, stop when Delta is down';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -5028,6 +5098,7 @@ await trailRun(data);
 await sigBreakdownRun(data);
 await nsePathsRun();
 await badInputRun(data);
+await tgtStoreRun(data);
 
 await browser.close();
 server.close();
