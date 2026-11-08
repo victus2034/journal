@@ -4460,6 +4460,21 @@ async function trailRun(seed) {
     check(pure.b && pure.b.label === 'Trail TP' && Math.abs(pure.b.r - 3.698125) < 1e-9, 'several steps in one candle: ' + JSON.stringify(pure.b));
     check(pure.c && pure.c.label === 'BE' && Math.abs(pure.c.r + 0.025) < 1e-9, 'BE under Trail TP: ' + JSON.stringify(pure.c));
     check(pure.d && pure.d.label === 'Trail TP' && Math.abs(pure.d.r - (1 - 1.01 * 0.05)) < 1e-9, 'SL shift past the target never fires with Trail TP: ' + JSON.stringify(pure.d));
+    // Exit at: the walk's own 20-candle fill window decides, not the scanner's "no fill"
+    // (lakky, 2026-11-08: BTC L4 1D of 15 Oct filled 30 Oct, the scanner said no fill).
+    const fw = await page.evaluate(() => {
+      const sig = { side: 'long', entry: 100, stop: 98, timeframe: '1D', date: '2026-10-15', time: '17:30', market: 'crypto', symbol: 'BTCUSD', filled: false };
+      const t = Date.parse('2026-10-15T17:30:00+05:30') / 1000, d = 86400;
+      const early = tgtWalk(sig, [{ time: t, high: 101, low: 100.5, close: 100.8 }], 1440, 'tp');
+      const over = tgtWalk(sig, Array.from({ length: 21 }, (_, i) => ({ time: t + i * d, high: 102, low: 100.5, close: 101 })), 1440, 'tp');
+      const late = tgtWalk(sig, [{ time: t, high: 101, low: 100.5, close: 100.8 }, { time: t + 15 * d, high: 100.5, low: 97, close: 97.5 }], 1440, 'tp');
+      const was = state.ui.sigTgt; state.ui.sigTgt = '1.5R';
+      const base = !!tgtBase({ signal: sig }), nse = !!tgtBase({ signal: Object.assign({}, sig, { market: 'NSE' }) });
+      state.ui.sigTgt = ''; const off = !!tgtBase({ signal: sig }); state.ui.sigTgt = was;
+      return { early, over, late: [late.sl, late.none], base, nse, off };
+    });
+    check(fw.early.none && fw.early.wait === 1 && fw.over.none && !fw.over.wait && fw.late[0] === 1 && !fw.late[1], 'fill window: wait while open, filled on day 15: ' + JSON.stringify(fw));
+    check(fw.base && !fw.nse && !fw.off, 'Exit at walks a scanner "no fill" crypto alert, not NSE, not with Scanner: ' + JSON.stringify(fw));
     check(pure.rec === '{"p":[[1,0.5],[1.005,0.9],[1.02,0.75]],"ta":null}' && pure.rnd === '{"p":[[2.249,2]],"ta":null}', 'path kept for Trail TP: ' + pure.rec + ' ' + pure.rnd);
     check(JSON.stringify(pure.w3) === '[0,1]' && JSON.stringify(pure.w4) === '[1,1,1.9]' && pure.w20[1] === undefined, 'till TP / SL walk past 3R: ' + JSON.stringify(pure));
   } catch (e) {
