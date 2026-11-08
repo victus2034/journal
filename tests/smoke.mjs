@@ -3197,7 +3197,7 @@ async function analysisFiltersRun(seed) {
       const card = l => (document.querySelector('#anStrip [data-ancard="' + l + '"] .mono-num') || {}).innerText;
       return { head: !document.getElementById('anRepHead').classList.contains('hidden'), net: card('net'), win: card('win'), fees: document.getElementById('anRepSub').innerText, bw: card('bw'), n: document.querySelectorAll('#anStrip > div').length,
         pairs: [...document.querySelectorAll('#btPairs [data-anpair]')].map(b => b.getAttribute('data-anpair')), days: document.querySelectorAll('#btDays > div').length, sel: [...document.querySelectorAll('#anPairSel option')].map(o => o.value) }; });
-    check(rep.head && rep.n === 8 && /\+\$1\.40/.test(rep.net) && rep.win === '100%' && /fees \$0\.10/.test(rep.fees) && /\+\$0\.80 \/ \+\$0\.60/.test(rep.bw) && rep.pairs.join() === 'TLAUSD' && rep.days === 1 && rep.sel.indexOf('TLAUSD') !== -1, 'journal report: ' + JSON.stringify(rep));
+    check(rep.head && rep.n === 8 && /\+\$1\.40/.test(rep.net) && rep.win === '100%' && /fees \$0\.10/.test(rep.fees) && /^\+\$0\.80 TLAUSD \+\$0\.60 TLAUSD$/.test(rep.bw.replace(/\s+/g, ' ')) && rep.pairs.join() === 'TLAUSD' && rep.days === 1 && rep.sel.indexOf('TLAUSD') !== -1, 'journal report: ' + JSON.stringify(rep));
     const onePair = await page.evaluate(() => { state.ui.anKind = ''; state.ui.anTlType = ''; state.ui.anPair = 'ZZUSD'; renderAnalysis(); const n = +[...document.querySelectorAll('#anStrip > div')].find(x => /Trades checked/i.test(x.innerText)).querySelector('.mono-num').innerText; state.ui.anPair = ''; return n; });
     check(onePair === 1, 'pair filter on a journal book: ' + onePair);
   } catch (e) {
@@ -3285,7 +3285,7 @@ async function anDemoRun(seed) {
       const card = k => (document.querySelector('#anStrip [data-ancard="' + k + '"]') || {}).innerText || '';
       const rows = {}; document.querySelectorAll('#anDemoTable tbody tr').forEach(tr => { rows[tr.getAttribute('data-demorow')] = [...tr.children].map(td => td.innerText.replace(/\s+/g, ' ').trim()); });
       return { sec: state.ui.anSec, shown: !document.querySelector('[data-ansec="demo"]').classList.contains('hidden'), line: document.getElementById('anDemoLine').innerText,
-        n: card('demo-n'), net: card('net'), diff: card('diff'), win: card('win'), avgr: card('avgr'), rows, head: document.getElementById('anDemoHead').innerText, habit: (document.getElementById('anDemoHabit') || {}).innerText || '',
+        n: card('demo-n'), net: card('net'), diff: card('diff'), win: card('win'), avgr: card('avgr'), rows, head: document.getElementById('anDemoHead').innerText.replace(/\s+/g, ' ').trim(), chips: [...document.querySelectorAll('#anDemoLine .demo-chip')].map(c => c.innerText).join('|'), habit: (document.getElementById('anDemoHabit') || {}).innerText || '',
         groups: [...document.querySelectorAll('#anDemoGroups [data-verdict]')].map(b => b.getAttribute('data-verdict') + ':' + b.innerText.replace(/\s+/g, ' ')),
         rules: document.getElementById('anRulesSum').innerText };
     });
@@ -3304,7 +3304,10 @@ async function anDemoRun(seed) {
     row('dSOL', '-$0.90', '-$2.15', 'SL', '-$1.25', 'Cut before the stop');
     row('dXRP', '+$0.30', '+$1.40', 'Target', '+$1.10', 'Closed before the TP');
     check(!v.rows.dADA && !v.rows.dNo, 'open and stop-less trades are not in the table: ' + Object.keys(v.rows).join());
-    check(/Costliest habit: Closed before the TP on 2 trades, \$3\.10 less/.test(v.habit), 'costliest habit: ' + v.habit);
+    check(/Costliest habit: Closed before the TP · 2 trades · \$3\.10 less than the plan/.test(v.habit), 'costliest habit: ' + v.habit);
+    // +0.48R: plan - you in R a trade, BTC +2.00 / 2, ETH +0.90 / 2, SOL -1.25 / 2, XRP +1.10 / 1 = 1.925 / 4.
+    check(v.head === 'Plan made -$0.05 4 trades held to the rules You made -$2.80 same trades, your exits Your exits cost $2.75 +0.48R a trade vs the plan', 'demo head, three figures: ' + v.head);
+    check(v.chips === 'Exit 1.5R|Held till TP or SL' && /Back to my exits/.test(v.line), 'demo rules as chips: ' + v.chips + ' / ' + v.line);
     check(v.groups.length === 3 && /^early:/.test(v.groups[0]) && v.groups.some(g => /^saved:/.test(g)), 'groups: ' + JSON.stringify(v.groups));
     check(/demo: exit at 1\.5R/.test(v.rules), 'rules summary: ' + v.rules);
     // Candles: 1m first, and no more once 1.5R closes the trade. ETH and SOL are stopped and
@@ -3375,6 +3378,70 @@ async function anDemoRun(seed) {
   }
   await ctx.close();
   const label = 'Analysis: Signals-style panels and demo mode (plan TP / SL vs your exit)';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
+// Number rows stay readable (lakky, 2026-11-08, iPad: "hard to see ... worst trade"):
+// 2 across on a phone, 4 on an iPad or laptop, 8 only from 1440px; no value or line
+// under it cut off or ending in "…", even for lakh-sized rupee figures; Best / worst
+// shows both figures, one under the other, and the sign stays with its amount.
+async function statRowsRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  for (const [name, vp, cols] of [['phone', { width: 390, height: 844 }, 2], ['iPad', { width: 1180, height: 820 }, 4], ['iPad portrait', { width: 820, height: 1180 }, 4], ['desktop', { width: 1600, height: 900 }, 8]]) {
+    const ctx = await browser.newContext({ viewport: vp, timezoneId: 'Asia/Kolkata' });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push(name + ' page error: ' + (e.stack || e.message)));
+    try {
+      await page.goto(base, { waitUntil: 'load' });
+      await page.waitForTimeout(200);
+      // Two big trades on the rupee book: a lakh-sized loss and a big win.
+      await page.evaluate(() => {
+        // On days the rupee book has no other trade (the made-up journal's crypto days), so each is its own best / worst day.
+        const used = new Set(state.trades.filter(t => t.accountId === 'acc_nse').map(dayOf)), t0 = state.trades.find(t => t.accountId === 'acc_nse');
+        const free = [1, 3, 5, 7, 9, 11].map(n => iso(new Date(Date.now() - n * 864e5))).filter(d => !used.has(d));
+        state.trades.push(Object.assign({}, t0, { id: 'bigL', date: free[0], exitDate: free[0], entry: 2000, exit: 1785.0898, stop: 1990, qty: 500, direction: 'long', pnl: -107455.2, risk: 5000, r: -21.49 }));
+        state.trades.push(Object.assign({}, t0, { id: 'bigW', date: free[1], exitDate: free[1], entry: 2000, exit: 2197.5309, stop: 1990, qty: 500, direction: 'long', pnl: 98765.35, risk: 5000, r: 19.75 }));
+        Object.assign(state.ui, { account: 'acc_nse', allCur: 'INR', month: 'all', anPeriod: 'all', anKind: '', anChan: '', anCoins: '', anPair: '' });
+        delete state.ui.anPlay;
+        save(); renderAll(); switchTab('dashboard');
+      });
+      // Measured after the rows are fitted (they fit on the next frame).
+      const read = id => page.evaluate(id => new Promise(res => requestAnimationFrame(() => requestAnimationFrame(() => {
+        const row = document.getElementById(id), cut = [];
+        row.querySelectorAll('*').forEach(el => { const cs = getComputedStyle(el); if (cs.textOverflow === 'ellipsis' || el.scrollWidth > el.clientWidth + 1 && cs.overflow !== 'visible') cut.push(el.textContent.trim()); });
+        const card = l => [...row.children].find(c => c.firstElementChild && c.firstElementChild.textContent.trim().toLowerCase() === l);
+        const pair = c => c ? [...c.querySelectorAll('.stat-pair')].map(p => p.innerText.replace(/\s+/g, ' ').trim()) : [];
+        // A sign on its own line: a line box ending in "-" or "+" inside any card.
+        const lone = [...row.querySelectorAll('.mono-num, .truncate')].filter(el => el.getClientRects().length && /(^|\n)[+-]\s*(\n|$)/.test(el.innerText)).map(el => el.innerText);
+        res({ cols: getComputedStyle(row).gridTemplateColumns.split(' ').length, cut, lone, net: (card('net p&l') || {}).innerText, bw: pair(card('best / worst')), bwd: pair(card('best / worst day')) });
+      }))), id);
+      const dash = await read('kpiRibbon');
+      check(dash.cols === cols, name + ': dashboard row has ' + dash.cols + ' columns, wanted ' + cols);
+      check(!dash.cut.length && !dash.lone.length, name + ': dashboard cut off: ' + JSON.stringify(dash.cut.concat(dash.lone)));
+      check(dash.bwd.length === 2 && /^\+₹98,765\.35 \d+ \w+$/.test(dash.bwd[0]) && /^-₹1,07,455\.20 \d+ \w+$/.test(dash.bwd[1]), name + ': best / worst day: ' + JSON.stringify(dash.bwd));
+      await page.evaluate(() => switchTab('analysis'));
+      const an = await read('anStrip');
+      check(an.cols === cols, name + ': analysis row has ' + an.cols + ' columns, wanted ' + cols);
+      check(!an.cut.length && !an.lone.length, name + ': analysis cut off: ' + JSON.stringify(an.cut.concat(an.lone)));
+      check(an.bw.length === 2 && /^\+₹98,765\.35 RELIANCE$/.test(an.bw[0]) && /^-₹1,07,455\.20 RELIANCE$/.test(an.bw[1]), name + ': best / worst: ' + JSON.stringify(an.bw));
+      // Turning the iPad (or resizing the window) refits the rows.
+      if (name === 'iPad') {
+        await page.setViewportSize({ width: 1500, height: 900 });
+        // A resize is fitted on the frame after it (a redraw before its first paint).
+        await page.waitForTimeout(300);
+        const wide = await read('anStrip');
+        check(wide.cols === 8 && !wide.cut.length, 'iPad turned to 1500px: ' + JSON.stringify(wide));
+      }
+    } catch (e) {
+      errs.push(name + ' threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+    }
+    await ctx.close();
+  }
+  const label = 'Number rows readable on phone, iPad and desktop (no cut-off values, Best / worst stacked)';
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
@@ -5313,6 +5380,7 @@ await behaviourRun(data);
 await setupLevelRun(data);
 await analysisFiltersRun(data);
 await anDemoRun(data);
+await statRowsRun(data);
 await alertPriceMatchRun(data);
 await aiReviewRun(data);
 await layoutRun(data);
