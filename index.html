@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.176">
+  <meta name="app-version" content="2026-11-08.177">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -2366,7 +2366,11 @@
     // as a % of entry, so -1R on a 0.5% stop reads (-0.50%).
     function pctOfR(r, stopPct) { return (r != null && isFinite(r) && stopPct != null && isFinite(stopPct)) ? r * stopPct : null; }
     function pfmt(v) { return (v == null || !isFinite(v)) ? "" : (v >= 0 ? "+" : "-") + Math.abs(v).toFixed(2) + "%"; }
-    function pTag(v) { const t = pfmt(v); return t ? ` <span class="text-[10px] font-normal opacity-80" title="% move from entry (net of fees for your trades)">(${t})</span>` : ""; }
+    function pTag(v, lab, tip) { const t = pfmt(v); return t ? ` <span class="text-[10px] font-normal opacity-80" title="${esc(tip || '% move from entry (net of fees for your trades)')}">(${t}${lab ? ' ' + lab : ''})</span>` : ""; }
+    // An alert's % beside its R is the price move (R × stop size), not money: said so where it
+    // sits next to R totals (lakky, 2026-11-08: "how is it possible to have 2 different %").
+    const PRICE_TIP = "Each alert's price move from entry (R × its stop size), added up. No position size or leverage, so this is not an account return: the Demo account shows that.";
+    function pMove(v) { return pTag(v, 'price move', PRICE_TIP); }
     // Your trade's net result (after fees) as a % of the position's value at entry.
     function tradePct(t) {
       if (t && t.orig) t = t.orig; // price and size are in the book's own currency
@@ -4216,7 +4220,7 @@
       if (mode === "missed") {
         const totalR = sum(shown.map(missedR));
         const cap = document.createElement('tr');
-        cap.innerHTML = `<td colspan="14" class="py-2 px-3 text-[11px] font-mono"><span class="text-emerald-400 font-bold">${rfmt(totalR)}${pTag(sumPct(shown.map(sigOutPct)))}</span> <span class="text-slate-400">left on the table: ${shown.length} alert${shown.length === 1 ? '' : 's'} in this view went on to win and you had no trade on them.</span></td>`;
+        cap.innerHTML = `<td colspan="14" class="py-2 px-3 text-[11px] font-mono"><span class="text-emerald-400 font-bold">${rfmt(totalR)}${pMove(sumPct(shown.map(sigOutPct)))}</span> <span class="text-slate-400">left on the table: ${shown.length} alert${shown.length === 1 ? '' : 's'} in this view went on to win and you had no trade on them.</span></td>`;
         tbody.appendChild(cap);
       }
       const sortedShown = shown.slice().sort((x, y) => {
@@ -10487,7 +10491,7 @@
       const left = sum(early.map(x => x.sr - x.mr)), extra = sum(worse.map(x => x.sr - x.mr));
       let h = head + '<p class="text-slate-500 text-[11px] mb-3">The ' + list.length + ' alerts you took, with the alert\'s own result next to yours. R for both is measured against the alert\'s stop.</p>'
         + '<div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">'
-        + card('Alerts made', rfmt(sTot) + pTag(sumPct(list.map(x => x.sp))), 'if you had followed them exactly', sTot >= 0 ? 'text-emerald-400' : 'text-rose-400')
+        + card('Alerts made', rfmt(sTot) + pMove(sumPct(list.map(x => x.sp))), 'if you had followed them exactly', sTot >= 0 ? 'text-emerald-400' : 'text-rose-400')
         + card('You made', rfmt(mTot) + pTag(sumPct(list.map(x => x.mp))), 'gap ' + rfmt(mTot - sTot), mTot >= 0 ? 'text-emerald-400' : 'text-rose-400')
         + card('Exited early', early.length, 'left about ' + Math.abs(left).toFixed(1) + 'R behind', early.length ? 'text-amber-300' : 'text-slate-100')
         + card('Lost more than alert', worse.length, 'cost about ' + Math.abs(extra).toFixed(1) + 'R extra', worse.length ? 'text-rose-300' : 'text-slate-100')
@@ -11676,8 +11680,8 @@
           { label: "Alerts", val: String(pairs.length), sub: `${taken} taken by you`, color: "text-slate-200" },
           { label: "Filled", val: String(filledN), sub: `${unfilled} no fill · ${ungraded} waiting`, color: "text-slate-200", tip: `${unfilled} never reached the entry; ${ungraded} have no result yet (see the line under these numbers).` },
           { label: "Win rate", val: scored.length ? pct(wins / scored.length * 100) : "—", sub: `${wins}W / ${scored.length - wins}L`, color: "text-emerald-400" },
-          { label: "Total R", val: scored.length ? rfmt(sum(rs)) + pTag(sumPct(psAll)) : "—", sub: "across all signals", color: sum(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
-          { label: "Average R", val: scored.length ? rfmt(avg(rs)) + (psAll.some(x => x != null) ? pTag(sumPct(psAll) / psAll.filter(x => x != null).length) : "") : "—", sub: "per alert (expectancy)", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
+          { label: "Total R", val: scored.length ? rfmt(sum(rs)) + pMove(sumPct(psAll)) : "—", sub: "across all signals", color: sum(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
+          { label: "Average R", val: scored.length ? rfmt(avg(rs)) + (psAll.some(x => x != null) ? pMove(sumPct(psAll) / psAll.filter(x => x != null).length) : "") : "—", sub: "per alert (expectancy)", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
           { label: "Profit factor", val: gl > 0 ? (gw / gl).toFixed(2) : (gw > 0 ? "∞" : "—"), sub: gw / Math.max(gl, 0.0001) >= 1.5 ? "healthy" : "thin", color: gw >= gl ? "text-emerald-400" : "text-rose-400" },
           { label: "Max drawdown", val: scored.length ? (run.maxDD ? "-" + run.maxDD.toFixed(2) + "R" : "0R") : "—", sub: scored.length ? `worst run: ${run.maxLs} loss${run.maxLs === 1 ? "" : "es"} in a row` : "", tip: "The deepest fall from a high of the running total, every alert in the order it fired at 1R. Worst run = the most losses in a row.", color: "text-rose-400" },
           { label: "Best / worst", val: scored.length ? statPair([rfmt(Math.max(...rs)), "text-emerald-400", bestPr ? esc(bestPr.signal.symbol) : ""], [rfmt(Math.min(...rs)), "text-rose-400", worstPr ? esc(worstPr.signal.symbol) : ""]) : "—", sub: scored.length ? "" : "single alert", tip: ["Best: " + describe(bestPr) + (pOfPick(bestPr) != null ? " (" + pfmt(pOfPick(bestPr)) + ")" : ""), "Worst: " + describe(worstPr) + (pOfPick(worstPr) != null ? " (" + pfmt(pOfPick(worstPr)) + ")" : ""), tipFor(worstPr)].filter(Boolean).join(". ").replace(/&middot;|·/g, "-"), color: "text-slate-200" }
@@ -14207,6 +14211,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-08.177', pr: 92, title: 'Signals: % beside R says "price move"', pts: ['Total R, Average R, Alerts made and left on the table show their % as "price move": each alert\'s move from entry (R × stop size), not money', 'It can be negative while R is positive (losers had wider stops); the Demo account\'s Return is the account %'] },
       { v: '2026-11-08.176', pr: 91, title: 'Demo account: what to improve; charts you can tap', pts: ['Demo account: trades fold into their own Trades section (All / Won / Lost / Skipped); new What to improve (groups costing you and working for you, skipped alerts) and Wins, losses and streaks', 'Results by also splits by exit, side, level / type, timeframe, stop size, weekday and time held', 'Charts: tap or hover anywhere for a point. Dashboard shows the day\'s P&L and trades, the Signals backtest curve has axes, dates and tips; a tap\'s tip stays on iPad'] },
       { v: '2026-11-08.175', pr: 90, title: 'Fix: Edge & breakdowns empty with Exit at', pts: ['Edge & breakdowns drew nothing when an alert the scanner called "no fill" was filled later by Exit at', 'The Scanner row in Exit targets compared leaves those alerts out and says how many'] },
       { v: '2026-11-08.174', pr: 89, title: 'Demo account: clearer chart, results by day / week / coin, hold time', pts: ['Balance chart with a price axis, dates and the drawdown under it; hover or tap it to see each trade', 'Results by day, week, month or coin: tap a row to see its trades; Top 3 / Top 5 coins vs all', 'Avg hold time (fill to exit) on the cards, per day / week / coin and on every trade'] },

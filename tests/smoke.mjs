@@ -2423,6 +2423,9 @@ async function sigBacktestRun(seed) {
     check(/CRYPTO 4h 4 100% 4 50% \+0\.25R \+1\.00R 1\.50 -2\.00R/.test(v.rep) && /CRYPTO 1D 5 80% 3 33% \+0\.00R \+0\.00R 1\.00 -1\.00R/.test(v.rep), 'channel rows: ' + v.rep.slice(-700));
     check(/^CRYPTO 4h/.test(v.firstRow.trim()), 'sorted by total R: ' + v.firstRow);
     check(JSON.stringify(v.said) === '["Exported 9 alerts"]', 'CSV export: ' + JSON.stringify(v.said));
+    // The % beside Total R / Average R is the price move (R × the 1% stops), and says so (v.177).
+    const strip = await page.evaluate(() => { const el = document.getElementById('sigEdgeStrip'); return { t: el.innerText.replace(/\s+/g, ' '), tip: (el.querySelector('span[title*="price move"]') || {}).title || '' }; });
+    check(/Total R \+1\.00R \(\+1\.00% price move\)/i.test(strip.t) && /Average R \+0\.14R \(\+0\.14% price move\)/i.test(strip.t) && /not an account return/.test(strip.tip), 'price move label: ' + JSON.stringify(strip));
     // The R curve (lakky, 2026-11-08): equity 0 2 1 0 1 0 2 1, so a 0-2R axis in 0.5R steps, the
     // deepest fall 2R, dates under alerts 1, 2, 4, 5 and 7, and a tip for the alert under the pointer.
     const c = await page.evaluate(() => ({ y: [...document.querySelectorAll('#sigBtChart .dc-y:not(.dc-y2) span')].map(s => s.textContent), y2: [...document.querySelectorAll('#sigBtChart .dc-y2 span')].map(s => s.textContent),
