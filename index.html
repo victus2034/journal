@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.172">
+  <meta name="app-version" content="2026-11-08.173">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -166,6 +166,30 @@
     .statrow>*>span:first-child{font-size:12px!important;color:var(--dim)!important;font-weight:500!important}
     .statrow .text-base,.statrow .sm\:text-lg{font-size:1.15rem!important;line-height:1.6rem;font-weight:600!important}
     .statrow .text-\[10px\]{color:var(--dim)!important}
+    /* Number rows stay readable (lakky, 2026-11-08, iPad): 2 across on a phone, 4 on a tablet
+       or laptop, 8 only from 1440px where each card has room. A value stays on one line
+       (fitStatRow shrinks it if it still does not fit); the line under it wraps instead of "…". */
+    @media (min-width:640px) and (max-width:1439.98px){.statrow.lg\:grid-cols-8{grid-template-columns:repeat(4,minmax(0,1fr))}}
+    .statrow .mono-num{white-space:nowrap;overflow:hidden}
+    .statrow>* .truncate{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:break-word}
+    .statrow .text-\[10px\]{font-size:11px!important;line-height:1.35}
+    .statrow .text-\[9px\]{font-size:10.5px!important}
+    .stat-pair{display:flex;align-items:baseline;column-gap:.4em;font-size:.87em;line-height:1.4}
+    .stat-pair>span:first-child{white-space:nowrap}
+    .stat-pair .stat-tag{font-size:.7em;font-weight:500;color:var(--dim)}
+    .fit-wrap .stat-pair{flex-wrap:wrap}
+    /* Demo rules under the Analysis numbers: chips, and what was replayed on its own line */
+    .demo-line{display:flex;flex-direction:column;gap:.35rem;font-size:12px}.demo-line.hidden{display:none}
+    .demo-line .demo-rules{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem}
+    .demo-line .demo-chip{padding:.12rem .55rem;border-radius:999px;border:1px solid color-mix(in srgb,var(--acc) 40%,transparent);background:color-mix(in srgb,var(--acc) 9%,transparent);color:var(--acc);white-space:nowrap}
+    .demo-line .demo-cover{color:var(--dim)}
+    .demo-line button{color:var(--acc);text-decoration:underline;white-space:nowrap}
+    .demo-sum{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;margin-top:.6rem}
+    .demo-sum>div{display:flex;flex-direction:column;gap:.1rem}
+    .demo-sum>div>span:first-child{font-size:11.5px;color:var(--dim)}
+    .demo-sum>div>b{font-size:16px;font-variant-numeric:tabular-nums;white-space:nowrap}
+    .demo-sum>div>span:last-child{font-size:11px;color:var(--dim)}
+    .demo-vs .nw{white-space:nowrap}
     #goalCurrent{font-weight:600}
     .card .kv>span:last-child{font-size:14px}
     /* Utilities the static Tailwind build lacks */
@@ -1194,7 +1218,7 @@
 
       <!-- Headline numbers for whatever the panels select (the demo's, with yours beside them, in demo mode) -->
       <section class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow" id="anStrip"></section>
-      <div id="anDemoLine" class="hidden text-[11px] font-mono text-amber-300"></div>
+      <div id="anDemoLine" class="hidden demo-line"></div>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
         <details id="anHowLive">
           <summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">How this is worked out</summary>
@@ -2670,7 +2694,12 @@
         // Expectancy in money per trade always works; R only exists for trades with a real stop.
         { label: "Expectancy", val: s.n ? signedMoney(s.net / s.n, cur) : "—", sub: s.rCount ? `per trade · ${rfmt(s.expectancy)} avg on ${s.rCount} with a stop` : "per trade · no stops to work out R", color: s.net >= 0 ? "text-emerald-400" : "text-rose-400" },
         greenOrReturn(greenDays, days, s, cur),
-        { label: "Best day", val: days.length ? signedMoney(Math.max(...days.map(d => d.net)), cur) : "—", sub: days.length ? `worst ${signedMoney(Math.min(...days.map(d => d.net)), cur)}` : "", color: !days.length || Math.max(...days.map(d => d.net)) >= 0 ? "text-emerald-400" : "text-rose-400" },
+        (() => {
+          // Best and worst day, one under the other, so the worst is as easy to read as the best.
+          if (!days.length) return { label: "Best / worst day", val: "—", sub: "no trading days yet", color: "text-slate-200" };
+          const hi = days.reduce((a, d) => d.net > a.net ? d : a), lo = days.reduce((a, d) => d.net < a.net ? d : a), dd = d => esc(fmtDay(d.date));
+          return { label: "Best / worst day", val: statPair([esc(signedMoney(hi.net, cur)), hi.net >= 0 ? "text-emerald-400" : "text-rose-400", dd(hi)], [esc(signedMoney(lo.net, cur)), lo.net >= 0 ? "text-emerald-400" : "text-rose-400", dd(lo)]), sub: "", color: "text-slate-200" };
+        })(),
         { label: "Max drawdown", val: money(-s.maxDD, cur), sub: "peak to trough", color: "text-rose-400" },
         { label: "Limit breaches", val: String(breaches), sub: breaches === 0 ? "rule intact" : "plan violations", color: breaches === 0 ? "text-emerald-400" : "text-rose-400" }
       ];
@@ -2683,7 +2712,7 @@
           <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${it.label}</span>
           <div class="my-0.5">
             <div class="text-base sm:text-lg font-bold ${it.color} mono-num">${it.val}</div>
-            <div class="text-[10px] text-slate-400 truncate">${it.sub}</div>
+            ${it.sub ? `<div class="text-[10px] text-slate-400 truncate">${statSub(it.sub)}</div>` : ''}
           </div>
           ${it.foot ? `<span class="text-[9px] text-amber-400/80 truncate">${it.foot}</span>` : ''}
         `;
@@ -4742,12 +4771,42 @@
         el.onclick = () => { const st = g && g.ex; if (!st) return; Object.assign(state.ui, { anKind: st.kind || "none", anLvl: st.kind === "fib" ? st.level : "", anTlType: st.kind === "trendline" ? st.level : "", anChan: "" }); anVisible = AN_PAGE; save(); renderAnalysis(); };
       });
     }
+    // ---- Number rows (Dashboard, Signals, Analysis, broker report) ----
+    // Two figures in one card (best / worst, avg win / loss): one under the other, each
+    // with its coin, so neither is cut off. a / b = [value html, colour class, tag].
+    function statPair(a, b) {
+      const one = x => '<div class="stat-pair"><span class="' + (x[1] || '') + '">' + x[0] + '</span>' + (x[2] ? '<span class="stat-tag">' + x[2] + '</span>' : '') + '</div>';
+      return one(a) + one(b);
+    }
+    // The line under a value wraps, but never inside an amount ("-" on one line, "₹10,474" on the next).
+    function statSub(html) { return String(html).replace(/([+-][₹$][\d,]+(?:\.\d+)?|[+-]\d[\d,.]*[R%])/g, '<span class="whitespace-nowrap">$1</span>'); }
+    // A value still too wide for its card (a big ₹ figure on a narrow one) shrinks to fit
+    // instead of being cut off; at 11px it wraps.
+    function fitStatRow(row) {
+      if (!row || !row.offsetWidth) return;
+      row.querySelectorAll('.mono-num').forEach(el => {
+        el.style.removeProperty('font-size'); el.style.removeProperty('white-space'); el.classList.remove('fit-wrap');
+        const w = el.clientWidth;
+        if (!w || el.scrollWidth <= w + 0.5) return;
+        const fs = parseFloat(getComputedStyle(el).fontSize) || 16;
+        el.style.setProperty('font-size', Math.max(11, Math.floor(fs * w / el.scrollWidth * 0.97)) + 'px', 'important');
+        if (el.scrollWidth > w + 0.5) { el.style.setProperty('white-space', 'normal', 'important'); el.classList.add('fit-wrap'); }
+      });
+    }
+    // Refit when a row is redrawn or changes width (rotating an iPad, opening a tab).
+    function watchStatRows() {
+      if (typeof ResizeObserver === 'undefined' || typeof MutationObserver === 'undefined') return;
+      const later = rows => requestAnimationFrame(() => rows.forEach(fitStatRow));
+      const ro = new ResizeObserver(es => later(es.filter(e => { const w = Math.round(e.contentRect.width); if (w === e.target._fitW) return false; e.target._fitW = w; return true; }).map(e => e.target)));
+      const mo = new MutationObserver(ms => later([...new Set(ms.map(m => (m.target.nodeType === 1 ? m.target : m.target.parentElement)).map(n => n && n.closest('.statrow')).filter(Boolean))]));
+      document.querySelectorAll('.statrow').forEach(r => { ro.observe(r); mo.observe(r, { childList: true, subtree: true, characterData: true }); fitStatRow(r); });
+    }
     // ---- The numbers row at the top (8 cards, like Signals) ----
     // Your trades as taken; in demo mode the demo's figures, with yours beside them.
     function anCard(c) {
       return '<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors"' + (c.id ? ' data-ancard="' + c.id + '"' : '') + (c.tip ? ' title="' + esc(c.tip) + '"' : '') + '>'
         + '<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">' + esc(c.label) + '</span>'
-        + '<div class="my-0.5"><div class="text-base sm:text-lg font-bold ' + c.color + ' mono-num whitespace-nowrap">' + c.val + '</div><div class="text-[10px] text-slate-400 truncate">' + esc(c.sub) + '</div></div></div>';
+        + '<div class="my-0.5"><div class="text-base sm:text-lg font-bold ' + c.color + ' mono-num">' + c.val + '</div>' + (c.sub ? '<div class="text-[10px] text-slate-400 truncate">' + statSub(esc(c.sub)) + '</div>' : '') + '</div></div>';
     }
     // Money results in the order they closed: total, wins, drawdown, streaks.
     function anMoneyRun(vals) { return sigRunStats(vals); }
@@ -4771,7 +4830,7 @@
           { label: "Average R", val: rsAn.length ? rfmt(avg(rsAn)) : "—", sub: rsAn.length ? `${rsAn.length} with a stop · total ${rfmt(sum(rsAn))}` : "no stop known", color: !rsAn.length ? "text-slate-200" : pos(avg(rsAn)), id: "avgr" },
           { label: "Profit factor", val: !res.n ? "—" : res.pf === Infinity ? "∞" : res.pf.toFixed(2), sub: "won ÷ lost", tip: "Money won ÷ money lost: above 1 makes money", color: res.pf >= 1 ? "text-emerald-400" : "text-rose-400", id: "pf" },
           { label: "Max drawdown", val: esc(money(-run.maxDD, cur)), sub: `worst run: ${run.maxLs} loss${run.maxLs === 1 ? "" : "es"} in a row`, color: run.maxDD > 0 ? "text-rose-400" : "text-slate-200", id: "dd", tip: "The deepest fall of your running P&L from a high, trades in the order you took them." },
-          { label: "Best / worst", val: `<span class="text-emerald-400">${sm(best.t.pnl)}</span> <span class="text-slate-500">/</span> <span class="text-rose-400">${sm(worst.t.pnl)}</span>`, sub: `${btSym(best.t.symbol)} · ${btSym(worst.t.symbol)}`, color: "text-slate-200", id: "bw" },
+          { label: "Best / worst", val: statPair([sm(best.t.pnl), "text-emerald-400", esc(btSym(best.t.symbol))], [sm(worst.t.pnl), "text-rose-400", esc(btSym(worst.t.symbol))]), sub: "", color: "text-slate-200", id: "bw", tip: "Best and worst single trade" },
           { label: "Trades checked", val: String(rows.length), sub: `${brokeOne.length} (${pct(brokeOne.length / rows.length * 100)}) broke a rule`, color: "text-slate-200" },
           { label: "Oversized", val: String(over.length), sub: `${pct(over.length / rows.length * 100)} · biggest ${xs.length ? Math.max(...xs).toFixed(1) + "×" : "—"}`, color: over.length ? "text-rose-400" : "text-emerald-400" }
         ].map(anCard).join('');
@@ -4786,20 +4845,26 @@
       const better = played.filter(z => z.d.diff > 0).length, worse = played.filter(z => z.d.diff < 0).length;
       const bestZ = played.reduce((b, z) => !b || z.d.money > b.d.money ? z : b, null), worstZ = played.reduce((b, z) => !b || z.d.money < b.d.money ? z : b, null);
       strip.innerHTML = [
-        { label: "Replayed", val: String(n), sub: `of ${rows.length} trade${rows.length === 1 ? "" : "s"}` + (note.n.open ? ` · ${note.n.open} open` : "") + (note.n.nostop ? ` · ${note.n.nostop} no stop` : ""), color: "text-slate-200", id: "demo-n", tip: note.text },
+        { label: "Replayed", val: String(n), sub: `of ${rows.length} trade${rows.length === 1 ? "" : "s"}` + (note.n.open ? ` · ${note.n.open} open` : "") + (note.n.nostop ? ` · ${note.n.nostop} no stop` : ""), color: "text-slate-200", id: "demo-n", tip: note.text + (note.tip ? ". " + note.tip : "") },
         { label: "Demo net P&L", val: n ? sm(P.tot) : "—", sub: n ? `you ${signedMoney(Y.tot, cur)} on these` : "no trade replayed yet", color: pos(P.tot), id: "net" },
         { label: "Plan vs you", val: n ? sm(diff) : "—", sub: n ? (diff >= 0 ? "what your exits cost" : "your exits made more") : "", color: !n ? "text-slate-200" : diff > 0 ? "text-rose-400" : "text-emerald-400", id: "diff", tip: "The demo's P&L minus yours on the same trades. Above zero: your exits cost that much against the plan. " + better + " trades did better on the plan, " + worse + " did better your way." },
         { label: "Win rate", val: n ? pct(P.win) : "—", sub: n ? `you ${pct(Y.win)} · ${P.wins}W / ${P.losses}L` : "", color: n && P.win >= 50 ? "text-emerald-400" : "text-amber-400", id: "win" },
         { label: "Average R", val: n ? rfmt(avg(pr)) : "—", sub: n ? `you ${rfmt(avg(yr))} · total ${rfmt(sum(pr))}` : "", color: n ? pos(avg(pr)) : "text-slate-200", id: "avgr" },
         { label: "Profit factor", val: n ? pf(P) : "—", sub: n ? `you ${pf(Y)}` : "", color: n && (P.pf == null || P.pf >= 1) ? "text-emerald-400" : "text-rose-400", id: "pf" },
         { label: "Max drawdown", val: n ? esc(money(-P.maxDD, cur)) : "—", sub: n ? `you ${money(-Y.maxDD, cur)}` : "", color: P.maxDD > 0 ? "text-rose-400" : "text-slate-200", id: "dd" },
-        { label: "Best / worst", val: n ? `<span class="text-emerald-400">${sm(bestZ.d.money)}</span> <span class="text-slate-500">/</span> <span class="text-rose-400">${sm(worstZ.d.money)}</span>` : "—", sub: n ? `${btSym(bestZ.x.t.symbol)} · ${btSym(worstZ.x.t.symbol)}` : "", color: "text-slate-200", id: "bw" }
+        { label: "Best / worst", val: n ? statPair([sm(bestZ.d.money), "text-emerald-400", esc(btSym(bestZ.x.t.symbol))], [sm(worstZ.d.money), "text-rose-400", esc(btSym(worstZ.x.t.symbol))]) : "—", sub: "", color: "text-slate-200", id: "bw", tip: "Best and worst single trade on the plan" }
       ].map(anCard).join('');
       const mv = anStopRule(), tr = anTrailRule();
       line.classList.remove('hidden');
-      line.innerHTML = 'Demo: every trade with a stop held to exit at ' + esc(tg.k) + (mv ? ', ' + esc(mv.label) : '') + (tr ? ', ' + esc(tr.label) : '') + ', ' + esc(anHoldTxt()) + ', instead of the exit you took · ' + esc(note.text)
-        + (note.fail ? ' · ' + note.fail + ' could not be read <button type="button" class="underline" onclick="anDemoRetry()">Retry</button>' : '')
-        + ' · <button type="button" class="underline" onclick="setAnTgt(\'\')">back to my exits</button>';
+      line.innerHTML = '<div class="demo-rules"><b class="text-amber-300 font-semibold mr-1">Demo</b>' + anDemoChips(tg, mv, tr)
+        + '<button type="button" class="ml-1" onclick="setAnTgt(\'\')">Back to my exits</button></div>'
+        + '<div class="demo-cover"' + (note.tip ? ' title="' + esc(note.tip) + '"' : '') + '>Your trades with a stop, replayed with these rules instead of your exit · ' + esc(note.text)
+        + (note.fail ? ' · ' + note.fail + ' could not be read <button type="button" onclick="anDemoRetry()">Retry</button>' : '') + '</div>';
+    }
+    // The demo's rules as short chips: "Exit 1.5R", "SL to +0.75R at 1R", "Trail TP …", "Held till TP or SL".
+    function anDemoChips(tg, mv, tr) {
+      const cap = x => x.charAt(0).toUpperCase() + x.slice(1);
+      return ['Exit ' + tg.k, mv && mv.label, tr && tr.label, cap(anHoldTxt())].filter(Boolean).map(x => '<span class="demo-chip">' + esc(x) + '</span>').join('');
     }
     // ---- Demo vs you: where the plan and your exits part ----
     function setAnDemoPick(k) { anDemoPick = anDemoPick === k ? null : k; anDemoVisible = AN_PAGE; renderAnalysis(); }
@@ -4813,28 +4878,37 @@
           + '<div id="anDemoQuick" class="flex flex-wrap gap-1.5 mt-3">' + quick + '</div>';
         return;
       }
-      const tg = anTgt(), note = anDemoNote(rows), mv = anStopRule(), tr = anTrailRule();
+      const note = anDemoNote(rows);
       const played = rows.map(x => ({ x, d: anDemoOf(x) })).filter(z => z.d && !z.d.why);
-      let h = '<div class="flex flex-wrap items-baseline justify-between gap-2"><h3 class="text-sm font-semibold text-white">Demo vs you <span class="text-amber-300 font-normal text-[12px]">· exit at ' + esc(tg.k) + (mv ? ' · ' + esc(mv.label) : '') + (tr ? ' · ' + esc(tr.label) : '') + ' · ' + esc(anHoldTxt()) + '</span></h3>'
-        + '<span id="anDemoCover" class="text-[11px] text-slate-500">' + esc(note.text) + (note.fail ? ' · ' + note.fail + ' could not be read <button type="button" class="underline" onclick="anDemoRetry()">Retry</button>' : '') + '</span></div>';
+      // The rules are the chips just above the section tabs; here only what was replayed.
+      let h = '<div class="flex flex-wrap items-baseline justify-between gap-2"><h3 class="text-sm font-semibold text-white">Demo vs you</h3>'
+        + '<span id="anDemoCover" class="text-[11px] text-slate-500"' + (note.tip ? ' title="' + esc(note.tip) + '"' : '') + '>' + esc(note.text) + (note.fail ? ' · ' + note.fail + ' could not be read <button type="button" class="underline" onclick="anDemoRetry()">Retry</button>' : '') + '</span></div>';
       if (!played.length) {
         host.innerHTML = h + '<p class="text-slate-500 mt-3">' + (anDemoProg || note.n.loading ? 'Reading prices…' : note.n.nostop === rows.length && rows.length ? 'None of these trades has a stop (yours or an alert\'s), so there is nothing to replay. Add a stop to a trade, or load the scanner\'s alerts.' : 'No trade here could be replayed yet.') + '</p>';
         return;
       }
       const planNet = sum(played.map(z => z.d.money)), youNet = sum(played.map(z => z.d.you)), diff = planNet - youNet;
       const dR = avg(played.map(z => z.d.r - z.d.youR));
-      h += '<p id="anDemoHead" class="text-[13px] text-slate-200 mt-2 leading-relaxed">Held to the plan, these ' + played.length + ' trade' + (played.length === 1 ? '' : 's') + ' make <b class="' + (planNet >= 0 ? 'text-emerald-300' : 'text-rose-300') + '">' + esc(signedMoney(planNet, cur)) + '</b>; you made <b class="' + (youNet >= 0 ? 'text-emerald-300' : 'text-rose-300') + '">' + esc(signedMoney(youNet, cur)) + '</b> on them. '
-        + (Math.abs(diff) < 0.005 ? 'The same.' : diff > 0 ? 'The plan makes <b class="text-rose-300">' + esc(money(diff, cur)) + ' more</b> (' + rfmt(dR) + ' a trade): that is what your exits cost.' : 'Your exits made <b class="text-emerald-300">' + esc(money(-diff, cur)) + ' more</b> (' + rfmt(-dR) + ' a trade) than the plan.') + '</p>';
+      // Three figures instead of a sentence: the plan, you, and the gap between them.
+      const fig = (lab, val, cls, sub) => '<div><span>' + lab + '</span><b class="' + cls + '">' + val + '</b><span>' + sub + '</span></div>';
+      const nT = played.length + ' trade' + (played.length === 1 ? '' : 's');
+      h += '<div id="anDemoHead" class="demo-sum">'
+        + fig('Plan made', esc(signedMoney(planNet, cur)), planNet >= 0 ? 'text-emerald-300' : 'text-rose-300', nT + ' held to the rules')
+        + fig('You made', esc(signedMoney(youNet, cur)), youNet >= 0 ? 'text-emerald-300' : 'text-rose-300', 'same trades, your exits')
+        + (Math.abs(diff) < 0.005 ? fig('Plan vs you', esc(money(0, cur)), 'text-slate-200', 'the same')
+          : diff > 0 ? fig('Your exits cost', esc(money(diff, cur)), 'text-rose-300', rfmt(dR) + ' a trade vs the plan')
+          : fig('Your exits made more', esc(money(-diff, cur)), 'text-emerald-300', rfmt(-dR) + ' a trade over the plan'))
+        + '</div>';
       // What happened, grouped: the habits that cost money first.
       const groups = Object.keys(AN_VERDICTS).map(k => { const g = played.filter(z => z.d.verdict === k); return { k, g, diff: sum(g.map(z => z.d.diff)) }; }).filter(x => x.g.length)
         .sort((a, b) => AN_VERDICTS[b.k].bad - AN_VERDICTS[a.k].bad || b.diff - a.diff);
       const worstHabit = groups.filter(x => AN_VERDICTS[x.k].bad > 0 && x.diff > 0).sort((a, b) => b.diff - a.diff)[0];
-      if (worstHabit) h += '<p id="anDemoHabit" class="text-[12px] text-slate-300 mt-1">Costliest habit: <b class="text-rose-300">' + esc(AN_VERDICTS[worstHabit.k].label) + '</b> on ' + worstHabit.g.length + ' trade' + (worstHabit.g.length === 1 ? '' : 's') + ', ' + esc(money(worstHabit.diff, cur)) + ' less than the plan.</p>';
+      if (worstHabit) h += '<p id="anDemoHabit" class="text-[12px] text-slate-300 mt-3">Costliest habit: <b class="text-rose-300">' + esc(AN_VERDICTS[worstHabit.k].label) + '</b> · ' + worstHabit.g.length + ' trade' + (worstHabit.g.length === 1 ? '' : 's') + ' · <span class="whitespace-nowrap">' + esc(money(worstHabit.diff, cur)) + '</span> less than the plan</p>';
       h += '<div id="anDemoGroups" class="demo-vs mt-3">' + groups.map(x => {
         const v = AN_VERDICTS[x.k], tone = v.bad > 0 ? 'text-rose-300' : v.bad < 0 ? 'text-emerald-300' : 'text-slate-300';
         return '<button type="button" data-verdict="' + x.k + '" onclick="setAnDemoPick(\'' + x.k + '\')" class="' + (anDemoPick === x.k ? 'on' : '') + '" title="' + esc(v.why) + '">'
           + '<div class="flex items-baseline justify-between gap-2"><span class="font-semibold ' + tone + '">' + esc(v.label) + '</span><span class="text-slate-400">' + x.g.length + '</span></div>'
-          + '<div class="text-[11px] text-slate-500 mt-0.5">plan vs you <span class="' + (x.diff > 0 ? 'text-rose-300' : x.diff < 0 ? 'text-emerald-300' : 'text-slate-400') + '">' + esc(signedMoney(x.diff, cur)) + '</span></div></button>';
+          + '<div class="text-[11px] text-slate-500 mt-0.5">plan vs you <span class="nw ' + (x.diff > 0 ? 'text-rose-300' : x.diff < 0 ? 'text-emerald-300' : 'text-slate-400') + '">' + esc(signedMoney(x.diff, cur)) + '</span></div></button>';
       }).join('') + '</div>';
       // Trade by trade, newest first.
       const pick = anDemoPick && groups.some(x => x.k === anDemoPick) ? anDemoPick : null;
@@ -9748,15 +9822,16 @@
       const n = { nse: 0, nostop: 0, noprice: 0, loading: 0, nodata: 0, open: 0, ok: 0 };
       rows.forEach(x => { const d = anDemoOf(x); if (d) n[d.why || "ok"]++; });
       const bits = [n.ok + " of " + rows.length + " trades replayed"];
-      if (n.nostop) bits.push(n.nostop + " with no stop (yours or an alert's)");
-      if (n.open) bits.push(n.open + " still open (no TP or SL yet)");
+      if (n.nostop) bits.push(n.nostop + " with no stop");
+      if (n.open) bits.push(n.open + " still open");
       if (n.nse) bits.push(n.nse + " NSE (no candles)");
       if (n.noprice) bits.push(n.noprice + " without prices");
       if (n.nodata) bits.push(n.nodata + " with no Delta candles");
       if (anDemoProg) bits.push("reading prices " + anDemoProg.done + "/" + anDemoProg.total + "…");
       else if (n.loading && navigator.onLine === false) bits.push("offline: prices load once the connection is back");
       else if (n.loading) bits.push(n.loading + " waiting for prices");
-      return { n, text: bits.join(" · "), fail: !anDemoProg && anDemoFail ? anDemoFail : 0 };
+      const tip = [n.nostop ? "No stop: neither you nor its alert set one, so there is nothing to replay." : "", n.open ? "Still open: price has reached neither the TP nor the SL yet." : ""].filter(Boolean).join(" ");
+      return { n, text: bits.join(" · "), tip, fail: !anDemoProg && anDemoFail ? anDemoFail : 0 };
     }
     // ---- The "How each trade is played" controls, shared by Signals and Analysis ----
     // P: whose settings (PLAY.sig / PLAY.an) and the functions that change them.
@@ -11190,14 +11265,14 @@
           { label: "Average R", val: scored.length ? rfmt(avg(rs)) + (psAll.some(x => x != null) ? pTag(sumPct(psAll) / psAll.filter(x => x != null).length) : "") : "—", sub: "per alert (expectancy)", color: avg(rs) >= 0 ? "text-emerald-400" : "text-rose-400" },
           { label: "Profit factor", val: gl > 0 ? (gw / gl).toFixed(2) : (gw > 0 ? "∞" : "—"), sub: gw / Math.max(gl, 0.0001) >= 1.5 ? "healthy" : "thin", color: gw >= gl ? "text-emerald-400" : "text-rose-400" },
           { label: "Max drawdown", val: scored.length ? (run.maxDD ? "-" + run.maxDD.toFixed(2) + "R" : "0R") : "—", sub: scored.length ? `worst run: ${run.maxLs} loss${run.maxLs === 1 ? "" : "es"} in a row` : "", tip: "The deepest fall from a high of the running total, every alert in the order it fired at 1R. Worst run = the most losses in a row.", color: "text-rose-400" },
-          { label: "Best / worst", val: scored.length ? `<span class="text-emerald-400">${rfmt(Math.max(...rs))}</span> <span class="text-slate-500">/</span> <span class="text-rose-400">${rfmt(Math.min(...rs))}</span>` : "—", sub: bestPr ? `${esc(bestPr.signal.symbol)} · ${esc(worstPr.signal.symbol)}` : "single alert", tip: ["Best: " + describe(bestPr) + (pOfPick(bestPr) != null ? " (" + pfmt(pOfPick(bestPr)) + ")" : ""), "Worst: " + describe(worstPr) + (pOfPick(worstPr) != null ? " (" + pfmt(pOfPick(worstPr)) + ")" : ""), tipFor(worstPr)].filter(Boolean).join(". ").replace(/&middot;|·/g, "-"), color: "text-slate-200" }
+          { label: "Best / worst", val: scored.length ? statPair([rfmt(Math.max(...rs)), "text-emerald-400", bestPr ? esc(bestPr.signal.symbol) : ""], [rfmt(Math.min(...rs)), "text-rose-400", worstPr ? esc(worstPr.signal.symbol) : ""]) : "—", sub: scored.length ? "" : "single alert", tip: ["Best: " + describe(bestPr) + (pOfPick(bestPr) != null ? " (" + pfmt(pOfPick(bestPr)) + ")" : ""), "Worst: " + describe(worstPr) + (pOfPick(worstPr) != null ? " (" + pfmt(pOfPick(worstPr)) + ")" : ""), tipFor(worstPr)].filter(Boolean).join(". ").replace(/&middot;|·/g, "-"), color: "text-slate-200" }
         ];
         items.forEach(it => {
           const card = document.createElement('div');
           if (it.tip) card.title = it.tip;
           card.className = 'bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors';
           card.innerHTML = `<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${it.label}</span>
-            <div class="my-0.5"><div class="text-base sm:text-lg font-bold ${it.color} mono-num">${it.val}</div><div class="text-[10px] text-slate-400 truncate">${it.sub}</div></div>`;
+            <div class="my-0.5"><div class="text-base sm:text-lg font-bold ${it.color} mono-num">${it.val}</div>${it.sub ? `<div class="text-[10px] text-slate-400 truncate">${statSub(it.sub)}</div>` : ""}</div>`;
           strip.appendChild(card);
         });
         // With an exit target picked, say so: these are what-if numbers, not the scanner's.
@@ -13211,15 +13286,15 @@
         { label: "Net P&L", val: signedMoney(s.net, cur), sub: `${s.n} closed · avg ${signedMoney(s.avg, cur, repDp(cur))}`, color: pos(s.net) },
         { label: "Win rate", val: s.n ? pct(s.winRate) : "—", sub: `${s.wins} won · ${s.losses} lost`, color: s.winRate >= 50 ? "text-emerald-400" : "text-amber-400" },
         { label: "Profit factor", val: s.pf === Infinity ? "∞" : s.n ? s.pf.toFixed(2) : "—", sub: "won ÷ lost", color: s.pf >= 1 ? "text-emerald-400" : "text-rose-400" },
-        { label: "Avg win / loss", val: `${signedMoney(s.avgWin, cur, repDp(cur))} / ${signedMoney(s.avgLoss, cur, repDp(cur))}`, sub: "per trade", color: "text-slate-200" },
-        { label: "Best / worst", val: `${signedMoney(s.best, cur, repDp(cur))} / ${signedMoney(s.worst, cur, repDp(cur))}`, sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
+        { label: "Avg win / loss", html: statPair([esc(signedMoney(s.avgWin, cur, repDp(cur))), "text-emerald-400", "win"], [esc(signedMoney(s.avgLoss, cur, repDp(cur))), "text-rose-400", "loss"]), sub: "per trade", color: "text-slate-200" },
+        { label: "Best / worst", html: statPair([esc(signedMoney(s.best, cur, repDp(cur))), "text-emerald-400", "best"], [esc(signedMoney(s.worst, cur, repDp(cur))), "text-rose-400", "worst"]), sub: `streaks: ${s.winRun} won, ${s.lossRun} lost`, color: "text-slate-200" },
         { label: "Max drawdown", val: money(-s.maxDD, cur), sub: "from a running peak", color: s.maxDD > 0 ? "text-rose-400" : "text-slate-200" },
-        { label: "Fees / funding", val: `${money(s.fees, cur, repDp(cur))} / ${signedMoney(s.funding, cur, repDp(cur))}`, sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
+        { label: "Fees / funding", html: statPair([esc(money(s.fees, cur, repDp(cur))), "", "fees"], [esc(signedMoney(s.funding, cur, repDp(cur))), "", "funding"]), sub: `avg hold ${btHeld(s.avgHeld == null ? null : Math.round(s.avgHeld))}`, color: "text-slate-200" },
         { label: "Open", val: String(s.open.length), sub: s.open.length ? `${signedMoney(s.openNet, cur)} so far` : "none open", color: s.open.length ? "text-sky-300" : "text-slate-200" }
       ];
       document.getElementById("btStrip").innerHTML = cards.map(c => `<div class="bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors">
           <span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${c.label}</span>
-          <div class="my-0.5"><div class="${c.val.length > 11 ? "text-sm" : "text-base sm:text-lg"} font-bold ${c.color} mono-num whitespace-nowrap">${esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${esc(c.sub)}</div></div></div>`).join("");
+          <div class="my-0.5"><div class="text-base sm:text-lg font-bold ${c.color} mono-num">${c.html || esc(c.val)}</div><div class="text-[10px] text-slate-400 truncate">${statSub(esc(c.sub))}</div></div></div>`).join("");
 
       // ---- check: every stored row of this currency is in exactly one trade ----
       const rowsCur = mineRows.map(conv);
@@ -13701,6 +13776,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-08.173', pr: 88, title: 'Number cards easy to read on iPad and phone', pts: ['Number rows (Dashboard, Signals, Analysis, report) show 4 across on an iPad or laptop, 8 only on a wide screen; no more cut-off values or "…"', 'Best / worst (and Best / worst day on the Dashboard) shows both figures, one under the other, with the coin or day', 'Demo: the rules are short chips, what was replayed is one line, and Demo vs you shows Plan made / You made / Your exits cost'] },
       { v: '2026-11-08.172', pr: 86, title: 'Exit at: alerts that filled after the scanner gave up now count', pts: ['With a fixed Exit at, every crypto alert is walked on its own candles: filled within 20 candles of the alert counts, even when the scanner (5-candle wait on fibs) said no fill', 'Filled / no fill / waiting follow that walk; an alert not reached yet is read again until its 20 candles are over', 'E.g. BTC L4 1D of 15 Oct filled on 30 Oct and was stopped: it was missing from the results'] },
       { v: '2026-11-08.171', pr: 87, title: 'Demo mode loads faster', pts: ['Reads 8 trades at a time, and stops reading a trade once your TP / SL rules have closed it', 'Opening Analysis again reads nothing new: closed trades are kept, and a trade still open is read again only after 15 minutes'] },
       { v: '2026-11-08.170', pr: 85, title: 'Analysis: Signals design + demo mode', pts: ['Analysis has Signals\' two folding panels (Which trades, with a new Coins filter; How each trade is played) and its 8-number row', 'Demo mode: pick a target in Exit at and every trade with a stop is replayed with that TP and SL from its own entry, set beside the exit you took', 'Demo vs you: what your exits cost, your costliest habit (e.g. closed before the TP), and every trade side by side'] },
@@ -13814,6 +13890,7 @@
       if (state.delta && state.delta.liveBalance && typeof state.delta.liveBalance.value === "number") liveDeltaBalance = state.delta.liveBalance;
       dropOldDeltaKey();
       renderAll();
+      watchStatRows();
       if (loadNotice) {
         const el = document.getElementById("storageAlert");
         const msg = loadNotice + (syncReady() ? " Your synced trades will come back from GitHub on the next sync." : " Restore a backup file if you have one.");
