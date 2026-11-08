@@ -2868,6 +2868,17 @@ async function demoDeepRun(seed) {
     await page.waitForTimeout(300);
     const kept = await page.evaluate(() => Object.values(tgtCache()).map(w => Array.isArray(w.p)));
     check(calls >= n0 + 4 && JSON.stringify(kept) === '[true,true]', 'candles gone on a re-read: the old walks stay: ' + JSON.stringify(kept) + ' calls ' + (calls - n0));
+    // A "no fill" from the scanner that the walk fills later: Edge & breakdowns still draws, and
+    // the Scanner row leaves it out (lakky, 2026-11-08: the whole section came up empty).
+    gone = false;
+    const edge = await page.evaluate(() => {
+      state.signals.push(Object.assign({}, state.signals[0], { id: 'c', key: 'kc', filled: false, outcome: 'no fill', resultR: null }));
+      try { setSigSec('edge'); renderAll(); return 'ok'; } catch (e) { return 'threw ' + e.message; }
+    });
+    await page.waitForFunction(() => !tgtBusy && /3 of 3 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText), null, { timeout: 10000 }).catch(() => {});
+    const cmp = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#sigTgtCmp > div > table tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').trim()), note: document.getElementById('sigTgtCmp').innerText.replace(/\s+/g, ' '), out: document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' ') }));
+    check(edge === 'ok' && /^Scanner 2 /.test(cmp.rows[0]) && /^1R 3 /.test(cmp.rows[1]) && cmp.note.includes('except 1 the scanner had as no fill that filled later within 20 candles') && /Target/.test(cmp.out),
+      'scanner no fill, walk filled: Edge draws, Scanner row 2, targets 3: ' + edge + ' ' + JSON.stringify(cmp).slice(0, 600));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
