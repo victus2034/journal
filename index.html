@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.177">
+  <meta name="app-version" content="2026-11-09.178">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -12509,6 +12509,22 @@
     }
     // Which rebuilds this device has taken in whole: one stamp for both.
     function rebuildStamp(zr, fr) { return zr || fr ? (zr ? zr.builtAt : "") + "|" + (fr ? fr.builtAt : "") : null; }
+    // Does this device still hold the whole rebuilt history (fib / trendline from 1 Jun,
+    // zones from 1 Sep) for these markets? A flag alone said yes after "Delete all signals",
+    // a "Load scanner alerts" of the last month or a cleared alert store, so a device could
+    // hold one month and lose a day of it at every reload (lakky, 2026-11-09: Fib 608 -> 531).
+    // Now it counts the rebuilt alerts it holds against how many it took.
+    const rbMkt = g => /^NSE$/i.test(g.market) ? "nse" : "crypto";
+    function rbCount(m) { let n = 0; (state.signals || []).forEach(g => { if (g.rb && rbMkt(g) === m) n++; }); return n; }
+    function rbMissing(rb, mks) {
+      const h = state.ui.rbHeld;
+      return !h || typeof h !== "object" || h.stamp !== rb || mks.some(m => typeof h[m] !== "number" || rbCount(m) < h[m] * 0.9);
+    }
+    function noteRbHeld(rb, mks) {
+      const h = state.ui.rbHeld && state.ui.rbHeld.stamp === rb ? state.ui.rbHeld : { stamp: rb };
+      mks.forEach(m => { h[m] = rbCount(m); });
+      state.ui.rbHeld = h;
+    }
     // The scanner's files, read into one list of alerts and held against the ones
     // this device already has: which are new, which gain a result, which are old
     // copies under a shorter key. Shared by "Load scanner alerts" and the quiet
@@ -12637,7 +12653,9 @@
         const isMeta = x => x[0] === "zrMeta" || x[0] === "ftrMeta";
         await Promise.all(files.filter(isMeta).map(read));
         const rbNow = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta)), rbVer = rbNow ? rbNow + "|" + appVersion() : "";
-        const skipRb = !!rbNow && state.ui.rbReadAt === rbVer;
+        // Taken in whole when it is new, or when this device no longer holds it all.
+        const mks = mk === "all" ? ["crypto", "nse"] : [mk], whole = !!rbNow && rbMissing(rbNow, mks);
+        const skipRb = !!rbNow && state.ui.rbReadAt === rbVer && !whole;
         await Promise.all(files.filter(x => !isMeta(x)).map(x => skipRb && RB_BODY_KEYS.indexOf(x[0]) !== -1 ? (got[x[0]] = x[2]) : read(x)));
         // From a week before the newest alert this device has (results come in
         // later), or the last month on a device with none.
@@ -12651,14 +12669,15 @@
           && typeof g.resultR !== "number" && g.outcome !== "timeout" && g.date >= iso(floor)).map(g => g.date).sort()[0];
         if (openFrom && openFrom < iso(d)) { d.setTime(new Date(openFrom + "T00:00:00").getTime()); }
         const marketOk = r => { const isNse = /^NSE$/i.test(r.market); return mk === "all" || (mk === "nse" ? isNse : !isNse); };
-        // A new zone rebuild is taken in whole once, then only the usual window.
-        const rb = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta));
-        const plan = buildScannerPlan(got, iso(d), marketOk, !!(rb && state.ui.zoneRebuildAt !== rb));
-        if (rb) state.ui.zoneRebuildAt = rb;
-        if (rb && !skipRb) state.ui.rbReadAt = rbVer;
+        // A rebuild is taken in whole once (and again whenever the device lost part of it),
+        // then only the usual window.
+        const plan = buildScannerPlan(got, iso(d), marketOk, whole);
+        if (rbNow && !skipRb) state.ui.rbReadAt = rbVer;
         let n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
         if (n) applyScannerPlan(plan);
         else if (setSentSigs(plan.sent)) n = 1;
+        // Only once its files came in: a failed read is tried again next time.
+        if (whole && (got.ftrRec || got.zr4h || got.zrHtf)) noteRbHeld(rbNow, mks);
         state.ui.sigAutoAt = Date.now();
         sigAutoFailAt = 0;
         save();
@@ -12759,15 +12778,18 @@
             jobs.forEach((j, i) => { got[j[0]] = texts[i]; });
             if (my !== runId) return;
 
-            const built = buildScannerPlan(got, cutoffOf(), marketOk);
+            // The rebuilt history comes in whole whatever the range, if this device lacks it.
+            const mks = mkt.value === "all" ? ["crypto", "nse"] : [mkt.value];
+            const rbNow = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta)), whole = !!rbNow && rbMissing(rbNow, mks);
+            const built = buildScannerPlan(got, cutoffOf(), marketOk, whole);
             const incoming = built.incoming, fresh = built.fresh, upgrades = built.upgrades;
-            plan = built;
+            plan = Object.assign(built, { whole, mks });
             const legacy = (state.signals || []).filter(g => !g.key && g.tradeId).length;
 
             const filled = incoming.filter(r => r.filled === true && typeof r.resultR === "number");
             const latest = incoming.map(r => r.date + " " + (r.time || "")).sort().pop();
             const graded = incoming.filter(r => r.filled === true || r.filled === false).map(r => r.date + " " + (r.time || "")).sort().pop();
-            status.innerText = `${incoming.length} alerts in range · latest ${latest || "—"} · latest graded by the scanner ${graded || "none"}`
+            status.innerText = `${incoming.length} alerts${whole ? ", with the scanner's rebuilt history" : " in range"} · latest ${latest || "—"} · latest graded by the scanner ${graded || "none"}`
               + (filled.length ? ` · ${Math.round(filled.filter(r => r.resultR > 0).length / filled.length * 100)}% of ${filled.length} resolved won` : "");
             const ftN = incoming.filter(r => r.kind).length;
             out.innerText = `${fresh.length} new · ${upgrades.length} to update with a result · ${incoming.length - fresh.length - upgrades.length} already up to date`
@@ -12788,7 +12810,7 @@
         if (!n) { toast("Nothing new to import"); return false; }
         applyScannerPlan(plan);
         state.ui.sigAutoAt = Date.now();
-        if (plan.zrBuiltAt) { state.ui.zoneRebuildAt = plan.zrBuiltAt; state.ui.rbReadAt = plan.zrBuiltAt + "|" + appVersion(); }
+        if (plan.zrBuiltAt) { state.ui.rbReadAt = plan.zrBuiltAt + "|" + appVersion(); if (plan.whole) noteRbHeld(plan.zrBuiltAt, plan.mks); }
         state.ui.sigMkt = document.getElementById('scanMarket') ? document.getElementById('scanMarket').value : state.ui.sigMkt;
         save(); renderAll();
         toast(`Imported ${plan.fresh.length} new, updated ${plan.upgrades.length}`);
@@ -12799,7 +12821,7 @@
     function deleteAllSignals() {
       const n = (state.signals || []).length;
       if (!n) { toast("There are no signals to delete"); return; }
-      if (!confirm(`Delete all ${n} signals? Your trades are not touched. Signals are not synced between devices, so this only clears this device; Load scanner alerts brings them back.`)) return;
+      if (!confirm(`Delete all ${n} signals? Your trades are not touched. Signals are not synced between devices, so this only clears this device. They come back from the scanner at the next check (within 10 minutes), or press Load scanner alerts.`)) return;
       state.signals = [];
       setSentSigs([]);
       save(); renderAll();
@@ -14211,6 +14233,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-09.178', pr: 92, title: 'Signals keep the whole history from 1 Jun', pts: ['After Delete all signals, Load scanner alerts (Last 1 month) or a cleared store, a device kept only a month of alerts (Fib 531 instead of 2,623), and fewer each day', 'Now a device that lacks part of the rebuilt history takes it in whole again, by itself'] },
       { v: '2026-11-08.177', pr: 92, title: 'Signals: % beside R says "price move"', pts: ['Total R, Average R, Alerts made and left on the table show their % as "price move": each alert\'s move from entry (R × stop size), not money', 'It can be negative while R is positive (losers had wider stops); the Demo account\'s Return is the account %'] },
       { v: '2026-11-08.176', pr: 91, title: 'Demo account: what to improve; charts you can tap', pts: ['Demo account: trades fold into their own Trades section (All / Won / Lost / Skipped); new What to improve (groups costing you and working for you, skipped alerts) and Wins, losses and streaks', 'Results by also splits by exit, side, level / type, timeframe, stop size, weekday and time held', 'Charts: tap or hover anywhere for a point. Dashboard shows the day\'s P&L and trades, the Signals backtest curve has axes, dates and tips; a tap\'s tip stays on iPad'] },
       { v: '2026-11-08.175', pr: 90, title: 'Fix: Edge & breakdowns empty with Exit at', pts: ['Edge & breakdowns drew nothing when an alert the scanner called "no fill" was filled later by Exit at', 'The Scanner row in Exit targets compared leaves those alerts out and says how many'] },

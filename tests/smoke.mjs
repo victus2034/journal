@@ -2466,10 +2466,13 @@ async function sigRedesignRun(seed) {
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
   const H = 3600e3, cutoff = Date.now() - 2 * 24 * H, isoAt = t => new Date(t).toISOString();
-  const sent = Math.floor((cutoff - 30 * H) / 1000);
+  const sent = Math.floor((cutoff - 30 * H) / 1000), sentOld = Math.floor((cutoff - 60 * 24 * H) / 1000);
   const files = {
+    // One rebuilt alert from 2 days back, one from 2 months back (older than any refresh window).
     'fibtl_rebuild_records.jsonl': JSON.stringify({ market: 'crypto', symbol: 'RBFIBUSD', tf: '1d', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
-      id: 'fib|RBFIBUSD@1|rb', key: 'fib|RBFIBUSD', sent_ts: sent, rebuild: true }),
+      id: 'fib|RBFIBUSD@1|rb', key: 'fib|RBFIBUSD', sent_ts: sent, rebuild: true }) + '\n'
+      + JSON.stringify({ market: 'crypto', symbol: 'RBOLDUSD', tf: '1d', price: 101, kind: 'fib', plan: { side: 'long', entry: 100, sl: 99 },
+      id: 'fib|RBOLDUSD@1|rb', key: 'fib|RBOLDUSD', sent_ts: sentOld, rebuild: true }),
     'fibtl_rebuild_results.json': JSON.stringify({ 'fib|RBFIBUSD@1|rb': { outcome: '2R', filled: true, resolved: true, r1: true, r2: true, sl: false, be: false, fill_ts: sent + 3600, end_ts: sent + 6 * 3600 } }),
     'fibtl_rebuild_meta.json': JSON.stringify({ cutoff: isoAt(cutoff), built_at: isoAt(cutoff) }),
   };
@@ -2501,6 +2504,22 @@ async function sigRedesignRun(seed) {
     await page.evaluate(() => autoRefreshAlerts(true));
     await page.evaluate(() => autoRefreshAlerts(true));
     check(hits['fibtl_rebuild_records.jsonl'] === 2, 'a new rebuild is read once more: ' + JSON.stringify(hits));
+    // lakky, 2026-11-09 (Fib 608 -> 531 on one PC): after "Delete all signals" the device took
+    // back only the last days, and "Load scanner alerts" (Last 1 month) only a month, while it
+    // still counted the rebuild as taken. The whole rebuilt history must come back either way.
+    const syms = () => page.evaluate(() => (state.signals || []).filter(g => g.rb).map(g => g.symbol).sort().join(','));
+    check(await syms() === 'RBFIBUSD,RBOLDUSD', 'both rebuilt alerts held: ' + await syms());
+    await page.evaluate(() => { state.signals = []; save(); return autoRefreshAlerts(true); });
+    check(await syms() === 'RBFIBUSD,RBOLDUSD', 'after Delete all signals the rebuilt history comes back: ' + await syms());
+    check(hits['fibtl_rebuild_records.jsonl'] === 3, 'read again because the device lost it: ' + JSON.stringify(hits));
+    await page.evaluate(() => autoRefreshAlerts(true));
+    check(hits['fibtl_rebuild_records.jsonl'] === 3, 'then skipped again while held: ' + JSON.stringify(hits));
+    await page.evaluate(() => { state.signals = []; save(); openScannerImport(); });
+    await page.waitForFunction(() => /alerts/.test((document.getElementById('scanStatus') || {}).innerText || '') && !/Fetching/.test(document.getElementById('scanStatus').innerText), null, { timeout: 8000 });
+    const st = await page.evaluate(() => document.getElementById('scanStatus').innerText);
+    check(/with the scanner's rebuilt history/.test(st), 'Load scanner alerts says it brings the rebuilt history: ' + st);
+    await page.click('#modalSheetSaveBtn'); await page.waitForTimeout(300);
+    check(await syms() === 'RBFIBUSD,RBOLDUSD', 'Load scanner alerts (Last 1 month) brings the whole rebuilt history: ' + await syms());
 
     const v = await page.evaluate(() => {
       const text = id => (document.getElementById(id) || {}).innerText.replace(/\s+/g, ' ');
