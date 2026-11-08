@@ -2773,9 +2773,33 @@ async function demoRealRun(seed) {
     // MRVL 7 x 14, +1.96 = 100.95684; SOL 1 x 90, -1.80 = 99.15684.
     await page.click('#sigDemo button[data-lot1="one"]');
     t = await text();
-    check(t.includes('Final balance $99.16') && t.includes('Placed 5 of 8') && t.includes('1 taken at 1 contract, risking more than planned (up to 3.0% of the balance on one trade).'), 'take 1 contract → $99.16: ' + t.slice(0, 1800));
+    check(t.includes('Final balance $99.16') && t.includes('Placed 5 of 8') && t.includes('1 taken at 1 contract, risking more than planned (up to 3.0% of the balance on one trade, never over 2× the plan).'), 'take 1 contract → $99.16: ' + t.slice(0, 1800));
     check(/^1 2026-10-01 10:00 BTCUSD Long 4H 4\.00% -1\.00R SL \$3\.00 \$75\.00 · 0\.8x 0\.001 BTC min /.test(await page.$eval('#sigDemoTrades tbody tr:last-child', tr => tr.innerText.replace(/\s+/g, ' ').trim())), 'BTC at 1 contract');
+    // Limit 1.5× still takes BTC ($3 = 1.5 × $2); 1.5× is the edge, so a smaller plan skips it.
+    await page.selectOption('#sigDemoLot1Cap', '1.5');
+    check((await text()).includes('Final balance $99.16'), '1.5× limit still takes BTC at exactly 1.5×');
+    // 1% of $100 = $1 planned: 1 BTC contract risks $3 = 3× and 1 SOL contract $1.80 = 1.8× → both over 1.5×, skipped.
+    await page.evaluate(() => demoSet('pct', '1'));
+    t = await text();
+    const btc1 = await page.$eval('#sigDemoTrades tbody tr:last-child', tr => tr.innerText.replace(/\s+/g, ' ').trim());
+    check(t.includes('2 where 1 contract risks over 1.5× the plan') && /Skipped: 1 contract \(0\.001 BTC\) = \$75\.00 risks \$3\.00 at this stop, more than 1\.5× the \$1\.00 planned$/.test(btc1)
+      && await page.$eval('#sigDemoTrades tbody tr:last-child', tr => tr.dataset.skip) === 'big', 'over the 1.5× limit → skipped: ' + btc1 + ' | ' + t.slice(0, 900));
+    await page.selectOption('#sigDemoLot1Cap', '0');
+    check((await text()).includes('2 taken at 1 contract') && !(await text()).includes('never over'), '"whatever it risks" takes BTC at 3× and SOL at 1.8×');
+    await page.evaluate(() => demoSet('pct', '2'));
+    // Always 1 contract (test): every placed trade is exactly 1 contract, whatever the risk.
+    // BTC 1 x 75 = $75, -1R at 4% = -3 → 97; ETH 1 x 22.4 at 0.5% = $0.112 x 2 = +0.224;
+    // RLC 1 x 4.3 at 0.12% x -1.5; MRVL 1 x 14 at 2% x +1; SOL 1 x 90 at 2% x -1 = 95.70.
+    await page.click('#sigDemo button[data-lot1="always"]');
+    t = await text();
+    // (the scanner R is after Delta's default fee, so each trade nets risk × R)
+    let b1 = 100;
+    [[75, 4, -1], [22.4, 0.5, 2], [4.3, 0.12, -1.5], [14, 2, 1], [90, 2, -1]].forEach(([p, sl, r]) => { b1 += p * sl / 100 * r; });
+    check(t.includes('Test: every trade is 1 contract, whatever it risks') && t.includes('Placed 5 of 8') && t.includes('Final balance ' + usd(b1)) && t.includes('1 contract a trade (test)') && !t.includes('Same alerts, other risk sizes'), 'always 1 contract → ' + usd(b1) + ': ' + t.slice(0, 1600));
+    const units = await page.$$eval('#sigDemoTrades tbody tr:not([data-skip])', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
+    check(units.length === 5 && /0\.001 BTC min/.test(units[4]) && /0\.01 ETH min/.test(units[3]) && /1 SOL min/.test(units[0]), 'always: 1 contract each: ' + units.join(' | '));
     await page.click('#sigDemo button[data-lot1="skip"]');
+    check((await text()).includes('as many contracts as the risk allows, never more risk than planned') && !(await page.$('#sigDemoLot1Cap')), 'Max within risk says so, no limit box');
     // Min stop 0: DOGE is placed (0.07% stop, $2 / 0.0007 = $2,872 needs 28x of 100x, 400 x $7.18).
     await page.fill('#sigDemoMinStop', '0');
     t = await text();
@@ -2812,7 +2836,7 @@ async function demoRealRun(seed) {
       let seed = 20261107; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
       const syms = Object.keys(DEMO_DELTA), runs = [];
       for (let k = 0; k < 40; k++) {
-        const cfg = Object.assign(demoCfg(), { start: [100, 1000, 25000][k % 3], mode: k % 5 ? 'pct' : 'fixed', pct: [0.5, 1, 2, 5][k % 4], fixed: [1, 10, 50][k % 3], lev: [0, 5, 20][k % 3], lot1: k % 2 ? 'one' : 'skip', minStop: [0, 0.1, 0.3][k % 3], real: true, broker: 'delta' });
+        const cfg = Object.assign(demoCfg(), { start: [100, 1000, 25000][k % 3], mode: k % 5 ? 'pct' : 'fixed', pct: [0.5, 1, 2, 5][k % 4], fixed: [1, 10, 50][k % 3], lev: [0, 5, 20][k % 3], lot1: ['skip', 'one', 'always', 'one'][k % 4], lot1Cap: [0, 1.5, 2, 3, 5][k % 5], minStop: [0, 0.1, 0.3][k % 3], real: true, broker: 'delta' });
         const rows = Array.from({ length: 10 }, () => {
           const sym = syms[Math.floor(rnd() * syms.length)], entry = Math.pow(10, rnd() * 8 - 3), slp = Math.pow(10, rnd() * 3.6 - 2), side = rnd() < 0.5 ? 'long' : 'short';
           const sig = { symbol: sym, side, entry, stop: side === 'long' ? entry * (1 - slp / 100) : entry * (1 + slp / 100), market: 'CRYPTO' };
@@ -2835,10 +2859,15 @@ async function demoRealRun(seed) {
         const why = x.slp < cfg.minStop ? 'tight' : x.slp < 3 * tickPct ? 'ticks' : '';
         const lim = bal * Math.min(d[2], cfg.lev || Infinity);
         let lots = Math.floor(Math.min(plan / (x.slp / 100), lim) / step + 1e-9), one = false;
-        if (!why && lots < 1 && cfg.lot1 === 'one' && step <= lim * (1 + 1e-9)) { lots = 1; one = true; }
+        let big = false;
+        if (!why && cfg.lot1 === 'always') { lots = step <= lim * (1 + 1e-9) ? 1 : 0; one = lots === 1; }
+        else if (!why && lots < 1 && cfg.lot1 === 'one' && step <= lim * (1 + 1e-9)) {
+          // 1 contract only while it risks at most lot1Cap x the plan (0 = any)
+          if (!cfg.lot1Cap || step * x.slp / 100 <= plan * cfg.lot1Cap * (1 + 1e-9)) { lots = 1; one = true; } else big = true;
+        }
         if (why || lots < 1) {
-          const sk = o.skips[si++];
-          check(sk && sk.i === i && sk.why === (why || 'lot'), 'run ' + k + ' alert ' + i + ' should skip (' + (why || 'lot') + '): ' + JSON.stringify(sk));
+          const sk = o.skips[si++], w = why || (big ? 'big' : 'lot');
+          check(sk && sk.i === i && sk.why === w, 'run ' + k + ' alert ' + i + ' should skip (' + w + '): ' + JSON.stringify(sk));
           skipped++; continue;
         }
         const tr = o.trades[ti++];
@@ -2850,6 +2879,7 @@ async function demoRealRun(seed) {
           'run ' + k + ' alert ' + i + ' ' + x.sym + ': ' + lots + ' contracts, risk ' + risk + ', balance ' + bal + ' vs ' + JSON.stringify({ units: tr.units, risk: tr.risk, bal: tr.bal, one: tr.one }));
         // never more risk than planned unless one contract was asked for; never past the leverage
         check(one || tr.risk <= plan * (1 + 1e-9), 'run ' + k + ' alert ' + i + ' risks more than planned');
+        check(cfg.lot1 !== 'one' || !cfg.lot1Cap || tr.risk <= plan * cfg.lot1Cap * (1 + 1e-9), 'run ' + k + ' alert ' + i + ' risks over the ' + cfg.lot1Cap + 'x limit');
         check(tr.pos <= lim * (1 + 1e-9), 'run ' + k + ' alert ' + i + ' over its max leverage');
         if (bal <= cfg.start * 1e-6) break;
       }

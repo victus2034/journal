@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.168">
+  <meta name="app-version" content="2026-11-08.169">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -310,6 +310,7 @@
     .sig-ctl .flex{flex-wrap:wrap}
     .sig-ctl button{white-space:nowrap}
     .sig-panel:not([open]) #sigPeriodHint{display:none}
+    #sigDemoRealForm button{white-space:nowrap}#sigDemoRealForm .flex{flex-wrap:wrap}
     @media (max-width:639px){.sig-row{grid-template-columns:3.3rem minmax(0,1fr);gap:.3rem .5rem}.sig-ctl .flex{gap:2px}.sig-ctl button{padding-left:.4rem;padding-right:.4rem}}
     @media (max-width:639px){#sigCoinPicks{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}#sigCoinPicks::-webkit-scrollbar{display:none}#sigCoinPicks .sig-coin{flex:0 0 auto}}
     .sig-coin{padding:.18rem .55rem;border-radius:999px;border:1px solid var(--line2);font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums}
@@ -10296,8 +10297,10 @@
     const DEMO_BROKERS = [{ k: "delta", label: "Delta", mk: 0.02, tk: 0.05 }, { k: "coindcx", label: "CoinDCX", mk: 0.02, tk: 0.05 }];
     const DEMO_ORDERS = [{ k: "lm", label: "Limit in, market out", legs: ["mk", "tk"] }, { k: "mm", label: "Market in and out", legs: ["tk", "tk"] }, { k: "ll", label: "Limit in and out", legs: ["mk", "mk"] }];
     const DEMO_GST = 18, DEMO_NSE_FEE = 0.1063;
-    const DEMO_DEF = { start: 100, cur: "USD", mode: "pct", pct: 1, fixed: 1, lev: 0, broker: "delta", orders: "lm", mk_delta: 0.02, tk_delta: 0.05, mk_coindcx: 0.02, tk_coindcx: 0.05, real: true, minStop: 0.1, lot1: "skip" };
+    const DEMO_DEF = { start: 100, cur: "USD", mode: "pct", pct: 1, fixed: 1, lev: 0, broker: "delta", orders: "lm", mk_delta: 0.02, tk_delta: 0.05, mk_coindcx: 0.02, tk_coindcx: 0.05, real: true, minStop: 0.1, lot1: "skip", lot1Cap: 2 };
     const DEMO_LEVS = [0, 2, 5, 10, 20, 25, 50, 100];
+    // "Take 1 if too small" only when 1 order risks at most this many times the plan (0 = any).
+    const DEMO_LOT1_CAPS = [1.5, 2, 3, 5, 0];
     const DEMO_CMP = [0.5, 1, 2, 3, 5];
     let demoRows = [], demoAll = false;
     // ---- Real orders (lakky, 2026-11-07: "is it possible to have my desire sl ... some
@@ -10385,7 +10388,8 @@
       const mode = d.mode === "fixed" ? "fixed" : "pct", cur = d.cur === "INR" ? "INR" : "USD";
       const broker = demoBroker(d.broker).k, orders = demoOrders(d.orders).k, mk = num(d["mk_" + broker]), tk = num(d["tk_" + broker]);
       const feesOn = state.ui.sigNoFee !== true;
-      const real = d.real !== false, minStop = num(d.minStop), lot1 = d.lot1 === "one" ? "one" : "skip";
+      const real = d.real !== false, minStop = num(d.minStop), lot1 = d.lot1 === "one" || d.lot1 === "always" ? d.lot1 : "skip";
+      const lot1Cap = DEMO_LOT1_CAPS.indexOf(num(d.lot1Cap)) !== -1 ? num(d.lot1Cap) : DEMO_DEF.lot1Cap;
       let err = "", warn = "";
       if (!isFinite(start) || !(start > 0)) err = "Enter a starting balance above 0.";
       else if (start > 1e12) err = "That starting balance is too large. Keep it under 1,000,000,000,000.";
@@ -10398,7 +10402,7 @@
       else if (!err && mode === "fixed" && fixed > start) warn = "The risk per trade is more than the starting balance, so a trade risks the whole balance until it grows.";
       // The round trip at the broker's rates, also worked out with fees off for the "with fees" line.
       const feePct = feeOk ? demoFeePct(mk, tk, orders) : null;
-      return { start, cur, mode, pct, fixed, lev: isFinite(lev) && lev > 0 ? lev : 0, broker, orders, mk, tk, feesOn, feePct, real, minStop: isFinite(minStop) && minStop > 0 ? minStop : 0, lot1, err, warn };
+      return { start, cur, mode, pct, fixed, lev: isFinite(lev) && lev > 0 ? lev : 0, broker, orders, mk, tk, feesOn, feePct, real, minStop: isFinite(minStop) && minStop > 0 ? minStop : 0, lot1, lot1Cap, err, warn };
     }
     // rows: [{ r, slp, fee, spec }] in time order: r = the result in R before fees, slp =
     // stop distance in %, fee = the round trip in R (fee % ÷ stop %, 0 = none), spec = how
@@ -10422,11 +10426,18 @@
           const coinCap = sp && sp.maxLev > 0 ? sp.maxLev : Infinity, youCap = cfg.lev > 0 ? cfg.lev : Infinity, capX = Math.min(coinCap, youCap);
           if (pos > bal * capX * (1 + tiny)) { pos = bal * capX; cap = coinCap < youCap ? "coin" : "you"; }
           if (sp) {
-            // Whole steps, rounded down; under the smallest order: skip, or one order if picked.
+            // Order size: the most whole steps the risk allows, rounded down ("skip": none fit =
+            // no trade); "one": 1 smallest order when none fit, if it risks at most lot1Cap x the
+            // plan (0 = any); "always" (a test): exactly 1 smallest order, whatever it risks.
             const minPos = Math.ceil(sp.min / sp.step - tiny) * sp.step, n = Math.floor(pos / sp.step + tiny);
-            if (n * sp.step < minPos - tiny * minPos) {
-              if (cfg.lot1 === "one" && minPos <= bal * capX * (1 + tiny)) { pos = minPos; one = true; ones++; oneMax = Math.max(oneMax, minPos * x.slp / bal); }
-              else { skips.push({ i, x, why: "lot", before, want, minPos, need: minPos * x.slp / 100, over: minPos > bal * capX * (1 + tiny) ? capX : 0 }); continue; }
+            const levOk = minPos <= bal * capX * (1 + tiny), need = minPos * x.slp / 100;
+            if (cfg.lot1 === "always") {
+              if (!levOk) { skips.push({ i, x, why: "lot", before, want, minPos, need, over: capX }); continue; }
+              pos = minPos; cap = ""; one = true; ones++; oneMax = Math.max(oneMax, minPos * x.slp / bal);
+            } else if (n * sp.step < minPos - tiny * minPos) {
+              const capR = cfg.lot1Cap > 0 ? cfg.lot1Cap : Infinity;
+              if (cfg.lot1 === "one" && levOk && need <= want * capR * (1 + tiny)) { pos = minPos; one = true; ones++; oneMax = Math.max(oneMax, minPos * x.slp / bal); }
+              else { skips.push({ i, x, why: cfg.lot1 === "one" && levOk ? "big" : "lot", before, want, minPos, need, over: levOk ? 0 : capX, capR: cfg.lot1 === "one" ? cfg.lot1Cap : 0 }); continue; }
             } else {
               if (n * sp.step < pos * (1 - 1e-6)) rounded++;
               pos = n * sp.step;
@@ -10520,11 +10531,16 @@
           : '<p class="text-slate-500 text-[11px] pb-2">Same switch as Fees above: every result on the tab is without fees.</p>')
         + '</div>';
       // Real orders: whole contracts, the coin's max leverage, a min stop; or any size.
-      const rl = cfg.real, vn = demoBroker(bk).label;
+      const rl = cfg.real, vn = demoBroker(bk).label, u1 = bk === 'coindcx' ? 'min order' : 'contract';
       const real = '<div id="sigDemoRealForm" class="flex flex-wrap items-end gap-4 mb-3 pb-3 border-b border-terminal-border">'
         + '<div>' + lab('Real orders') + seg(segBtn(rl, 'On', "demoSet('real',true)", 'data-real="1"') + segBtn(!rl, 'Off (any size)', "demoSet('real',false)", 'data-real="0"')) + '</div>'
         + (rl ? '<div>' + lab('Min stop') + '<div class="flex items-center gap-1.5 text-slate-500"><input type="number" id="sigDemoMinStop" step="any" min="0" max="10" inputmode="decimal" value="' + val(d.minStop) + '" oninput="demoSet(\'minStop\', this.value)" style="width:70px" class="' + box + '">% and ' + DEMO_MIN_TICKS + ' ticks</div></div>'
-          + '<div>' + lab('Smaller than 1 ' + (bk === 'coindcx' ? 'min order' : 'contract')) + seg(segBtn(cfg.lot1 === 'skip', 'Skip the trade', "demoSet('lot1','skip')", 'data-lot1="skip"') + segBtn(cfg.lot1 === 'one', 'Take 1 (risks more)', "demoSet('lot1','one')", 'data-lot1="one"')) + '</div>'
+          + '<div>' + lab('Order size') + '<div class="flex flex-wrap items-center gap-1.5">' + seg(segBtn(cfg.lot1 === 'skip', 'Max within risk', "demoSet('lot1','skip')", 'data-lot1="skip" title="As many whole ' + u1 + 's as the risk allows. If even 1 risks more, the trade is skipped."')
+            + segBtn(cfg.lot1 === 'one', 'Take 1 if too small', "demoSet('lot1','one')", 'data-lot1="one" title="When even 1 ' + u1 + ' risks more than planned, take 1 anyway, up to the limit you pick."')
+            + segBtn(cfg.lot1 === 'always', 'Always 1 ' + u1 + ' (test)', "demoSet('lot1','always')", 'data-lot1="always" title="Every trade is exactly 1 ' + u1 + ', whatever it risks. Risk per trade is not used."'))
+            + (cfg.lot1 === 'one' ? '<select id="sigDemoLot1Cap" onchange="demoSet(\'lot1Cap\', this.value)" class="' + box + '" title="Take the 1 ' + u1 + ' only if it risks at most this much">'
+              + DEMO_LOT1_CAPS.map(c => '<option value="' + c + '"' + (cfg.lot1Cap === c ? ' selected' : '') + '>' + (c ? 'if it risks up to ' + c + '× the plan' : 'whatever it risks') + '</option>').join('') + '</select>' : '')
+            + '</div></div>'
           : '<p class="text-slate-500 text-[11px] pb-2">Any size, any stop: positions are risk ÷ stop, however small, with no leverage limit but yours.</p>')
         + '</div>';
       host.innerHTML = '<div class="flex items-center gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Demo account</h3></div>'
@@ -10558,14 +10574,19 @@
       // Real orders on or off, in one line: what was placed, what was skipped and why, and the other way's result.
       const W = run.why, sk = run.skips.length, dcx = cfg.broker === 'coindcx', one1 = dcx ? 'min order' : 'contract';
       const other = demoRun(rows, Object.assign({}, cfg, { real: !cfg.real }));
-      const skipBits = [W.lot ? W.lot + ' smaller than 1 ' + one1 : '', W.tight ? W.tight + ' stop under ' + cfg.minStop + '%' : '', W.ticks ? W.ticks + ' stop within ' + DEMO_MIN_TICKS + ' ticks' : '', W.venue ? W.venue + ' not on ' + bkl : ''].filter(Boolean);
+      const capTxt = cfg.lot1Cap ? cfg.lot1Cap + '×' : '';
+      const skipBits = [W.lot ? W.lot + (cfg.lot1 === 'always' ? ' over the leverage at 1 ' + one1 : ' smaller than 1 ' + one1) : '', W.big ? W.big + ' where 1 ' + one1 + ' risks over ' + capTxt + ' the plan' : '', W.tight ? W.tight + ' stop under ' + cfg.minStop + '%' : '', W.ticks ? W.ticks + ' stop within ' + DEMO_MIN_TICKS + ' ticks' : '', W.venue ? W.venue + ' not on ' + bkl : ''].filter(Boolean);
       const specTxt = dcx ? 'Min orders and leverage as CoinDCX listed them on ' + DEMO_SPECS_AT + '.' : demoLive ? 'Contract sizes and leverage read live from Delta.' : 'Contract sizes and leverage as Delta listed them on ' + DEMO_SPECS_AT + (demoLiveBusy ? ' (reading Delta now…)' : '') + '.';
       const realLine = '<div id="sigDemoRealLine" class="rounded-lg border p-2 mb-3 text-[11px] ' + (cfg.real ? 'border-sky-500/40 bg-sky-500/5' : 'border-amber-500/40 bg-amber-500/5') + '">'
         + (cfg.real
           ? '<b class="text-sky-300">Real orders on</b> · ' + esc(bkl) + ': whole ' + one1 + 's, rounded down; each coin\'s max leverage' + (cfg.lev ? ' and your ' + cfg.lev + 'x' : '') + '; stops under ' + cfg.minStop + '% or ' + DEMO_MIN_TICKS + ' ticks skipped. '
             + 'Placed <b class="text-slate-100">' + n + '</b> of ' + (n + sk) + (sk ? ', skipped <b class="text-amber-300">' + sk + '</b>: ' + skipBits.join(', ') : '') + '.'
             + (run.capCoin ? ' ' + run.capCoin + ' sized down to the coin\'s max leverage.' : '')
-            + (run.ones ? ' ' + run.ones + ' taken at 1 ' + one1 + ', risking more than planned (up to <b class="text-rose-400">' + run.oneMax.toFixed(1) + '%</b> of the balance on one trade).' : '')
+            + (cfg.lot1 === 'always'
+              ? ' <b class="text-amber-300">Test: every trade is 1 ' + one1 + '</b>, whatever it risks (risk per trade not used)' + (run.ones ? '; up to <b class="text-rose-400">' + run.oneMax.toFixed(1) + '%</b> of the balance on one trade' : '') + '.'
+              : cfg.lot1 === 'one'
+                ? (run.ones ? ' ' + run.ones + ' taken at 1 ' + one1 + ', risking more than planned (up to <b class="text-rose-400">' + run.oneMax.toFixed(1) + '%</b> of the balance on one trade' + (capTxt ? ', never over ' + capTxt + ' the plan' : '') + ').' : '')
+                : ' Each trade is as many ' + one1 + 's as the risk allows, never more risk than planned.')
             + ' Any size, every alert: ' + altTxt(other) + '. ' + specTxt
             + (nNse || rows.some(x => x.nse) ? ' NSE: 1 share, ' + DEMO_NSE_LEV + 'x.' : '')
           : '<b class="text-amber-300">Real orders off</b>: every trade at its exact risk ÷ stop size, however small. As real ' + esc(bkl) + ' orders: ' + altTxt(other) + ', ' + other.trades.length + ' of ' + rows.length + ' placed.'
@@ -10583,7 +10604,7 @@
             + ' <button type="button" onclick="demoFees(\'' + cfg.broker + '\')" class="underline text-amber-300">Charge fees</button>')
         + '</div>';
       const stats = '<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-3">'
-        + cell('Start', m(cfg.start), 'risk ' + riskTxt)
+        + cell('Start', m(cfg.start), cfg.real && cfg.lot1 === 'always' ? '1 ' + one1 + ' a trade (test)' : 'risk ' + riskTxt)
         + cell('Final balance', m(run.end), 'peak ' + m(run.peak), tone(run.end - cfg.start))
         + cell('Return', pfmt(run.ret) || '0.00%', sm(run.end - cfg.start) + (cfg.feesOn ? ' after fees' : ' no fees'), tone(run.ret))
         + cell('Trades', n + (sk ? ' <span class="text-[10px] font-normal text-amber-300">+' + sk + ' skipped</span>' : ''), run.wins + 'W / ' + run.losses + 'L · ' + pct(run.wins / n * 100) + ' won', '', 'Alerts with a result in this view, placed' + (sk ? '; ' + sk + ' could not be placed as real orders' : '') + (run.blownAt != null ? ', up to the trade that blew the account' : ''))
@@ -10620,7 +10641,7 @@
         if (k.why === 'ticks') return 'stop ' + k.x.slp.toFixed(3) + '% is within ' + DEMO_MIN_TICKS + ' ticks (1 tick = ' + sp.tickPct.toFixed(4) + '%)';
         const q = Math.round(k.minPos / sp.step) * sp.qty;
         return (sp.unit === 'share' ? '1 share = ' : '1 ' + one1 + ' (' + (+q.toPrecision(6)) + ' ' + esc(sp.unit) + ') = ') + m(k.minPos)
-          + (k.over ? ', more than ' + k.over + 'x leverage on ' + m(k.before) : ' risks ' + m(k.need) + ' at this stop, more than the ' + m(k.want) + ' planned');
+          + (k.over ? ', more than ' + k.over + 'x leverage on ' + m(k.before) : ' risks ' + m(k.need) + ' at this stop, more than ' + (k.why === 'big' ? k.capR + '× the ' : 'the ') + m(k.want) + ' planned');
       };
       const LIMIT = 30, rowsT = T.concat(run.skips).sort((a, b) => b.i - a.i), shown = demoAll ? rowsT : rowsT.slice(0, LIMIT);
       const head = (when, alert) => '<td class="py-1.5 pr-3 text-slate-500">' + when + '</td>' + alert;
@@ -10633,7 +10654,7 @@
             + '<td class="pr-3 text-right whitespace-nowrap">' + rfmt(t.x.r - t.x.fee) + '</td><td colspan="6" class="pr-3 text-amber-300/80">Skipped: ' + skipTxt(t) + '</td></tr>';
           return '<tr class="border-t border-terminal-border/60 hover:bg-white/5">' + lead
             + '<td class="pr-3 text-right whitespace-nowrap ' + tone(t.x.r - t.x.fee) + '"' + (t.x.fee ? ' title="' + rfmt(t.x.r) + ' before fees, ' + rfmt(-t.x.fee) + ' fees"' : '') + '>' + rfmt(t.x.r - t.x.fee) + (t.x.label ? ' <span class="text-slate-500 text-[10px]">' + esc(t.x.label) + '</span>' : '') + '</td>'
-            + '<td class="pr-3 text-right ' + (t.one ? 'text-amber-300' : 'text-slate-300') + '"' + (t.one ? ' title="1 ' + one1 + ' risks more than the ' + esc(m(t.want)) + ' planned"' : '') + '>' + m(t.risk) + '</td>'
+            + '<td class="pr-3 text-right ' + (t.one && t.risk > t.want * (1 + 1e-9) ? 'text-amber-300' : 'text-slate-300') + '"' + (t.one ? ' title="1 ' + one1 + (t.risk > t.want * (1 + 1e-9) ? ' risks more than the ' + esc(m(t.want)) + ' planned' : '') + '"' : '') + '>' + m(t.risk) + '</td>'
             + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + (t.pos != null ? m(t.pos) + ' · ' + levTxt(t.lev) + (t.cap ? ' <span class="text-amber-300 text-[10px]">' + (t.cap === 'coin' ? 'max' : 'cap') + '</span>' : '') : '—') + '</td>'
             + '<td class="pr-3 text-right whitespace-nowrap text-slate-400">' + sizeTxt(t) + (t.one ? ' <span class="text-amber-300 text-[10px]">min</span>' : '') + '</td>'
             + '<td class="pr-3 text-right text-slate-400">' + (t.fee ? '-' + m(t.fee) : '—') + '</td>'
@@ -10641,9 +10662,9 @@
         + '</tbody></table></div>'
         + (rowsT.length > LIMIT ? '<div class="text-center mt-2"><button type="button" onclick="demoShowAll()" class="px-3 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">' + (demoAll ? 'Show the newest ' + LIMIT : 'Show all ' + rowsT.length) + '</button></div>' : '') + '</div>';
 
-      if (!n) { out.innerHTML = notes.join('') + realLine + feeLine + '<p class="text-amber-300 mb-3">None of these ' + rows.length + ' alerts can be placed as real ' + esc(bkl) + ' orders at this balance and risk. Raise the balance or the risk, pick Take 1 above, or turn real orders off.</p>' + list; return; }
+      if (!n) { out.innerHTML = notes.join('') + realLine + feeLine + '<p class="text-amber-300 mb-3">None of these ' + rows.length + ' alerts can be placed as real ' + esc(bkl) + ' orders at this balance and risk. Raise the balance or the risk, ' + (cfg.lot1 === 'skip' ? 'pick Take 1 if too small' : cfg.lot1 === 'one' && cfg.lot1Cap ? 'raise the Take 1 limit' : 'pick another broker') + ' above, or turn real orders off.</p>' + list; return; }
       out.innerHTML = notes.join('') + realLine + feeLine + stats + curve
-        + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + prog + cmp + '</div>'
+        + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + prog + (cfg.real && cfg.lot1 === 'always' ? '' : cmp) + '</div>'
         + list
         + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. Fees come off on top: position × the round trip above (position = risk ÷ stop distance), per trade under Fee; Result is in R after them. With real orders on, the position is rounded down to whole contracts (Size), so a trade can risk a little less than planned, never more unless Take 1 is picked. Stop slippage (0.05%) counts either way, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
     }
@@ -13263,6 +13284,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-08.169', pr: 84, title: 'Demo account: order size options', pts: ['Order size: Max within risk (as many lots as your risk allows, never more), Take 1 if too small (only up to 1.5× / 2× / 3× / 5× your risk, or any), or Always 1 lot (test)', 'A trade over the Take 1 limit is skipped and says what it would have risked'] },
       { v: '2026-11-08.168', pr: 83, title: 'Weekly check: price data kept safely', pts: ['Exit at price data now lives with the alerts (IndexedDB), so it can no longer fill the space your trades need', 'Offline, no price reads: it says so and reads them once you are back online', 'With Delta unreachable it stops after a few failed reads; Retry reads the rest'] },
       { v: '2026-11-08.167', pr: 82, title: 'Signals redesign + Top coins compare', pts: ['Filters in two panels: Which alerts and How each trade is played, one labelled row each; fold a panel to see its settings in one line, Reset goes back to the scanner', 'New Coins filter (All / Top 3 / Top 5 / Picks) and a Backtest report table: top coins vs the other coins vs all crypto, each coin, and whether the gap is likely real or luck', 'Backtest report: How sure is this? (95% ranges, first vs second half, months in profit, time in trade, open trades); history from 1 Jun, downloaded once'] },
       { v: '2026-11-07.166', pr: 81, title: 'Trail TP: the TP is locked once hit', pts: ['Once price reaches your Exit at target, the stop goes to that target and never below it', 'Then it trails the gap behind the highest target reached (e.g. 1.5R, +0.25R, 0.5R behind: SL 1.5R at 1.5R, 1.75R and 2R; 1.75R at 2.25R)', 'New SL gap: 0.75R / 0.75% behind'] },
