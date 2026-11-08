@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-08.174">
+  <meta name="app-version" content="2026-11-08.175">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -10192,9 +10192,13 @@
         host.innerHTML = h + '<p class="text-slate-500">' + (tgtProg ? 'Reading prices…' : sigTgt() ? 'No graded crypto alert with price data in this view yet.' : 'No graded crypto alert with price data in this view yet. Pick an Exit at target to read prices.') + '</p>';
         return;
       }
+      // The Scanner row has only the alerts the scanner graded: one it called "no fill" that
+      // Exit at's walk filled later (tgtBase "walk") has no scanner result (lakky, 2026-11-08:
+      // Edge & breakdowns came up empty).
+      const scanSet = set.filter(pr => scanR(pr, nf)), noScan = set.length - scanSet.length;
       const rows = SIG_TGTS.map(tg => {
         const rs = [], ps = [];
-        set.forEach(pr => { const o = tg.k ? tgtScore(pr.signal, tgtPath(pr.signal), tg, nf, mvR, trOf(tg)) : scanR(pr, nf); rs.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) ps.push(p); });
+        (tg.k ? set : scanSet).forEach(pr => { const o = tg.k ? tgtScore(pr.signal, tgtPath(pr.signal), tg, nf, mvR, trOf(tg)) : scanR(pr, nf); if (!o) return; rs.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) ps.push(p); });
         const w = rs.filter(r => r > 0).length, gw = sum(rs.filter(r => r > 0)), gl = -sum(rs.filter(r => r < 0));
         return { tg, n: rs.length, wr: w / rs.length * 100, tot: sum(rs), avg: avg(rs), pf: gl > 0 ? gw / gl : (gw > 0 ? Infinity : null), totP: ps.length ? sum(ps) : null };
       });
@@ -10204,14 +10208,15 @@
         const on = x.tg.k === cur;
         h += `<tr data-tgt="${esc(x.tg.k)}" onclick="setSigTgt('${x.tg.k}')" class="cursor-pointer border-t border-terminal-border hover:bg-white/5${on ? ' text-amber-300' : ''}" title="Click to score the whole tab at this exit">`
           + `<td class="py-1 pr-2 font-semibold">${esc(x.tg.label || x.tg.k)}${x === best ? ' <span class="text-emerald-400">best</span>' : ''}</td>`
-          + `<td class="pr-2 text-right">${x.n}</td><td class="pr-2 text-right">${pct(x.wr)}</td>`
+          + (!x.n ? `<td class="pr-2 text-right">0</td><td colspan="5" class="text-slate-500">no scanner result for these alerts</td></tr>` : '')
+          + (!x.n ? '' : `<td class="pr-2 text-right">${x.n}</td><td class="pr-2 text-right">${pct(x.wr)}</td>`
           + `<td class="pr-2 text-right ${x.tot >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(x.tot)}</td>`
           + `<td class="pr-2 text-right ${x.avg >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(x.avg)}</td>`
           + `<td class="pr-2 text-right">${x.pf == null ? '—' : x.pf === Infinity ? '∞' : x.pf.toFixed(2)}</td>`
-          + `<td class="text-right">${x.totP == null ? '—' : (x.totP >= 0 ? '+' : '') + x.totP.toFixed(2) + '%'}</td></tr>`;
+          + `<td class="text-right">${x.totP == null ? '—' : (x.totP >= 0 ? '+' : '') + x.totP.toFixed(2) + '%'}</td></tr>`);
       });
       const fees = nf ? 'No fees (the 0.05% stop slippage still counts).' : 'Fees as the scanner (0.08% round trip) + 0.05% stop slippage.';
-      h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row. Fixed target, the alert\'s own stop, '
+      h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row' + (noScan ? ', except ' + noScan + ' the scanner had as no fill that filled later within 20 candles: the Scanner row leaves ' + (noScan === 1 ? 'it' : 'them') + ' out' : '') + '. Fixed target, the alert\'s own stop, '
         + (mvR ? 'moved as Move SL says (' + esc(mvR.label) + ', from the candle after the one that reached it)' : 'no breakeven move') + (trR ? '; ' + esc(trR.label) + ' (R targets in R, % targets in %)' : '') + (mvR || trR ? '; the Scanner row keeps the scanner\'s own rules' : '')
         + '; a candle touching the stop and the target counts as the stop. ' + (sigHold() === 'tp' ? 'Held till the target or the stop; an alert with neither yet is left out. ' : 'Not hit in 20 candles of the alert\'s timeframe: closed there (Time exit). ') + fees + ' Click a row to score the whole tab at that exit.</p>';
       h += renderStopGrid(pairs, tgs, nf, cur, mvR, sigStopUnit() === "%" ? trOf({ p: 1 }) : trOf({ r: 1 }));
@@ -14001,6 +14006,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-08.175', pr: 90, title: 'Fix: Edge & breakdowns empty with Exit at', pts: ['Edge & breakdowns drew nothing when an alert the scanner called "no fill" was filled later by Exit at', 'The Scanner row in Exit targets compared leaves those alerts out and says how many'] },
       { v: '2026-11-08.174', pr: 89, title: 'Demo account: clearer chart, results by day / week / coin, hold time', pts: ['Balance chart with a price axis, dates and the drawdown under it; hover or tap it to see each trade', 'Results by day, week, month or coin: tap a row to see its trades; Top 3 / Top 5 coins vs all', 'Avg hold time (fill to exit) on the cards, per day / week / coin and on every trade'] },
       { v: '2026-11-08.173', pr: 88, title: 'Number cards easy to read on iPad and phone', pts: ['Number rows (Dashboard, Signals, Analysis, report) show 4 across on an iPad or laptop, 8 only on a wide screen; no more cut-off values or "…"', 'Best / worst (and Best / worst day on the Dashboard) shows both figures, one under the other, with the coin or day', 'Demo: the rules are short chips, what was replayed is one line, and Demo vs you shows Plan made / You made / Your exits cost'] },
       { v: '2026-11-08.172', pr: 86, title: 'Exit at: alerts that filled after the scanner gave up now count', pts: ['With a fixed Exit at, every crypto alert is walked on its own candles: filled within 20 candles of the alert counts, even when the scanner (5-candle wait on fibs) said no fill', 'Filled / no fill / waiting follow that walk; an alert not reached yet is read again until its 20 candles are over', 'E.g. BTC L4 1D of 15 Oct filled on 30 Oct and was stopped: it was missing from the results'] },

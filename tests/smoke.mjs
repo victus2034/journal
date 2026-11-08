@@ -2101,6 +2101,12 @@ async function importNowRun(seed) {
   page.on('pageerror', e => errs.push('page error: ' + e.message));
   await page.clock.install({ time: now });
   const settle = async (ms) => { await page.clock.runFor(ms); await page.waitForTimeout(400); };
+  // Press Import now and wait (real time) until GitHub has answered the dispatch: only then is
+  // the first look at the runs set on the fake clock, so a slow runner can't leave settle() early.
+  const press = async sel => {
+    await page.click(sel);
+    for (let i = 0; i < 50 && await page.evaluate(() => Object.values(pcRuns).some(r => r.step === 'asking')); i++) await page.waitForTimeout(100);
+  };
   const view = () => page.evaluate(() => ({ text: document.getElementById('cdxRunStatus').innerText, cls: document.getElementById('cdxRunStatus').className,
     btn: document.getElementById('cdxRunBtn').innerText, off: document.getElementById('cdxRunBtn').disabled,
     link: document.getElementById('cdxRunLink').classList.contains('hidden') ? '' : document.getElementById('cdxRunLink').href,
@@ -2129,7 +2135,7 @@ async function importNowRun(seed) {
     check(v.btn === 'Import now' && !v.off && v.text === '' && !v.link, 'button before: ' + JSON.stringify(v));
 
     // 1. Pressed on the phone while the PC is off: asked, then waiting for the PC.
-    await page.click('#cdxRunBtn');
+    await press('#cdxRunBtn');
     await page.waitForTimeout(300);
     v = await view();
     check(gh.dispatched.length === 1 && gh.dispatched[0].ref === 'main', 'dispatch: ' + JSON.stringify(gh.dispatched));
@@ -2161,7 +2167,7 @@ async function importNowRun(seed) {
     // 2. From Signals → More, the key refused (the hotspot's IP moved): the reason the run left shows.
     await page.evaluate(() => switchTab('signals'));
     await page.click('#view-signals details.menu summary');
-    await page.click('#view-signals details.menu >> text=Import CoinDCX + Delta');
+    await press('#view-signals details.menu >> text=Import CoinDCX + Delta');
     await page.waitForTimeout(300);
     check(gh.dispatched.length === 2, 'Signals → More did not start it: ' + gh.dispatched.length);
     const why = "CoinDCX refused the key (401) from this PC's IP 203.0.113.7. The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets. Or a secret was copied short.";
@@ -2175,7 +2181,7 @@ async function importNowRun(seed) {
     check(v.text.endsWith('but CoinDCX said no: ' + why) && /text-rose-300/.test(v.cls) && v.card.startsWith("GitHub's last run failed: " + why), 'refused key: ' + JSON.stringify(v));
 
     // 3. The PC never picks it up: after 15 minutes it stops watching and says so.
-    await page.click('#cdxRunBtn');
+    await press('#cdxRunBtn');
     await page.waitForTimeout(300);
     await newRun('pending');
     await settle(5000);
@@ -2191,7 +2197,7 @@ async function importNowRun(seed) {
 
     // 4. A token without Actions access: says what to give it.
     gh.dispatchStatus = 403;
-    await page.click('#cdxRunBtn');
+    await press('#cdxRunBtn');
     await page.waitForTimeout(400);
     v = await view();
     check(v.text === 'GitHub refused (403): give the sync token Actions: Read and write, then press Import now again.' && !v.off && /GitHub said 403/.test(v.card), 'refused token: ' + JSON.stringify(v));
@@ -2200,7 +2206,7 @@ async function importNowRun(seed) {
     gh.dispatchStatus = 204;
     gh.dx = { dispatched: [], runs: [] };
     await page.evaluate(() => { openSettings('connect'); renderDataView(); });
-    await page.click('#dxRunBtn');
+    await press('#dxRunBtn');
     await page.waitForTimeout(300);
     const t6a = await page.evaluate(() => Date.now());
     gh.runs.unshift({ id: 40, created_at: new Date(t6a).toISOString(), status: 'completed', conclusion: 'success', html_url: RUN_URL + 40 });
@@ -2220,7 +2226,7 @@ async function importNowRun(seed) {
     await page.evaluate(() => { openSettings('connect'); renderDataView(); });
     v = await view();
     check(/^Not set up yet/.test(v.dxCard), 'Delta card before: ' + JSON.stringify(v.dxCard));
-    await page.click('#dxRunBtn');
+    await press('#dxRunBtn');
     await page.waitForTimeout(300);
     v = await view();
     check(gh.dispatched.length === nd + 1 && gh.dx.dispatched.length === 1 && gh.dx.dispatched[0].ref === 'main' && v.off && v.dxBtn, 'both not started: ' + JSON.stringify({ cdx: gh.dispatched.length - nd, dx: gh.dx.dispatched, v }));
@@ -2868,6 +2874,17 @@ async function demoDeepRun(seed) {
     await page.waitForTimeout(300);
     const kept = await page.evaluate(() => Object.values(tgtCache()).map(w => Array.isArray(w.p)));
     check(calls >= n0 + 4 && JSON.stringify(kept) === '[true,true]', 'candles gone on a re-read: the old walks stay: ' + JSON.stringify(kept) + ' calls ' + (calls - n0));
+    // A "no fill" from the scanner that the walk fills later: Edge & breakdowns still draws, and
+    // the Scanner row leaves it out (lakky, 2026-11-08: the whole section came up empty).
+    gone = false;
+    const edge = await page.evaluate(() => {
+      state.signals.push(Object.assign({}, state.signals[0], { id: 'c', key: 'kc', filled: false, outcome: 'no fill', resultR: null }));
+      try { setSigSec('edge'); renderAll(); return 'ok'; } catch (e) { return 'threw ' + e.message; }
+    });
+    await page.waitForFunction(() => !tgtBusy && /3 of 3 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText), null, { timeout: 10000 }).catch(() => {});
+    const cmp = await page.evaluate(() => ({ rows: [...document.querySelectorAll('#sigTgtCmp > div > table tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').trim()), note: document.getElementById('sigTgtCmp').innerText.replace(/\s+/g, ' '), out: document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' ') }));
+    check(edge === 'ok' && /^Scanner 2 /.test(cmp.rows[0]) && /^1R 3 /.test(cmp.rows[1]) && cmp.note.includes('except 1 the scanner had as no fill that filled later within 20 candles') && /Target/.test(cmp.out),
+      'scanner no fill, walk filled: Edge draws, Scanner row 2, targets 3: ' + edge + ' ' + JSON.stringify(cmp).slice(0, 600));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
