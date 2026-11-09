@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-09.179">
+  <meta name="app-version" content="2026-11-09.180">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -12331,10 +12331,11 @@
     const is30m = g => /^30m$/i.test(String(g.timeframe || "").trim()) || / 30M$/i.test(String(g.channel || "").trim());
     // Fib and trendline alerts, with the result the scanner's daily fib/trendline report
     // gave each. Its rules: entry at the zone edge or the line, 1R and 2R targets, a candle
-    // touching both the stop and a target counts as the stop. Signal R here is the scanner's
-    // own booking: +2R when 2R was hit, the breakeven stop (about 0R) or -1R when the stop
-    // closed it, +1R only for a one-target plan, each less the same round-trip cost the
-    // scanner uses (price, below). A timeout gets no R, as in the scanner's own win rate.
+    // touching both the stop and a target counts as the stop. Signal R here: a fib or
+    // trendline is out in full at the TP its alert prints (1R), -1R at the stop, and the
+    // breakeven stop (about 0R) only where it closed the trade before the TP; a 1D+ zone
+    // is held for 2R. Each less the same round-trip cost the scanner uses (price, below).
+    // A timeout gets no R, as in the scanner's own win rate.
     function parseFibTl(recText, resText, lvText) {
       const { rows, skipped } = scannerJsonLines(recText || "");
       let res = {}, lvRes = {};
@@ -12352,14 +12353,14 @@
       const TF = { "30m": "30M", "4h": "4H", "1d": "1D", "1w": "1W", "1M": "1MO" };
       const n = v => (typeof v === "number" && isFinite(v)) ? v : null;
       // One scanner result, priced: the R it books after costs and stop slippage.
-      // oneR: a one-target plan (plan.target_r 1: trendlines since 2026-10-11, TL BROKEN),
-      // which exits at 1R. Every other plan (fibs, 1D+ zones, older trendlines) is held for
-      // 2R with the breakeven stop, as the scanner books it (booked_r, "held for 2R"): its
-      // "1R" means 1R traded but not 2R, and the trade is priced by the stop that closed it
-      // (BE, or SL where the breakeven offset was too tight to place); a timeout after 1R gets
-      // no R, like any timeout. It used to be +1R, which took the better of two exits per
-      // trade (backtest 2026-11-09: fib all +17.7R vs -281R the scanner's way).
-      function price(x, entry, sl, market, side, oneR) {
+      // tp1: the trade is out in full at 1R, the TP every fib and trendline alert prints
+      // (lakky, 2026-11-09: "on TP it should consider that fully, not BE"; plan.target_r 1
+      // too). The scanner grades fibs as held for 2R, so its "1R" (1R traded, then the
+      // breakeven, the stop or a timeout) and its "2R" are both +1R here; its "BE" closed the
+      // trade before the TP and stays BE. v.179 had priced "1R" by the stop that closed it.
+      // Other plans (1D+ zones) are held for 2R with the breakeven stop (booked_r): "1R" is
+      // the breakeven or stop that closed it, a timeout after 1R gets no R.
+      function price(x, entry, sl, market, side, tp1) {
         const riskPct = entry > 0 ? Math.abs(entry - sl) / entry * 100 : 0;
         const costR = riskPct > 0 ? (COST[market] || 0.10) / riskPct : 0;
         const slR = () => -1 - (riskPct > 0 ? (sl / entry) * SLIP_PCT / riskPct : 0) - costR;
@@ -12373,8 +12374,8 @@
           if (x.outcome === "no fill") { filled = false; rank = 3; }
           else if (x.filled) {
             filled = true; rank = x.resolved ? 3 : 2;
-            if (x.outcome === "2R") { outcome = "+2R"; resultR = 2 - costR; }
-            else if (x.outcome === "1R" && oneR) { outcome = "+1R"; resultR = 1 - costR; }
+            if (tp1 && (x.outcome === "1R" || x.outcome === "2R")) { outcome = "+1R"; resultR = 1 - costR; }
+            else if (x.outcome === "2R") { outcome = "+2R"; resultR = 2 - costR; }
             else if (x.outcome === "1R") {
               if (x.be) { outcome = "BE"; resultR = beR(); }
               else if (x.sl) { outcome = "SL"; resultR = slR(); }
@@ -12395,8 +12396,8 @@
         // Rebuilt rows: a fill within 15 min of US CPI/PPI/FOMC is left out of every backtest.
         if (r.rebuild && res[r.id] && res[r.id].news_window) return;
         const ip = istParts(new Date(r.sent_ts * 1000));
-        const oneR = r.plan.target_r === 1;
-        const { filled, outcome, resultR, rank } = price(res[r.id] || null, entry, sl, r.market, r.plan.side, oneR);
+        const tp1 = r.plan.target_r === 1 || r.kind === "fib" || r.kind === "trendline";
+        const { filled, outcome, resultR, rank } = price(res[r.id] || null, entry, sl, r.market, r.plan.side, tp1);
         // When it filled and when it closed (seconds), for the Backtest report's time in trade.
         const xr = res[r.id] || null, fillTs = xr && xr.filled && n(xr.fill_ts) != null ? n(xr.fill_ts) : undefined;
         const endTs = fillTs != null && xr.resolved && n(xr.end_ts) != null ? n(xr.end_ts) : undefined;
@@ -12407,7 +12408,7 @@
           ["L1", "L2", "L4"].forEach(k => {
             const y = lv[k];
             if (!y || typeof y !== "object" || n(y.entry) == null) return;
-            const p = y.outcome === "not reached" ? { filled: false, outcome: "not reached", resultR: null, rank: 3 } : price(y, n(y.entry), sl, r.market, r.plan.side, oneR);
+            const p = y.outcome === "not reached" ? { filled: false, outcome: "not reached", resultR: null, rank: 3 } : price(y, n(y.entry), sl, r.market, r.plan.side, tp1);
             whatIf[k] = { entry: n(y.entry), filled: p.filled, outcome: p.outcome, resultR: p.resultR != null ? +p.resultR.toFixed(4) : null, done: y.resolved === true };
           });
         }
@@ -12572,7 +12573,10 @@
     // this device already has: which are new, which gain a result, which are old
     // copies under a shorter key. Shared by "Load scanner alerts" and the quiet
     // refresh that keeps a device's alerts current.
-    function buildScannerPlan(got, cutoff, marketOk, rebuildAll) {
+    // reprice: the first read after an app update. Results this build prices itself (fib,
+    // trendline and 1D+ zone) then update the copies the device holds, whatever the date
+    // window, so a pricing change reaches old alerts too (before v.180 only the last week did).
+    function buildScannerPlan(got, cutoff, marketOk, rebuildAll, reprice) {
       const all = [];
       if (got.c4) all.push(...parseLiveAlerts(got.c4, "CRYPTO").records);
       if (got.n4) all.push(...parseLiveAlerts(got.n4, "NSE").records);
@@ -12592,7 +12596,7 @@
         : (fr && !r.rb && whenKey(r) < fr.cutoff);
 
       // one record per alert: the most resolved version wins
-      const best = new Map(), sent = new Map();
+      const best = new Map(), sent = new Map(), held = new Set();
       all.forEach(r => {
         if (oldZone(r)) {
           // A fib or trendline alert Discord sent before the rebuild's cutoff: kept aside
@@ -12601,7 +12605,10 @@
           return;
         }
         // rebuilt rows the device does not have yet come in whatever the date window
-        if (cutoff && r.date < cutoff && !(rebuildAll && r.rb)) return;
+        if (cutoff && r.date < cutoff && !(rebuildAll && r.rb)) {
+          if (!(reprice && r.hasReportR)) return;
+          held.add(r.key); // only to update a copy the device has
+        }
         if (r.market && !marketOk(r)) return;
         const cur = best.get(r.key);
         best.set(r.key, cur ? combineAlert(cur, r) : r);
@@ -12625,7 +12632,8 @@
       // Copies saved with the older, shorter key are replaced by the fresh ones
       // rather than shown twice (their old key is the first two parts of the new one).
       const oldKey = r => r.key.split("|").slice(0, 2).join("|");
-      const incomingOld = {}; incoming.forEach(r => { incomingOld[oldKey(r)] = 1; });
+      // (an older alert taken only to re-price it never drops a copy)
+      const incomingOld = {}; incoming.forEach(r => { if (!held.has(r.key)) incomingOld[oldKey(r)] = 1; });
       const staleIds = new Set((state.signals || []).filter(g => (g.key && g.key.split("|").length < 4 && incomingOld[g.key])
         // 30m zone alerts, and zone alerts graded under old rules that the rebuild replaces
         || (g.key && oldZone(g))).map(g => g.id));
@@ -12634,12 +12642,14 @@
       const fresh = [], upgrades = [];
       incoming.forEach(r => {
         const ex = have[r.key];
-        if (!ex) fresh.push(r);
+        if (!ex) { if (!held.has(r.key)) fresh.push(r); }
         else if (r.srcRank > signalRank(ex) || (r.zoneResult && !ex.zoneResult)
           // the same result, re-priced: the journal's fib/trendline costs changed, or the scanner re-graded it
           || (r.srcRank >= 3 && typeof r.resultR === "number" && typeof ex.resultR === "number" && Math.abs(r.resultR - ex.resultR) > 1e-4)
           // a 2R plan that reached 1R and then timed out, or is still open: +1R before 2026-11-09, no R now
           || (r.hasReportR && r.srcRank >= signalRank(ex) && (r.outcome === "timeout" || r.outcome === "open") && r.resultR == null && typeof ex.resultR === "number")
+          // the scanner's result booked another way (v.180: a fib's open "1R" is +1R, not open)
+          || (r.hasReportR && r.srcRank >= signalRank(ex) && r.outcome && r.outcome !== ex.outcome)
           // new or changed L1 / L2 / L4 what-ifs
           || (r.fibWhatIf && JSON.stringify(r.fibWhatIf) !== JSON.stringify(ex.fibWhatIf || null))
           // a trendline's anchors, for alerts saved before they were kept
@@ -12700,7 +12710,9 @@
         const rbNow = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta)), rbVer = rbNow ? rbNow + "|" + appVersion() : "";
         // Taken in whole when it is new, or when this device no longer holds it all.
         const mks = mk === "all" ? ["crypto", "nse"] : [mk], whole = !!rbNow && rbMissing(rbNow, mks);
-        const skipRb = !!rbNow && state.ui.rbReadAt === rbVer && !whole;
+        // First read after an app update: every result is priced again by this build's rules.
+        const reprice = state.ui.sigPriceVer !== appVersion();
+        const skipRb = !!rbNow && state.ui.rbReadAt === rbVer && !whole && !reprice;
         await Promise.all(files.filter(x => !isMeta(x)).map(x => skipRb && RB_BODY_KEYS.indexOf(x[0]) !== -1 ? (got[x[0]] = x[2]) : read(x)));
         // From a week before the newest alert this device has (results come in
         // later), or the last month on a device with none.
@@ -12716,8 +12728,9 @@
         const marketOk = r => { const isNse = /^NSE$/i.test(r.market); return mk === "all" || (mk === "nse" ? isNse : !isNse); };
         // A rebuild is taken in whole once (and again whenever the device lost part of it),
         // then only the usual window.
-        const plan = buildScannerPlan(got, iso(d), marketOk, whole);
+        const plan = buildScannerPlan(got, iso(d), marketOk, whole, reprice);
         if (rbNow && !skipRb) state.ui.rbReadAt = rbVer;
+        state.ui.sigPriceVer = appVersion();
         let n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
         if (n) applyScannerPlan(plan);
         else if (setSentSigs(plan.sent)) n = 1;
@@ -14278,6 +14291,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-09.180', pr: 94, title: 'Signals: a fib or trendline TP counts in full', pts: ['Scanner results: a fib or trendline that reached its TP (1R, as the alert prints) is +1R, even if price came back to breakeven later; a fib that reached 2R is +1R too', 'BE only where the breakeven stop closed the trade before the TP; Exit at is unchanged: SL or the fixed TP, or with Trail TP the trailing stop'] },
       { v: '2026-11-09.179', pr: 93, title: 'Signals: fib Scanner results and Trail TP closer to real', pts: ['Fib Scanner results now follow the scanner: a fib that reached 1R and came back to breakeven counts as breakeven, not +1R (backtest 1 Jan - 9 Nov, all fibs: +18R before, -281R now)', 'Exit at walks an older alert on 15m candles for its first ~18 days; 1h-1d candles hid pullbacks and Trail TP looked far better (RS TL BR 3R + trail: +273R before, ~+165R now)', 'Walks kept from before are read once more, so the first open after updating takes longer'] },
       { v: '2026-11-09.178', pr: 92, title: 'Signals keep the whole history from 1 Jun', pts: ['After Delete all signals, Load scanner alerts (Last 1 month) or a cleared store, a device kept only a month of alerts (Fib 531 instead of 2,623), and fewer each day', 'Now a device that lacks part of the rebuilt history takes it in whole again, by itself'] },
       { v: '2026-11-08.177', pr: 92, title: 'Signals: % beside R says "price move"', pts: ['Total R, Average R, Alerts made and left on the table show their % as "price move": each alert\'s move from entry (R × stop size), not money', 'It can be negative while R is positive (losers had wider stops); the Demo account\'s Return is the account %'] },
