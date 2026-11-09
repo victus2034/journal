@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-09.178">
+  <meta name="app-version" content="2026-11-09.179">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -9472,10 +9472,11 @@
     function tgtWalk(sig, candles, resMin, hold) {
       const entry = signalEntry(sig), stop = sig.stop, s = sig.side === "short" ? -1 : 1;
       const tfMs = tfMinutes(sig.timeframe) * 60000, resMs = resMin * 60000, t0 = tgtAlertMs(sig);
-      const bars = candles.map(k => ({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close })).filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + resMs > t0).sort((a, b) => a.t - b.t);
+      // k.res: the candle's own size in minutes, where one read mixed sizes (tgtOne's 15m head).
+      const bars = candles.map(k => Object.assign({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close }, k.res ? { r: k.res * 60000 } : {})).filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + (k.r || resMs) > t0).sort((a, b) => a.t - b.t);
       const fi = bars.findIndex(k => k.t < t0 + TGT_BARS * tfMs && (s > 0 ? k.l <= entry : k.h >= entry));
       // Not reached yet while the fill window is still open: "wait", read again later.
-      const seenTo = bars.length ? bars[bars.length - 1].t + resMs : 0;
+      const seenTo = bars.length ? bars[bars.length - 1].t + (bars[bars.length - 1].r || resMs) : 0;
       if (fi < 0) return seenTo < t0 + TGT_BARS * tfMs ? { none: "entry not reached", wait: 1 } : { none: "entry not reached" };
       const tp = hold === "tp";
       return walkFrom(entry, stop, s, bars, fi, tp ? Infinity : bars[fi].t + TGT_BARS * tfMs, resMs);
@@ -9656,18 +9657,43 @@
       nseAt = Date.now(); nseBusy = false;
       renderSignalsTable();
     }
-    async function tgtOne(sig, hold) {
-      // 20 candles: the alert's window. Till TP / SL: everything from the alert to now,
-      // in the finest candles that fit one read (an older alert reads coarser ones).
-      const tfMin = tfMinutes(sig.timeframe), t0 = tgtAlertMs(sig), now = Date.now();
-      const span = hold === "tp" ? Math.max(now - t0, 3600000) : 2 * TGT_BARS * tfMin * 60000;
-      const r = AI_RES.find(x => span / (x[0] * 60000) <= 1900) || AI_RES[AI_RES.length - 1];
-      const from = t0 - r[0] * 60000, to = Math.min(now, t0 + span);
-      const sym = tgtSym(sig.symbol), url = DELTA_BASE + "/v2/history/candles?resolution=" + r[1] + "&symbol=" + encodeURIComponent(sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
-      const res = await fetch(url);
-      const j = await res.json().catch(() => null);
+    // The candle size every walk starts on, and how many of them one read gives it.
+    const TGT_HEAD_RES = 15, TGT_HEAD_BARS = 1800;
+    // The candle size one read of the whole window would take (finest that fits 1900).
+    function tgtSpan(sig, hold) {
+      const t0 = tgtAlertMs(sig), now = Date.now();
+      const span = hold === "tp" ? Math.max(now - t0, 3600000) : 2 * TGT_BARS * tfMinutes(sig.timeframe) * 60000;
+      return { t0, now, span, r: AI_RES.find(x => span / (x[0] * 60000) <= 1900) || AI_RES[AI_RES.length - 1] };
+    }
+    // A window too long for 15m candles in one read gets a 15m head (backtest 2026-11-09:
+    // on 1h-1d candles the pullbacks inside a candle are invisible, and Trail TP read far
+    // better than it was: RS TL BR 3R + trail +273R vs +165R on 15m).
+    function tgtNeedsHead(sig, hold) { return tgtSpan(sig, hold).r[0] > TGT_HEAD_RES; }
+    async function tgtRead(sym, res, from, to) {
+      const url = DELTA_BASE + "/v2/history/candles?resolution=" + res + "&symbol=" + encodeURIComponent(sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
+      const r = await fetch(url);
+      const j = await r.json().catch(() => null);
       if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad reply");
-      return j.result.length ? tgtWalk(sig, j.result, r[0], hold) : Object.assign({ none: "no candles on Delta" }, sym !== tgtPlain(sig.symbol) ? { via: sym } : {});
+      return j.result;
+    }
+    async function tgtOne(sig, hold) {
+      // 20 candles: the alert's window. Till TP / SL: everything from the alert to now.
+      // One read when 15m (or finer) candles fit 1900 of them; otherwise two: 15m candles
+      // for the first ~18 days, where most trades are decided, then the finest size that
+      // fits the rest, from a candle open of that size on (fh = read this way).
+      const { t0, now, span, r } = tgtSpan(sig, hold), to = Math.min(now, t0 + span);
+      const sym = tgtSym(sig.symbol), none = () => Object.assign({ none: "no candles on Delta" }, sym !== tgtPlain(sig.symbol) ? { via: sym } : {});
+      if (r[0] <= TGT_HEAD_RES) {
+        const rows = await tgtRead(sym, r[1], t0 - r[0] * 60000, to);
+        return rows.length ? Object.assign(tgtWalk(sig, rows, r[0], hold), { fh: 1 }) : none();
+      }
+      const hMs = TGT_HEAD_RES * 60000, cut = Math.floor((t0 + TGT_HEAD_BARS * hMs) / (r[0] * 60000)) * r[0] * 60000;
+      const tail = AI_RES.find(x => (to - cut) / (x[0] * 60000) <= 1900) || r;
+      // One after the other, so four walks at a time stay four reads at a time.
+      const h = await tgtRead(sym, "15m", t0 - hMs, cut), t = await tgtRead(sym, tail[1], cut, to);
+      const rows = h.filter(k => k.time * 1000 < cut).map(k => Object.assign({}, k, { res: TGT_HEAD_RES }))
+        .concat(t.filter(k => k.time * 1000 >= cut).map(k => Object.assign({}, k, { res: tail[0] })));
+      return rows.length ? Object.assign(tgtWalk(sig, rows, TGT_HEAD_RES, hold), { fh: 1 }) : none();
     }
     // Reads the candles of every graded alert in view that has none yet, four at a
     // time, and redraws as they come in. Finished windows are kept on this device.
@@ -9681,7 +9707,8 @@
         // candles" kept before the bStocks names were known (tgtStale), and a "Till TP /
         // SL" one kept before Trail TP (no tr).
         // With the Demo account open, a walk kept before times (no ft) is read once more for its hold time.
-        if (seen[k] || (c && ((c.none && !tgtStale(g, c) && !tgtNoneEarly(g)) || (Array.isArray(c.p) && (hold !== "tp" || c.tr) && (c.ft != null || !times)))) || tgtTried[k] || tgtWhy(g) || !tgtBase({ signal: g })) return false;
+        // A walk kept before the 15m head (no fh) whose window needs one is read once more too.
+        if (seen[k] || (c && ((c.none && !tgtStale(g, c) && !tgtNoneEarly(g)) || (Array.isArray(c.p) && (hold !== "tp" || c.tr) && (c.ft != null || !times) && (c.fh || !tgtNeedsHead(g, hold))))) || tgtTried[k] || tgtWhy(g) || !tgtBase({ signal: g })) return false;
         return (seen[k] = true);
       });
       if (!todo.length) return;
@@ -12304,10 +12331,10 @@
     const is30m = g => /^30m$/i.test(String(g.timeframe || "").trim()) || / 30M$/i.test(String(g.channel || "").trim());
     // Fib and trendline alerts, with the result the scanner's daily fib/trendline report
     // gave each. Its rules: entry at the zone edge or the line, 1R and 2R targets, a candle
-    // touching both the stop and a target counts as the stop. Signal R here is +2R when 2R
-    // was hit, +1R when 1R was hit but not 2R (the stop moved to +1R), -1R stopped out,
-    // each less the same round-trip cost the scanner uses. A timeout (entered, neither
-    // stop nor 1R in time) gets no R, as in the scanner's own win rate.
+    // touching both the stop and a target counts as the stop. Signal R here is the scanner's
+    // own booking: +2R when 2R was hit, the breakeven stop (about 0R) or -1R when the stop
+    // closed it, +1R only for a one-target plan, each less the same round-trip cost the
+    // scanner uses (price, below). A timeout gets no R, as in the scanner's own win rate.
     function parseFibTl(recText, resText, lvText) {
       const { rows, skipped } = scannerJsonLines(recText || "");
       let res = {}, lvRes = {};
@@ -12325,23 +12352,36 @@
       const TF = { "30m": "30M", "4h": "4H", "1d": "1D", "1w": "1W", "1M": "1MO" };
       const n = v => (typeof v === "number" && isFinite(v)) ? v : null;
       // One scanner result, priced: the R it books after costs and stop slippage.
-      function price(x, entry, sl, market, side) {
+      // oneR: a one-target plan (plan.target_r 1: trendlines since 2026-10-11, TL BROKEN),
+      // which exits at 1R. Every other plan (fibs, 1D+ zones, older trendlines) is held for
+      // 2R with the breakeven stop, as the scanner books it (booked_r, "held for 2R"): its
+      // "1R" means 1R traded but not 2R, and the trade is priced by the stop that closed it
+      // (BE, or SL where the breakeven offset was too tight to place); a timeout after 1R gets
+      // no R, like any timeout. It used to be +1R, which took the better of two exits per
+      // trade (backtest 2026-11-09: fib all +17.7R vs -281R the scanner's way).
+      function price(x, entry, sl, market, side, oneR) {
         const riskPct = entry > 0 ? Math.abs(entry - sl) / entry * 100 : 0;
         const costR = riskPct > 0 ? (COST[market] || 0.10) / riskPct : 0;
+        const slR = () => -1 - (riskPct > 0 ? (sl / entry) * SLIP_PCT / riskPct : 0) - costR;
+        const beR = () => {
+          const be = BE_PCT[market] != null ? BE_PCT[market] : BE_PCT.crypto;
+          const sign = side === "short" ? -1 : 1;
+          return (riskPct > 0 ? (be - (1 + sign * be / 100) * SLIP_PCT) / riskPct : 0) - costR;
+        };
         let filled, outcome = "", resultR = null, rank = 1;
         if (x) {
           if (x.outcome === "no fill") { filled = false; rank = 3; }
           else if (x.filled) {
             filled = true; rank = x.resolved ? 3 : 2;
             if (x.outcome === "2R") { outcome = "+2R"; resultR = 2 - costR; }
-            else if (x.outcome === "1R") { outcome = "+1R"; resultR = 1 - costR; }
-            else if (x.outcome === "SL") { outcome = "SL"; resultR = -1 - (riskPct > 0 ? (sl / entry) * SLIP_PCT / riskPct : 0) - costR; }
-            else if (x.outcome === "BE") {
-              outcome = "BE";
-              const be = BE_PCT[market] != null ? BE_PCT[market] : BE_PCT.crypto;
-              const sign = side === "short" ? -1 : 1;
-              resultR = (riskPct > 0 ? (be - (1 + sign * be / 100) * SLIP_PCT) / riskPct : 0) - costR;
+            else if (x.outcome === "1R" && oneR) { outcome = "+1R"; resultR = 1 - costR; }
+            else if (x.outcome === "1R") {
+              if (x.be) { outcome = "BE"; resultR = beR(); }
+              else if (x.sl) { outcome = "SL"; resultR = slR(); }
+              else outcome = x.resolved ? "timeout" : "open";
             }
+            else if (x.outcome === "SL") { outcome = "SL"; resultR = slR(); }
+            else if (x.outcome === "BE") { outcome = "BE"; resultR = beR(); }
             else outcome = x.outcome === "timeout" ? "timeout" : "open";
           }
         }
@@ -12355,7 +12395,8 @@
         // Rebuilt rows: a fill within 15 min of US CPI/PPI/FOMC is left out of every backtest.
         if (r.rebuild && res[r.id] && res[r.id].news_window) return;
         const ip = istParts(new Date(r.sent_ts * 1000));
-        const { filled, outcome, resultR, rank } = price(res[r.id] || null, entry, sl, r.market, r.plan.side);
+        const oneR = r.plan.target_r === 1;
+        const { filled, outcome, resultR, rank } = price(res[r.id] || null, entry, sl, r.market, r.plan.side, oneR);
         // When it filled and when it closed (seconds), for the Backtest report's time in trade.
         const xr = res[r.id] || null, fillTs = xr && xr.filled && n(xr.fill_ts) != null ? n(xr.fill_ts) : undefined;
         const endTs = fillTs != null && xr.resolved && n(xr.end_ts) != null ? n(xr.end_ts) : undefined;
@@ -12366,7 +12407,7 @@
           ["L1", "L2", "L4"].forEach(k => {
             const y = lv[k];
             if (!y || typeof y !== "object" || n(y.entry) == null) return;
-            const p = y.outcome === "not reached" ? { filled: false, outcome: "not reached", resultR: null, rank: 3 } : price(y, n(y.entry), sl, r.market, r.plan.side);
+            const p = y.outcome === "not reached" ? { filled: false, outcome: "not reached", resultR: null, rank: 3 } : price(y, n(y.entry), sl, r.market, r.plan.side, oneR);
             whatIf[k] = { entry: n(y.entry), filled: p.filled, outcome: p.outcome, resultR: p.resultR != null ? +p.resultR.toFixed(4) : null, done: y.resolved === true };
           });
         }
@@ -12488,6 +12529,8 @@
       if (hi.srcRank >= 3) out.filled = hi.filled;
       else if (hi.filled === true) out.filled = true;
       else if (lo.filled !== undefined) out.filled = lo.filled;
+      // A scanner timeout or open trade has no R, even where an older copy had one.
+      if (hi.hasReportR && (hi.outcome === "timeout" || hi.outcome === "open") && hi.resultR == null) out.resultR = null;
       out.srcRank = hi.srcRank;
       return out;
     }
@@ -12595,6 +12638,8 @@
         else if (r.srcRank > signalRank(ex) || (r.zoneResult && !ex.zoneResult)
           // the same result, re-priced: the journal's fib/trendline costs changed, or the scanner re-graded it
           || (r.srcRank >= 3 && typeof r.resultR === "number" && typeof ex.resultR === "number" && Math.abs(r.resultR - ex.resultR) > 1e-4)
+          // a 2R plan that reached 1R and then timed out, or is still open: +1R before 2026-11-09, no R now
+          || (r.hasReportR && r.srcRank >= signalRank(ex) && (r.outcome === "timeout" || r.outcome === "open") && r.resultR == null && typeof ex.resultR === "number")
           // new or changed L1 / L2 / L4 what-ifs
           || (r.fibWhatIf && JSON.stringify(r.fibWhatIf) !== JSON.stringify(ex.fibWhatIf || null))
           // a trendline's anchors, for alerts saved before they were kept
@@ -14233,6 +14278,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-09.179', pr: 93, title: 'Signals: fib Scanner results and Trail TP closer to real', pts: ['Fib Scanner results now follow the scanner: a fib that reached 1R and came back to breakeven counts as breakeven, not +1R (backtest 1 Jan - 9 Nov, all fibs: +18R before, -281R now)', 'Exit at walks an older alert on 15m candles for its first ~18 days; 1h-1d candles hid pullbacks and Trail TP looked far better (RS TL BR 3R + trail: +273R before, ~+165R now)', 'Walks kept from before are read once more, so the first open after updating takes longer'] },
       { v: '2026-11-09.178', pr: 92, title: 'Signals keep the whole history from 1 Jun', pts: ['After Delete all signals, Load scanner alerts (Last 1 month) or a cleared store, a device kept only a month of alerts (Fib 531 instead of 2,623), and fewer each day', 'Now a device that lacks part of the rebuilt history takes it in whole again, by itself'] },
       { v: '2026-11-08.177', pr: 92, title: 'Signals: % beside R says "price move"', pts: ['Total R, Average R, Alerts made and left on the table show their % as "price move": each alert\'s move from entry (R × stop size), not money', 'It can be negative while R is positive (losers had wider stops); the Demo account\'s Return is the account %'] },
       { v: '2026-11-08.176', pr: 91, title: 'Demo account: what to improve; charts you can tap', pts: ['Demo account: trades fold into their own Trades section (All / Won / Lost / Skipped); new What to improve (groups costing you and working for you, skipped alerts) and Wins, losses and streaks', 'Results by also splits by exit, side, level / type, timeframe, stop size, weekday and time held', 'Charts: tap or hover anywhere for a point. Dashboard shows the day\'s P&L and trades, the Signals backtest curve has axes, dates and tips; a tap\'s tip stays on iPad'] },

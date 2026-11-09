@@ -2282,9 +2282,17 @@ async function fibTlRun(seed) {
     rec('c', 'trendline', 'nse', '1d', { entry: 200, sl: 196, side: 'long', target_r: 1 }, now - 9000),
     rec('d', 'zone', 'nse', '1d', { entry: 200, sl: 196, side: 'long' }, now - 9600, { zone_bottom: 197, zone_top: 200 }),
     rec('w', 'fib', 'crypto', '1w', { entry: 10, sl: 9, side: 'long' }, old),
+    // 1R traded, not 2R (backtest 2026-11-09): a fib holds for 2R with the breakeven stop
+    rec('f', 'fib', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 10800),
+    rec('g', 'fib', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 11000),
+    rec('h', 'trendline', 'crypto', '4h', { entry: 100, sl: 97, side: 'long', target_r: 1 }, now - 11200),
+    rec('i', 'fib', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 11400),
+    rec('j', 'fib', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 11600),
   ].join('\n') + '\n';
   const done = o => ({ filled: true, resolved: true, outcome: o });
-  const res = { a: done('SL'), b: done('BE'), c: done('SL'), d: done('BE'), w: done('2R') };
+  const res = { a: done('SL'), b: done('BE'), c: done('SL'), d: done('BE'), w: done('2R'),
+    f: Object.assign(done('1R'), { r1: true, be: true }), g: Object.assign(done('1R'), { r1: true, sl: true }), h: Object.assign(done('1R'), { r1: true }),
+    i: Object.assign(done('1R'), { r1: true }), j: { filled: true, resolved: false, outcome: '1R', r1: true } };
   const wOpen = { w: { filled: true, resolved: false, outcome: 'open' } };
   let served = res;
   await ctx.route(url => !url.href.startsWith(base), async r => {
@@ -2300,12 +2308,18 @@ async function fibTlRun(seed) {
   try {
     await page.goto(base, { waitUntil: 'load' });
     const got = await page.evaluate(([r, x]) => {
-      const out = {}; parseFibTl(r, JSON.stringify(x)).records.forEach(g => { out[g.key] = { r: g.resultR, kind: g.kind, daily: g.scoredDaily, lo: g.zoneLow }; });
+      const out = {}; parseFibTl(r, JSON.stringify(x)).records.forEach(g => { out[g.key] = { r: g.resultR, o: g.outcome, kind: g.kind, daily: g.scoredDaily, lo: g.zoneLow }; });
       return out;
     }, [recs, res]);
-    // booked_r(plan, market, result)[0] from the scanner, for these plans
-    const want = { a: -1.0437, b: -0.019627, c: -1.07765, d: -0.01818 };
+    // booked_r(plan, market, result) from the scanner, for these plans: held for 2R (fibs,
+    // zones) or out at 1R (a one-target trendline). Risk 3%: cost 0.0826 / 3 = 0.02753R;
+    // breakeven (0.0933 - 1.000933 x 0.05) / 3 - 0.02753 = -0.01312R.
+    const want = { a: -1.0437, b: -0.019627, c: -1.07765, d: -0.01818, f: -0.013116, g: -1.0437, h: 0.972467 };
     Object.keys(want).forEach(k => check(got[k] && Math.abs(got[k].r - want[k]) < 1e-4, `R of ${k}: ${got[k] && got[k].r} want ${want[k]}`));
+    // A fib that reached 1R and came back is the breakeven (or stop) that closed it, not +1R;
+    // a timeout after 1R and a 1R still open get no R; a one-target trendline is +1R.
+    check(got.f && got.f.o === 'BE' && got.g && got.g.o === 'SL' && got.h && got.h.o === '+1R', '1R then the stop: ' + JSON.stringify([got.f, got.g, got.h]));
+    check(got.i && got.i.o === 'timeout' && got.i.r === null && got.j && got.j.o === 'open' && got.j.r === null, '1R then timeout / open: ' + JSON.stringify([got.i, got.j]));
     check(got.d && got.d.kind === undefined && got.d.daily === true && got.d.lo === 197, '1D zone not a zone: ' + JSON.stringify(got.d));
     check(got.a && got.a.kind === 'fib' && got.c.kind === 'trendline', 'fib / trendline kinds: ' + JSON.stringify(got));
     // A device that took the 1W alert while it was open, and has newer alerts since,
@@ -2318,6 +2332,13 @@ async function fibTlRun(seed) {
     await page.evaluate(() => { state.ui.sigAutoAt = 0; return autoRefreshAlerts(true); });
     const w = await page.evaluate(() => { const g = state.signals.find(s => s.key === 'w'); return g && g.resultR; });
     check(typeof w === 'number' && w > 1.9, '1W result never arrived: ' + w);
+    // Copies kept with the old +1R (before 2026-11-09) are re-priced on the next refresh.
+    const rp = await page.evaluate(() => {
+      ['f', 'i', 'j'].forEach(k => { const g = state.signals.find(s => s.key === k); if (g) Object.assign(g, { outcome: '+1R', resultR: 0.9725 }); });
+      state.ui.sigAutoAt = 0;
+      return autoRefreshAlerts(true).then(() => ['f', 'i', 'j'].map(k => { const g = state.signals.find(s => s.key === k); return g ? [g.outcome, g.resultR] : null; }));
+    });
+    check(rp[0] && rp[0][0] === 'BE' && Math.abs(rp[0][1] + 0.0131) < 1e-4 && JSON.stringify(rp.slice(1)) === '[["timeout",null],["open",null]]', 'old +1R copies re-priced: ' + JSON.stringify(rp));
     // Fib levels: L1-L4 come back from the alert's key and entry (the scanner's own
     // levels for this XAUT alert).
     const lv = await page.evaluate(() => {
@@ -5057,6 +5078,69 @@ async function trailRun(seed) {
 }
 // NSE "Exit at": the sync repo's job reads Yahoo candles (a fake one here) and writes
 // nse-paths.json; the journal reads it with its sync token and re-scores NSE alerts.
+// Old alerts read 15m candles for their first ~18 days (backtest 2026-11-09: on 1h-1d
+// candles the pullbacks inside a candle are invisible and Trail TP read far better than
+// it was). A long 100 / 99, 40 days old: 1.1R, a dip to +0.4R and 2.6R all inside one
+// hour, then the stop. 15m: Trail TP (+0.25R, 0R behind) locks 1R and the dip ends it at
+// +1R - 1.01 x 0.05 = +0.9495R. The same hour as one 1h candle hides the dip: +2.44875R.
+async function tgtHeadRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const day = new Date(Date.now() - 40 * 86400e3).toISOString().slice(0, 10);
+  const t0 = Date.parse(day + 'T10:00:00+05:30') / 1000, Q = 900, H = 3600, h0 = t0 - 1800;
+  const q = [[t0, 100.3, 99.9, 100.1], [t0 + Q, 100.3, 99.95, 100.1], [t0 + 2 * Q, 101.1, 100.6, 101], [t0 + 3 * Q, 101.05, 100.4, 100.5], [t0 + 4 * Q, 102.6, 100.5, 102.5], [t0 + 5 * Q, 102.6, 102.3, 102.5], [t0 + 6 * Q, 102.5, 98.9, 99]];
+  const hr = [[h0, 100.3, 99.9, 100.1], [h0 + H, 102.6, 100.4, 102.5], [h0 + 2 * H, 102.5, 98.9, 99]];
+  const reads = [];
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const u = new URL(route.request().url()), res = u.searchParams.get('resolution'), a = +u.searchParams.get('start'), b = +u.searchParams.get('end');
+    if (u.searchParams.get('symbol') === 'HEADUSD') reads.push([res, a, b]);
+    const rows = (res === '15m' ? q : res === '1h' ? hr : []).filter(x => x[0] >= a && x[0] <= b);
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: rows.map(([time, high, low, close]) => ({ time, open: close, high, low, close })) }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady);
+    const r = await page.evaluate(async ([day, hr]) => {
+      const sig = { id: 'h', key: 'kh', kind: 'trendline', date: day, time: '10:00', symbol: 'HEAD', side: 'long', score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: true, outcome: '+1R', resultR: 0.9, hasReportR: true, price: 100, stop: 99, entry: 100 };
+      const tr = trailMove('R', 0.25, 0), sc = w => { const o = tgtScore(sig, w, { r: 1 }, true, null, tr); return o && [o.label, +o.r.toFixed(5)]; };
+      const w = await tgtOne(sig, 'tp');
+      const coarse = tgtWalk(sig, hr.map(([time, high, low, close]) => ({ time, high, low, close })), 60, 'tp');
+      // A walk kept before the head (no fh) is read once more; one with it is kept.
+      state.signals = [sig];
+      Object.assign(state.ui, { sigKind: 'trendline', sigTgt: '1R', sigHold: 'tp' });
+      const k = tgtHoldKey(sig, 'tp');
+      tgtCache()[k] = Object.assign({}, coarse);
+      await tgtLoad([{ signal: sig, trade: null }]);
+      const again = tgtCache()[k];
+      tgtRetry();
+      await tgtLoad([{ signal: sig, trade: null }]);
+      return { need: tgtNeedsHead(sig, 'tp'), needRecent: tgtNeedsHead(Object.assign({}, sig, { date: new Date().toISOString().slice(0, 10) }), 'tp'), fh: w.fh, head: sc(w), coarse: sc(coarse), again: again && again.fh === 1 && sc(again) };
+    }, [day, hr]);
+    check(r.need === true && r.needRecent === false, 'a 40-day window needs the 15m head, a fresh one does not: ' + JSON.stringify(r));
+    check(r.fh === 1 && JSON.stringify(r.head) === '["Trail TP",0.9495]', '15m head: Trail TP ends at +1R on the dip: ' + JSON.stringify(r.head));
+    check(JSON.stringify(r.coarse) === '["Trail TP",2.44875]', 'one 1h candle hides the dip: ' + JSON.stringify(r.coarse));
+    check(JSON.stringify(r.again) === '["Trail TP",0.9495]', 'a walk kept without the head is read again: ' + JSON.stringify(r.again));
+    // Reads: 15m from the alert, then 1h from a whole-hour cut ~18.75 days later, to now;
+    // twice for tgtOne and the re-read, none for the walk already kept with the head.
+    const cut = Math.floor((t0 * 1000 + 1800 * 900e3) / 3600e3) * 3600;
+    const want = JSON.stringify([['15m', t0 - Q, cut], ['1h', cut]]);
+    const got = JSON.stringify(reads.slice(0, 2).map((x, i) => i ? x.slice(0, 2) : x));
+    check(reads.length === 4 && got === want && JSON.stringify(reads.slice(2, 4).map(x => x.slice(0, 2))) === JSON.stringify([['15m', t0 - Q], ['1h', cut]]), 'two reads per walk: ' + JSON.stringify(reads) + ' want ' + want);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'Exit at: old alerts walk 15m candles first (Trail TP not flattered by 1h-1d candles)';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 async function nsePathsRun() {
   const errs = [];
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
@@ -5715,6 +5799,7 @@ await exitTargetRun(data);
 await stopMoveRun(data);
 await holdPctRun(data);
 await trailRun(data);
+await tgtHeadRun(data);
 await sigBreakdownRun(data);
 await nsePathsRun();
 await badInputRun(data);
