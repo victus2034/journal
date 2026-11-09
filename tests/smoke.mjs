@@ -2267,10 +2267,10 @@ async function importNowRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
-// Fib / trendline / 1D+ zone results priced as the scanner prices them (its
-// fib_trendline_trades.booked_r at the 1R booking: Delta fee, breakeven offset and
-// stop slippage), 1D+ zones shown as zones, and a 1W result that closes weeks after
-// its alert still reaches the journal.
+// Fib / trendline / 1D+ zone results priced with the scanner's costs (Delta fee,
+// breakeven offset and stop slippage): a fib or trendline out in full at its TP (1R,
+// as the alert prints), a 1D+ zone held for 2R; 1D+ zones shown as zones, and a 1W
+// result that closes weeks after its alert still reaches the journal.
 async function fibTlRun(seed) {
   const errs = [];
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
@@ -2282,17 +2282,21 @@ async function fibTlRun(seed) {
     rec('c', 'trendline', 'nse', '1d', { entry: 200, sl: 196, side: 'long', target_r: 1 }, now - 9000),
     rec('d', 'zone', 'nse', '1d', { entry: 200, sl: 196, side: 'long' }, now - 9600, { zone_bottom: 197, zone_top: 200 }),
     rec('w', 'fib', 'crypto', '1w', { entry: 10, sl: 9, side: 'long' }, old),
-    // 1R traded, not 2R (backtest 2026-11-09): a fib holds for 2R with the breakeven stop
+    // 1R traded, not 2R: the scanner held it for 2R, but the TP (1R) counts in full (lakky, 2026-11-09)
     rec('f', 'fib', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 10800),
     rec('g', 'fib', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 11000),
     rec('h', 'trendline', 'crypto', '4h', { entry: 100, sl: 97, side: 'long', target_r: 1 }, now - 11200),
     rec('i', 'fib', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 11400),
     rec('j', 'fib', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 11600),
+    // a 1D+ zone is still held for 2R: 1R then breakeven is the breakeven
+    rec('k', 'zone', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 11800, { zone_bottom: 98, zone_top: 100 }),
+    rec('m', 'zone', 'crypto', '1d', { entry: 100, sl: 97, side: 'long' }, now - 12000, { zone_bottom: 98, zone_top: 100 }),
   ].join('\n') + '\n';
   const done = o => ({ filled: true, resolved: true, outcome: o });
   const res = { a: done('SL'), b: done('BE'), c: done('SL'), d: done('BE'), w: done('2R'),
     f: Object.assign(done('1R'), { r1: true, be: true }), g: Object.assign(done('1R'), { r1: true, sl: true }), h: Object.assign(done('1R'), { r1: true }),
-    i: Object.assign(done('1R'), { r1: true }), j: { filled: true, resolved: false, outcome: '1R', r1: true } };
+    i: Object.assign(done('1R'), { r1: true }), j: { filled: true, resolved: false, outcome: '1R', r1: true },
+    k: Object.assign(done('1R'), { r1: true, be: true }), m: Object.assign(done('2R'), { r1: true, r2: true }) };
   const wOpen = { w: { filled: true, resolved: false, outcome: 'open' } };
   let served = res;
   await ctx.route(url => !url.href.startsWith(base), async r => {
@@ -2311,15 +2315,16 @@ async function fibTlRun(seed) {
       const out = {}; parseFibTl(r, JSON.stringify(x)).records.forEach(g => { out[g.key] = { r: g.resultR, o: g.outcome, kind: g.kind, daily: g.scoredDaily, lo: g.zoneLow }; });
       return out;
     }, [recs, res]);
-    // booked_r(plan, market, result) from the scanner, for these plans: held for 2R (fibs,
-    // zones) or out at 1R (a one-target trendline). Risk 3%: cost 0.0826 / 3 = 0.02753R;
-    // breakeven (0.0933 - 1.000933 x 0.05) / 3 - 0.02753 = -0.01312R.
-    const want = { a: -1.0437, b: -0.019627, c: -1.07765, d: -0.01818, f: -0.013116, g: -1.0437, h: 0.972467 };
+    // Fibs and trendlines are out at 1R (the alert's TP), 1D+ zones held for 2R, with the
+    // scanner's costs. Risk 3%: cost 0.0826 / 3 = 0.02753R, so +1R = 0.97247R and +2R =
+    // 1.97247R; breakeven (0.0933 - 1.000933 x 0.05) / 3 - 0.02753 = -0.01312R.
+    const want = { a: -1.0437, b: -0.019627, c: -1.07765, d: -0.01818, f: 0.972467, g: 0.972467, h: 0.972467, i: 0.972467, j: 0.972467, k: -0.013116, m: 1.972467 };
     Object.keys(want).forEach(k => check(got[k] && Math.abs(got[k].r - want[k]) < 1e-4, `R of ${k}: ${got[k] && got[k].r} want ${want[k]}`));
-    // A fib that reached 1R and came back is the breakeven (or stop) that closed it, not +1R;
-    // a timeout after 1R and a 1R still open get no R; a one-target trendline is +1R.
-    check(got.f && got.f.o === 'BE' && got.g && got.g.o === 'SL' && got.h && got.h.o === '+1R', '1R then the stop: ' + JSON.stringify([got.f, got.g, got.h]));
-    check(got.i && got.i.o === 'timeout' && got.i.r === null && got.j && got.j.o === 'open' && got.j.r === null, '1R then timeout / open: ' + JSON.stringify([got.i, got.j]));
+    // A fib that reached its TP is +1R in full, whatever came after (breakeven, stop,
+    // timeout, still open); a fib the breakeven closed before the TP (b) stays BE; a 1D+
+    // zone that reached 1R and came back is the breakeven, and its 2R is +2R.
+    check(['f', 'g', 'h', 'i', 'j'].every(k => got[k] && got[k].o === '+1R'), 'TP counts in full: ' + JSON.stringify(['f', 'g', 'h', 'i', 'j'].map(k => got[k])));
+    check(got.b && got.b.o === 'BE' && got.k && got.k.o === 'BE' && got.m && got.m.o === '+2R', 'BE before the TP / zone held for 2R: ' + JSON.stringify([got.b, got.k, got.m]));
     check(got.d && got.d.kind === undefined && got.d.daily === true && got.d.lo === 197, '1D zone not a zone: ' + JSON.stringify(got.d));
     check(got.a && got.a.kind === 'fib' && got.c.kind === 'trendline', 'fib / trendline kinds: ' + JSON.stringify(got));
     // A device that took the 1W alert while it was open, and has newer alerts since,
@@ -2331,14 +2336,22 @@ async function fibTlRun(seed) {
     check(wBefore === null || wBefore === undefined, '1W should start open: ' + wBefore);
     await page.evaluate(() => { state.ui.sigAutoAt = 0; return autoRefreshAlerts(true); });
     const w = await page.evaluate(() => { const g = state.signals.find(s => s.key === 'w'); return g && g.resultR; });
-    check(typeof w === 'number' && w > 1.9, '1W result never arrived: ' + w);
-    // Copies kept with the old +1R (before 2026-11-09) are re-priced on the next refresh.
-    const rp = await page.evaluate(() => {
-      ['f', 'i', 'j'].forEach(k => { const g = state.signals.find(s => s.key === k); if (g) Object.assign(g, { outcome: '+1R', resultR: 0.9725 }); });
-      state.ui.sigAutoAt = 0;
-      return autoRefreshAlerts(true).then(() => ['f', 'i', 'j'].map(k => { const g = state.signals.find(s => s.key === k); return g ? [g.outcome, g.resultR] : null; }));
+    // 2R on a 1W fib: +1R less 0.0826 / 10 = 0.99174R
+    check(typeof w === 'number' && Math.abs(w - 0.99174) < 1e-4, '1W result never arrived: ' + w);
+    // Copies kept by v.179 (breakeven, timeout, open) or before it (+2R) are re-priced: recent
+    // ones on the next refresh, older ones (w, 20 days back, past the refresh window) on the
+    // first refresh after an app update.
+    const rp = await page.evaluate(async () => {
+      const old = { f: { outcome: 'BE', resultR: -0.0131 }, i: { outcome: 'timeout', resultR: null }, j: { outcome: 'open', resultR: null }, w: { outcome: '+2R', resultR: 1.9917 } };
+      Object.keys(old).forEach(k => { const g = state.signals.find(s => s.key === k); if (g) Object.assign(g, old[k]); });
+      const now = () => Object.keys(old).map(k => { const g = state.signals.find(s => s.key === k); return g ? [g.outcome, g.resultR] : null; });
+      state.ui.sigAutoAt = 0; await autoRefreshAlerts(true);
+      const same = now();
+      state.ui.sigPriceVer = '2026-11-09.179'; state.ui.sigAutoAt = 0; await autoRefreshAlerts(true);
+      return { same, upd: now(), ver: state.ui.sigPriceVer === appVersion() };
     });
-    check(rp[0] && rp[0][0] === 'BE' && Math.abs(rp[0][1] + 0.0131) < 1e-4 && JSON.stringify(rp.slice(1)) === '[["timeout",null],["open",null]]', 'old +1R copies re-priced: ' + JSON.stringify(rp));
+    check(rp.same.slice(0, 3).every(x => x && x[0] === '+1R' && Math.abs(x[1] - 0.9725) < 1e-4) && rp.same[3] && rp.same[3][0] === '+2R', 'recent copies re-priced, old one waits for an update: ' + JSON.stringify(rp.same));
+    check(rp.upd[3] && rp.upd[3][0] === '+1R' && Math.abs(rp.upd[3][1] - 0.9917) < 1e-4 && rp.ver, 'old copy re-priced after an app update: ' + JSON.stringify(rp));
     // Fib levels: L1-L4 come back from the alert's key and entry (the scanner's own
     // levels for this XAUT alert).
     const lv = await page.evaluate(() => {
@@ -2365,8 +2378,8 @@ async function fibTlRun(seed) {
       state.ui.sigKind = 'zone'; out.zone = sigLvlPairs(pairs).length; state.ui.sigLvl = '';
       return out;
     });
-    // L4: risk 3.6883 on 4127.38 = 0.08936%; 2R less 0.0826% / 0.08936% = 2 - 0.9243
-    const l4r = 2 - 0.0826 / (Math.abs(4127.3808 - 4123.6925) / 4127.3808 * 100);
+    // L4: risk 3.6883 on 4127.38 = 0.08936%; its 2R is out at the TP, 1R less 0.0826% / 0.08936% = 1 - 0.9243
+    const l4r = 1 - 0.0826 / (Math.abs(4127.3808 - 4123.6925) / 4127.3808 * 100);
     check(wi.w && wi.w.L4 && Math.abs(wi.w.L4.resultR - l4r) < 1e-3, 'L4 what-if R: ' + JSON.stringify(wi.w && wi.w.L4));
     check(wi.w && wi.w.L2 && wi.w.L2.outcome === 'not reached' && wi.w.L2.resultR === null, 'L2 not reached: ' + JSON.stringify(wi.w && wi.w.L2));
     check(wi.all.length === 2 && wi.all.every(x => x.same), 'All levels keeps every alert as is: ' + JSON.stringify(wi.all));
@@ -2513,7 +2526,7 @@ async function sigRedesignRun(seed) {
     await page.waitForFunction(() => (state.signals || []).some(g => g.symbol === 'RBFIBUSD'), null, { timeout: 8000 });
     // Fill and close times: 1h and 6h after the alert, so 5 hours in the trade.
     const rb = await page.evaluate(() => { const g = state.signals.find(x => x.symbol === 'RBFIBUSD'); return [g.endTs - g.fillTs, g.outcome]; });
-    check(rb[0] === 5 * 3600 && rb[1] === '+2R', 'rebuilt record keeps fill / close times: ' + JSON.stringify(rb));
+    check(rb[0] === 5 * 3600 && rb[1] === '+1R', 'rebuilt record keeps fill / close times: ' + JSON.stringify(rb));
     const once = Object.assign({}, hits);
     await page.evaluate(() => autoRefreshAlerts(true));
     await page.evaluate(() => autoRefreshAlerts(true));
