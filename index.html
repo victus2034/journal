@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-09.180">
+  <meta name="app-version" content="2026-11-10.181">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -766,6 +766,7 @@
         <details id="sigRulesPanel" class="card sig-panel" data-fold="rules" open>
           <summary><span class="sig-chev">&#9662;</span><h3>How each trade is played</h3><span id="sigRulesSum" class="sig-sum"></span><span id="sigRulesReset" class="sig-ph-r"></span></summary>
           <div class="sig-row"><span class="sig-lab">Exit at</span><div class="sig-ctl"><div id="sigTgtBar"></div></div></div>
+          <div class="sig-row"><span class="sig-lab">SL</span><div class="sig-ctl"><div id="sigSlBar"></div></div></div>
           <div class="sig-row"><span class="sig-lab">Move SL</span><div class="sig-ctl"><div id="sigStopBar"></div></div></div>
           <div class="sig-row"><span class="sig-lab">Trail TP</span><div class="sig-ctl"><div id="sigTrailBar"></div></div></div>
           <div class="sig-row"><span class="sig-lab">Hold</span><div class="sig-ctl"><div id="sigHoldBar"></div></div></div>
@@ -4038,7 +4039,7 @@
       }
       const hint = document.getElementById('sigPeriodHint');
       if (hint) hint.innerText = state.ui.sigDay ? `Showing ${state.ui.sigDay} only. Click the day again to go back.` : ((range.from || range.to) ? `${range.from || "start"} → ${range.to || "now"}` : "All available history");
-      const rawPairs = matchSignals(kind), allPairs = sigLvlPairs(rawPairs);
+      const rawPairs = matchSignals(kind), allPairs = sigSlPairs(sigLvlPairs(rawPairs));
       // Coins: which ones the filter keeps, from the coins in this channel and period.
       const chanPairs = state.ui.sigChan ? allPairs.filter(pr => chanKey(pr.signal) === state.ui.sigChan) : allPairs;
       const coinCounts = sigCoinCounts(chanPairs.filter(pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to)));
@@ -4091,6 +4092,7 @@
       const mfSig = mktFilter();
       renderMktFilterBar('sigMktBar', 'mktCalSignals');
       renderSigTgtBar();
+      renderSigSlBar();
       renderSigStopBar();
       renderSigTrailBar();
       renderSigHoldBar();
@@ -4124,7 +4126,7 @@
       sigView.pairs = skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs;
       sigView.preCoin = coinKeep ? (skipTiny ? preCoin.filter(pr => !isTiny(pr)) : preCoin) : sigView.pairs;
       // The coins in view first, then the rest for the report's Top coins compare.
-      if (sigTgt()) { const ps = sigView.pairs.concat(coinKeep ? sigView.preCoin.filter(pr => !coinKeep(pr.signal)) : []); setTimeout(() => { tgtLoad(ps); nseLoad(ps); }, 0); }
+      if (sigTgt()) { const ps = sigView.pairs.concat(coinKeep ? sigView.preCoin.filter(pr => !coinKeep(pr.signal)) : []); setTimeout(() => { slcLoad(slcWant(ps)); tgtLoad(ps.concat(slCmpPairs(sigView.pairs))); nseLoad(ps); }, 0); }
       renderSignalEdgeAnalysis(sigView.pairs);
       drawSigSec(sigCurSec());
 
@@ -4255,9 +4257,10 @@
           ? { label: "entered · open", why: "The scanner saw price reach this entry, but the trade was still inside its 6-hour evaluation window when the report ran. It gets its result in the next report." }
           : { label: "entered · unclear", why: "The scanner saw this entry, but stop and target traded inside the same candle and it could not tell which came first, so it gives no result." };
         const zoneNote = zr ? `<div class="text-[10px] font-normal text-slate-500" title="The scanner graded the ${esc(zr.from)} alert on this same zone and counts this one as a repeat of it">zone result · ${esc(zr.from)} alert${zr.outcome && zr.resultR != null ? " · " + esc(outcomeTxt[zr.outcome] || zr.outcome) : ""}</div>` : "";
-        const lvlTag = sig.lvlWhatIf ? `<div class="text-[10px] font-normal text-sky-300" title="This alert entered at another level; this is the scanner's what-if as if entered at ${sig.lvlWhatIf}, same stop">what-if ${sig.lvlWhatIf}</div>` : "";
+        const lvlTag = (sig.lvlWhatIf ? `<div class="text-[10px] font-normal text-sky-300" title="This alert entered at another level; this is the scanner's what-if as if entered at ${sig.lvlWhatIf}, same stop">what-if ${sig.lvlWhatIf}</div>` : "")
+          + (sig.slWhatIf ? `<div class="text-[10px] font-normal text-sky-300" title="Played with this SL (${esc(sig.slShort || "")}) in the numbers above; the result here is the scanner's, on the alert's own SL ${sig.slFrom && sig.slFrom.stop != null ? (+sig.slFrom.stop).toFixed(4) : ""}">SL ${esc(sig.slShort || "")}${sig.slWait ? " · reading" : sig.slNone ? " · none" : ""}</div>` : "");
         const sigHtml = lvlTag + (sig.filled === false ? '<span class="text-slate-600 font-normal" title="Price never reached the entry zone">—</span>'
-          : (ownR != null) ? `<span class="${rCls(ownR)}">${rfmt(ownR)}</span>${pTag(pctOfR(ownR, sp))}${sig.outcome ? `<div class="text-[10px] font-normal text-slate-500">${esc(outcomeTxt[sig.outcome] || sig.outcome)}</div>` : ""}`
+          : (ownR != null) ? `<span class="${rCls(ownR)}">${rfmt(ownR)}</span>${pTag(pctOfR(ownR, sig.slFrom ? slPct(sig.slFrom) : sp))}${sig.outcome ? `<div class="text-[10px] font-normal text-slate-500">${esc(outcomeTxt[sig.outcome] || sig.outcome)}</div>` : ""}`
           : (zr && sigRv != null) ? `<span class="${rCls(sigRv)}">${rfmt(sigRv)}</span>${pTag(pctOfR(sigRv, sp))}${zoneNote}`
           : zr ? `<span class="text-slate-500 font-normal" title="The ${esc(zr.from)} alert on this same zone was entered; its result comes in the next scanner report">zone entered · open</span>${zoneNote}`
           : `<span class="text-slate-500 font-normal" title="${esc((entered ? enteredLabel : gs).why)}">${esc((entered ? enteredLabel : gs).label)}</span>`);
@@ -9313,7 +9316,8 @@
     }
     function outcomeBase(pair) {
       const sig = pair.signal;
-      if (sig.filled === false) return null;
+      // Played with another SL: the scanner's result is for its own stop, so the walk decides.
+      if (sig.filled === false || sig.slWhatIf) return null;
       if (typeof sig.resultR === "number" && isFinite(sig.resultR)) return { r: sig.resultR, source: "scanner" };
       if (sig.hasReportR) return null;
       const r = sigR(sig);
@@ -9438,6 +9442,263 @@
       if (d.mode === "shift") { d[pc ? "shAtP" : "shAt"] = Number(m[1]); d[pc ? "shToP" : "shTo"] = Number(m[2]); }
       state.ui.sigStop = d; state.ui.sigStop = stopRaw(); state.ui.sigTgt = tk;
       save(); renderSignalsTable();
+    }
+    // ---- "SL": which stop each alert is played with (lakky, 2026-11-10: "so many ways to
+    // see sl ... below or above candle, wick"). Alert = the alert's own stop. Wick / Body:
+    // the most recent closed candle of the alert's own timeframe before the alert whose
+    // wick (low for a buy, high for a sell) or body (open / close) is at least the gap
+    // past the entry; the stop sits on it (the scanner's trendline stop is the closer of
+    // the two at 0.75%: "Wick or body"). Fixed %: that % from entry. Fib alerts also get
+    // Next level (just past the next deeper level, the scanner's 4H / 1D rule since
+    // 27 Oct) and L4 box (every level on the strong box's stop, the rule before it).
+    // With a fixed Exit at only (like Move SL): each alert is walked again with the new
+    // stop, so the headline, breakdowns, Move SL, Trail TP, Hold, Fees and the Demo
+    // account all follow it. Candles come from Delta, read once per alert and kept.
+    const SIG_SLS = [{ k: "", label: "Alert" }, { k: "wick", label: "Wick" }, { k: "body", label: "Body" }, { k: "near", label: "Wick or body" }, { k: "pct", label: "Fixed %" }, { k: "next", label: "Next level", fib: 1 }, { k: "box", label: "L4 box", fib: 1 }];
+    const SL_CANDLE = { wick: 1, body: 1, near: 1 };
+    const SL_GAPS = [0.25, 0.5, 0.75, 1, 1.5], SL_PCTS = [0.5, 1, 1.5, 2, 3], SL_DEF = { mode: "", gap: 0.75, pct: 1 };
+    // How many candles of the alert's timeframe are looked back for a wick or body that far.
+    const SLC_BARS = 300;
+    function slRaw(src) {
+      const v = src !== undefined ? src : state.ui.sigSl, d = v && typeof v === "object" ? v : {};
+      const pick = (v, list, def) => list.indexOf(Number(v)) !== -1 ? Number(v) : def;
+      return { mode: SIG_SLS.some(x => x.k && x.k === d.mode) ? d.mode : "", gap: pick(d.gap, SL_GAPS, SL_DEF.gap), pct: pick(d.pct, SL_PCTS, SL_DEF.pct) };
+    }
+    // The rule for a type with these settings: { k, mode, v, label }, or null for the alert's own.
+    function slRuleOf(mode, d) {
+      d = slRaw(d);
+      if (mode === "wick" || mode === "body" || mode === "near") {
+        const what = mode === "wick" ? "wick" : mode === "body" ? "body" : "wick or body";
+        return { k: mode + "|" + d.gap, mode, v: d.gap, short: (mode === "near" ? "Wick/body" : mode === "wick" ? "Wick" : "Body") + " " + d.gap + "%", label: "SL at the last candle " + what + " " + d.gap + "%+ past entry" };
+      }
+      if (mode === "pct") return { k: "pct|" + d.pct, mode, v: d.pct, short: d.pct + "%", label: "SL " + d.pct + "% from entry" };
+      if (mode === "next") return { k: "next", mode, short: "Next level", label: "SL past the next fib level" };
+      if (mode === "box") return { k: "box", mode, short: "L4 box", label: "SL on the L4 box stop" };
+      return null;
+    }
+    // The SL picked on the bar (fib-only types count only on Fib alerts), with or without a target.
+    function sigSlPicked() {
+      const d = slRaw(), t = SIG_SLS.find(x => x.k === d.mode);
+      return !t || !t.k || (t.fib && sigKind() !== "fib") ? null : slRuleOf(d.mode, d);
+    }
+    // In force: only with a fixed Exit at. Scanner keeps the alert's own stop.
+    function sigSlOn() { return sigTgt() ? sigSlPicked() : null; }
+    function setSigSl(k, v) {
+      const d = slRaw(); d[k] = k === "mode" ? String(v || "") : Number(v);
+      state.ui.sigSl = slRaw(d);
+      // A new stop needs a fixed target: 1R, the target fib and trendline alerts print.
+      if (k === "mode" && state.ui.sigSl.mode && !sigTgt()) state.ui.sigTgt = "1R";
+      save(); renderSignalsTable();
+    }
+    // One click on the SL compare grid: an SL type and a target together.
+    function setSigSlTgt(mode, tk) {
+      const d = slRaw(); d.mode = mode; state.ui.sigSl = slRaw(d); state.ui.sigTgt = tk;
+      save(); renderSignalsTable();
+    }
+    // Pure: the candles of the alert's timeframe, built from Delta's (resMin each) when
+    // Delta has no such size (1W from days, Monday on; 1M from days by calendar month,
+    // UTC), closed before t0 (ms) only. The oldest built one may be partial: dropped.
+    function slcBars(rows, tf, resMin, t0) {
+      const D = 86400000, W = 7 * D, tfMs = tf * 60000;
+      const ks = rows.map(k => ({ t: k.time * 1000, o: +k.open, h: +k.high, l: +k.low, c: +k.close })).filter(k => k.o > 0 && k.h > 0 && k.l > 0 && k.c > 0).sort((a, b) => a.t - b.t);
+      if (resMin === tf) return ks.filter(k => k.t + tfMs <= t0);
+      const month = tf === 43200, from = t => { if (month) { const d = new Date(t); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); } return tf === 10080 ? Math.floor((t - 4 * D) / W) * W + 4 * D : Math.floor(t / tfMs) * tfMs; };
+      const to = b => { if (month) { const d = new Date(b); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); } return b + tfMs; };
+      const out = [];
+      ks.forEach(k => {
+        const b = from(k.t), last = out[out.length - 1];
+        if (last && last.t === b) { last.h = Math.max(last.h, k.h); last.l = Math.min(last.l, k.l); last.c = k.c; }
+        else out.push({ t: b, o: k.o, h: k.h, l: k.l, c: k.c });
+      });
+      const closed = out.filter(k => to(k.t) <= t0);
+      return closed.length && ks.length && closed[0].t === from(ks[0].t) && ks[0].t !== closed[0].t ? closed.slice(1) : closed;
+    }
+    // Pure: walking back from the newest candle, each new low (buy) or high (sell) of the
+    // wicks (w) and of the bodies (b). The first one at least the gap past an entry is
+    // the most recent candle that far, for any entry and gap, so a few numbers per alert
+    // serve every level and gap.
+    function slcStairs(bars, s) {
+      const w = [], b = [], keep = (list, v) => { if (!list.length || (s > 0 ? v < list[list.length - 1] : v > list[list.length - 1])) list.push(v); };
+      for (let i = bars.length - 1; i >= 0; i--) {
+        const k = bars[i];
+        keep(w, s > 0 ? k.l : k.h);
+        keep(b, s > 0 ? Math.min(k.o, k.c) : Math.max(k.o, k.c));
+      }
+      return { w, b };
+    }
+    function slcKey(sig) { return "slc|" + [sig.key || sig.symbol + "|" + sig.date + "|" + sig.time, sig.side === "short" ? "short" : "long", sig.timeframe].join("|"); }
+    // Pure: the stop rule r gives this alert: a price, null (none this way) or undefined
+    // (its candles are not read yet). st = its kept candle steps (slcStairs).
+    function slStopFor(sig, r, st) {
+      const e = signalEntry(sig), s = sig.side === "short" ? -1 : 1;
+      if (!(e > 0)) return null;
+      let v = null;
+      if (r.mode === "pct") v = e * (1 - s * r.v / 100);
+      else if (r.mode === "next" || r.mode === "box") v = slFibStop(sig, r.mode);
+      else {
+        if (isNseSig(sig)) return null;
+        if (!st) return undefined;
+        if (st.none || !Array.isArray(st.w)) return null;
+        const T = e * (1 - s * r.v / 100), first = list => { const x = (list || []).find(p => s > 0 ? p <= T : p >= T); return x != null ? x : null; };
+        const w = first(st.w), b = first(st.b);
+        v = r.mode === "wick" ? w : r.mode === "body" ? b : w == null ? b : b == null ? w : s > 0 ? Math.max(w, b) : Math.min(w, b);
+      }
+      return v != null && isFinite(v) && v > 0 && (s > 0 ? v < e : v > e) ? v : null;
+    }
+    // Fib: from the alert's own fib (the key's top and its entry level). Both boxes are
+    // 0.11 of the range; the pad past a level is 25% of a box, as the scanner's.
+    function slFibStop(sig, mode) {
+      const g = fibGeom(sig);
+      if (!g) return null;
+      const k = sig.lvlWhatIf || g.entryLevel, rk = FIB_RATIOS[k], e = signalEntry(sig);
+      if (!rk) return null;
+      const span = (e - g.top) / rk, box = FIB_RATIOS.L4 - FIB_RATIOS.L3, pad = box * 0.25;
+      const next = { L1: FIB_RATIOS.L2, L2: FIB_RATIOS.L3, L3: FIB_RATIOS.L4, L4: FIB_RATIOS.L4 + box };
+      return g.top + ((mode === "box" ? FIB_RATIOS.L4 : next[k]) + pad) * span;
+    }
+    // The alert played with rule r: a copy with that stop, kept per alert and rule so
+    // caches keyed by the alert keep working. Its scanner result is for the old stop,
+    // so it has none (outcomeBase); the walk decides. slWait: candles not read yet;
+    // slNone: no stop this way (no candle that far back, not a fib, NSE).
+    const sigSlMemo = new WeakMap();
+    function sigWithSl(sig, r) {
+      const stop = slStopFor(sig, r, tgtCache()[slcKey(sig)]);
+      let m = sigSlMemo.get(sig);
+      if (!m) { m = {}; sigSlMemo.set(sig, m); }
+      const ck = String(stop);
+      if (!m[r.k] || m[r.k].ck !== ck) m[r.k] = { ck, sig: Object.assign({}, sig, { stop: stop == null ? null : stop, slWhatIf: r.k, slShort: r.short, slFrom: sig, slWait: stop === undefined ? true : undefined, slNone: stop === null ? true : undefined, fillTs: undefined, endTs: undefined }) };
+      return m[r.k].sig;
+    }
+    function sigSlPairs(pairs) {
+      const r = sigSlOn();
+      return r ? pairs.map(pr => Object.assign({}, pr, { signal: sigWithSl(pr.signal, r) })) : pairs;
+    }
+    // Reads the candles before each alert that has none kept yet, four at a time.
+    let slcBusy = false, slcProg = null, slcFail = 0;
+    const slcTried = {};
+    async function slcOne(sig) {
+      const tf = tfMinutes(sig.timeframe), t0 = tgtAlertMs(sig), s = sig.side === "short" ? -1 : 1;
+      const res = AI_RES.slice().reverse().find(x => tf % x[0] === 0) || AI_RES[0];
+      const n = Math.min(1900, Math.ceil(SLC_BARS * tf / res[0]));
+      const rows = await tgtRead(tgtSym(sig.symbol), res[1], t0 - n * res[0] * 60000, t0);
+      const bars = slcBars(rows, tf, res[0], t0);
+      return bars.length ? Object.assign({ n: bars.length }, slcStairs(bars, s)) : { none: "no candles on Delta" };
+    }
+    async function slcLoad(sigs) {
+      if (slcBusy || !tgtReady || navigator.onLine === false) return;
+      const seen = {}, todo = sigs.filter(g => {
+        const k = slcKey(g);
+        if (seen[k] || slcTried[k] || tgtCache()[k] || isNseSig(g) || !tfMinutes(g.timeframe) || !isFinite(tgtAlertMs(g))) return false;
+        return (seen[k] = true);
+      });
+      if (!todo.length) return;
+      slcBusy = true; slcProg = { done: 0, total: todo.length };
+      let ok = 0, missed = 0, drawn = Date.now();
+      const worker = async () => {
+        while (todo.length) {
+          if (navigator.onLine === false || (!ok && missed >= 12)) { todo.forEach(x => { slcTried[slcKey(x)] = 1; }); slcFail += todo.length; todo.length = 0; break; }
+          const g = todo.shift(), k = slcKey(g);
+          slcTried[k] = 1;
+          try { tgtCache()[k] = await slcOne(g); ok++; } catch (e) { slcFail++; missed++; }
+          slcProg.done++;
+          if (Date.now() - drawn > 1500) { drawn = Date.now(); tgtSave(); renderSignalsTable(); }
+        }
+      };
+      try { await Promise.all([1, 2, 3, 4].map(worker)); } finally { slcBusy = false; slcProg = null; tgtSave(); renderSignalsTable(); }
+    }
+    // The alerts whose candles a view still needs: its own, and every one the SL grid wants.
+    function slcWant(pairs) {
+      const out = [];
+      pairs.forEach(pr => { const g = pr.signal; if (g.slWait) out.push(g.slFrom); });
+      if (slCmpOn && sigTgt()) pairs.forEach(pr => out.push(pr.signal.slFrom || pr.signal));
+      return out;
+    }
+    // With the SL grid reading: each alert and every SL type's copy of it, for the price walks.
+    function slCmpPairs(pairs) {
+      if (!slCmpOn || !sigTgt()) return [];
+      const rules = slCmpRules().filter(Boolean), out = [];
+      pairs.forEach(pr => {
+        const g = pr.signal.slFrom || pr.signal;
+        // The Alert row: the alert itself, with its own stop.
+        if (g !== pr.signal) out.push({ signal: g });
+        rules.forEach(r => { const s = sigWithSl(g, r); if (s !== pr.signal && !s.slWait && !s.slNone) out.push({ signal: s }); });
+      });
+      return out;
+    }
+    // One line on the SL in force: how many alerts wait for candles or have no stop this way.
+    function slCoverBits(pairs) {
+      const r = sigSlOn();
+      if (!r) return [];
+      const wait = pairs.filter(pr => pr.signal.slWait).length, none = pairs.filter(pr => pr.signal.slNone).length, bits = [];
+      if (wait) bits.push(wait + " waiting for candles to set the SL" + (slcProg ? " (" + slcProg.done + "/" + slcProg.total + ")" : navigator.onLine === false ? "" : ""));
+      if (none) bits.push(none + " with no " + (SL_CANDLE[r.mode] ? "candle " + r.v + "% past entry in " + SLC_BARS + " candles" : r.mode === "pct" ? "price" : "fib level") + " (no result)");
+      if (slcFail && !slcProg) bits.push(slcFail + " candle read" + (slcFail === 1 ? "" : "s") + " failed");
+      return bits;
+    }
+    function renderSigSlBar() {
+      const bar = document.getElementById('sigSlBar');
+      if (!bar) return;
+      const d = slRaw(), fib = sigKind() === 'fib', types = SIG_SLS.filter(x => !x.fib || fib), cur = types.some(x => x.k === d.mode) ? d.mode : "";
+      bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
+      bar.title = "Which stop each alert is played with. Alert: its own. Wick / Body: the last closed candle of the alert's timeframe, before the alert, whose wick or body is at least the gap past the entry (below a buy, above a sell); the stop sits on it. Wick or body: the closer of the two (the scanner's trendline stop, 0.75%). Fixed %: that far from entry. Fib alerts: Next level (just past the next deeper level, the scanner's rule now) or L4 box (every level on the strong box's stop, the old rule). Works with a fixed Exit at: R is measured on the new stop.";
+      let h = '<div class="flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (sigTgt() ? '' : ' opacity-60') + '">'
+        + types.map(x => '<button type="button" data-sl="' + x.k + '" onclick="setSigSl(\'mode\',\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? PLAY_ON : PLAY_OFF) + '">' + esc(x.label) + '</button>').join('') + '</div>';
+      const sel = (id, k, list, v, txt) => '<select id="' + id + '" onchange="setSigSl(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">' + list.map(x => '<option value="' + x + '"' + (x === v ? ' selected' : '') + '>' + txt(x) + '</option>').join('') + '</select>';
+      if (SL_CANDLE[cur]) h += '<span class="text-slate-500">at least</span>' + sel('sigSlGap', 'gap', SL_GAPS, d.gap, x => x + '%') + '<span class="text-slate-500">past entry</span>';
+      if (cur === 'pct') h += sel('sigSlPct', 'pct', SL_PCTS, d.pct, x => x + '%') + '<span class="text-slate-500">from entry</span>';
+      bar.innerHTML = h;
+    }
+    // "SL compared" (Edge & breakdowns): the same alerts with every SL type, at every
+    // fixed target, total R, with each type's average stop size. Every type needs its
+    // own walk, so it reads only once asked (kept on the device after).
+    let slCmpOn = false;
+    function slCmpRules() { const d = slRaw(), fib = sigKind() === 'fib'; return SIG_SLS.filter(x => !x.fib || fib).map(x => slRuleOf(x.k, d)); }
+    function slCmpRead() { slCmpOn = true; Object.keys(slcTried).forEach(k => delete slcTried[k]); slcFail = 0; renderSignalsTable(); }
+    function renderSlGrid(pairs, tgs, nf, cur) {
+      const rules = slCmpRules(), cfg = stopRaw(), td = trailRaw();
+      const mvOf = tg => stopRuleOf(cfg, tg), trOf = tg => trailRuleOf(td, tg);
+      const head = '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">SL compared</h3><span class="text-[11px] text-slate-500">Total R with each stop at each exit · ' + holdTxt() + '</span></div>';
+      const seen = new Set(), origs = [];
+      pairs.forEach(pr => { const g = pr.signal.slFrom || pr.signal; if (!seen.has(g) && !isNseSig(g) && tgtBase({ signal: g })) { seen.add(g); origs.push(g); } });
+      const sets = [];
+      let need = 0, noStop = 0;
+      origs.forEach(g => {
+        const sigs = rules.map(r => r ? sigWithSl(g, r) : g);
+        if (sigs.some(s => s.slNone)) { noStop++; return; }
+        const ws = sigs.map(s => s.slWait ? null : tgtPath(s));
+        if (ws.some(w => !w)) { need++; return; }
+        if (ws.some(w => w.none)) return;
+        const row = sigs.map((s, i) => tgs.map(tg => tgtScore(s, ws[i], tg, nf, mvOf(tg), trOf(tg))));
+        if (row.every(x => x.every(Boolean))) sets.push({ row, sl: sigs.map(slPct) });
+      });
+      const prog = slcProg ? 'reading candles ' + slcProg.done + '/' + slcProg.total + '… ' : tgtProg ? 'reading prices ' + tgtProg.done + '/' + tgtProg.total + '… ' : '';
+      const btn = !slCmpOn || (!slcProg && !tgtProg && need) ? '<button type="button" id="sigSlCmpRead" onclick="slCmpRead()" class="underline text-amber-300">' + (slCmpOn ? 'Retry' : 'Read prices for every SL') + '</button>' : '';
+      const status = '<p class="text-[11px] text-slate-500 mb-2">' + prog + (need ? need + ' alert' + (need === 1 ? '' : 's') + ' still need prices for some SL types' + (slCmpOn ? '' : ' (each SL is its own walk on Delta\'s candles, about ' + (need * (rules.length - 1)) + ' reads, kept on the device after)') + ' ' : '') + btn + '</p>';
+      if (!sets.length) return head + status + '<p class="text-slate-500">' + (sigTgt() ? 'No alert has a result with every SL yet.' : 'Pick an Exit at target to read prices.') + '</p></div>';
+      const cells = rules.map((r, i) => tgs.map((tg, j) => {
+        const rs = sets.map(x => x.row[i][j].r), w = rs.filter(v => v > 0).length;
+        return { tot: sum(rs), avg: avg(rs), wr: w / rs.length * 100 };
+      }));
+      const slAvg = rules.map((r, i) => avg(sets.map(x => x.sl[i])));
+      let best = null;
+      cells.forEach((row, i) => row.forEach((c, j) => { if (!best || c.tot > best.c.tot) best = { c, i, j }; }));
+      const curK = sigSlOn() ? sigSlOn().k : "", tmode = r => r ? r.mode : "";
+      let h = head + status + '<div class="overflow-x-auto"><table id="sigSlGrid" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">SL</th><th class="pr-2 text-right">Avg SL</th>'
+        + tgs.map(tg => '<th class="pr-2 text-right">' + esc(tg.k) + '</th>').join('') + '</tr></thead><tbody>';
+      rules.forEach((r, i) => {
+        const rk = r ? r.k : "";
+        h += '<tr data-sl="' + esc(tmode(r)) + '" class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold whitespace-nowrap' + (sigTgt() && curK === rk ? ' text-amber-300' : ' text-slate-300') + '" title="' + esc(r ? r.label : "The alert's own SL") + '">' + esc(r ? (SIG_SLS.find(x => x.k === r.mode) || {}).label + (SL_CANDLE[r.mode] ? ' ' + r.v + '%' : r.mode === 'pct' ? ' ' + r.v + '%' : '') : 'Alert') + '</td>'
+          + '<td class="pr-2 text-right text-slate-400">' + (slAvg[i] != null ? slAvg[i].toFixed(2) + '%' : '—') + '</td>';
+        tgs.forEach((tg, j) => {
+          const c = cells[i][j], on = sigTgt() && curK === rk && cur === tg.k, top = best.i === i && best.j === j;
+          h += '<td data-cell="' + esc(tg.k + '~' + tmode(r)) + '" onclick="setSigSlTgt(\'' + tmode(r) + '\',\'' + tg.k + '\')" title="' + esc((r ? r.label : "Alert's own SL") + ' · exit at ' + tg.k + ': ' + pct(c.wr) + ' won, ' + rfmt(c.avg) + ' a trade. Click to score the whole tab with it.') + '" class="pr-2 py-1 text-right cursor-pointer hover:bg-white/5 '
+            + (c.tot >= 0 ? 'text-emerald-400' : 'text-rose-400') + (on ? ' bg-amber-500/15 font-bold' : '') + (top ? ' underline' : '') + '">' + rfmt(c.tot) + '</td>';
+        });
+        h += '</tr>';
+      });
+      const mv = sigStopRule(), tr = sigTrailRule();
+      return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. R is measured on each row\'s own stop, so a tighter stop makes each R smaller (fees and the 0.05% stop slippage weigh more in R). Avg SL = the average stop distance from entry. '
+        + (mv || tr ? 'Move SL / Trail TP as picked (R targets in R, % targets in %). ' : '') + (noStop ? noStop + ' alert' + (noStop === 1 ? ' has' : 's have') + ' no stop for some type (no candle that far back in ' + SLC_BARS + ' candles) and ' + (noStop === 1 ? 'is' : 'are') + ' left out. ' : '') + 'Crypto only. Click a cell to use it on the whole tab.</p></div>';
     }
     // Runs fn with the picked target applied to every alert result it reads.
     function inSigScope(fn) { const was = tgtScope; tgtScope = true; try { return fn(); } finally { tgtScope = was; } }
@@ -9739,7 +10000,7 @@
     function tgtWantTimes() { return typeof sigCurSec === "function" && !!sigView && sigCurSec() === "demo"; }
     // A "not reached" kept before its fill window ended (older builds kept it for good).
     function tgtNoneEarly(sig) { return tgtAlertMs(sig) + TGT_BARS * tfMinutes(sig.timeframe) * 60000 > Date.now(); }
-    function tgtRetry() { Object.keys(tgtTried).forEach(k => delete tgtTried[k]); tgtFail = 0; renderSignalsTable(); }
+    function tgtRetry() { Object.keys(tgtTried).forEach(k => delete tgtTried[k]); Object.keys(slcTried).forEach(k => delete slcTried[k]); tgtFail = 0; slcFail = 0; renderSignalsTable(); }
     // One line on what the target covers, for the strip and the compare card.
     function tgtCoverNote(pairs) {
       const graded = pairs.filter(pr => tgtBase(pr));
@@ -9754,6 +10015,7 @@
         if (open) bits.push(`${open} still open (no TP or SL yet)`);
       }
       if (tgtProg) bits.push(`reading prices ${tgtProg.done}/${tgtProg.total}…`);
+      slCoverBits(pairs).forEach(b => bits.push(b));
       if (navigator.onLine === false) bits.push("offline: prices load once the connection is back");
       return { text: bits.join(" · "), fail: !tgtProg && tgtFail ? tgtFail : 0 };
     }
@@ -10190,9 +10452,10 @@
       bar.innerHTML = h;
     }
     // Back to the scanner's own results: no fixed target, stop moves, trail or fee change.
-    function sigRulesDefault() { const d = stopRaw(); return !sigTgt() && d.mode === "off" && !trailRaw().on && sigHold() === "tp" && state.ui.sigNoFee !== true; }
+    function sigRulesDefault() { const d = stopRaw(); return !sigTgt() && d.mode === "off" && !slRaw().mode && !trailRaw().on && sigHold() === "tp" && state.ui.sigNoFee !== true; }
     function resetSigRules() {
       const d = stopRaw(); d.mode = "off"; state.ui.sigStop = d;
+      const l = slRaw(); l.mode = ""; state.ui.sigSl = l;
       const t = trailRaw(); t.on = false; state.ui.sigTrail = t;
       state.ui.sigTgt = ""; state.ui.sigHold = "tp"; state.ui.sigNoFee = false;
       save(); renderSignalsTable();
@@ -10230,6 +10493,7 @@
         const tg = sigTgt(), mv = sigStopRule(), tr = sigTrailRule(), bits = [];
         if (tg) {
           bits.push('exit at ' + tg.k);
+          if (sigSlOn()) bits.push(sigSlOn().label);
           bits.push(mv ? mv.label : 'stop stays');
           if (tr) bits.push(tr.label);
           bits.push(holdTxt());
@@ -10238,7 +10502,7 @@
         rules.innerText = bits.join(' · ');
       }
       const reset = document.getElementById('sigRulesReset');
-      if (reset) reset.innerHTML = sigRulesDefault() ? '' : '<button type="button" id="sigRulesResetBtn" onclick="event.preventDefault();event.stopPropagation();resetSigRules()" title="Back to the scanner\'s own results: Exit at Scanner, Move SL and Trail TP off, Till TP / SL, with fees">Reset</button>';
+      if (reset) reset.innerHTML = sigRulesDefault() ? '' : '<button type="button" id="sigRulesResetBtn" onclick="event.preventDefault();event.stopPropagation();resetSigRules()" title="Back to the scanner\'s own results: Exit at Scanner, the alert\'s own SL, Move SL and Trail TP off, Till TP / SL, with fees">Reset</button>';
     }
     // "Exit targets compared": the same alerts at every target, side by side.
     function renderTgtCompare(pairs) {
@@ -10284,6 +10548,7 @@
         + (mvR ? 'moved as Move SL says (' + esc(mvR.label) + ', from the candle after the one that reached it)' : 'no breakeven move') + (trR ? '; ' + esc(trR.label) + ' (R targets in R, % targets in %)' : '') + (mvR || trR ? '; the Scanner row keeps the scanner\'s own rules' : '')
         + '; a candle touching the stop and the target counts as the stop. ' + (sigHold() === 'tp' ? 'Held till the target or the stop; an alert with neither yet is left out. ' : 'Not hit in 20 candles of the alert\'s timeframe: closed there (Time exit). ') + fees + ' Click a row to score the whole tab at that exit.</p>';
       h += renderStopGrid(pairs, tgs, nf, cur, mvR, sigStopUnit() === "%" ? trOf({ p: 1 }) : trOf({ r: 1 }));
+      h += renderSlGrid(pairs, tgs, nf, cur);
       host.innerHTML = h;
     }
     // "Move SL compared": every fixed target with no move, breakeven and stop shifts,
@@ -11737,13 +12002,20 @@
           line.innerHTML = 'Move SL (' + esc(sigStopRule().label) + ') works with a fixed Exit at; the scanner\'s own results keep its own stop rules · <button type="button" class="underline" onclick="setSigTgt(\'2R\')">exit at 2R</button>';
           strip.appendChild(line);
         }
+        if (!tg && sigSlPicked()) {
+          const line = document.createElement('div');
+          line.id = 'sigSlNote';
+          line.className = 'col-span-full text-[11px] font-mono text-amber-300';
+          line.innerHTML = 'SL (' + esc(sigSlPicked().label) + ') works with a fixed Exit at; the scanner\'s own results keep the alert\'s SL · <button type="button" class="underline" onclick="setSigTgt(\'1R\')">exit at 1R</button>';
+          strip.appendChild(line);
+        }
         if (tg) {
           const cv = tgtCoverNote(pairs);
           const line = document.createElement('div');
           line.id = 'sigTgtNote';
           line.className = 'col-span-full text-[11px] font-mono text-amber-300';
-          const mv = sigStopMove(), tr = sigTrail();
-          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (' + (mv ? esc(mv.label) : tr ? 'no Move SL' : 'same stop, no breakeven') + (tr ? ', ' + esc(tr.label) : '') + ', ' + holdTxt() + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
+          const mv = sigStopMove(), tr = sigTrail(), sl = sigSlOn();
+          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (' + (sl ? esc(sl.label) + ', ' : '') + (mv ? esc(mv.label) : tr ? 'no Move SL' : sl ? 'no breakeven' : 'same stop, no breakeven') + (tr ? ', ' + esc(tr.label) : '') + ', ' + holdTxt() + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
           strip.appendChild(line);
         }
         // Say why numbers are missing instead of leaving dashes unexplained.
@@ -11769,7 +12041,7 @@
     // "Edge & breakdowns": best and worst setups, and R by score, channel, hour and more.
     function renderSigEdge(pairs) {
       renderTgtCompare(pairs);
-      setTimeout(() => { tgtLoad(pairs); nseLoad(pairs); }, 0);
+      setTimeout(() => { slcLoad(slcWant(pairs)); tgtLoad(pairs.concat(slCmpPairs(pairs))); nseLoad(pairs); }, 0);
       renderSetups(pairs);
       const note = pairs.length ? "Only alerts with a result from the scanner (or an exit price you add) can be measured." : "Import some signals first.";
       // Cards in the order they stack. A breakdown with a single group says nothing
@@ -14291,6 +14563,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-10.181', pr: 95, title: 'Signals: pick the SL, and compare them', pts: ['Signals → SL: play every alert with its own SL, the last candle wick or body at least 0.25-1.5% past entry, the closer of the two, a fixed %, or for fibs the next level / L4 box', 'Works with any fixed Exit at; the headline, breakdowns, Move SL, Trail TP and Demo account follow it', 'Edge & breakdowns: SL compared, total R for every SL at every target, with each one\'s average SL size; tap a cell to use it'] },
       { v: '2026-11-09.180', pr: 94, title: 'Signals: a fib or trendline TP counts in full', pts: ['Scanner results: a fib or trendline that reached its TP (1R, as the alert prints) is +1R, even if price came back to breakeven later; a fib that reached 2R is +1R too', 'BE only where the breakeven stop closed the trade before the TP; Exit at is unchanged: SL or the fixed TP, or with Trail TP the trailing stop'] },
       { v: '2026-11-09.179', pr: 93, title: 'Signals: fib Scanner results and Trail TP closer to real', pts: ['Fib Scanner results now follow the scanner: a fib that reached 1R and came back to breakeven counts as breakeven, not +1R (backtest 1 Jan - 9 Nov, all fibs: +18R before, -281R now)', 'Exit at walks an older alert on 15m candles for its first ~18 days; 1h-1d candles hid pullbacks and Trail TP looked far better (RS TL BR 3R + trail: +273R before, ~+165R now)', 'Walks kept from before are read once more, so the first open after updating takes longer'] },
       { v: '2026-11-09.178', pr: 92, title: 'Signals keep the whole history from 1 Jun', pts: ['After Delete all signals, Load scanner alerts (Last 1 month) or a cleared store, a device kept only a month of alerts (Fib 531 instead of 2,623), and fewer each day', 'Now a device that lacks part of the rebuilt history takes it in whole again, by itself'] },
