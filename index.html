@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-10.181">
+  <meta name="app-version" content="2026-11-10.182">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -4126,6 +4126,7 @@
       sigView.pairs = skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs;
       sigView.preCoin = coinKeep ? (skipTiny ? preCoin.filter(pr => !isTiny(pr)) : preCoin) : sigView.pairs;
       // The coins in view first, then the rest for the report's Top coins compare.
+      tgtGen++;
       if (sigTgt()) { const ps = sigView.pairs.concat(coinKeep ? sigView.preCoin.filter(pr => !coinKeep(pr.signal)) : []); setTimeout(() => { slcLoad(slcWant(ps)); tgtLoad(ps.concat(slCmpPairs(sigView.pairs))); nseLoad(ps); }, 0); }
       renderSignalEdgeAnalysis(sigView.pairs);
       drawSigSec(sigCurSec());
@@ -9575,7 +9576,7 @@
     }
     // Reads the candles before each alert that has none kept yet, four at a time.
     let slcBusy = false, slcProg = null, slcFail = 0;
-    const slcTried = {};
+    const slcTried = {}, slcQ = [], slcQIn = {};
     async function slcOne(sig) {
       const tf = tfMinutes(sig.timeframe), t0 = tgtAlertMs(sig), s = sig.side === "short" ? -1 : 1;
       const res = AI_RES.slice().reverse().find(x => tf % x[0] === 0) || AI_RES[0];
@@ -9585,19 +9586,26 @@
       return bars.length ? Object.assign({ n: bars.length }, slcStairs(bars, s)) : { none: "no candles on Delta" };
     }
     async function slcLoad(sigs) {
-      if (slcBusy || !tgtReady || navigator.onLine === false) return;
+      if (!tgtReady || navigator.onLine === false) return;
       const seen = {}, todo = sigs.filter(g => {
         const k = slcKey(g);
-        if (seen[k] || slcTried[k] || tgtCache()[k] || isNseSig(g) || !tfMinutes(g.timeframe) || !isFinite(tgtAlertMs(g))) return false;
+        tgtWant[k] = tgtGen;
+        if (seen[k] || slcQIn[k] || slcTried[k] || tgtCache()[k] || isNseSig(g) || !tfMinutes(g.timeframe) || !isFinite(tgtAlertMs(g))) return false;
         return (seen[k] = true);
       });
       if (!todo.length) return;
-      slcBusy = true; slcProg = { done: 0, total: todo.length };
+      todo.forEach(g => { slcQIn[slcKey(g)] = 1; });
+      // Already reading: this view's alerts first (see tgtLoad).
+      if (slcBusy) { slcQ.unshift(...todo); if (slcProg) slcProg.total += todo.length; return; }
+      slcQ.push(...todo);
+      slcBusy = true; slcProg = { done: 0, total: slcQ.length };
       let ok = 0, missed = 0, drawn = Date.now();
       const worker = async () => {
-        while (todo.length) {
-          if (navigator.onLine === false || (!ok && missed >= 12)) { todo.forEach(x => { slcTried[slcKey(x)] = 1; }); slcFail += todo.length; todo.length = 0; break; }
-          const g = todo.shift(), k = slcKey(g);
+        while (slcQ.length) {
+          if (navigator.onLine === false || (!ok && missed >= 12)) { slcQ.forEach(x => { slcTried[slcKey(x)] = 1; delete slcQIn[slcKey(x)]; }); slcFail += slcQ.length; slcQ.length = 0; break; }
+          const g = slcQ.shift(), k = slcKey(g);
+          delete slcQIn[k];
+          if ((tgtWant[k] || 0) < tgtGen - 1) { slcProg.total--; continue; }
           slcTried[k] = 1;
           try { tgtCache()[k] = await slcOne(g); ok++; } catch (e) { slcFail++; missed++; }
           slcProg.done++;
@@ -9930,12 +9938,40 @@
     // on 1h-1d candles the pullbacks inside a candle are invisible, and Trail TP read far
     // better than it was: RS TL BR 3R + trail +273R vs +165R on 15m).
     function tgtNeedsHead(sig, hold) { return tgtSpan(sig, hold).r[0] > TGT_HEAD_RES; }
-    async function tgtRead(sym, res, from, to) {
+    // One read from Delta. Busy (429) or a server error: asked again, twice, a little later.
+    async function tgtReadRaw(sym, res, from, to) {
       const url = DELTA_BASE + "/v2/history/candles?resolution=" + res + "&symbol=" + encodeURIComponent(sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
-      const r = await fetch(url);
-      const j = await r.json().catch(() => null);
-      if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad reply");
-      return j.result;
+      for (let i = 0; ; i++) {
+        const r = await fetch(url);
+        if ((r.status === 429 || r.status >= 500) && i < 2) { await new Promise(done => setTimeout(done, 800 * (i + 1))); continue; }
+        const j = await r.json().catch(() => null);
+        if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad reply");
+        return j.result;
+      }
+    }
+    // Candles are read in fixed blocks (TGT_CHUNK candles of one size, from a fixed
+    // start) and kept for the session, so every alert on a coin shares them (lakky,
+    // 2026-11-10: a month of fib alerts with a candle SL took ~1,300 reads, one or two
+    // per alert, and filled slowly or not at all). The block still forming is read
+    // again after a minute.
+    const TGT_CHUNK = 1800, tgtChunks = {};
+    async function tgtRead(sym, res, from, to) {
+      const rm = (AI_RES.find(x => x[1] === res) || [])[0];
+      if (!rm) return tgtReadRaw(sym, res, from, to);
+      const step = TGT_CHUNK * rm * 60000, a = Math.floor(from / 1000), b = Math.ceil(to / 1000), now = Date.now(), ps = [];
+      for (let c = Math.floor(from / step); c * step <= to && c * step <= now; c++) {
+        const cs = c * step, ce = cs + step, k = sym + "|" + res + "|" + c;
+        let m = tgtChunks[k];
+        if (!m || (m.open && now - m.at > 60000)) {
+          const made = m = tgtChunks[k] = { open: ce > now, at: now, p: tgtReadRaw(sym, res, cs, Math.min(ce - 1000, now)) };
+          // A failed read is not kept; an empty block is asked again after a minute too.
+          made.p.then(rows => { if (!rows.length) made.open = true; }, () => { if (tgtChunks[k] === made) delete tgtChunks[k]; });
+        }
+        ps.push(m.p);
+      }
+      const out = [], got = {};
+      (await Promise.all(ps)).forEach(rows => rows.forEach(row => { if (row.time >= a && row.time <= b && !got[row.time]) { got[row.time] = 1; out.push(row); } }));
+      return out;
     }
     async function tgtOne(sig, hold) {
       // 20 candles: the alert's window. Till TP / SL: everything from the alert to now.
@@ -9958,12 +9994,16 @@
     }
     // Reads the candles of every graded alert in view that has none yet, four at a
     // time, and redraws as they come in. Finished windows are kept on this device.
+    // tgtGen: one per draw of the Signals tab; tgtWant: the draw that last asked for each read.
+    let tgtGen = 0;
+    const tgtWant = {}, tgtQ = [], tgtQIn = {};
     async function tgtLoad(pairs) {
       // Offline, every read would fail: wait for the connection (the "online" event redraws).
-      if (tgtBusy || !tgtReady || navigator.onLine === false) return;
+      if (!tgtReady || navigator.onLine === false) return;
       const seen = {}, hold = sigHold(), times = tgtWantTimes();
       const todo = pairs.map(pr => pr.signal).filter(g => {
         const k = tgtHoldKey(g, hold), c = tgtCache()[k];
+        tgtWant[k] = tgtGen;
         // A summary kept before Move SL has no path: read it once more. So is a "no
         // candles" kept before the bStocks names were known (tgtStale), and a "Till TP /
         // SL" one kept before Trail TP (no tr).
@@ -9972,15 +10012,24 @@
         if (seen[k] || (c && ((c.none && !tgtStale(g, c) && !tgtNoneEarly(g)) || (Array.isArray(c.p) && (hold !== "tp" || c.tr) && (c.ft != null || !times) && (c.fh || !tgtNeedsHead(g, hold))))) || tgtTried[k] || tgtWhy(g) || !tgtBase({ signal: g })) return false;
         return (seen[k] = true);
       });
-      if (!todo.length) return;
-      tgtBusy = true; tgtProg = { done: 0, total: todo.length };
+      // Already reading: what this view needs goes to the front of the line (a setting
+      // changed mid-read used to wait for every read of the old setting first).
+      const fresh = todo.map(g => ({ g, hold, k: tgtHoldKey(g, hold) })).filter(it => !tgtQIn[it.k]);
+      if (!fresh.length) return;
+      fresh.forEach(it => { tgtQIn[it.k] = 1; });
+      if (tgtBusy) { tgtQ.unshift(...fresh); if (tgtProg) tgtProg.total += fresh.length; return; }
+      tgtQ.push(...fresh);
+      tgtBusy = true; tgtProg = { done: 0, total: tgtQ.length };
       let drawn = Date.now(), ok = 0, missed = 0;
       const worker = async () => {
-        while (todo.length) {
+        while (tgtQ.length) {
           // The connection dropped mid-read (or Delta is unreachable): stop instead of
           // firing thousands of reads that all fail. The rest stays unread for Retry.
-          if (navigator.onLine === false || (!ok && missed >= 12)) { todo.forEach(x => { tgtTried[tgtHoldKey(x, hold)] = 1; }); tgtFail += todo.length; todo.length = 0; break; }
-          const g = todo.shift(), k = tgtHoldKey(g, hold);
+          if (navigator.onLine === false || (!ok && missed >= 12)) { tgtQ.forEach(x => { tgtTried[x.k] = 1; delete tgtQIn[x.k]; }); tgtFail += tgtQ.length; tgtQ.length = 0; break; }
+          const it = tgtQ.shift(), g = it.g, k = it.k, hold = it.hold;
+          delete tgtQIn[k];
+          // No view asked for it since the settings changed: not read.
+          if ((tgtWant[k] || 0) < tgtGen - 1) { tgtProg.total--; continue; }
           tgtTried[k] = 1;
           try {
             const w = await tgtOne(g, hold);
@@ -14563,6 +14612,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-10.182', pr: 96, title: 'Signals: Exit at and SL results fill much faster', pts: ['A month of fib alerts with a Wick / Body SL needed ~1,000+ price reads from Delta, one or two per alert, and the results stayed empty for minutes', 'Candles are now read in blocks shared by every alert on a coin: about a fifth of the reads, same results', 'A setting changed mid-read is read first (old reads are dropped), and a busy Delta is asked again'] },
       { v: '2026-11-10.181', pr: 95, title: 'Signals: pick the SL, and compare them', pts: ['Signals → SL: play every alert with its own SL, the last candle wick or body at least 0.25-1.5% past entry, the closer of the two, a fixed %, or for fibs the next level / L4 box', 'Works with any fixed Exit at; the headline, breakdowns, Move SL, Trail TP and Demo account follow it', 'Edge & breakdowns: SL compared, total R for every SL at every target, with each one\'s average SL size; tap a cell to use it'] },
       { v: '2026-11-09.180', pr: 94, title: 'Signals: a fib or trendline TP counts in full', pts: ['Scanner results: a fib or trendline that reached its TP (1R, as the alert prints) is +1R, even if price came back to breakeven later; a fib that reached 2R is +1R too', 'BE only where the breakeven stop closed the trade before the TP; Exit at is unchanged: SL or the fixed TP, or with Trail TP the trailing stop'] },
       { v: '2026-11-09.179', pr: 93, title: 'Signals: fib Scanner results and Trail TP closer to real', pts: ['Fib Scanner results now follow the scanner: a fib that reached 1R and came back to breakeven counts as breakeven, not +1R (backtest 1 Jan - 9 Nov, all fibs: +18R before, -281R now)', 'Exit at walks an older alert on 15m candles for its first ~18 days; 1h-1d candles hid pullbacks and Trail TP looked far better (RS TL BR 3R + trail: +273R before, ~+165R now)', 'Walks kept from before are read once more, so the first open after updating takes longer'] },
