@@ -3032,7 +3032,7 @@ async function demoDeepRun(seed) {
     check(JSON.stringify(ex.holds) === '[15,4800]' && ex.card.startsWith(ex.want), 'Exit at 1R: A 15m, B on time after 4800m: ' + JSON.stringify(ex));
     // A walk kept before times (no ft): not read again on another section, read once here.
     const n0 = calls;
-    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; delete w.te; delete w.pt; delete w.tta; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); setSigSec('edge'); renderAll(); });
+    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; delete w.te; delete w.pt; delete w.tta; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); Object.keys(tgtChunks).forEach(k => delete tgtChunks[k]); setSigSec('edge'); renderAll(); });
     await page.waitForTimeout(400);
     check(calls === n0, 'no re-read outside the Demo account: ' + (calls - n0));
     await page.evaluate(() => { setSigSec('demo'); });
@@ -3040,7 +3040,7 @@ async function demoDeepRun(seed) {
     check(calls === n0 + 2 && await page.evaluate(() => JSON.stringify(demoRows.map(x => x.hold))) === '[15,4800]', 'each old walk read once for its times: ' + (calls - n0));
     // Read again with the candles gone: the old walk is kept, not lost.
     gone = true;
-    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); renderAll(); });
+    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); Object.keys(tgtChunks).forEach(k => delete tgtChunks[k]); renderAll(); });
     await page.waitForFunction(n => !tgtBusy, null, { timeout: 10000 });
     await page.waitForTimeout(300);
     const kept = await page.evaluate(() => Object.values(tgtCache()).map(w => Array.isArray(w.p)));
@@ -3049,6 +3049,7 @@ async function demoDeepRun(seed) {
     // the Scanner row leaves it out (lakky, 2026-11-08: the whole section came up empty).
     gone = false;
     const edge = await page.evaluate(() => {
+      Object.keys(tgtChunks).forEach(k => delete tgtChunks[k]); // the empty blocks read while the candles were gone
       state.signals.push(Object.assign({}, state.signals[0], { id: 'c', key: 'kc', filled: false, outcome: 'no fill', resultR: null }));
       try { setSigSec('edge'); renderAll(); return 'ok'; } catch (e) { return 'threw ' + e.message; }
     });
@@ -4957,7 +4958,9 @@ async function slTypeRun(seed) {
     let st = await strip();
     check(/exited at 1R \(SL at the last candle wick 0\.75%\+ past entry, no breakeven, closed after 20 candles\)/.test(st) && /Total R \+1\.84R/.test(st), 'wick 0.75% at 1R: ' + st);
     check(/1 with no candle 0\.75% past entry/.test(st), 'the NSE alert has no candle stop: ' + st);
-    check(reads['4h'] === 2, 'one 4H read per crypto alert, none for NSE: ' + reads['4h']);
+    // Candles come in fixed blocks shared by a coin's alerts: one or two per coin here.
+    const slcReads = reads['4h'];
+    check(slcReads >= 2 && slcReads <= 4, '4H blocks read per crypto coin, none for NSE: ' + slcReads);
     const kept = await page.evaluate(() => ({ a: tgtCache()['slc|ka|long|4H'], b: tgtCache()['slc|kb|short|4H'], stops: sigView.pairs.map(pr => pr.signal.stop) }));
     // The forming 04:00 candle (low 95 / high 210) is left out; older flat candles add no new step.
     check(JSON.stringify(kept.a && kept.a.w) === '[99.6,98.8,98.6]' && JSON.stringify(kept.a && kept.a.b) === '[100.4,99.8,99.2]', 'A steps: ' + JSON.stringify(kept.a));
@@ -4969,12 +4972,12 @@ async function slTypeRun(seed) {
     // Body: no new candle read. A 1 - 0.0826/0.8 = +0.8968; B the same => +1.79R
     await page.click('#sigSlBar button[data-sl="body"]');
     await page.waitForFunction(() => /Total R\s+\+1\.79R/.test(document.getElementById('sigEdgeStrip').innerText) && !/reading/.test((document.getElementById('sigTgtNote') || {}).innerText || ''), null, { timeout: 10000 });
-    check(reads['4h'] === 2, 'the kept candles serve every SL type: ' + reads['4h']);
+    check(reads['4h'] === slcReads, 'the kept candles serve every SL type: ' + reads['4h']);
     // Wick at 0.25%+: A 99.6 (0.4%) 1 - 0.2065 = +0.7935; B 201 (0.5%) 1 - 0.1652 = +0.8348 => +1.63R
     await page.click('#sigSlBar button[data-sl="wick"]');
     await page.selectOption('#sigSlGap', '0.25');
     await page.waitForFunction(() => /Total R\s+\+1\.63R/.test(document.getElementById('sigEdgeStrip').innerText) && !/reading/.test((document.getElementById('sigTgtNote') || {}).innerText || ''), null, { timeout: 10000 });
-    check(reads['4h'] === 2, 'a new gap needs no new read either: ' + reads['4h']);
+    check(reads['4h'] === slcReads, 'a new gap needs no new read either: ' + reads['4h']);
     await page.selectOption('#sigSlGap', '0.75');
     // The grid: every SL type at every target on the same alerts, once asked.
     check(/Read prices for every SL/.test(await page.evaluate(() => document.getElementById('sigTgtCmp').innerText)), 'the grid waits to be asked');
@@ -5307,12 +5310,15 @@ async function tgtHeadRun(seed) {
     check(r.fh === 1 && JSON.stringify(r.head) === '["Trail TP",0.9495]', '15m head: Trail TP ends at +1R on the dip: ' + JSON.stringify(r.head));
     check(JSON.stringify(r.coarse) === '["Trail TP",2.44875]', 'one 1h candle hides the dip: ' + JSON.stringify(r.coarse));
     check(JSON.stringify(r.again) === '["Trail TP",0.9495]', 'a walk kept without the head is read again: ' + JSON.stringify(r.again));
-    // Reads: 15m from the alert, then 1h from a whole-hour cut ~18.75 days later, to now;
-    // twice for tgtOne and the re-read, none for the walk already kept with the head.
-    const cut = Math.floor((t0 * 1000 + 1800 * 900e3) / 3600e3) * 3600;
-    const want = JSON.stringify([['15m', t0 - Q, cut], ['1h', cut]]);
-    const got = JSON.stringify(reads.slice(0, 2).map((x, i) => i ? x.slice(0, 2) : x));
-    check(reads.length === 4 && got === want && JSON.stringify(reads.slice(2, 4).map(x => x.slice(0, 2))) === JSON.stringify([['15m', t0 - Q], ['1h', cut]]), 'two reads per walk: ' + JSON.stringify(reads) + ' want ' + want);
+    // Reads: fixed blocks of 1800 candles (15m from the alert to the whole-hour cut ~18.75
+    // days later, 1h from there to now), each read once: the second walk and the re-read
+    // share them.
+    const cut = Math.floor((t0 * 1000 + 1800 * 900e3) / 3600e3) * 3600, nowS = Date.now() / 1000;
+    const blocks = res => reads.filter(x => x[0] === res).sort((a, b) => a[1] - b[1]), size = { '15m': 1800 * 900, '1h': 1800 * 3600 };
+    const whole = reads.every(x => x[1] % size[x[0]] === 0 && x[2] <= x[1] + size[x[0]] - 1), once = new Set(reads.map(x => x[0] + x[1])).size === reads.length;
+    const m = blocks('15m'), h = blocks('1h');
+    const covers = m.length && m[0][1] <= t0 - Q && m[m.length - 1][2] >= cut - 1 && h.length && h[0][1] <= cut && h[h.length - 1][2] >= nowS - 120;
+    check(whole && once && covers, 'whole blocks, each read once, covering the walk: ' + JSON.stringify(reads) + ' t0 ' + t0 + ' cut ' + cut);
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
