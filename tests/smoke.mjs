@@ -4901,6 +4901,174 @@ async function stopMoveRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals Move SL (BE / SL shift): re-scored by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('move sl: ' + e); });
 }
+// "SL" (lakky, 2026-11-10: "so many ways to see sl ... below or above candle, wick"):
+// each alert played with another stop, re-scored by hand. Two 4H trendline alerts at
+// 10:00 IST (04:30 UTC) on 1 Oct. 4H candles before it (newest first; the 04:00 UTC one
+// is still forming and must be ignored):
+//   A long 100 (alert SL 99, 1%): 00:00 low 99.6 body 100.4 · 20:00 low 98.8 body 99.8 ·
+//     16:00 low 98.6 body 99.2. At 0.75%+ (99.25): wick 98.8 (1.2%), body 99.2 (0.8%).
+//   B short 200 (alert SL 202, 1%): 00:00 high 201 body 199.8 · 20:00 high 201.8 body 201 ·
+//     16:00 high 202.4 body 201.6. At 0.75%+ (201.5): wick 201.8 (0.9%), body 201.6 (0.8%).
+// 15m walk: A fills, +1.6% (high 101.6), +2.1% (high 102.1), then low 98.5 (every stop).
+// B fills, -1.25% (low 197.5), then high 202.5 (every stop).
+async function slTypeRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const t0 = Date.parse('2026-10-01T10:00:00+05:30') / 1000, Q = 900, H4 = 14400, c0 = Date.parse('2026-10-01T00:00:00Z') / 1000;
+  const pre = {
+    // [time, open, high, low, close]
+    AUSD: [[c0 + H4, 100, 100.2, 95, 100], [c0, 100.5, 101, 99.6, 100.4], [c0 - H4, 99.8, 100.6, 98.8, 100.5], [c0 - 2 * H4, 99.4, 99.9, 98.6, 99.2]],
+    BUSD: [[c0 + H4, 200, 210, 199, 200], [c0, 199.5, 201, 199, 199.8], [c0 - H4, 200.2, 201.8, 199.5, 201], [c0 - 2 * H4, 201.6, 202.4, 200.5, 200.9]]
+  };
+  for (let i = 3; i < 10; i++) { pre.AUSD.push([c0 - i * H4, 101, 101.5, 101, 101.2]); pre.BUSD.push([c0 - i * H4, 199, 199.2, 198.5, 199]); }
+  const walk = { AUSD: [[t0, 100.2, 99.9, 100.1], [t0 + Q, 101.6, 100, 101.5], [t0 + 2 * Q, 102.1, 101, 101.2], [t0 + 3 * Q, 101, 98.5, 98.6]],
+    BUSD: [[t0, 200.1, 199.8, 199.9], [t0 + Q, 200.2, 197.5, 198], [t0 + 2 * Q, 202.5, 199, 202.4]] };
+  const reads = { '4h': 0, '15m': 0 };
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const u = new URL(route.request().url()), sym = u.searchParams.get('symbol'), res = u.searchParams.get('resolution');
+    if (!pre[sym]) return route.abort();
+    reads[res] = (reads[res] || 0) + 1;
+    const body = res === '4h' ? pre[sym].map(([time, open, high, low, close]) => ({ time, open, high, low, close }))
+      : walk[sym].map(([time, high, low, close]) => ({ time, open: close, high, low, close }));
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: body }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const strip = () => page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+  const cell = (tgt, sl) => page.$eval(`#sigSlGrid td[data-cell="${tgt}~${sl}"]`, td => td.innerText.trim()).catch(() => null);
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => {
+      const sg = (id, sym, side, entry, stop, r, mkt) => ({ id, key: 'k' + id, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: sym, side, score: '', market: mkt || 'CRYPTO', timeframe: '4H', channel: (mkt || 'CRYPTO') + ' 4H',
+        filled: true, outcome: r > 0 ? '+1R' : 'SL', resultR: r, hasReportR: true, price: entry, stop, entry });
+      state.signals = [sg('a', 'A', 'long', 100, 99, 0.9), sg('b', 'B', 'short', 200, 202, -1), sg('c', 'RELIANCE', 'long', 100, 99, 0.9, 'NSE')];
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '', sigHold: '20', sigNoFee: false, sigStop: { mode: 'off' }, sigTrail: { on: false } });
+      state.ui.sigDemo = Object.assign({}, state.ui.sigDemo || {}, { real: false });
+      switchTab('signals'); renderAll();
+    });
+    // Picking an SL with the Scanner exit moves to 1R (a new stop needs a fixed target).
+    await page.click('#sigSlBar button[data-sl="wick"]');
+    check(await page.evaluate(() => state.ui.sigTgt) === '1R', 'an SL with no target picks 1R: ' + await page.evaluate(() => state.ui.sigTgt));
+    await page.waitForFunction(n => { const t = (document.getElementById('sigTgtNote') || {}).innerText || ''; return /2 of 2 graded alerts have price data/.test(t) && !/reading|waiting for candles/.test(t); }, null, { timeout: 15000 });
+    // 1R on the wick: A 1 - 0.0826/1.2 = +0.9312; B 1 - 0.0826/0.9 = +0.9082 => +1.84R
+    let st = await strip();
+    check(/exited at 1R \(SL at the last candle wick 0\.75%\+ past entry, no breakeven, closed after 20 candles\)/.test(st) && /Total R \+1\.84R/.test(st), 'wick 0.75% at 1R: ' + st);
+    check(/1 with no candle 0\.75% past entry/.test(st), 'the NSE alert has no candle stop: ' + st);
+    check(reads['4h'] === 2, 'one 4H read per crypto alert, none for NSE: ' + reads['4h']);
+    const kept = await page.evaluate(() => ({ a: tgtCache()['slc|ka|long|4H'], b: tgtCache()['slc|kb|short|4H'], stops: sigView.pairs.map(pr => pr.signal.stop) }));
+    // The forming 04:00 candle (low 95 / high 210) is left out; older flat candles add no new step.
+    check(JSON.stringify(kept.a && kept.a.w) === '[99.6,98.8,98.6]' && JSON.stringify(kept.a && kept.a.b) === '[100.4,99.8,99.2]', 'A steps: ' + JSON.stringify(kept.a));
+    check(JSON.stringify(kept.b && kept.b.w) === '[201,201.8,202.4]' && JSON.stringify(kept.b && kept.b.b) === '[199.8,201,201.6]', 'B steps: ' + JSON.stringify(kept.b));
+    check(JSON.stringify(kept.stops) === '[98.8,201.8,null]', 'stops in play: ' + JSON.stringify(kept.stops));
+    // The table says which SL the numbers use.
+    const tag = await page.evaluate(() => [...document.querySelectorAll('#signalsTableBody tr')].map(tr => tr.innerText).join(' | '));
+    check(/SL Wick 0\.75%/.test(tag), 'alert rows tagged with the SL: ' + tag.slice(0, 200));
+    // Body: no new candle read. A 1 - 0.0826/0.8 = +0.8968; B the same => +1.79R
+    await page.click('#sigSlBar button[data-sl="body"]');
+    await page.waitForFunction(() => /Total R\s+\+1\.79R/.test(document.getElementById('sigEdgeStrip').innerText) && !/reading/.test((document.getElementById('sigTgtNote') || {}).innerText || ''), null, { timeout: 10000 });
+    check(reads['4h'] === 2, 'the kept candles serve every SL type: ' + reads['4h']);
+    // Wick at 0.25%+: A 99.6 (0.4%) 1 - 0.2065 = +0.7935; B 201 (0.5%) 1 - 0.1652 = +0.8348 => +1.63R
+    await page.click('#sigSlBar button[data-sl="wick"]');
+    await page.selectOption('#sigSlGap', '0.25');
+    await page.waitForFunction(() => /Total R\s+\+1\.63R/.test(document.getElementById('sigEdgeStrip').innerText) && !/reading/.test((document.getElementById('sigTgtNote') || {}).innerText || ''), null, { timeout: 10000 });
+    check(reads['4h'] === 2, 'a new gap needs no new read either: ' + reads['4h']);
+    await page.selectOption('#sigSlGap', '0.75');
+    // The grid: every SL type at every target on the same alerts, once asked.
+    check(/Read prices for every SL/.test(await page.evaluate(() => document.getElementById('sigTgtCmp').innerText)), 'the grid waits to be asked');
+    // A device that never read the alerts on their own SL (no Scanner visit) reads them for the Alert row too.
+    // Fixed 0.5% (A 99.5, B 201), so no other row shares the alerts' own stops.
+    await page.evaluate(() => { setSigSl('pct', 0.5); ['ka|long|100|99', 'kb|short|200|202'].forEach(k => { delete tgtCache()[k]; delete tgtTried[k]; }); });
+    await page.click('#sigSlCmpRead');
+    await page.waitForFunction(() => document.getElementById('sigSlGrid') && !/reading|still need/.test(document.getElementById('sigTgtCmp').innerText.split('SL compared')[1] || 'reading'), null, { timeout: 15000 });
+    // Avg SL and 1R: Alert 1.00% +1.83R; Wick (1.2 + 0.9) / 2; Body / Wick or body 0.8%; 1% = the alert's stop.
+    const rows = await page.$$eval('#sigSlGrid tbody tr', trs => trs.map(tr => tr.dataset.sl + ':' + tr.children[1].innerText.trim()));
+    check(JSON.stringify(rows) === '[":1.00%","wick:1.05%","body:0.80%","near:0.80%","pct:0.50%"]', 'grid rows and avg SL: ' + JSON.stringify(rows));
+    // 3R (nothing reaches it): every stop hit. Alert -1.1321 - 1.1331; Wick A -1 - 0.988*0.05/1.2 - 0.0826/1.2 = -1.11,
+    // B -1 - 1.009*0.05/0.9 - 0.0826/0.9 = -1.14783 => -2.26R; Body A -1.16525, B -1 - 1.008*0.05/0.8 - 0.10325 = -1.16625 => -2.33R
+    // 2R: Alert A +1.9174 (102.1), B SL -1.1331 => +0.78R; Body A 101.6 = 2R +1.89675, B 2R = 196.8 not reached, SL -1.16625 => +0.73R
+    // Fixed 0.5%: 1R both reached, 1 - 0.0826/0.5 = +0.8348 each => +1.67R; 3R: A 101.5 reached +2.8348, B stopped at 201:
+    // -1 - 1.005*0.05/0.5 - 0.1652 = -1.2657 => +1.57R
+    const want = { '1R~': '+1.83R', '1R~wick': '+1.84R', '1R~body': '+1.79R', '1R~near': '+1.79R', '1R~pct': '+1.67R', '3R~pct': '+1.57R', '3R~': '-2.27R', '3R~wick': '-2.26R', '3R~body': '-2.33R', '2R~': '+0.78R', '2R~body': '+0.73R' };
+    for (const [k, v] of Object.entries(want)) { const [t, s] = k.split('~'); const got = await cell(t, s); check(got === v, 'grid ' + k + ': ' + got + ' (want ' + v + ')'); }
+    check(!(await page.$('#sigSlGrid tr[data-sl="next"]')), 'fib-only types are not offered on trendline alerts');
+    // Click a cell: SL type and target together; the demo account follows.
+    await page.click('#sigSlGrid td[data-cell="2R~body"]');
+    const picked = await page.evaluate(() => ({ t: state.ui.sigTgt, s: state.ui.sigSl.mode }));
+    check(picked.t === '2R' && picked.s === 'body', 'grid click sets both: ' + JSON.stringify(picked));
+    st = await strip();
+    check(/Total R \+0\.73R/.test(st), 'body at 2R strip: ' + st);
+    await page.evaluate(() => setSigSec('demo'));
+    await page.waitForFunction(() => document.getElementById('sigDemoOut') && /Final balance/i.test(document.getElementById('sigDemoOut').innerText));
+    // $100 at 1% risk: A +1.89675R -> 101.89675; B 1.0189675 x -1.16625 => 100.71
+    const demo = await page.evaluate(() => document.getElementById('sigDemoOut').innerText.replace(/\s+/g, ' '));
+    check(/\$100\.71/.test(demo), 'demo account follows the SL: ' + demo.slice(0, 200));
+    await page.evaluate(() => setSigSec('edge'));
+    // Back to Scanner: the alert's own SL and result, and a note on the SL picked.
+    await page.evaluate(() => setSigTgt(''));
+    st = await strip();
+    check(/Total R \+0\.80R/.test(st) && /SL \(SL at the last candle body 0\.75%\+ past entry\) works with a fixed Exit at/.test(st), 'scanner keeps the alert SL: ' + st);
+    check(/candle body/.test(await page.evaluate(() => document.getElementById('sigRulesSum').innerText)) === false, 'folded rules line names no SL without a target');
+    await page.evaluate(() => setSigTgt('1R'));
+    check(/SL at the last candle body/.test(await page.evaluate(() => document.getElementById('sigRulesSum').innerText)), 'folded rules line names the SL');
+    // Reset puts the alert's own SL back.
+    await page.click('#sigRulesResetBtn');
+    check(await page.evaluate(() => slRaw().mode) === '' && await page.evaluate(() => state.ui.sigTgt) === '', 'Reset clears the SL');
+    // Pure checks.
+    const pure = await page.evaluate(() => {
+      const fib = (key, entry, side, lvl) => Object.assign({ key, kind: 'fib', side: side || 'long', entry, stop: 1 }, lvl ? { lvlWhatIf: lvl } : {});
+      const at = (sig, m) => { const v = slStopFor(sig, slRuleOf(m, {})); return v == null ? v : +v.toFixed(6); };
+      // Buy fib top 110, base 10 (range 100): L1 76, L2 65, L3 55, L4 44; pad = 25% of a box (11) = 2.75.
+      const L3 = fib('fib|X|1d|1|1000|110|2', 55), L1 = fib('fib|X|1d|1|1000|110|1|L1', 76), L4 = fib('fib|X|1d|1|1000|110|2|L4', 44), L2c = fib('fib|X|1d|1|1000|110|2', 65, 'long', 'L2');
+      // Sell fib top 10 (low), base 110: L3 at 65, next = 10 + 0.6875 x 100 = 78.75.
+      const S3 = fib('fib|X|4h|-1|1000|10|2', 65, 'short');
+      const out = { L3: [at(L3, 'next'), at(L3, 'box')], L1: [at(L1, 'next'), at(L1, 'box')], L4: [at(L4, 'next'), at(L4, 'box')], L2c: at(L2c, 'next'), S3: at(S3, 'next'),
+        pct: [at({ entry: 100, side: 'long' }, 'pct'), at({ entry: 200, side: 'short' }, 'pct')], tl: at({ key: 'tl|1', kind: 'trendline', entry: 100, side: 'long' }, 'next') };
+      // Built candles: 1M from days (calendar months, UTC), the forming month and a partial oldest one left out;
+      // 1W from Monday. Days from 15 Jul to 10 Oct 2026, alert on 10 Oct.
+      const D = 86400, rows = [];
+      for (let t = Date.UTC(2026, 6, 15) / 1000; t <= Date.UTC(2026, 9, 10) / 1000; t += D) rows.push({ time: t, open: 10, high: 11 + (t === Date.UTC(2026, 7, 20) / 1000 ? 5 : 0), low: 9, close: 10.5 });
+      const mo = slcBars(rows, 43200, 1440, Date.UTC(2026, 9, 10, 6));
+      const wk = slcBars(rows, 10080, 1440, Date.UTC(2026, 9, 10, 6));
+      out.months = mo.map(k => new Date(k.t).toISOString().slice(0, 10) + ':' + k.h);
+      out.weeks = [wk.length, new Date(wk[0].t).toISOString().slice(0, 10), new Date(wk[wk.length - 1].t).getUTCDay(), new Date(wk[wk.length - 1].t).toISOString().slice(0, 10)];
+      // Random candles: the kept steps pick the same stop as walking back candle by candle (the scanner's candle_stop).
+      let bad = 0, seed = 7;
+      const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+      for (let n = 0; n < 400; n++) {
+        const s = rnd() < 0.5 ? 1 : -1, bars = [];
+        let p = 100;
+        for (let i = 0; i < 60; i++) { const o = p, c = p * (1 + (rnd() - 0.5) * 0.04); bars.push({ o, c, h: Math.max(o, c) * (1 + rnd() * 0.01), l: Math.min(o, c) * (1 - rnd() * 0.01) }); p = c; }
+        const e = p * (1 + (rnd() - 0.5) * 0.02), gap = [0.25, 0.5, 0.75, 1, 1.5][n % 5], st = slcStairs(bars, s), T = e * (1 - s * gap / 100);
+        let w = null, b = null;
+        for (let j = bars.length - 1; j >= 0; j--) {
+          const k = bars[j], wv = s > 0 ? k.l : k.h, bv = s > 0 ? Math.min(k.o, k.c) : Math.max(k.o, k.c);
+          if (w == null && (s > 0 ? wv <= T : wv >= T)) w = wv;
+          if (b == null && (s > 0 ? bv <= T : bv >= T)) b = bv;
+        }
+        const near = w == null ? b : b == null ? w : s > 0 ? Math.max(w, b) : Math.min(w, b), sig = { entry: e, side: s > 0 ? 'long' : 'short' };
+        const got = ['wick', 'body', 'near'].map(m => slStopFor(sig, { mode: m, v: gap }, st));
+        if (got[0] !== w || got[1] !== b || got[2] !== near) bad++;
+      }
+      out.bad = bad;
+      return out;
+    });
+    check(JSON.stringify(pure.L3) === '[41.25,41.25]', 'fib L3: next = L4 box = L4 - pad: ' + JSON.stringify(pure.L3));
+    check(JSON.stringify(pure.L1) === '[62.25,41.25]' && JSON.stringify(pure.L4) === '[30.25,41.25]' && pure.L2c === 52.25, 'fib L1 / L4 / L2 what-if: ' + JSON.stringify(pure));
+    check(pure.S3 === 78.75, 'sell fib next level: ' + pure.S3);
+    check(JSON.stringify(pure.pct) === '[99,202]' && pure.tl === null, 'fixed 1% both ways; a trendline has no fib level: ' + JSON.stringify([pure.pct, pure.tl]));
+    check(JSON.stringify(pure.months) === '["2026-08-01:16","2026-09-01:11"]', '1M candles from days: ' + JSON.stringify(pure.months));
+    check(pure.weeks[2] === 1 && pure.weeks[3] === '2026-09-28' && pure.weeks[1] === '2026-07-20', '1W candles start on Monday, forming week out: ' + JSON.stringify(pure.weeks));
+    check(pure.bad === 0, 'steps pick the same stop as walking back: ' + pure.bad + ' of 400 differ');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals SL types (wick / body / fixed % / fib levels) + SL compared: re-scored by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('sl types: ' + e); });
+}
 // Hold and % Move SL. C: long 100, stop 99 (1%): flat for 330 15m candles (past its
 // 20 4H candles = 320), then +2.2R. D: short 200, stop 202: flat, never stopped, never 2R.
 async function holdPctRun(seed) {
@@ -5810,6 +5978,7 @@ await syncSettingsRun(data);
 await keysLockRun(data);
 await exitTargetRun(data);
 await stopMoveRun(data);
+await slTypeRun(data);
 await holdPctRun(data);
 await trailRun(data);
 await tgtHeadRun(data);
