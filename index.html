@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-10.182">
+  <meta name="app-version" content="2026-11-11.183">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -759,6 +759,7 @@
             </div></div></div>
           <div class="sig-row"><span class="sig-lab">Channel</span><div id="sigChanBar" class="sig-ctl"></div></div>
           <div id="sigCoinWrap" class="sig-row"><span class="sig-lab">Coins</span><div id="sigCoinBar" class="sig-ctl"></div></div>
+          <div id="sigLvlOnWrap" class="sig-row"><span class="sig-lab">Levels on</span><div class="sig-ctl"><div id="sigLvlOnBar"></div></div></div>
           <div id="sigLvlWrap" class="sig-row"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="sigLvlBar"></div></div></div>
           <div id="sigTlWrap" class="sig-row"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="sigTlBar"></div></div></div>
           <div class="sig-row"><span class="sig-lab">BTC day</span><div class="sig-ctl"><div id="sigMktBar"></div></div></div>
@@ -4097,6 +4098,7 @@
       renderSigTrailBar();
       renderSigHoldBar();
       renderSigFeeBar();
+      renderSigLvlOnBar(kind);
       renderSigLvlBar(kind);
       renderSigTlBar(kind);
       renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
@@ -10403,7 +10405,40 @@
       const l = parseInt(String(sig.key || "").split("|")[3], 10);
       return l === 0 || l === 1 ? l : sig.side === "short" ? 1 : 0;
     }
+    // Levels on/off (lakky, 2026-11-10: "check is l2 profitable or not"): fib alerts by the level they
+    // actually entered at; switch any of L1-L4 off and everything on the tab follows. The Level row
+    // above is the other way round (every alert re-scored at one level).
+    function sigLvlOff() { return sigKind() === 'fib' && Array.isArray(state.ui.sigLvlOff) ? state.ui.sigLvlOff.filter(k => FIB_LEVEL_KEYS.indexOf(k) !== -1) : []; }
+    function toggleSigLvlOn(k) {
+      const off = sigLvlOff().slice(), i = off.indexOf(k);
+      if (i === -1) off.push(k); else off.splice(i, 1);
+      state.ui.sigLvlOff = off; sigVisible = SIG_PAGE; save(); renderSignalsTable();
+    }
+    function sigLvlOnPairs(pairs) {
+      const off = sigLvlOff();
+      if (!off.length) return pairs;
+      return pairs.filter(pr => { const g = fibGeom(pr.signal); return !g || !g.entryLevel || off.indexOf(g.entryLevel) === -1; });
+    }
+    function renderSigLvlOnBar(kind) {
+      const wrap = document.getElementById('sigLvlOnWrap'), bar = document.getElementById('sigLvlOnBar');
+      if (!wrap || !bar) return;
+      wrap.classList.toggle('hidden', kind !== 'fib');
+      const off = sigLvlOff();
+      bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+      bar.title = "Switch fib levels on or off by the level the alert entered at. Off levels are left out of every number on this tab.";
+      bar.innerHTML = '';
+      FIB_LEVEL_KEYS.forEach(k => {
+        const on = off.indexOf(k) === -1;
+        const b = document.createElement('button'); b.type = 'button';
+        b.dataset.lvlon = k; b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        b.className = 'px-2 py-1 rounded-md font-semibold ' + (on ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-500 line-through hover:text-white');
+        b.innerText = k;
+        b.onclick = () => toggleSigLvlOn(k);
+        bar.appendChild(b);
+      });
+    }
     function sigLvlPairs(pairs) {
+      pairs = sigLvlOnPairs(pairs);
       const tt = sigTlType();
       if (tt) return pairs.filter(pr => pr.signal.kind === "trendline" && sigTlLine(pr.signal) === tt.line && (pr.signal.side === "short" ? "short" : "long") === tt.side);
       const k = sigLvl();
@@ -14612,6 +14647,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-11.183', pr: 97, title: 'Signals: switch fib levels on or off', pts: ['Under Fib alerts, Levels on: L1 L2 L3 L4 as buttons. Switch a level off and every number on the tab leaves out the alerts that entered there, so you can check L2 on its own, or L2-L4 without L1', 'The Level row (score every alert at one level) is unchanged; the scanner stopped alerting L1 on 11 Nov'] },
       { v: '2026-11-10.182', pr: 96, title: 'Signals: Exit at and SL results fill much faster', pts: ['A month of fib alerts with a Wick / Body SL needed ~1,000+ price reads from Delta, one or two per alert, and the results stayed empty for minutes', 'Candles are now read in blocks shared by every alert on a coin: about a fifth of the reads, same results', 'A setting changed mid-read is read first (old reads are dropped), and a busy Delta is asked again'] },
       { v: '2026-11-10.181', pr: 95, title: 'Signals: pick the SL, and compare them', pts: ['Signals → SL: play every alert with its own SL, the last candle wick or body at least 0.25-1.5% past entry, the closer of the two, a fixed %, or for fibs the next level / L4 box', 'Works with any fixed Exit at; the headline, breakdowns, Move SL, Trail TP and Demo account follow it', 'Edge & breakdowns: SL compared, total R for every SL at every target, with each one\'s average SL size; tap a cell to use it'] },
       { v: '2026-11-09.180', pr: 94, title: 'Signals: a fib or trendline TP counts in full', pts: ['Scanner results: a fib or trendline that reached its TP (1R, as the alert prints) is +1R, even if price came back to breakeven later; a fib that reached 2R is +1R too', 'BE only where the breakeven stop closed the trade before the TP; Exit at is unchanged: SL or the fixed TP, or with Trail TP the trailing stop'] },
