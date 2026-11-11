@@ -2376,6 +2376,10 @@ async function fibTlRun(seed) {
       const at = k => { state.ui.sigKind = 'fib'; state.ui.sigLvl = k; return sigLvlPairs(pairs).map(p => ({ e: p.signal.entry, r: p.signal.resultR, f: p.signal.filled, wi: p.signal.lvlWhatIf || '', same: p.signal === g || p.signal === l1 })); };
       const out = { w: g.fibWhatIf, all: at(''), L1: at('L1'), L2: at('L2'), L3: at('L3'), L4: at('L4'), again: sigLvlPairs(pairs)[0].signal === sigLvlPairs(pairs)[0].signal };
       state.ui.sigKind = 'zone'; out.zone = sigLvlPairs(pairs).length; state.ui.sigLvl = '';
+      const offs = o => { state.ui.sigKind = 'fib'; state.ui.sigLvlOff = o; return sigLvlPairs(pairs).map(p => p.signal === g ? 'L3' : 'L1'); };
+      out.offL1 = offs(['L1']); out.offL3 = offs(['L3']); out.offAll = offs(['L1', 'L2', 'L3', 'L4']); out.offNone = offs([]);
+      state.ui.sigKind = 'zone'; out.offZone = (state.ui.sigLvlOff = ['L1'], sigLvlPairs(pairs).length); state.ui.sigLvlOff = []; state.ui.sigKind = 'fib';
+      state.ui.sigKind = 'zone';
       return out;
     });
     // L4: risk 3.6883 on 4127.38 = 0.08936%; its 2R is out at the TP, 1R less 0.0826% / 0.08936% = 1 - 0.9243
@@ -2388,6 +2392,7 @@ async function fibTlRun(seed) {
     check(wi.L2.length === 1 && wi.L2[0].f === false && wi.L2[0].wi === 'L2', 'L2 never reached = no fill: ' + JSON.stringify(wi.L2));
     check(wi.L4.length === 1 && Math.abs(wi.L4[0].r - l4r) < 1e-3 && wi.L4[0].f === true, 'L4 = what-if result: ' + JSON.stringify(wi.L4));
     check(wi.again, 'same copy on every redraw');
+    check(wi.offL1.join() === 'L3' && wi.offL3.join() === 'L1' && wi.offAll.length === 0 && wi.offNone.length === 2 && wi.offZone === 2, 'Levels on/off by entry level: ' + JSON.stringify([wi.offL1, wi.offL3, wi.offAll, wi.offNone, wi.offZone]));
     check(wi.zone === 2, 'Level ignored outside Fib alerts: ' + wi.zone);
     // Trendline Type: support = lower line (0), resistance = upper line (1); the line
     // comes from the key, or the side when an old key has none.
