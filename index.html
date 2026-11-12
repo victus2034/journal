@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-12.184">
+  <meta name="app-version" content="2026-11-12.185">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -9453,12 +9453,17 @@
     // past the entry; the stop sits on it (the scanner's trendline stop is the closer of
     // the two at 0.75%: "Wick or body"). Fixed %: that % from entry. Fib alerts also get
     // Next level (just past the next deeper level, the scanner's 4H / 1D rule since
-    // 27 Oct) and L4 box (every level on the strong box's stop, the rule before it).
+    // 27 Oct) and L4 box (every level on the strong box's stop, the rule before it),
+    // and Inner L2 / Inner L3 (SL_INNER, 2026-11-12).
     // With a fixed Exit at only (like Move SL): each alert is walked again with the new
     // stop, so the headline, breakdowns, Move SL, Trail TP, Hold, Fees and the Demo
     // account all follow it. Candles come from Delta, read once per alert and kept.
-    const SIG_SLS = [{ k: "", label: "Alert" }, { k: "wick", label: "Wick" }, { k: "body", label: "Body" }, { k: "near", label: "Wick or body" }, { k: "pct", label: "Fixed %" }, { k: "next", label: "Next level", fib: 1 }, { k: "box", label: "L4 box", fib: 1 }];
+    const SIG_SLS = [{ k: "", label: "Alert" }, { k: "wick", label: "Wick" }, { k: "body", label: "Body" }, { k: "near", label: "Wick or body" }, { k: "pct", label: "Fixed %" }, { k: "next", label: "Next level", fib: 1 }, { k: "box", label: "L4 box", fib: 1 }, { k: "in2", label: "Inner L2", fib: 1 }, { k: "in3", label: "Inner L3", fib: 1 }];
     const SL_CANDLE = { wick: 1, body: 1, near: 1 };
+    // Inner L2 / Inner L3 (lakky, 2026-11-12, NEAR 1D): a small fib drawn between the level and the
+    // next deeper one (L4: one box past it); the stop sits on its 2nd / 3rd line, 45% / 55% of the
+    // way there. NEAR 1D buy: L1 4.744 -> 4.559, L2 4.332 -> 4.163.
+    const SL_INNER = { in2: 0.45, in3: 0.55 };
     const SL_GAPS = [0.25, 0.5, 0.75, 1, 1.5], SL_PCTS = [0.5, 1, 1.5, 2, 3], SL_DEF = { mode: "", gap: 0.75, pct: 1 };
     // How many candles of the alert's timeframe are looked back for a wick or body that far.
     const SLC_BARS = 300;
@@ -9477,6 +9482,7 @@
       if (mode === "pct") return { k: "pct|" + d.pct, mode, v: d.pct, short: d.pct + "%", label: "SL " + d.pct + "% from entry" };
       if (mode === "next") return { k: "next", mode, short: "Next level", label: "SL past the next fib level" };
       if (mode === "box") return { k: "box", mode, short: "L4 box", label: "SL on the L4 box stop" };
+      if (mode === "in2" || mode === "in3") return { k: mode, mode, short: mode === "in2" ? "Inner L2" : "Inner L3", label: "SL on the inner fib's " + (mode === "in2" ? "2nd" : "3rd") + " line (" + SL_INNER[mode] * 100 + "% of the way to the next fib level)" };
       return null;
     }
     // The SL picked on the bar (fib-only types count only on Fib alerts), with or without a target.
@@ -9537,7 +9543,7 @@
       if (!(e > 0)) return null;
       let v = null;
       if (r.mode === "pct") v = e * (1 - s * r.v / 100);
-      else if (r.mode === "next" || r.mode === "box") v = slFibStop(sig, r.mode);
+      else if (r.mode === "next" || r.mode === "box" || SL_INNER[r.mode]) v = slFibStop(sig, r.mode);
       else {
         if (isNseSig(sig)) return null;
         if (!st) return undefined;
@@ -9557,6 +9563,7 @@
       if (!rk) return null;
       const span = (e - g.top) / rk, box = FIB_RATIOS.L4 - FIB_RATIOS.L3, pad = box * 0.25;
       const next = { L1: FIB_RATIOS.L2, L2: FIB_RATIOS.L3, L3: FIB_RATIOS.L4, L4: FIB_RATIOS.L4 + box };
+      if (SL_INNER[mode]) return g.top + (rk + SL_INNER[mode] * (next[k] - rk)) * span;
       return g.top + ((mode === "box" ? FIB_RATIOS.L4 : next[k]) + pad) * span;
     }
     // The alert played with rule r: a copy with that stop, kept per alert and rule so
@@ -9650,7 +9657,7 @@
       if (!bar) return;
       const d = slRaw(), fib = sigKind() === 'fib', types = SIG_SLS.filter(x => !x.fib || fib), cur = types.some(x => x.k === d.mode) ? d.mode : "";
       bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
-      bar.title = "Which stop each alert is played with. Alert: its own. Wick / Body: the last closed candle of the alert's timeframe, before the alert, whose wick or body is at least the gap past the entry (below a buy, above a sell); the stop sits on it. Wick or body: the closer of the two (the scanner's trendline stop, 0.75%). Fixed %: that far from entry. Fib alerts: Next level (just past the next deeper level, the scanner's rule now) or L4 box (every level on the strong box's stop, the old rule). Works with a fixed Exit at: R is measured on the new stop.";
+      bar.title = "Which stop each alert is played with. Alert: its own. Wick / Body: the last closed candle of the alert's timeframe, before the alert, whose wick or body is at least the gap past the entry (below a buy, above a sell); the stop sits on it. Wick or body: the closer of the two (the scanner's trendline stop, 0.75%). Fixed %: that far from entry. Fib alerts: Next level (just past the next deeper level, the scanner's rule now) or L4 box (every level on the strong box's stop, the old rule); Inner L2 / Inner L3 (a small fib between the level and the next deeper one, the stop on its 2nd / 3rd line: 45% / 55% of the way). Works with a fixed Exit at: R is measured on the new stop.";
       let h = '<div class="flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (sigTgt() ? '' : ' opacity-60') + '">'
         + types.map(x => '<button type="button" data-sl="' + x.k + '" onclick="setSigSl(\'mode\',\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? PLAY_ON : PLAY_OFF) + '">' + esc(x.label) + '</button>').join('') + '</div>';
       const sel = (id, k, list, v, txt) => '<select id="' + id + '" onchange="setSigSl(\'' + k + '\', this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200">' + list.map(x => '<option value="' + x + '"' + (x === v ? ' selected' : '') + '>' + txt(x) + '</option>').join('') + '</select>';
@@ -14662,6 +14669,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-12.185', pr: 99, title: 'Signals: Inner L2 / Inner L3 fib SL', pts: ['Signals → SL on Fib alerts: Inner L2 and Inner L3. A small fib between the entry level and the next deeper level, with the stop on its 2nd or 3rd line (45% / 55% of the way). NEAR 1D buy: L1 4.744 → SL 4.559', 'Works like every other SL: any fixed Exit at, Move SL, Trail TP, the SL compared grid and the Demo account follow it'] },
       { v: '2026-11-12.184', pr: 98, title: 'Signals: history fills only after the alert', pts: ['A history (rebuilt) fib or trendline alert is stamped at the start of the candle the scanner checked, up to 4 hours (1D) or a day (1W / 1M) before the alert really went out, and Exit at counted fills from that start', 'Now a fill counts only after the first candle that reaches the alert band (0.75%, 3% on 1W / 1M); a fill in that same candle is one your order would have missed', 'Fixed Exit at results change a little (one 1000PEPE trade was +5.6R of a month); those alerts are read once more, so the first open takes longer'] },
       { v: '2026-11-11.183', pr: 97, title: 'Signals: switch fib levels on or off', pts: ['Under Fib alerts, Levels on: L1 L2 L3 L4 as buttons. Switch a level off and every number on the tab leaves out the alerts that entered there, so you can check L2 on its own, or L2-L4 without L1', 'The Level row (score every alert at one level) is unchanged; the scanner stopped alerting L1 on 11 Nov'] },
       { v: '2026-11-10.182', pr: 96, title: 'Signals: Exit at and SL results fill much faster', pts: ['A month of fib alerts with a Wick / Body SL needed ~1,000+ price reads from Delta, one or two per alert, and the results stayed empty for minutes', 'Candles are now read in blocks shared by every alert on a coin: about a fifth of the reads, same results', 'A setting changed mid-read is read first (old reads are dropped), and a busy Delta is asked again'] },
