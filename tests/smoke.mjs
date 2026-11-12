@@ -19,6 +19,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import zlib from 'node:zlib';
 import { execFile } from 'node:child_process';
 import { EXPECTED, REPORT_ROWS, backtestXlsx, backtestCsv } from './backtest-fixture.mjs';
 import { createRequire } from 'node:module';
@@ -3056,7 +3057,7 @@ async function demoDeepRun(seed) {
     check(JSON.stringify(ex.holds) === '[15,4800]' && ex.card.startsWith(ex.want), 'Exit at 1R: A 15m, B on time after 4800m: ' + JSON.stringify(ex));
     // A walk kept before times (no ft): not read again on another section, read once here.
     const n0 = calls;
-    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; delete w.te; delete w.pt; delete w.tta; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); Object.keys(tgtChunks).forEach(k => delete tgtChunks[k]); setSigSec('edge'); renderAll(); });
+    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; delete w.te; delete w.pt; delete w.tta; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); Object.keys(tgtChunks).forEach(k => delete tgtChunks[k]); tgtIdx = Promise.resolve({}); setSigSec('edge'); renderAll(); });
     await page.waitForTimeout(400);
     check(calls === n0, 'no re-read outside the Demo account: ' + (calls - n0));
     await page.evaluate(() => { setSigSec('demo'); });
@@ -3064,7 +3065,7 @@ async function demoDeepRun(seed) {
     check(calls === n0 + 2 && await page.evaluate(() => JSON.stringify(demoRows.map(x => x.hold))) === '[15,4800]', 'each old walk read once for its times: ' + (calls - n0));
     // Read again with the candles gone: the old walk is kept, not lost.
     gone = true;
-    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); Object.keys(tgtChunks).forEach(k => delete tgtChunks[k]); renderAll(); });
+    await page.evaluate(() => { Object.values(tgtCache()).forEach(w => { delete w.ft; }); Object.keys(tgtTried).forEach(k => delete tgtTried[k]); Object.keys(tgtChunks).forEach(k => delete tgtChunks[k]); tgtIdx = Promise.resolve({}); renderAll(); });
     await page.waitForFunction(n => !tgtBusy, null, { timeout: 10000 });
     await page.waitForTimeout(300);
     const kept = await page.evaluate(() => Object.values(tgtCache()).map(w => Array.isArray(w.p)));
@@ -5310,44 +5311,50 @@ async function tgtHeadRun(seed) {
   await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
   const page = await ctx.newPage();
   page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const sigOf = d => ({ id: 'h', key: 'kh', kind: 'trendline', date: d, time: '10:00', symbol: 'HEAD', side: 'long', score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+    filled: true, outcome: '+1R', resultR: 0.9, hasReportR: true, price: 100, stop: 99, entry: 100 });
   try {
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady);
-    const r = await page.evaluate(async ([day, hr]) => {
-      const sig = { id: 'h', key: 'kh', kind: 'trendline', date: day, time: '10:00', symbol: 'HEAD', side: 'long', score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
-        filled: true, outcome: '+1R', resultR: 0.9, hasReportR: true, price: 100, stop: 99, entry: 100 };
+    const r = await page.evaluate(async ([sig, hr]) => {
       const tr = trailMove('R', 0.25, 0), sc = w => { const o = tgtScore(sig, w, { r: 1 }, true, null, tr); return o && [o.label, +o.r.toFixed(5)]; };
       const w = await tgtOne(sig, 'tp');
       const coarse = tgtWalk(sig, hr.map(([time, high, low, close]) => ({ time, high, low, close })), 60, 'tp');
-      // A walk kept before the head (no fh) is read once more; one with it is kept.
+      // A walk kept by an older build (no v: 1h candles for an old alert) is walked again on 15m.
       state.signals = [sig];
       Object.assign(state.ui, { sigKind: 'trendline', sigTgt: '1R', sigHold: 'tp' });
       const k = tgtHoldKey(sig, 'tp');
-      tgtCache()[k] = Object.assign({}, coarse);
+      tgtCache()[k] = Object.assign({}, coarse, { fh: 1 });
       await tgtLoad([{ signal: sig, trade: null }]);
       const again = tgtCache()[k];
-      tgtRetry();
-      await tgtLoad([{ signal: sig, trade: null }]);
-      return { need: tgtNeedsHead(sig, 'tp'), needRecent: tgtNeedsHead(Object.assign({}, sig, { date: new Date().toISOString().slice(0, 10) }), 'tp'), fh: w.fh, head: sc(w), coarse: sc(coarse), again: again && again.fh === 1 && sc(again) };
-    }, [day, hr]);
-    check(r.need === true && r.needRecent === false, 'a 40-day window needs the 15m head, a fresh one does not: ' + JSON.stringify(r));
-    check(r.fh === 1 && JSON.stringify(r.head) === '["Trail TP",0.9495]', '15m head: Trail TP ends at +1R on the dip: ' + JSON.stringify(r.head));
+      return { v: w.v, head: sc(w), coarse: sc(coarse), again: again && again.v === TGT_WALK_V && sc(again) };
+    }, [sigOf(day), hr]);
+    check(r.v === 3 && JSON.stringify(r.head) === '["Trail TP",0.9495]', '15m: Trail TP ends at +1R on the dip: ' + JSON.stringify(r));
     check(JSON.stringify(r.coarse) === '["Trail TP",2.44875]', 'one 1h candle hides the dip: ' + JSON.stringify(r.coarse));
-    check(JSON.stringify(r.again) === '["Trail TP",0.9495]', 'a walk kept without the head is read again: ' + JSON.stringify(r.again));
-    // Reads: fixed blocks of 1800 candles (15m from the alert to the whole-hour cut ~18.75
-    // days later, 1h from there to now), each read once: the second walk and the re-read
-    // share them.
-    const cut = Math.floor((t0 * 1000 + 1800 * 900e3) / 3600e3) * 3600, nowS = Date.now() / 1000;
-    const blocks = res => reads.filter(x => x[0] === res).sort((a, b) => a[1] - b[1]), size = { '15m': 1800 * 900, '1h': 1800 * 3600 };
-    const whole = reads.every(x => x[1] % size[x[0]] === 0 && x[2] <= x[1] + size[x[0]] - 1), once = new Set(reads.map(x => x[0] + x[1])).size === reads.length;
-    const m = blocks('15m'), h = blocks('1h');
-    const covers = m.length && m[0][1] <= t0 - Q && m[m.length - 1][2] >= cut - 1 && h.length && h[0][1] <= cut && h[h.length - 1][2] >= nowS - 120;
-    check(whole && once && covers, 'whole blocks, each read once, covering the walk: ' + JSON.stringify(reads) + ' t0 ' + t0 + ' cut ' + cut);
+    check(JSON.stringify(r.again) === '["Trail TP",0.9495]', 'a walk kept by an older build is walked again on 15m: ' + JSON.stringify(r.again));
+    // Reads: only 15m, whole blocks of 1800 candles, each once, and only the block(s) the
+    // walk needs (it ends on the 7th candle): not every block from the alert to now.
+    const size = 1800 * 900, whole = reads.every(x => x[0] === '15m' && x[1] % size === 0 && x[2] <= x[1] + size - 1), once = new Set(reads.map(x => x[0] + x[1])).size === reads.length;
+    const first = Math.floor((t0 - Q) / size) * size;
+    check(whole && once && reads.length >= 1 && reads.length <= 2 && reads[0][1] === first, 'one 15m block read once, not the 40 days: ' + JSON.stringify(reads) + ' t0 ' + t0);
+    // A fresh alert reads 15m too (it used to take 1m / 5m candles: a different answer).
+    const n0 = reads.length, today = new Date(Date.now() - 86400e3).toISOString().slice(0, 10);
+    await page.evaluate(async sig => { await tgtOne(sig, 'tp'); }, sigOf(today));
+    check(reads.length > n0 && reads.slice(n0).every(x => x[0] === '15m'), 'a fresh alert reads 15m too: ' + JSON.stringify(reads.slice(n0)));
+    // An ended block is kept on the device: after a reload the same walk reads nothing from Delta.
+    await page.waitForTimeout(500);
+    await page.evaluate(() => tgtSave());
+    await page.waitForTimeout(500);
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady);
+    const n1 = reads.length;
+    const re = await page.evaluate(async sig => { const w = await tgtOne(sig, 'tp'); return w.v === TGT_WALK_V && w.sl === 1 && Object.keys(tgtChunks).length; }, sigOf(day));
+    check(re && reads.length === n1, 'kept block read from the device after a reload: Delta reads ' + (reads.length - n1) + ' ' + re);
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
   await ctx.close();
-  const label = 'Exit at: old alerts walk 15m candles first (Trail TP not flattered by 1h-1d candles)';
+  const label = 'Exit at: every walk on 15m candles (any alert age), only the blocks it needs, kept on the device';
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
@@ -5962,6 +5969,113 @@ async function tgtStoreRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// Parity (lakky, 2026-11-12: "i told you to recheck backtest result of journal and most of the
+// times its differ ... make sure it wont happen again"). Real scanner alerts (195, 10-25 Oct)
+// and Delta's real candles (tests/fixtures/signals-parity.json.gz) go through the Signals tab
+// as lakky uses it, under several Exit at / SL / Move SL / Trail TP / Hold / Fees settings,
+// and every trade's R must equal tools/signals-retest.py's, an independent retest written
+// from the rules (candle by candle on 15m, no path summary). A rule changed on one side only
+// fails here.
+const PARITY_COMBOS = [
+  { name: 'fib 1R', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '1R' },
+  { name: 'TL 4H 2R, BE at 1R, 20 candles', kind: 'trendline', chan: 'CRYPTO 4H', from: '2026-10-10', to: '2026-10-25', tgt: '2R', stop: { mode: 'be', beAt: 1 }, hold: '20' },
+  { name: 'fib setup: 1.5R, wick or body SL, shift 1R to 0.75R, trail', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', sl: { mode: 'near', gap: 0.75 }, stop: { mode: 'shift', shAt: 1, shTo: 0.75 }, trail: { on: true, step: 0.25, gap: 0.5 } },
+  { name: 'TL 3R, wick SL, trail, no fees', kind: 'trendline', from: '2026-10-10', to: '2026-10-25', tgt: '3R', sl: { mode: 'wick', gap: 0.75 }, trail: { on: true, step: 0.25, gap: 0.5 }, nofee: true },
+  { name: 'fib L3 2%, SL to +0.5% at 1%', kind: 'fib', lvl: 'L3', from: '2026-10-10', to: '2026-10-25', tgt: '2%', stop: { mode: 'shift', shAtP: 1, shToP: 0.5 } },
+  { name: 'support TL 1.5R, body SL 1%', kind: 'trendline', tl: 'support', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', sl: { mode: 'body', gap: 1 } },
+  { name: 'TL 1D 2%, 1% SL, trail in %', kind: 'trendline', chan: 'CRYPTO 1D', from: '2026-10-10', to: '2026-10-25', tgt: '2%', sl: { mode: 'pct', pct: 1 }, trail: { on: true, stepP: 0.25, gapP: 0.25 } },
+];
+async function parityRun() {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const fxFile = path.join(ROOT, 'tests', 'fixtures', 'signals-parity.json.gz');
+  const fx = JSON.parse(zlib.gunzipSync(fs.readFileSync(fxFile)).toString('utf8'));
+  const files = {
+    'fibtl_rebuild_records.jsonl': fx.records.map(r => JSON.stringify(r)).join('\n') + '\n',
+    'fibtl_rebuild_results.json': JSON.stringify(fx.results),
+    'fibtl_rebuild_meta.json': JSON.stringify(fx.meta),
+  };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  let reads = 0;
+  await ctx.route(url => !url.href.startsWith(base), r => {
+    const u = r.request().url();
+    if (u.includes('/scanner-runtime-state/')) return r.fulfill({ status: 200, contentType: 'text/plain', body: files[u.split('/').pop().split('?')[0]] || '' });
+    if (u.startsWith('https://api.india.delta.exchange/v2/history/candles')) {
+      const q = new URL(u).searchParams, a = +q.get('start'), b = +q.get('end');
+      const ser = fx.candles[q.get('symbol') + '_' + q.get('resolution')];
+      if (ser) reads++; // (the BTC days behind Market days are not the walks')
+      const rows = (ser || []).filter(x => x[0] >= a && x[0] <= b);
+      return r.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: rows.map(([time, open, high, low, close]) => ({ time, open, high, low, close, volume: 1 })) }) });
+    }
+    return r.abort();
+  });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  page.on('dialog', d => d.dismiss());
+  const app = {}, shown = {};
+  try {
+    await page.clock.install({ time: new Date(fx.now * 1000) });
+    await page.clock.resume();
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && typeof signalsReady !== 'undefined', null, { timeout: 20000 });
+    await page.evaluate(async () => { await signalsReady; while (sigAutoBusy) await new Promise(r => setTimeout(r, 100)); await autoRefreshAlerts(true); switchTab('signals'); });
+    for (const c of PARITY_COMBOS) {
+      await page.evaluate(c => {
+        const u = state.ui;
+        Object.assign(u, { sigKind: c.kind, sigChan: c.chan || '', sigMkt: 'crypto', sigPeriod: { mode: 'custom', from: c.from, to: c.to }, sigDay: '', sigCoins: '', mktFilter: '', sigSkipTiny: false,
+          sigTgt: c.tgt, sigHold: c.hold || 'tp', sigNoFee: !!c.nofee, sigLvl: c.lvl || '', sigLvlOff: [], sigTlType: c.tl || '', sigSec: 'edge' });
+        u.sigSl = Object.assign({ mode: '', gap: 0.75, pct: 1 }, c.sl || {});
+        u.sigStop = Object.assign({ mode: 'off', beAt: 1, shAt: 1, shTo: 0.75, beAtP: 1, shAtP: 1, shToP: 0.5 }, c.stop || {});
+        u.sigTrail = Object.assign({ on: false, step: 0.25, gap: 0.25, stepP: 0.25, gapP: 0.25 }, c.trail || {});
+        save(); renderSignalsTable();
+      }, c);
+      // Until the tab's own reads settle and a redraw asks for nothing more.
+      for (let i = 0, quiet = 0; i < 400; i++) {
+        await page.waitForTimeout(150);
+        if (await page.evaluate(() => tgtBusy || slcBusy || tgtQ.length > 0 || slcQ.length > 0)) { quiet = 0; continue; }
+        if (++quiet < 2) continue;
+        const r0 = reads;
+        await page.evaluate(() => renderSignalsTable());
+        await page.waitForTimeout(250);
+        if (reads === r0 && !(await page.evaluate(() => tgtBusy || slcBusy || tgtQ.length > 0 || slcQ.length > 0))) break;
+        quiet = 0;
+      }
+      const d = await page.evaluate(() => withOutcomeCache(() => inSigScope(() => ({
+        rows: sigView.pairs.map(pr => { const o = outcomeOf(pr); return [pr.signal.key, o ? o.r : null]; }),
+        banner: (document.getElementById('sigNotFinal') || {}).innerText || '', total: (document.getElementById('sigEdgeStrip').innerText.match(/Total R\s*([+-]?[\d.]+R)/) || [])[1] || ''
+      }))));
+      app[c.name] = Object.fromEntries(d.rows);
+      shown[c.name] = d;
+      check(!d.banner, c.name + ': numbers left "not final": ' + d.banner);
+    }
+    // CSV export = what the tab shows (it exported the scanner's R under an Exit at).
+    await page.evaluate(() => setSigSec('report'));
+    await page.waitForFunction(() => btLast.length > 0, null, { timeout: 10000 });
+    const csv = await page.evaluate(() => { let out = null; const real = URL.createObjectURL; URL.createObjectURL = b => { out = b; return 'blob:x'; }; try { exportSigBacktestCsv(); } finally { URL.createObjectURL = real; } return out ? out.text() : ''; });
+    // (Quoted cells may hold commas.)
+    const cells = l => (l.match(/("([^"]|"")*"|[^,]*)(,|$)/g) || []).map(x => x.replace(/,$/, '').replace(/^"|"$/g, '').replace(/""/g, '"'));
+    const lines = csv.replace(/^\uFEFF/, '').split('\r\n'), head = cells(lines[0]), ri = head.indexOf('signal_r');
+    const last = PARITY_COMBOS[PARITY_COMBOS.length - 1].name, sumCsv = lines.slice(1).reduce((t, l) => { const v = cells(l)[ri]; return t + (v ? +v : 0); }, 0);
+    const sumApp = Object.values(app[last]).reduce((t, v) => t + (v == null ? 0 : v), 0);
+    check(head.includes('what_if') && head.includes('exit') && Math.abs(sumCsv - sumApp) < 0.01 * Math.max(1, lines.length), 'CSV signal_r = the what-if shown: ' + sumCsv.toFixed(3) + ' vs ' + sumApp.toFixed(3) + ' (' + (lines.length - 1) + ' rows) ' + lines.slice(0, 2).join(' / ').slice(0, 400));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  // The independent retest on the same alerts and candles.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-'));
+  fs.writeFileSync(path.join(dir, 'combos.json'), JSON.stringify(PARITY_COMBOS));
+  fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(app));
+  const py = await new Promise(done => execFile('python3', [path.join(ROOT, 'tools', 'signals-retest.py'), fxFile, path.join(dir, 'combos.json'), path.join(dir, 'retest.json'), '--app', path.join(dir, 'app.json')], { timeout: 120000 }, (err, out, er) => done({ err, out: String(out || '') + String(er || '') })));
+  check(!py.err, 'journal vs independent retest:\n       ' + py.out.trim().split('\n').join('\n       '));
+  const n = Object.values(app).reduce((t, x) => t + Object.values(x).filter(v => v != null).length, 0);
+  check(n >= 400, 'trades compared: ' + n);
+  fs.rmSync(dir, { recursive: true, force: true });
+  const label = `Signals parity: journal = independent retest on real alerts + Delta candles (${PARITY_COMBOS.length} settings, ${n} trades)`;
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push('parity: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -6016,6 +6130,7 @@ await sigBreakdownRun(data);
 await nsePathsRun();
 await badInputRun(data);
 await tgtStoreRun(data);
+await parityRun();
 
 await browser.close();
 server.close();
