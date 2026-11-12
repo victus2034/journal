@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-12.184">
+  <meta name="app-version" content="2026-11-12.186">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -2223,6 +2223,13 @@
       return sigDb().then(db => new Promise((res, rej) => {
         const tx = db.transaction(SIG_STORE, "readwrite");
         tx.objectStore(SIG_STORE).put(val, key);
+        tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error("aborted"));
+      }));
+    }
+    function idbDel(key) {
+      return sigDb().then(db => new Promise((res, rej) => {
+        const tx = db.transaction(SIG_STORE, "readwrite");
+        tx.objectStore(SIG_STORE).delete(key);
         tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error("aborted"));
       }));
     }
@@ -9909,6 +9916,7 @@
     }
     function tgtSave() {
       if (!tgtReady) return;
+      tgtIdxSave();
       const json = JSON.stringify(tgtCache());
       if (!tgtIdb || !sigIdbOk) { tgtLocal(json); return; }
       idbPut(TGT_KEY, json).then(() => { try { localStorage.removeItem(TGT_KEY); } catch (e) {} }, () => { tgtIdb = false; tgtLocal(json); });
@@ -9943,71 +9951,140 @@
       nseAt = Date.now(); nseBusy = false;
       renderSignalsTable();
     }
-    // The candle size every walk starts on, and how many of them one read gives it.
-    const TGT_HEAD_RES = 15, TGT_HEAD_BARS = 1800;
-    // The candle size one read of the whole window would take (finest that fits 1900).
-    function tgtSpan(sig, hold) {
-      const t0 = tgtAlertMs(sig), now = Date.now();
-      const span = hold === "tp" ? Math.max(now - t0, 3600000) : 2 * TGT_BARS * tfMinutes(sig.timeframe) * 60000;
-      return { t0, now, span, r: AI_RES.find(x => span / (x[0] * 60000) <= 1900) || AI_RES[AI_RES.length - 1] };
-    }
-    // A window too long for 15m candles in one read gets a 15m head (backtest 2026-11-09:
-    // on 1h-1d candles the pullbacks inside a candle are invisible, and Trail TP read far
-    // better than it was: RS TL BR 3R + trail +273R vs +165R on 15m).
-    function tgtNeedsHead(sig, hold) { return tgtSpan(sig, hold).r[0] > TGT_HEAD_RES; }
+    // ---- The candles behind every walk (lakky, 2026-11-12: "i told you to recheck backtest
+    // result of journal and most of the times its differ") ----
+    // Every walk reads Delta's 15m candles, whatever the alert's age. Until v.186 the size
+    // came from the alert's age: 1m under ~31 hours, 5m under ~6.6 days, 15m under ~20
+    // days, then 15m for ~18 days and 1h-1d after. A walk is kept once it ends, so the same
+    // alert scored differently depending on the day this device first walked it, and a
+    // retest on 15m disagreed (Trail TP and Move SL most: a pullback inside a 1h candle is
+    // invisible, one inside a 5m candle is not). TGT_WALK_V marks a walk made this way: one
+    // kept by an older build is walked again once. tools/signals-retest.py replays the same
+    // rules on its own, and the smoke test holds the two equal on real alerts and candles.
+    const TGT_RES = 15, TGT_RES_K = "15m", TGT_WALK_V = 3;
+    // A walk still open (no TP or SL yet) is walked again after this long, as new candles come in.
+    const TGT_LIVE_MS = 5 * 60000;
     // One read from Delta. Busy (429) or a server error: asked again, twice, a little later.
+    // At most TGT_READS at a time, first asked first served: the walks wait on their blocks,
+    // so the reads never idle while a walk waits (and Delta is not flooded).
+    const TGT_READS = 6;
+    let tgtReading = 0;
+    const tgtReadWait = [];
     async function tgtReadRaw(sym, res, from, to) {
-      const url = DELTA_BASE + "/v2/history/candles?resolution=" + res + "&symbol=" + encodeURIComponent(sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
-      for (let i = 0; ; i++) {
-        const r = await fetch(url);
-        if ((r.status === 429 || r.status >= 500) && i < 2) { await new Promise(done => setTimeout(done, 800 * (i + 1))); continue; }
-        const j = await r.json().catch(() => null);
-        if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad reply");
-        return j.result;
+      if (tgtReading >= TGT_READS) await new Promise(go => tgtReadWait.push(go));
+      tgtReading++;
+      try {
+        const url = DELTA_BASE + "/v2/history/candles?resolution=" + res + "&symbol=" + encodeURIComponent(sym) + "&start=" + Math.floor(from / 1000) + "&end=" + Math.ceil(to / 1000);
+        for (let i = 0; ; i++) {
+          const r = await fetch(url);
+          if ((r.status === 429 || r.status >= 500) && i < 2) { await new Promise(done => setTimeout(done, 800 * (i + 1))); continue; }
+          const j = await r.json().catch(() => null);
+          if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad reply");
+          return j.result;
+        }
+      } finally {
+        tgtReading--;
+        const next = tgtReadWait.shift();
+        if (next) next();
       }
     }
     // Candles are read in fixed blocks (TGT_CHUNK candles of one size, from a fixed
-    // start) and kept for the session, so every alert on a coin shares them (lakky,
-    // 2026-11-10: a month of fib alerts with a candle SL took ~1,300 reads, one or two
-    // per alert, and filled slowly or not at all). The block still forming is read
-    // again after a minute.
-    const TGT_CHUNK = 1800, tgtChunks = {};
+    // start) and shared by every alert on a coin (lakky, 2026-11-10: a month of fib alerts
+    // with a candle SL took ~1,300 reads). A block that has ended is kept on this device
+    // too (IndexedDB, "tgtc|" keys, the TGT_KEEP_BLOCKS used last), so the next visit, or
+    // another Exit at / SL / Hold, reads only the block still forming (lakky, 2026-11-12:
+    // "in backtest it takes so much time"). The block still forming is read again after a
+    // minute; an empty block is never kept and is asked again after a minute too.
+    const TGT_CHUNK = 1800, TGT_KEEP_BLOCKS = 600, tgtChunks = {};
+    // Kept blocks: key -> last used (ms), saved beside the walks.
+    const TGT_IDX_KEY = "tapeAndTarget.sigTgtBlocks";
+    let tgtIdx = null, tgtIdxDirty = false;
+    function tgtIdxLoad() {
+      if (!tgtIdx) tgtIdx = (tgtIdb && sigIdbOk ? idbGet(TGT_IDX_KEY).then(v => tgtObj(v) || {}, () => ({})) : Promise.resolve({}));
+      return tgtIdx;
+    }
+    function tgtIdxSave() {
+      if (!tgtIdx || !tgtIdxDirty || !tgtIdb || !sigIdbOk) return;
+      tgtIdxDirty = false;
+      tgtIdx.then(ix => {
+        const ks = Object.keys(ix);
+        // Over the cap: the blocks used longest ago go.
+        if (ks.length > TGT_KEEP_BLOCKS) ks.sort((a, b) => ix[a] - ix[b]).slice(0, ks.length - TGT_KEEP_BLOCKS).forEach(k => { delete ix[k]; idbDel("tgtc|" + k).catch(() => {}); });
+        return idbPut(TGT_IDX_KEY, JSON.stringify(ix));
+      }).catch(() => {});
+    }
+    // Rows <-> one Float64Array of [time, open, high, low, close] (exact prices: a low equal
+    // to the entry must still fill).
+    function tgtPack(rows) {
+      const d = new Float64Array(rows.length * 5);
+      rows.forEach((k, i) => { d[i * 5] = +k.time; d[i * 5 + 1] = +k.open; d[i * 5 + 2] = +k.high; d[i * 5 + 3] = +k.low; d[i * 5 + 4] = +k.close; });
+      return d;
+    }
+    function tgtUnpack(v) {
+      const d = v && v.d;
+      if (!d || typeof d.length !== "number" || !d.length || d.length % 5) return null;
+      const out = [];
+      for (let i = 0; i < d.length; i += 5) out.push({ time: d[i], open: d[i + 1], high: d[i + 2], low: d[i + 3], close: d[i + 4] });
+      return out;
+    }
+    // A block that ended over 10 minutes ago: from this device if kept, else from Delta (then kept).
+    function tgtBlock(k, ce, now, read) {
+      if (ce + 10 * 60000 > now || !tgtIdb || !sigIdbOk) return read();
+      return tgtIdxLoad().then(ix => (ix[k] ? idbGet("tgtc|" + k).catch(() => null) : Promise.resolve(null)).then(v => {
+        const kept = tgtUnpack(v);
+        if (kept) { ix[k] = now; tgtIdxDirty = true; return kept; }
+        return read().then(rows => {
+          if (rows.length) idbPut("tgtc|" + k, { v: 1, d: tgtPack(rows) }).then(() => { ix[k] = Date.now(); tgtIdxDirty = true; }, () => {});
+          return rows;
+        });
+      }));
+    }
+    // Block c of sym / res: the one in memory, else asked for (from this device or Delta).
+    function tgtChunk(sym, res, c, step, now) {
+      const cs = c * step, ce = cs + step, k = sym + "|" + res + "|" + c;
+      let m = tgtChunks[k];
+      if (!m || (m.open && now - m.at > 60000)) {
+        const made = m = tgtChunks[k] = { open: ce > now, at: now, p: tgtBlock(k, ce, now, () => tgtReadRaw(sym, res, cs, Math.min(ce - 1000, now))) };
+        made.p.then(rows => { if (!rows.length) made.open = true; }, () => { if (tgtChunks[k] === made) delete tgtChunks[k]; });
+      }
+      return m;
+    }
+    // rows.hole: a block came back empty after one with candles (Delta answered empty for a
+    // stretch it has, a hiccup); a walk read from it is not kept, so it is read again.
     async function tgtRead(sym, res, from, to) {
       const rm = (AI_RES.find(x => x[1] === res) || [])[0];
       if (!rm) return tgtReadRaw(sym, res, from, to);
-      const step = TGT_CHUNK * rm * 60000, a = Math.floor(from / 1000), b = Math.ceil(to / 1000), now = Date.now(), ps = [];
-      for (let c = Math.floor(from / step); c * step <= to && c * step <= now; c++) {
-        const cs = c * step, ce = cs + step, k = sym + "|" + res + "|" + c;
-        let m = tgtChunks[k];
-        if (!m || (m.open && now - m.at > 60000)) {
-          const made = m = tgtChunks[k] = { open: ce > now, at: now, p: tgtReadRaw(sym, res, cs, Math.min(ce - 1000, now)) };
-          // A failed read is not kept; an empty block is asked again after a minute too.
-          made.p.then(rows => { if (!rows.length) made.open = true; }, () => { if (tgtChunks[k] === made) delete tgtChunks[k]; });
-        }
-        ps.push(m.p);
-      }
-      const out = [], got = {};
-      (await Promise.all(ps)).forEach(rows => rows.forEach(row => { if (row.time >= a && row.time <= b && !got[row.time]) { got[row.time] = 1; out.push(row); } }));
+      const step = TGT_CHUNK * rm * 60000, a = Math.floor(from / 1000), b = Math.ceil(to / 1000), now = Date.now(), ms = [];
+      for (let c = Math.floor(from / step); c * step <= to && c * step <= now; c++) ms.push(tgtChunk(sym, res, c, step, now));
+      const blocks = await Promise.all(ms.map(m => m.p)), out = [], got = {};
+      let seen = false, hole = false;
+      blocks.forEach((rows, i) => {
+        // (The block still forming may be empty for a moment: not a hole.)
+        if (rows.length) seen = true; else if (seen && (Math.floor(from / step) + i + 1) * step <= now) hole = true;
+        rows.forEach(row => { if (row.time >= a && row.time <= b && !got[row.time]) { got[row.time] = 1; out.push(row); } });
+      });
+      if (hole) out.hole = true;
       return out;
     }
+    // The walk window: 20 candles = fill within 20 of the alert's timeframe, then 20 more;
+    // Till TP / SL = from the alert to now.
+    function tgtEnd(sig, hold, now) { return hold === "tp" ? now : Math.min(now, tgtAlertMs(sig) + 2 * TGT_BARS * tfMinutes(sig.timeframe) * 60000); }
     async function tgtOne(sig, hold) {
-      // 20 candles: the alert's window. Till TP / SL: everything from the alert to now.
-      // One read when 15m (or finer) candles fit 1900 of them; otherwise two: 15m candles
-      // for the first ~18 days, where most trades are decided, then the finest size that
-      // fits the rest, from a candle open of that size on (fh = read this way).
-      const { t0, now, span, r } = tgtSpan(sig, hold), to = Math.min(now, t0 + span);
-      const sym = tgtSym(sig.symbol), none = () => Object.assign({ none: "no candles on Delta" }, sym !== tgtPlain(sig.symbol) ? { via: sym } : {});
-      if (r[0] <= TGT_HEAD_RES) {
-        const rows = await tgtRead(sym, r[1], t0 - r[0] * 60000, to);
-        return rows.length ? Object.assign(tgtWalk(sig, rows, r[0], hold), { fh: 1 }) : none();
+      // Block by block: most walks end (SL, target settled, window over) in the first one
+      // or two, so only those are read; a walk still going reads the next block and is
+      // walked again from the start (the same result as one read of everything).
+      const t0 = tgtAlertMs(sig), end = tgtEnd(sig, hold, Date.now()), sym = tgtSym(sig.symbol);
+      const from = t0 - TGT_RES * 60000, step = TGT_CHUNK * TGT_RES * 60000;
+      let to = Math.min(end, (Math.floor(from / step) + 1) * step - 1), w = null, hole = false;
+      for (;;) {
+        const rows = await tgtRead(sym, TGT_RES_K, from, to);
+        if (rows.hole) hole = true;
+        w = rows.length ? tgtWalk(sig, rows, TGT_RES, hold) : null;
+        if (to >= end || (w && (w.sl || w.done || (w.none && !w.wait)))) break;
+        to = Math.min(end, to + step);
       }
-      const hMs = TGT_HEAD_RES * 60000, cut = Math.floor((t0 + TGT_HEAD_BARS * hMs) / (r[0] * 60000)) * r[0] * 60000;
-      const tail = AI_RES.find(x => (to - cut) / (x[0] * 60000) <= 1900) || r;
-      // One after the other, so four walks at a time stay four reads at a time.
-      const h = await tgtRead(sym, "15m", t0 - hMs, cut), t = await tgtRead(sym, tail[1], cut, to);
-      const rows = h.filter(k => k.time * 1000 < cut).map(k => Object.assign({}, k, { res: TGT_HEAD_RES }))
-        .concat(t.filter(k => k.time * 1000 >= cut).map(k => Object.assign({}, k, { res: tail[0] })));
-      return rows.length ? Object.assign(tgtWalk(sig, rows, TGT_HEAD_RES, hold), { fh: 1 }) : none();
+      if (!w) return Object.assign({ none: "no candles on Delta", v: TGT_WALK_V }, sym !== tgtPlain(sig.symbol) ? { via: sym } : {});
+      return Object.assign(w, { v: TGT_WALK_V }, hole ? { hole: 1 } : {});
     }
     // Reads the candles of every graded alert in view that has none yet, four at a
     // time, and redraws as they come in. Finished windows are kept on this device.
@@ -10025,8 +10102,10 @@
         // candles" kept before the bStocks names were known (tgtStale), and a "Till TP /
         // SL" one kept before Trail TP (no tr).
         // With the Demo account open, a walk kept before times (no ft) is read once more for its hold time.
-        // A walk kept before the 15m head (no fh) whose window needs one is read once more too.
-        if (seen[k] || (c && ((c.none && !tgtStale(g, c) && !tgtNoneEarly(g)) || (Array.isArray(c.p) && (hold !== "tp" || c.tr) && (c.ft != null || !times) && (c.fh || !tgtNeedsHead(g, hold))))) || tgtTried[k] || tgtWhy(g) || !tgtBase({ signal: g })) return false;
+        // A walk kept by a build before v.186 (no v: its candle size came from the alert's age) is walked again on 15m.
+        // A walk still open is walked again after TGT_LIVE_MS, as new candles come in.
+        const live = tgtLive[k], again = !!live && live.none !== "no candles on Delta" && Date.now() - (live.at || 0) > TGT_LIVE_MS;
+        if (seen[k] || (c && c.v === TGT_WALK_V && ((c.none && !tgtStale(g, c) && !tgtNoneEarly(g)) || (Array.isArray(c.p) && (hold !== "tp" || c.tr) && (c.ft != null || !times)))) || (tgtTried[k] && !again) || tgtWhy(g) || !tgtBase({ signal: g })) return false;
         return (seen[k] = true);
       });
       // Already reading: what this view needs goes to the front of the line (a setting
@@ -10037,7 +10116,7 @@
       if (tgtBusy) { tgtQ.unshift(...fresh); if (tgtProg) tgtProg.total += fresh.length; return; }
       tgtQ.push(...fresh);
       tgtBusy = true; tgtProg = { done: 0, total: tgtQ.length };
-      let drawn = Date.now(), ok = 0, missed = 0;
+      let drawn = Date.now(), saved = Date.now(), ok = 0, missed = 0;
       const worker = async () => {
         while (tgtQ.length) {
           // The connection dropped mid-read (or Delta is unreachable): stop instead of
@@ -10045,22 +10124,38 @@
           if (navigator.onLine === false || (!ok && missed >= 12)) { tgtQ.forEach(x => { tgtTried[x.k] = 1; delete tgtQIn[x.k]; }); tgtFail += tgtQ.length; tgtQ.length = 0; break; }
           const it = tgtQ.shift(), g = it.g, k = it.k, hold = it.hold;
           delete tgtQIn[k];
+          // Once Delta answers, the next walks' first blocks are asked for ahead (see tgtPrefetch).
+          if (ok) tgtPrefetch(tgtQ.slice(0, 4 * TGT_READS));
           // No view asked for it since the settings changed: not read.
           if ((tgtWant[k] || 0) < tgtGen - 1) { tgtProg.total--; continue; }
           tgtTried[k] = 1;
           try {
             const w = await tgtOne(g, hold);
             ok++;
-            // A walk read again only for its times keeps the old one if the candles are gone now.
+            // Read again only for its times or for 15m: the old walk stays if the candles are gone now.
             const prev = tgtCache()[k];
-            if (w.none && prev && Array.isArray(prev.p)) { /* keep prev */ }
-            else if ((w.none && !w.wait) || w.sl || w.done) tgtCache()[k] = w; else { tgtLive[k] = w; delete tgtCache()[k]; }
+            if (w.none === "no candles on Delta" && prev && Array.isArray(prev.p)) { /* keep prev */ }
+            // Kept for good only once it has ended, from blocks with no hole; "no candles"
+            // only for this visit (a coin Delta lists later is read again next time).
+            else if (!w.hole && ((w.none && !w.wait && w.none !== "no candles on Delta") || w.sl || w.done)) { tgtCache()[k] = w; delete tgtLive[k]; }
+            else { tgtLive[k] = Object.assign(w, { at: Date.now() }); delete tgtCache()[k]; }
           } catch (e) { tgtFail++; missed++; }
           tgtProg.done++;
-          if (Date.now() - drawn > 1500) { drawn = Date.now(); tgtSave(); renderSignalsTable(); }
+          // Redrawn every 1.5 s; written to the device every 10 s (the whole store is one value).
+          if (Date.now() - drawn > 1500) { drawn = Date.now(); if (Date.now() - saved > 10000) { saved = Date.now(); tgtSave(); } renderSignalsTable(); }
         }
       };
       try { await Promise.all([1, 2, 3, 4].map(worker)); } finally { tgtBusy = false; tgtProg = null; tgtSave(); renderSignalsTable(); }
+    }
+    // The first block of the walks next in line is asked for ahead, in queue order
+    // (TGT_READS at a time): four walks waiting on one coin's block no longer leave the
+    // other coins' reads idle. A block already asked for is not asked again.
+    function tgtPrefetch(items) {
+      const step = TGT_CHUNK * TGT_RES * 60000;
+      items.forEach(it => {
+        const from = tgtAlertMs(it.g) - TGT_RES * 60000;
+        if (isFinite(from) && from <= Date.now()) tgtChunk(tgtSym(it.g.symbol), TGT_RES_K, Math.floor(from / step), step, Date.now());
+      });
     }
     // Hold times are wanted where they are shown: the Demo account (Signals).
     function tgtWantTimes() { return typeof sigCurSec === "function" && !!sigView && sigCurSec() === "demo"; }
@@ -10083,7 +10178,11 @@
       if (tgtProg) bits.push(`reading prices ${tgtProg.done}/${tgtProg.total}…`);
       slCoverBits(pairs).forEach(b => bits.push(b));
       if (navigator.onLine === false) bits.push("offline: prices load once the connection is back");
-      return { text: bits.join(" · "), fail: !tgtProg && tgtFail ? tgtFail : 0 };
+      // missing: alerts left out of the numbers for now (no price data yet, or the SL still
+      // waits for candles); loading: reads still going, so the numbers will change.
+      const missing = graded.length - have + pairs.filter(pr => pr.signal.slWait).length;
+      return { text: bits.join(" · "), fail: !tgtProg && tgtFail ? tgtFail : 0, missing, graded: graded.length + pairs.filter(pr => pr.signal.slWait).length, loading: !!(tgtProg || slcProg),
+        prog: tgtProg ? tgtProg.done + "/" + tgtProg.total : slcProg ? "SL candles " + slcProg.done + "/" + slcProg.total : "" };
     }
     // ---- Analysis demo mode (lakky, 2026-11-08: "add demo mode so i can check what
     // mistakes i did if i go with the tp and sl not with amount i saw and exit") ----
@@ -11251,12 +11350,20 @@
     // The alerts in the current view as a spreadsheet, results included.
     function exportSigBacktestCsv() {
       const q = v => { const x = v == null ? "" : String(v); return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
-      const cols = ["date", "time", "kind", "channel", "symbol", "side", "entry", "stop", "stop_pct", "score", "filled", "outcome", "signal_r", "signal_pct", "taken", "my_r"];
-      const rows = withOutcomeCache(() => btLast.slice().sort((a, b) => sbtWhen(a.signal) < sbtWhen(b.signal) ? -1 : 1).map(pr => {
-        const g = pr.signal, o = outcomeOf(pr), sp = slPct(g), mo = myOutcome(pr);
+      // Inside the Signals scope, so signal_r is what the tab shows (with an Exit at, the
+      // what-if result; it used to export the scanner's). The what-if columns let a retest
+      // be checked trade by trade (tools/signals-retest.py): the rules, Delta's symbol, the
+      // fill candle (IST), the exit and minutes held.
+      const cols = ["date", "time", "kind", "channel", "symbol", "side", "entry", "stop", "stop_pct", "score", "filled", "outcome", "signal_r", "signal_pct", "taken", "my_r", "scanner_r", "what_if", "delta_symbol", "walk_filled", "fill_time", "exit", "exit_after_min"];
+      const tg = sigTgt(), rules = tg ? inSigScope(() => [tg.k, sigSlOn() ? sigSlOn().label : "", sigStopMove() ? sigStopMove().label : "", sigTrail() ? sigTrail().label : "", holdTxt(), sigNoFee() ? "no fees" : ""].filter(Boolean).join("; ")) : "";
+      const istTime = ms => { const d = new Date(ms + 330 * 60000); return d.toISOString().slice(0, 16).replace("T", " "); };
+      const rows = withOutcomeCache(() => inSigScope(() => btLast.slice().sort((a, b) => sbtWhen(a.signal) < sbtWhen(b.signal) ? -1 : 1).map(pr => {
+        const g = pr.signal, o = outcomeOf(pr), sp = slPct(g), mo = myOutcome(pr), b = outcomeBase(pr), w = tg && !isNseSig(g) ? tgtPath(g) : null, wf = tg ? tgtFilled(pr) : null;
         return [g.date, g.time, g.kind || "zone", chanLabel(chanKey(g)), g.symbol, g.side, signalEntry(g), g.stop, sp != null ? sp.toFixed(3) : "", g.score || "",
-          g.filled === true ? "yes" : g.filled === false ? "no" : "", g.outcome || "", o ? o.r.toFixed(3) : "", o && sp != null ? (o.r * sp).toFixed(3) : "", pr.trade ? "yes" : "", mo ? mo.r.toFixed(3) : ""];
-      }));
+          g.filled === true ? "yes" : g.filled === false ? "no" : "", g.outcome || "", o ? o.r.toFixed(3) : "", o && sp != null ? (o.r * sp).toFixed(3) : "", pr.trade ? "yes" : "", mo ? mo.r.toFixed(3) : "",
+          b && b.r != null ? b.r.toFixed(3) : "", rules, tg && !isNseSig(g) ? tgtSym(g.symbol) : "", wf === true ? "yes" : wf === false ? "no" : "",
+          w && w.ft != null ? istTime(w.ft) : "", o && o.label ? o.label : "", o && o.at != null ? o.at : ""];
+      })));
       if (!rows.length) { toast("No alerts in this view to export"); return; }
       const csv = "﻿" + [cols].concat(rows).map(r => r.map(q).join(",")).join("\r\n");
       const a = document.createElement("a");
@@ -12047,6 +12154,17 @@
       const strip = document.getElementById('sigEdgeStrip');
       if (strip) {
         strip.innerHTML = '';
+        // Numbers over part of the alerts look final but are not (lakky, 2026-11-12: "sometimes
+        // it gives wrong data"): say so above them while prices load or some are missing.
+        const cv0 = sigTgt() ? tgtCoverNote(pairs) : null;
+        if (cv0 && (cv0.loading || cv0.missing > 0)) {
+          const b = document.createElement('div');
+          b.id = 'sigNotFinal';
+          b.className = 'col-span-full text-[12px] font-mono px-2.5 py-1.5 rounded-lg border ' + (cv0.loading ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-rose-500/50 bg-rose-500/10 text-rose-200');
+          b.innerHTML = cv0.loading ? `Not final yet: loading prices${cv0.prog ? ' ' + esc(cv0.prog) : ''}. ${cv0.missing} of ${cv0.graded} alerts have no result yet, so these numbers will still change.`
+            : `Not final: ${cv0.missing} of ${cv0.graded} alerts have no price data, so they are left out of these numbers.` + (cv0.fail ? ' <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '');
+          strip.appendChild(b);
+        }
         const rs = scored.map(pr => outcomeOf(pr).r);
         const psAll = scored.map(sigOutPct);
         const pOfPick = pr => pr ? sigOutPct(pr) : null;
@@ -12080,7 +12198,7 @@
         items.forEach(it => {
           const card = document.createElement('div');
           if (it.tip) card.title = it.tip;
-          card.className = 'bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors';
+          card.className = 'bg-terminal-card border border-terminal-border hover:border-terminal-borderLight p-2.5 rounded-lg flex flex-col justify-between transition-colors' + (cv0 && cv0.loading ? ' opacity-50' : '');
           card.innerHTML = `<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">${it.label}</span>
             <div class="my-0.5"><div class="text-base sm:text-lg font-bold ${it.color} mono-num">${it.val}</div>${it.sub ? `<div class="text-[10px] text-slate-400 truncate">${statSub(it.sub)}</div>` : ""}</div>`;
           strip.appendChild(card);
@@ -12109,7 +12227,7 @@
           strip.appendChild(line);
         }
         if (tg) {
-          const cv = tgtCoverNote(pairs);
+          const cv = cv0 || tgtCoverNote(pairs);
           const line = document.createElement('div');
           line.id = 'sigTgtNote';
           line.className = 'col-span-full text-[11px] font-mono text-amber-300';
@@ -14662,6 +14780,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-12.186', pr: 100, title: 'Signals: backtest = retest, faster', pts: ['Every Exit at walk now uses 15m candles. It used to pick 1m to 1d by the alert\'s age, so the same alert scored differently by the day you looked and retests disagreed; old results are redone once', 'Candles are kept on the device and read in parallel, only as far as each trade needs (a full fib view: 309 reads to 193, ~30% faster; the next visit reads only the newest block). A Not final line shows while prices load', 'Export CSV now gives the what-if R shown (it gave the scanner\'s) with fill and exit per trade. A new test holds the tab equal to an independent retest on real alerts'] },
       { v: '2026-11-12.184', pr: 98, title: 'Signals: history fills only after the alert', pts: ['A history (rebuilt) fib or trendline alert is stamped at the start of the candle the scanner checked, up to 4 hours (1D) or a day (1W / 1M) before the alert really went out, and Exit at counted fills from that start', 'Now a fill counts only after the first candle that reaches the alert band (0.75%, 3% on 1W / 1M); a fill in that same candle is one your order would have missed', 'Fixed Exit at results change a little (one 1000PEPE trade was +5.6R of a month); those alerts are read once more, so the first open takes longer'] },
       { v: '2026-11-11.183', pr: 97, title: 'Signals: switch fib levels on or off', pts: ['Under Fib alerts, Levels on: L1 L2 L3 L4 as buttons. Switch a level off and every number on the tab leaves out the alerts that entered there, so you can check L2 on its own, or L2-L4 without L1', 'The Level row (score every alert at one level) is unchanged; the scanner stopped alerting L1 on 11 Nov'] },
       { v: '2026-11-10.182', pr: 96, title: 'Signals: Exit at and SL results fill much faster', pts: ['A month of fib alerts with a Wick / Body SL needed ~1,000+ price reads from Delta, one or two per alert, and the results stayed empty for minutes', 'Candles are now read in blocks shared by every alert on a coin: about a fifth of the reads, same results', 'A setting changed mid-read is read first (old reads are dropped), and a busy Delta is asked again'] },
