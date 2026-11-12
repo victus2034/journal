@@ -2902,6 +2902,25 @@ async function demoDeepRun(seed) {
   const text = sel => page.evaluate(s => { const el = document.querySelector(s); return el ? el.innerText.replace(/\s+/g, ' ').trim() : null; }, sel);
   try {
     await page.goto(base, { waitUntil: 'load' });
+    // ---- Pure: a rebuilt history row fills only after the candle that reaches the alert band (v.184) ----
+    const late = await page.evaluate(t0 => {
+      const Q = 900, base = { side: 'long', entry: 100, stop: 99, timeframe: '1D', date: '2026-10-01', time: '10:00', kind: 'fib' };
+      // candle 1 away from the band, candle 2 reaches the band and the entry at once, candle 3 runs, candle 4 comes back to the entry
+      const cs = [{ time: t0, high: 102, low: 101.5, close: 101.8 }, { time: t0 + Q, high: 101.8, low: 99.9, close: 101.5 }, { time: t0 + 2 * Q, high: 103, low: 101.2, close: 102.5 }, { time: t0 + 3 * Q, high: 102.5, low: 99.95, close: 100.2 }];
+      const live = tgtWalk(Object.assign({ key: 'fib|X|1d|a@1' }, base), cs, 15), rb = tgtWalk(Object.assign({ key: 'fib|X|1d|a@1|rb', rb: true }, base), cs, 15);
+      const never = tgtWalk(Object.assign({ key: 'fib|X|1d|a@1|rb', rb: true }, base), cs.slice(0, 3), 15);
+      const brk = tgtWalk(Object.assign({ key: 'tl|X|1d|0|1|2|br@1|rb', rb: true }, base, { kind: 'trendline' }), cs, 15);
+      const wk = tgtWalk(Object.assign({ key: 'fib|X|1w|a@1|rb', rb: true }, base, { timeframe: '1W' }), cs, 15);
+      return { live: live.ft, rb: rb.ft, never: never.none, brk: brk.ft, wk: wk.ft, t1: (t0 + Q) * 1000, t3: (t0 + 3 * Q) * 1000,
+        keys: [tgtHoldKey(Object.assign({ key: 'k', rb: true }, base), 'tp'), tgtHoldKey(Object.assign({ key: 'k' }, base), 'tp')] };
+    }, Date.parse('2026-10-01T04:30:00Z') / 1000);
+    if (late.live !== late.t1) errs.push('late alert: a live alert should fill in the band candle: ' + JSON.stringify(late));
+    if (late.rb !== late.t3) errs.push('late alert: a rebuilt row should fill only after the band candle: ' + JSON.stringify(late));
+    if (late.never !== 'entry not reached') errs.push('late alert: no later touch should be no fill: ' + JSON.stringify(late));
+    if (late.brk !== late.t1) errs.push('late alert: a rebuilt break row is unchanged: ' + JSON.stringify(late));
+    // 1W: the 3% band (103) is reached by candle 1, so candle 2 can fill
+    if (late.wk !== late.t1) errs.push('late alert: 1W uses the 3% band: ' + JSON.stringify(late));
+    if (!/\|ab$/.test(late.keys[0]) || /\|ab$/.test(late.keys[1])) errs.push('late alert: rebuilt rows need their own kept walk: ' + JSON.stringify(late.keys));
     // ---- Pure: walk times, the exit time of each rule, hold, labels, axis steps ----
     const p = await page.evaluate(t0 => {
       const sig = { side: 'long', entry: 100, stop: 99, timeframe: '4H', date: '2026-10-01', time: '10:00' }, Q = 900;
