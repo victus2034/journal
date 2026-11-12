@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-11.183">
+  <meta name="app-version" content="2026-11-12.184">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -9725,7 +9725,17 @@
     function tgtStale(sig, w) { return !!w && w.none === "no candles on Delta" && !w.via && tgtSym(sig.symbol) !== tgtPlain(sig.symbol); }
     function tgtKey(sig) { return [sig.key || sig.symbol + "|" + sig.date + "|" + sig.time, sig.side, signalEntry(sig), sig.stop].join("|"); }
     // Each hold has its own walk: the 20-candle one (kept under the plain key) and "|tp".
-    function tgtHoldKey(sig, hold) { return tgtKey(sig) + ((hold || sigHold()) === "tp" ? "|tp" : ""); }
+    function tgtHoldKey(sig, hold) { return tgtKey(sig) + ((hold || sigHold()) === "tp" ? "|tp" : "") + (tgtLate(sig) ? "|ab" : ""); }
+    // A rebuilt history row (fib or trendline touch) is stamped at the open of the candle
+    // the scanner's replay checked (4h for a 1D alert, a day for 1W / 1M), not the minute
+    // the alert went out: price came into the alert band some time inside that candle,
+    // and an order placed on the alert cannot fill before that (lakky, 2026-11-12: a
+    // 1000PEPE L4 fill in the candle that first reached the band was +5.6R of a month's
+    // +11.8R). For these rows the walk waits for the first candle that reaches the band
+    // (0.75% from entry, 3% on 1W / 1M, the scanner's) and fills only from the next one.
+    // Live alerts carry their real minute; break alerts enter at market: both unchanged.
+    function tgtLate(sig) { return !!sig && sig.rb === true && (sig.kind === "fib" || sig.kind === "trendline") && !/^tlbreak\||\|br(@|$)/.test(String(sig.key || "")); }
+    function tgtBandFrac(sig) { return (tfMinutes(sig.timeframe) >= 10080 ? 3 : 0.75) / 100; }
     function tgtAlertMs(sig) { return new Date(sig.date + "T" + String(sig.time || "00:00").slice(0, 5).padStart(5, "0") + ":00+05:30").getTime(); }
     // Why an alert can't be re-scored, or "" when it can.
     function tgtWhy(sig) {
@@ -9745,7 +9755,12 @@
       const tfMs = tfMinutes(sig.timeframe) * 60000, resMs = resMin * 60000, t0 = tgtAlertMs(sig);
       // k.res: the candle's own size in minutes, where one read mixed sizes (tgtOne's 15m head).
       const bars = candles.map(k => Object.assign({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close }, k.res ? { r: k.res * 60000 } : {})).filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + (k.r || resMs) > t0).sort((a, b) => a.t - b.t);
-      const fi = bars.findIndex(k => k.t < t0 + TGT_BARS * tfMs && (s > 0 ? k.l <= entry : k.h >= entry));
+      let from = 0;
+      if (tgtLate(sig)) {
+        const edge = entry * (1 + s * tgtBandFrac(sig)), bi = bars.findIndex(k => s > 0 ? k.l <= edge : k.h >= edge);
+        from = bi < 0 ? bars.length : bi + 1;
+      }
+      const fi = bars.findIndex((k, i) => i >= from && k.t < t0 + TGT_BARS * tfMs && (s > 0 ? k.l <= entry : k.h >= entry));
       // Not reached yet while the fill window is still open: "wait", read again later.
       const seenTo = bars.length ? bars[bars.length - 1].t + (bars[bars.length - 1].r || resMs) : 0;
       if (fi < 0) return seenTo < t0 + TGT_BARS * tfMs ? { none: "entry not reached", wait: 1 } : { none: "entry not reached" };
@@ -14647,6 +14662,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-12.184', pr: 98, title: 'Signals: history fills only after the alert', pts: ['A history (rebuilt) fib or trendline alert is stamped at the start of the candle the scanner checked, up to 4 hours (1D) or a day (1W / 1M) before the alert really went out, and Exit at counted fills from that start', 'Now a fill counts only after the first candle that reaches the alert band (0.75%, 3% on 1W / 1M); a fill in that same candle is one your order would have missed', 'Fixed Exit at results change a little (one 1000PEPE trade was +5.6R of a month); those alerts are read once more, so the first open takes longer'] },
       { v: '2026-11-11.183', pr: 97, title: 'Signals: switch fib levels on or off', pts: ['Under Fib alerts, Levels on: L1 L2 L3 L4 as buttons. Switch a level off and every number on the tab leaves out the alerts that entered there, so you can check L2 on its own, or L2-L4 without L1', 'The Level row (score every alert at one level) is unchanged; the scanner stopped alerting L1 on 11 Nov'] },
       { v: '2026-11-10.182', pr: 96, title: 'Signals: Exit at and SL results fill much faster', pts: ['A month of fib alerts with a Wick / Body SL needed ~1,000+ price reads from Delta, one or two per alert, and the results stayed empty for minutes', 'Candles are now read in blocks shared by every alert on a coin: about a fifth of the reads, same results', 'A setting changed mid-read is read first (old reads are dropped), and a busy Delta is asked again'] },
       { v: '2026-11-10.181', pr: 95, title: 'Signals: pick the SL, and compare them', pts: ['Signals → SL: play every alert with its own SL, the last candle wick or body at least 0.25-1.5% past entry, the closer of the two, a fixed %, or for fibs the next level / L4 box', 'Works with any fixed Exit at; the headline, breakdowns, Move SL, Trail TP and Demo account follow it', 'Edge & breakdowns: SL compared, total R for every SL at every target, with each one\'s average SL size; tap a cell to use it'] },
