@@ -2189,6 +2189,9 @@ async function importNowRun(seed) {
     v = await view();
     check(/^Waiting for your PC/.test(v.text) && v.off, 'pending: ' + JSON.stringify(v));
     await settle(15 * 60e3);
+    // A look at GitHub fired inside those 15 minutes may still be answering (real time):
+    // let it land and give it the poll after it, so a slow runner can't catch it mid-look.
+    for (let i = 0; i < 40 && await page.evaluate(() => pcLive()); i++) await settle(10e3);
     v = await view();
     check(/^Still waiting for your PC since \d\d:\d\d( [AP]M)?: .*New trades come in with the next sync\.$/.test(v.text) && !v.off && v.btn === 'Import now', 'gave up: ' + JSON.stringify(v));
     check(/The run from \d\d:\d\d( [AP]M)? is waiting for your PC: the import runs there/.test(v.card) && !/Import last run/.test(v.card), 'card does not say the run waits for the PC: ' + JSON.stringify(v.card));
