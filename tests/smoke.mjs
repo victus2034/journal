@@ -5033,6 +5033,7 @@ async function slTypeRun(seed) {
       // Sell fib top 10 (low), base 110: L3 at 65, next = 10 + 0.6875 x 100 = 78.75.
       const S3 = fib('fib|X|4h|-1|1000|10|2', 65, 'short');
       const out = { L3: [at(L3, 'next'), at(L3, 'box')], L1: [at(L1, 'next'), at(L1, 'box')], L4: [at(L4, 'next'), at(L4, 'box')], L2c: at(L2c, 'next'), S3: at(S3, 'next'),
+        inner: [at(L1, 'in2'), at(L1, 'in3'), at(L2c, 'in2'), at(L4, 'in2'), at(S3, 'in2'), at({ key: 'tl|1', kind: 'trendline', entry: 100, side: 'long' }, 'in2')],
         pct: [at({ entry: 100, side: 'long' }, 'pct'), at({ entry: 200, side: 'short' }, 'pct')], tl: at({ key: 'tl|1', kind: 'trendline', entry: 100, side: 'long' }, 'next') };
       // Built candles: 1M from days (calendar months, UTC), the forming month and a partial oldest one left out;
       // 1W from Monday. Days from 15 Jul to 10 Oct 2026, alert on 10 Oct.
@@ -5066,6 +5067,7 @@ async function slTypeRun(seed) {
     check(JSON.stringify(pure.L3) === '[41.25,41.25]', 'fib L3: next = L4 box = L4 - pad: ' + JSON.stringify(pure.L3));
     check(JSON.stringify(pure.L1) === '[62.25,41.25]' && JSON.stringify(pure.L4) === '[30.25,41.25]' && pure.L2c === 52.25, 'fib L1 / L4 / L2 what-if: ' + JSON.stringify(pure));
     check(pure.S3 === 78.75, 'sell fib next level: ' + pure.S3);
+    check(JSON.stringify(pure.inner) === '[71.05,69.95,60.5,39.05,69.95,null]', 'inner fib SL: L1 2nd / 3rd line, L2, L4, sell L3, not on a trendline: ' + JSON.stringify(pure.inner));
     check(JSON.stringify(pure.pct) === '[99,202]' && pure.tl === null, 'fixed 1% both ways; a trendline has no fib level: ' + JSON.stringify([pure.pct, pure.tl]));
     check(JSON.stringify(pure.months) === '["2026-08-01:16","2026-09-01:11"]', '1M candles from days: ' + JSON.stringify(pure.months));
     check(pure.weeks[2] === 1 && pure.weeks[3] === '2026-09-28' && pure.weeks[1] === '2026-07-20', '1W candles start on Monday, forming week out: ' + JSON.stringify(pure.weeks));
