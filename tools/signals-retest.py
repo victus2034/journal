@@ -24,6 +24,11 @@ The rules (each one lakky's):
   the higher stop wins; a Move SL trigger at or past the target never fires; Trail TP
   locks the first target. Hold: till TP / SL, or 20 candles after the fill (closed at the
   last close). Costs: 0.0826% round trip (off with no fees), every stop fills 0.05% past it.
+- Partial (2026-11-13): a share of the position closes at a level (a limit, no slippage) on
+  the first candle reaching it, after the stop check (the fill candle: its close); another
+  share at the Move SL trigger when "book" is set. Shares of the whole position, lowest
+  level first, never more than what is left. Without Trail TP a level at or past the target
+  books nothing. Every later exit is for the rest; fees stay one round trip on the whole.
 
 python3 tools/signals-retest.py FIXTURE.json.gz COMBOS.json OUT.json [--app APP.json]
 FIXTURE: {now, records, results, candles: {"SYM_15m": [[time s, open, high, low, close], ...]}}.
@@ -140,6 +145,29 @@ def main(argv):
         tr = c.get("trail") or {}
         step = inR(tr.get("stepP" if pc else "step", 0.25)) if tr.get("on") else None
         gap = inR(tr.get("gapP" if pc else "gap", 0.25)) if tr.get("on") else None
+        pt = c.get("part") or {}
+        parts = []
+        if pt.get("q"):
+            parts.append([inR(pt.get("atP" if pc else "at", 0.5 if pc else 1)), pt["q"] / 100])
+        if pt.get("beQ") and mv_at is not None:
+            parts.append([mv_at, pt["beQ"] / 100])
+        parts = sorted(p for p in parts if step is not None or p[0] < tR - 1e-9)
+        bk = {"got": 0.0, "left": 1.0, "n": 0}
+
+        def book(fav):
+            for p in parts:
+                if len(p) == 2 and bk["left"] > 1e-9 and fav >= p[0] - 1e-9:
+                    q = min(p[1], bk["left"])
+                    bk["got"] += q * p[0]
+                    bk["left"] -= q
+                    bk["n"] += 1
+                    p.append(1)
+            return bk["left"] <= 1e-9
+
+        def done(r, label):
+            if label == "Partial":
+                return {"filled": True, "r": bk["got"] - cost, "label": label}
+            return {"filled": True, "r": bk["got"] + bk["left"] * r - cost, "label": ("Part + " if bk["n"] else "") + label}
         resms = RESM * 60000
         bars = [b for b in between(sym, "15m", (t0 - resms) // 1000, now + 1) if b[0] * 1000 + resms > t0]
         i0 = 0
@@ -151,17 +179,19 @@ def main(argv):
         if fi is None:
             return {"filled": False, "r": None, "label": "no fill"}
         R = lambda p: s * (p - entry) / entry / rk
-        sl_r = -1 - (stop / entry) * SLIP / risk - cost
-        exit_at = lambda lvl: lvl - (1 + s * lvl * risk / 100) * SLIP / risk - cost
+        sl_r = -1 - (stop / entry) * SLIP / risk
+        exit_at = lambda lvl: lvl - (1 + s * lvl * risk / 100) * SLIP / risk
         end = math.inf if c.get("hold", "tp") == "tp" else bars[fi][0] * 1000 + BARS * tfms
         f = bars[fi]
         hit = lambda b, p: (b[3] <= p if s > 0 else b[2] >= p)
         if hit(f, stop):
-            return {"filled": True, "r": sl_r, "label": "SL"}
+            return done(sl_r, "SL")
         moved, why, tgt = None, "", tR
         best = max(0.0, R(f[4]))
+        if book(best):
+            return done(0, "Partial")
         if best >= tR - 1e-9 and step is None:
-            return {"filled": True, "r": tR - cost, "label": "Target"}
+            return done(tR, "Target")
 
         def events(fav):
             nonlocal tgt
@@ -184,14 +214,16 @@ def main(argv):
             pend, last = [], b
             lo, hi = R(b[3] if s > 0 else b[2]), R(b[2] if s > 0 else b[3])
             if hit(b, stop) and moved is None:
-                return {"filled": True, "r": sl_r, "label": "SL"}
+                return done(sl_r, "SL")
             if moved is not None and lo <= moved + 1e-9:
-                return {"filled": True, "r": exit_at(moved), "label": why}
+                return done(exit_at(moved), why)
+            if book(hi):
+                return done(0, "Partial")
             if step is None and hi >= tR - 1e-9:
-                return {"filled": True, "r": tR - cost, "label": "Target"}
+                return done(tR, "Target")
             pend = events(hi)
         if end != math.inf and last[0] * 1000 + resms >= end:
-            return {"filled": True, "r": R(last[4]) - cost, "label": "Time exit"}
+            return done(R(last[4]), "Time exit")
         return {"filled": True, "r": None, "label": "open"}
 
     report, bad = {}, 0
