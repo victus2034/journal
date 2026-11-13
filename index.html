@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-13.188">
+  <meta name="app-version" content="2026-11-13.189">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -4051,12 +4051,14 @@
       const rawPairs = matchSignals(kind), allPairs = sigSlPairs(sigLvlPairs(rawPairs));
       // Coins: which ones the filter keeps, from the coins in this channel and period.
       const chanPairs = state.ui.sigChan ? allPairs.filter(pr => chanKey(pr.signal) === state.ui.sigChan) : allPairs;
-      const coinCounts = sigCoinCounts(chanPairs.filter(pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to)));
-      const coinSet = Object.keys(coinCounts).length ? sigCoinSet(coinCounts) : null;
-      const coinKeep = coinSet ? (g => coinSet.indexOf(coinOf(g)) !== -1) : null;
-      renderSigCoinBar(coinCounts, coinSet);
+      const coinPool = chanPairs.filter(pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to));
+      const coinCounts = sigCoinCounts(coinPool);
+      const coinSet = coinSetFor(COINS.sig, coinCounts, coinPool, pr => pr.signal);
+      const coinKeep = coinKeepOf(coinSet);
+      renderSigCoinBar(coinCounts, coinSet, coinPool.some(pr => !isNseSig(pr.signal)));
+      if (sigCoinMode() === "delta") demoSpecsLoad(); // Delta's live list, when it can be read
       renderSigCalendar(coinKeep ? chanPairs.filter(pr => coinKeep(pr.signal)) : chanPairs, range);
-      if (hint && coinSet) hint.innerText += ` · ${coinSet.length ? coinSet.join(", ") : "no coins picked"}`;
+      if (hint && coinSet) hint.innerText += ` · ${coinSetTxt(coinSet)}`;
       if (hint && mktFilter()) hint.innerText += ` · BTC ${MKT_LABEL[mktFilter()].toLowerCase()} days only`;
       if (hint && sigLvl()) hint.innerText += ` · entered at ${sigLvl()}`;
       if (hint && sigTlType()) hint.innerText += ` · ${sigTlType().label} only`;
@@ -4430,7 +4432,8 @@
     }
     // Coins on your trades, like Signals' Coins row: "BTC" for BTCUSD or B-BTC_USDT;
     // NSE, gold, silver and US stocks are not coins.
-    function anCoinOf(t) { const a = acct(t.accountId); return coinOf({ symbol: aiDeltaSym(t.symbol), market: a && a.market === "nse" ? "NSE" : "" }); }
+    function anSigOf(t) { const a = acct(t.accountId); return { symbol: aiDeltaSym(t.symbol), market: a && a.market === "nse" ? "NSE" : "" }; }
+    function anCoinOf(t) { return coinOf(anSigOf(t)); }
     function anCoinMode() { return SIG_COIN_MODES.some(x => x.k === state.ui.anCoins) ? state.ui.anCoins : ""; }
     function anCoinRank() { return state.ui.anCoinRank === "alerts" ? "alerts" : "cap"; }
     function anCoinPicks() { return Array.isArray(state.ui.anCoinPicks) ? state.ui.anCoinPicks.filter(x => typeof x === "string" && x) : SIG_COIN_PICKS.slice(); }
@@ -4438,8 +4441,8 @@
     function setAnCoinRank(v) { anSet('anCoinRank', v === "alerts" ? "alerts" : "cap"); }
     function toggleAnCoinPick(c) { const p = anCoinPicks(), i = p.indexOf(c); if (i === -1) p.push(c); else p.splice(i, 1); anSet('anCoinPicks', p); }
     // The coins the Coins row keeps (null: every trade), from the trades in view.
-    let anCoinCur = null;
-    function anPassCoin(t) { return !anCoinCur || anCoinCur.indexOf(anCoinOf(t)) !== -1; }
+    let anCoinCur = null, anCoinKeep = null;
+    function anPassCoin(t) { return !anCoinKeep || anCoinKeep(anSigOf(t)); }
     // A row of buttons; fn is called with the picked key.
     function anSegBar(id, items, cur, fn, attr, title) {
       const bar = document.getElementById(id);
@@ -4491,9 +4494,11 @@
       }
       // Coins: from the trades of this type and channel in the period.
       const coinCnt = {};
-      pool.filter(x => anPassSetup(x.s)).forEach(x => { const c = anCoinOf(x.t); if (c) coinCnt[c] = (coinCnt[c] || 0) + 1; });
-      anCoinCur = Object.keys(coinCnt).length ? sigCoinSet(coinCnt, null, COINS.an) : null;
-      renderCoinBar(COINS.an, coinCnt, anCoinCur);
+      const coinPool = pool.filter(x => anPassSetup(x.s));
+      coinPool.forEach(x => { const c = anCoinOf(x.t); if (c) coinCnt[c] = (coinCnt[c] || 0) + 1; });
+      anCoinCur = coinSetFor(COINS.an, coinCnt, coinPool, x => anSigOf(x.t)); anCoinKeep = coinKeepOf(anCoinCur);
+      renderCoinBar(COINS.an, coinCnt, anCoinCur, coinPool.some(x => !isNseSig(anSigOf(x.t))));
+      if (anCoinMode() === "delta") demoSpecsLoad();
       document.getElementById('anLvlWrap').classList.toggle('hidden', kind !== 'fib');
       anSegBar('anLvlBar', [["", "All"]].concat(FIB_LEVEL_KEYS.map(k => [k, k])), anLvl(), "setAnLvl", "lvl", "The fib level the trade was taken at");
       document.getElementById('anTlWrap').classList.toggle('hidden', kind !== 'trendline');
@@ -4505,7 +4510,7 @@
       const r = anRangeFull(), hint = [];
       hint.push(r.from || r.to ? (r.from || "start") + " → " + (r.to || "now") : "All history");
       if (state.ui.anChan) hint.push(chanLabel(state.ui.anChan));
-      if (anCoinCur) hint.push(anCoinCur.length ? anCoinCur.join(", ") : "no coins picked");
+      if (anCoinCur) hint.push(coinSetTxt(anCoinCur));
       if (anLvl()) hint.push("fib " + anLvl());
       if (anTlType()) hint.push(anTlType().label);
       if (mktFilter()) hint.push("BTC " + MKT_LABEL[mktFilter()].toLowerCase() + " days");
@@ -4516,7 +4521,7 @@
       if (ws) {
         const cm = SIG_COIN_MODES.find(x => x.k === anCoinMode());
         const bits = [(AN_KINDS.find(x => x.k === kind) || AN_KINDS[0]).label, (AN_PERIODS.find(p => p.k === mode) || AN_PERIODS[3]).label, state.ui.anChan ? chanLabel(state.ui.anChan) : "all channels"];
-        if (anCoinCur) bits.push(cm.label + " (" + anCoinCur.join(", ") + ")");
+        if (anCoinCur) bits.push(coinSetTxt(anCoinCur, cm.label));
         if (anLvl()) bits.push(anLvl());
         if (anTlType()) bits.push(anTlType().label);
         if (mktFilter()) bits.push("BTC " + MKT_LABEL[mktFilter()].toLowerCase() + " days");
@@ -10666,12 +10671,27 @@
     // ones you pick, everywhere on the tab; the Backtest report compares them with the
     // rest. Top 3 / Top 5 are by market cap (stablecoins left out) or by the most alerts
     // in view. Gold, silver, US stocks and NSE are not coins, so a coin filter leaves them out.
+    // Crypto / xStocks (lakky, 2026-11-13: "xstock and crypto so we can diffrentiate easily"):
+    // only coins, or only tokenised US stocks. CoinDCX / Delta (same day: Signals +14.51R but
+    // the Demo account's real CoinDCX orders skipped 82 alerts as "not on CoinDCX"): only what
+    // that broker's futures list, by the very list the Demo account's real orders use
+    // (DEMO_DCX; Delta's live product list, else DEMO_DELTA), so the two add up the same alerts.
     const SIG_TOP_CAP = ["BTC", "ETH", "XRP", "BNB", "SOL", "DOGE", "ADA", "HYPE", "LINK", "AVAX"];
-    const SIG_COIN_MODES = [{ k: "", label: "All" }, { k: "top3", label: "Top 3", n: 3 }, { k: "top5", label: "Top 5", n: 5 }, { k: "picks", label: "Picks" }];
+    const SIG_COIN_MODES = [{ k: "", label: "All" }, { k: "top3", label: "Top 3", n: 3 }, { k: "top5", label: "Top 5", n: 5 }, { k: "picks", label: "Picks" },
+      { k: "crypto", label: "Crypto", only: "coin" }, { k: "xstock", label: "xStocks", only: "stock" }, { k: "dcx", label: "CoinDCX", venue: "coindcx" }, { k: "delta", label: "Delta", venue: "delta" }];
     const SIG_COIN_PICKS = ["BTC", "ETH", "SOL"];
     const SIG_NOT_COIN = { XAUT: 1, PAXG: 1, SLVON: 1, CL: 1 };
-    const SIG_STOCK_RE = /^(TSLA|META|NVDA|AAPL|GOOGL|GOOG|AMZN|MSFT|NFLX|COIN|CRCL|SPY|QQQ|SOXL|SOXX|SNDK|MRVL|MSTR|HOOD|INTC|NBIS|DELL|AVGO|BABA|IBM|AMD|PLTR|ORCL|MU|TSM)[XB]?$/;
+    const SIG_STOCK_RE = /^(TSLA|META|NVDA|NVDL|AAPL|GOOGL|GOOG|AMZN|MSFT|NFLX|COIN|CRCL|SPY|QQQ|TQQQ|SOXL|SOXX|SNDK|MRVL|MSTR|HOOD|INTC|NBIS|DELL|AVGO|BABA|IBM|AMD|PLTR|ORCL|MU|TSM|AXTI|OPENAI|SPCX)[XB]?$/;
     const coinMemo = new Map();
+    // What an alert is on: "coin", "stock" (a tokenised US stock: TSLAX, SOXLB, MRVL),
+    // "other" (gold, silver, oil) or "nse". The coin itself is coinOf.
+    function symKind(sig) {
+      if (!sig) return "";
+      if (isNseSig(sig)) return "nse";
+      if (coinOf(sig)) return "coin";
+      const b = String(sig.symbol || "").toUpperCase().split(/[\/:]/)[0].replace(/[^A-Z0-9]/g, "").replace(/(USDT|USDC|USD)$/, "");
+      return !b ? "" : SIG_NOT_COIN[b] ? "other" : "stock";
+    }
     // The coin an alert is on ("BTC" for BTCUSD), or "" when it is not a crypto coin.
     function coinOf(sig) {
       if (!sig || isNseSig(sig)) return "";
@@ -10684,6 +10704,23 @@
       coinMemo.set(raw, c);
       return c;
     }
+    // CoinDCX's name for an alert's coin ("BTC", "1000PEPE"): the key of DEMO_DCX.
+    function dcxBaseOf(sym) { return aiDeltaSym(String(sym || "").split(":")[0]).replace(/USD$/, ""); }
+    // Is an alert's symbol listed on that broker's futures? The Demo account's real orders
+    // place exactly these (demoSpec), so a Coins filter on the broker plays the same alerts.
+    function onVenue(sig, v) {
+      if (!sig || isNseSig(sig)) return false;
+      return v === "coindcx" ? !!DEMO_DCX[dcxBaseOf(sig.symbol)] : !!deltaSymOf(sig.symbol);
+    }
+    // A Coins mode's test on one alert (Crypto, xStocks, CoinDCX, Delta), or null for a coin list.
+    function coinModeTest(m) {
+      if (!m) return null;
+      if (m.venue) return sig => onVenue(sig, m.venue);
+      if (m.only) return sig => symKind(sig) === m.only;
+      return null;
+    }
+    // The name a symbol shows under in the Coins row: the coin, else the chart's name.
+    function coinNameOf(sig) { return coinOf(sig) || String(sig && sig.symbol || "").toUpperCase().split(/[\/:]/)[0].replace(/(USDT|USDC|USD)$/, "").replace(/\.NS$/, "") || String(sig && sig.symbol || ""); }
     function sigCoinMode() { return SIG_COIN_MODES.some(x => x.k === state.ui.sigCoins) ? state.ui.sigCoins : ""; }
     function sigCoinRank() { return state.ui.sigCoinRank === "alerts" ? "alerts" : "cap"; }
     function sigCoinPicks() { return Array.isArray(state.ui.sigCoinPicks) ? state.ui.sigCoinPicks.filter(x => typeof x === "string" && x) : SIG_COIN_PICKS.slice(); }
@@ -10700,6 +10737,36 @@
       if (!m || !m.k) return null;
       return m.n ? sigTopCoins(m.n, counts, C.rank()) : C.picks();
     }
+    // What a Coins mode keeps, or null for all. items: the alerts (or trades) in view, sigOf
+    // gives each one's alert. Top 3 / Top 5 / Picks give a list of coins; Crypto, xStocks,
+    // CoinDCX and Delta a list of the symbols kept with .test (the alert test), .keep and
+    // .out ({name: how many} kept and left out) and .mode.
+    function coinSetFor(C, counts, items, sigOf) {
+      const m = SIG_COIN_MODES.find(x => x.k === C.mode()), test = coinModeTest(m);
+      if (!test) return Object.keys(counts).length ? sigCoinSet(counts, null, C) : null;
+      const keep = {}, out = {};
+      items.forEach(it => { const g = sigOf(it); if (!g) return; const nm = coinNameOf(g), t = test(g) ? keep : out; t[nm] = (t[nm] || 0) + 1; });
+      if (!Object.keys(keep).length && !Object.keys(out).length) return null;
+      return Object.assign(Object.keys(keep).sort((a, b) => keep[b] - keep[a] || a.localeCompare(b)), { test, keep, out, mode: m });
+    }
+    // The alert test for what coinSetFor gave (null: every alert passes).
+    function coinKeepOf(set) { return !set ? null : set.test || (g => set.indexOf(coinOf(g)) !== -1); }
+    const sumVals = o => Object.keys(o).reduce((a, k) => a + o[k], 0);
+    // The Coins setting in a few words, for the hints and a folded panel.
+    function coinSetTxt(set, withLabel) {
+      if (!set) return "";
+      if (set.test) return set.mode.label + " only: " + set.length + " of " + (set.length + Object.keys(set.out).length) + " symbols";
+      const list = set.length ? set.join(", ") : "no coins picked";
+      return withLabel ? withLabel + " (" + list + ")" : list;
+    }
+    // Crypto / xStocks / CoinDCX / Delta in the Coins row: what it keeps and what it leaves out.
+    function coinTestLine(C, set) {
+      if (!set) return '<span class="text-[11px] text-slate-500">no ' + C.what + ' in this view</span>';
+      const n = sumVals(set.keep), outs = Object.keys(set.out).sort((a, b) => set.out[b] - set.out[a] || a.localeCompare(b)), o = sumVals(set.out);
+      const m = set.mode, where = m.venue ? 'on ' + m.label + (m.venue === 'delta' ? (demoLive ? ' (live list)' : ' (list of ' + DEMO_SPECS_AT + ')') : ' (list of ' + DEMO_SPECS_AT + ')') : m.only === 'coin' ? 'on crypto coins' : 'on tokenised US stocks';
+      return '<span id="' + C.id + 'CoinTest" class="text-[11px] text-slate-400 font-mono">' + n + ' ' + (n === 1 ? C.what.replace(/s$/, '') : C.what) + ' ' + esc(where) + ', ' + set.length + ' symbol' + (set.length === 1 ? '' : 's')
+        + (o ? ' · <span class="text-amber-300">left out ' + o + '</span>: ' + esc(outs.slice(0, 6).map(k => k + ' ' + set.out[k]).join(', ') + (outs.length > 6 ? ', +' + (outs.length - 6) + ' more' : '')) : ' · none left out') + '</span>';
+    }
     function setSigCoins(k) { state.ui.sigCoins = k; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
     function setSigCoinRank(v) { state.ui.sigCoinRank = v === "alerts" ? "alerts" : "cap"; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
     function toggleSigCoinPick(c) {
@@ -10711,19 +10778,21 @@
     // The Coins row, for Signals' alerts and Analysis's trades alike.
     const COINS = {
       sig: { id: "sig", mode: () => sigCoinMode(), rank: () => sigCoinRank(), picks: () => sigCoinPicks(), fn: { mode: "setSigCoins", rank: "setSigCoinRank", pick: "toggleSigCoinPick" }, what: "alerts",
-        tip: "Top 3 / Top 5: only the biggest coins' alerts (by market cap, or by the most alerts in view). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest." },
+        tip: "Top 3 / Top 5: only the biggest coins' alerts (by market cap, or by the most alerts in view). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest. Crypto: every coin. xStocks: only tokenised US stocks (TSLAX, NVDAX, SOXLB...). CoinDCX / Delta: only what that broker's futures list, the same list the Demo account's real orders use." },
       an: { id: "an", mode: () => anCoinMode(), rank: () => anCoinRank(), picks: () => anCoinPicks(), fn: { mode: "setAnCoins", rank: "setAnCoinRank", pick: "toggleAnCoinPick" }, what: "trades",
-        tip: "Top 3 / Top 5: only your trades on the biggest coins (by market cap, or the coins you trade most). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on." }
+        tip: "Top 3 / Top 5: only your trades on the biggest coins (by market cap, or the coins you trade most). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. Crypto: every coin. xStocks: only tokenised US stocks. CoinDCX / Delta: only coins that broker's futures list." }
     };
-    function renderSigCoinBar(counts, set) { renderCoinBar(COINS.sig, counts, set); }
-    function renderCoinBar(C, counts, set) {
+    function renderSigCoinBar(counts, set, any) { renderCoinBar(COINS.sig, counts, set, any); }
+    // any: there are alerts (trades) in view that are not NSE, so Crypto / xStocks / a broker can pick from them.
+    function renderCoinBar(C, counts, set, any) {
       const wrap = document.getElementById(C.id + 'CoinWrap'), bar = document.getElementById(C.id + 'CoinBar');
       if (!wrap || !bar) return;
-      const cur = C.mode(), coins = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
-      wrap.classList.toggle('hidden', !coins.length && !cur);
+      const cur = C.mode(), coins = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)), mode = SIG_COIN_MODES.find(x => x.k === cur);
+      wrap.classList.toggle('hidden', !coins.length && !any && !cur);
       let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="' + esc(C.tip) + '">'
         + SIG_COIN_MODES.map(x => '<button type="button" data-coins="' + x.k + '" onclick="' + C.fn.mode + '(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : SEG_OFF) + '">' + x.label + '</button>').join('') + '</div>';
-      if (cur && !coins.length) h += '<span class="text-[11px] text-slate-500">no crypto ' + C.what + ' in this view, so it is off</span>';
+      if (coinModeTest(mode)) h += coinTestLine(C, set);
+      else if (cur && !coins.length) h += '<span class="text-[11px] text-slate-500">no crypto ' + C.what + ' in this view, so it is off</span>';
       else if (cur === 'top3' || cur === 'top5') {
         const rk = C.rank();
         h += '<select id="' + C.id + 'CoinRank" onchange="' + C.fn.rank + '(this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200 text-[11px] font-mono"><option value="cap"' + (rk === 'cap' ? ' selected' : '') + '>by market cap</option><option value="alerts"' + (rk === 'alerts' ? ' selected' : '') + '>by most ' + C.what + '</option></select>'
@@ -10766,7 +10835,7 @@
         const per = state.ui.sigDay ? state.ui.sigDay : (SIG_PERIODS.find(x => x.k === sigPeriod().mode) || SIG_PERIODS[3]).label;
         const cm = SIG_COIN_MODES.find(x => x.k === sigCoinMode());
         const bits = [(SIG_KINDS.find(x => x.k === kind) || SIG_KINDS[0]).label, per, state.ui.sigChan ? chanLabel(state.ui.sigChan) : 'all channels'];
-        if (coinSet) bits.push(cm.label + ' (' + coinSet.join(', ') + ')');
+        if (coinSet) bits.push(coinSetTxt(coinSet, cm.label));
         if (sigLvl()) bits.push(sigLvl());
         if (sigTlType()) bits.push(sigTlType().label);
         if (mktFilter()) bits.push('BTC ' + MKT_LABEL[mktFilter()].toLowerCase() + ' days');
@@ -11252,9 +11321,9 @@
     }
     // "Top coins vs all crypto": the same alerts split by coin, before the Coins filter.
     function sigCoinCompareHtml(pre) {
-      const all = pre.filter(pr => coinOf(pr.signal));
-      if (!all.length) return '';
-      const graded = sigGraded(all), counts = sigCoinCounts(all);
+      const nn = pre.filter(pr => !isNseSig(pr.signal)), all = nn.filter(pr => coinOf(pr.signal));
+      if (!nn.length) return '';
+      const graded = sigGraded(all), counts = sigCoinCounts(all), gradedNn = sigGraded(nn);
       const t3 = sigTopCoins(3, counts), t5 = sigTopCoins(5, counts), picks = sigCoinPicks(), cur = sigCoinMode();
       const inS = set => c => set.indexOf(c) !== -1, notS = set => c => set.indexOf(c) === -1;
       const grp = (label, sub, keep, k) => {
@@ -11262,9 +11331,18 @@
         return { label, sub, k, alerts: all.filter(pr => keep(coinOf(pr.signal))).length, rs, st: sigRunStats(rs) };
       };
       const rk = sigCoinRank() === 'alerts' ? 'most alerts' : 'market cap';
-      const groups = [grp('All crypto', Object.keys(counts).length + ' coins', () => true, ''), grp('Top 3', t3.join(', '), inS(t3), 'top3'), grp('Top 5', t5.join(', '), inS(t5), 'top5'), grp('Other coins', 'not in the top 5', notS(t5), null)];
-      if (picks.length) groups.push(grp('Your picks', picks.join(', '), inS(picks), 'picks'));
-      const each = t5.concat(picks.filter(c => t5.indexOf(c) === -1)).map(c => grp(c, '', x => x === c, null));
+      const groups = !all.length ? [] : [grp('All crypto', Object.keys(counts).length + ' coins', () => true, ''), grp('Top 3', t3.join(', '), inS(t3), 'top3'), grp('Top 5', t5.join(', '), inS(t5), 'top5'), grp('Other coins', 'not in the top 5', notS(t5), null)];
+      if (all.length && picks.length) groups.push(grp('Your picks', picks.join(', '), inS(picks), 'picks'));
+      // Crypto against xStocks, and what each broker lists (lakky, 2026-11-13), over every alert in view.
+      const mgrp = (label, sub, test, k) => {
+        const rs = gradedNn.filter(x => test(x.pr.signal)).map(x => x.o.r);
+        return { label, sub, k, alerts: nn.filter(pr => test(pr.signal)).length, rs, st: sigRunStats(rs) };
+      };
+      const kindIs = k => g => symKind(g) === k;
+      const markets = [mgrp('xStocks', 'tokenised US stocks', kindIs('stock'), 'xstock'), mgrp('Gold, silver, oil', '', kindIs('other'), null),
+        mgrp('On CoinDCX', 'what its futures list', g => onVenue(g, 'coindcx'), 'dcx'), mgrp('On Delta', 'what its futures list', g => onVenue(g, 'delta'), 'delta')].filter(g => g.alerts);
+      if (!all.length) markets.unshift(mgrp('Crypto', 'coins', kindIs('coin'), 'crypto'));
+      const each = !all.length ? [] : t5.concat(picks.filter(c => t5.indexOf(c) === -1)).map(c => grp(c, '', x => x === c, null));
       const tone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
       const row = (g, isCur) => {
         const st = g.st, mr = sigMeanRange(st);
@@ -11280,11 +11358,20 @@
         if (!g) return '<span class="text-slate-500">' + esc(label) + ': too few alerts on one side to compare</span>';
         return '<span><b class="text-slate-200">' + esc(label) + '</b> <span class="' + tone(g.a.avg) + '">' + rfmt(g.a.avg) + '</span> vs <span class="' + tone(g.b.avg) + '">' + rfmt(g.b.avg) + '</span> a trade for the rest (' + g.a.n + ' vs ' + g.b.n + ') · gap ' + rfmt(g.gap) + ' · <span class="' + w.c + '">' + w.w + '</span></span>';
       };
+      // xStocks against crypto, said like the coin gaps above (only when both have alerts).
+      const vsMk = (la, lb, ta, tb) => {
+        const a = gradedNn.filter(x => ta(x.pr.signal)).map(x => x.o.r), b = gradedNn.filter(x => tb(x.pr.signal)).map(x => x.o.r);
+        if (!a.length || !b.length) return '';
+        const g = sigGap(a, b), w = sigGapWord(g);
+        if (!g) return '<span class="text-slate-500">' + esc(la) + ' vs ' + esc(lb) + ': too few alerts on one side to compare</span>';
+        return '<span id="sigMktGap"><b class="text-slate-200">' + esc(la) + '</b> <span class="' + tone(g.a.avg) + '">' + rfmt(g.a.avg) + '</span> vs <span class="' + tone(g.b.avg) + '">' + rfmt(g.b.avg) + '</span> a trade for ' + esc(lb) + ' (' + g.a.n + ' vs ' + g.b.n + ') · gap ' + rfmt(g.gap) + ' · <span class="' + w.c + '">' + w.w + '</span></span>';
+      };
       return '<div id="sigCoinCmp" class="mb-3"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-1"><span class="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Top coins vs all crypto</span><span class="text-[10px] text-slate-500">top by ' + rk + ' · same filters, before the Coins filter</span></div>'
         + '<div class="overflow-x-auto"><table class="sig-cmp w-full text-left mono-num"><thead class="text-slate-500 text-[10px] uppercase"><tr><th>Coins</th><th class="text-right">Alerts</th><th class="text-right">Graded</th><th class="text-right">Win %</th><th class="text-right">Avg R</th><th class="text-right" title="Where the true average most likely sits">95% range</th><th class="text-right">Total R</th><th class="text-right">PF</th><th class="text-right">Max DD</th><th class="text-right" title="Most losses in a row">Loss run</th></tr></thead><tbody>'
-        + groups.map(g => row(g, g.k != null && g.k === cur)).join('')
-        + '<tr class="grp"><td colspan="10">Each coin</td></tr>' + each.map(g => row(g, false)).join('')
-        + '</tbody></table></div><div class="sig-verdict">' + vs('Top 3', t3) + vs('Top 5', t5) + (picks.length ? vs('Your picks', picks) : '') + '</div>'
+        + groups.map(g => row(g, g.k != null && (g.k === cur || (g.k === '' && cur === 'crypto')))).join('')
+        + (markets.length ? '<tr class="grp"><td colspan="10">Markets and brokers</td></tr>' + markets.map(g => row(g, g.k != null && g.k === cur)).join('') : '')
+        + (each.length ? '<tr class="grp"><td colspan="10">Each coin</td></tr>' + each.map(g => row(g, false)).join('') : '')
+        + '</tbody></table></div><div class="sig-verdict">' + (all.length ? vs('Top 3', t3) + vs('Top 5', t5) + (picks.length ? vs('Your picks', picks) : '') : '') + vsMk('xStocks', 'crypto', kindIs('stock'), kindIs('coin')) + '</div>'
         + '<p class="text-[10px] text-slate-500 mt-1">A gap counts as likely real when it is about twice its own uncertainty (Welch t ≥ 2), each side with 10+ results. Pick a group with Coins above to see every number for it alone.</p></div>';
     }
     const sbtWhen = g => (g.date || "") + " " + (g.time || "");
@@ -11541,6 +11628,9 @@
       } catch (e) { demoLive = null; }
       demoLiveAt = Date.now(); demoLiveBusy = false;
       demoDrawOut(); // live or not, the "reading Delta now" note goes
+      // A Coins filter on Delta now reads the live list (it used the 7 Nov one until now).
+      const shown = t => { const el = document.getElementById('view-' + t); return !!el && !el.classList.contains('hidden'); };
+      if (demoLive) { if (sigCoinMode() === "delta" && shown('signals')) renderSignalsTable(); if (anCoinMode() === "delta" && shown('analysis')) renderAnalysis(); }
     }
     // How the broker takes one alert, in the account's money: step = one contract (or
     // quantity step), min = the smallest order, qty = coins per step; null = not listed.
@@ -11549,7 +11639,7 @@
       if (!(entry > 0)) return null;
       if (isNseSig(sig)) { const k = cfg.cur === "INR" ? 1 : 1 / FX_DEFAULT; return { venue: "NSE", step: entry * k, min: entry * k, qty: 1, unit: "share", maxLev: DEMO_NSE_LEV, tickPct: 0 }; }
       if (cfg.broker === "coindcx") {
-        const base = aiDeltaSym(sig.symbol).replace(/USD$/, ""), d = DEMO_DCX[base];
+        const base = dcxBaseOf(sig.symbol), d = DEMO_DCX[base];
         if (!d) return null;
         const k = cfg.cur === "INR" ? FX_COINDCX : 1;
         return { venue: "CoinDCX", step: d[0] * entry * k, min: Math.max(d[1] * entry, d[2]) * k, qty: d[0], unit: base, maxLev: d[4] || 0, tickPct: d[3] / entry * 100 };
@@ -11591,24 +11681,26 @@
     // stop distance in %, fee = the round trip in R (fee % ÷ stop %, 0 = none), spec = how
     // the broker takes it (demoSpec; null = not listed). cfg.real places each trade as a
     // real order (whole contracts, the coin's max leverage, min stop); off, any size goes.
-    // Pure, so the test can check it by hand.
+    // cfg.parts turns single real-order rules off ({venue, stop, lev, lots}: false = not
+    // applied), for "What changed the result". Pure, so the test can check it by hand.
     function demoRun(rows, cfg) {
       let bal = cfg.start, peak = cfg.start, low = cfg.start, maxDD = 0, maxDDPct = 0, maxLev = 0, capped = 0, capCoin = 0, blownAt = null, tooBig = false, fees = 0, rounded = 0, ones = 0, oneMax = 0;
       const trades = [], skips = [], tiny = 1e-9;
+      const P = Object.assign({ venue: true, stop: true, lev: true, lots: true }, cfg.parts || {});
       for (let i = 0; i < rows.length; i++) {
         const x = rows[i], before = bal, sp = cfg.real ? x.spec || null : null;
         const want = cfg.mode === "fixed" ? Math.min(cfg.fixed, bal) : bal * cfg.pct / 100;
         let risk = want, lev = null, cap = "", pos = null, units = null, one = false;
         if (x.slp > 0) {
           if (cfg.real) {
-            const why = !x.spec ? "venue" : x.slp < (cfg.minStop || 0) - tiny ? "tight" : sp.tickPct > 0 && x.slp < DEMO_MIN_TICKS * sp.tickPct - tiny ? "ticks" : "";
+            const why = !x.spec ? (P.venue ? "venue" : "") : !P.stop ? "" : x.slp < (cfg.minStop || 0) - tiny ? "tight" : sp.tickPct > 0 && x.slp < DEMO_MIN_TICKS * sp.tickPct - tiny ? "ticks" : "";
             if (why) { skips.push({ i, x, why, before, want }); continue; }
           }
           // The position is risk ÷ stop distance; as a multiple of the balance, the leverage it needs.
           pos = want / (x.slp / 100);
-          const coinCap = sp && sp.maxLev > 0 ? sp.maxLev : Infinity, youCap = cfg.lev > 0 ? cfg.lev : Infinity, capX = Math.min(coinCap, youCap);
+          const coinCap = sp && P.lev && sp.maxLev > 0 ? sp.maxLev : Infinity, youCap = cfg.lev > 0 ? cfg.lev : Infinity, capX = Math.min(coinCap, youCap);
           if (pos > bal * capX * (1 + tiny)) { pos = bal * capX; cap = coinCap < youCap ? "coin" : "you"; }
-          if (sp) {
+          if (sp && P.lots) {
             // Order size: the most whole steps the risk allows, rounded down ("skip": none fit =
             // no trade); "one": 1 smallest order when none fit, if it risks at most lot1Cap x the
             // plan (0 = any); "always" (a test): exactly 1 smallest order, whatever it risks.
@@ -12122,6 +12214,28 @@
           : '<b class="text-amber-300">Real orders off</b>: every trade at its exact risk ÷ stop size, however small. As real ' + esc(bkl) + ' orders: ' + altTxt(other) + ', ' + other.trades.length + ' of ' + rows.length + ' placed.'
             + ' <button type="button" onclick="demoSet(\'real\', true)" class="underline text-sky-300">Use real orders</button>')
         + '</div>';
+      // What changed the result (lakky, 2026-11-13: Signals +14.51R, the Demo -36% with real
+      // CoinDCX orders): from any size, every alert, one real-order rule at a time, each on
+      // top of the ones before, ending at this result. Fees are in every step, as in Signals.
+      let whyLine = '';
+      if (cfg.real && cfg.lot1 !== 'always') {
+        const step = parts => demoRun(rows, Object.assign({}, cfg, { parts }));
+        const r1 = step({ stop: false, lev: false, lots: false }), r2 = step({ lev: false, lots: false }), r3 = step({ lots: false });
+        const nStop = (W.tight || 0) + (W.ticks || 0), nLot = (W.lot || 0) + (W.big || 0);
+        const lotBits = [nLot ? nLot + ' skipped' : '', run.ones ? run.ones + ' at 1 ' + one1 : '', run.rounded ? run.rounded + ' rounded down' : ''].filter(Boolean).join(', ');
+        const steps = [
+          ['venue', 'not on ' + bkl, W.venue ? W.venue + ' skipped' : '', other, r1],
+          ['stop', 'stop too tight', nStop ? nStop + ' skipped' : '', r1, r2],
+          ['lev', 'coin\'s max leverage', run.capCoin ? run.capCoin + ' sized down' : '', r2, r3],
+          ['lots', 'whole ' + one1 + 's', lotBits, r3, run]
+        ].filter(x => x[2] || Math.abs(x[4].end - x[3].end) > cfg.start * 1e-6);
+        const chg = d => '<b class="' + tone(d) + '">' + sm(d) + ' (' + (pfmt(d / cfg.start * 100) || '0.00%') + ')</b>';
+        whyLine = '<div id="sigDemoWhy" class="rounded-lg border border-slate-500/40 bg-slate-500/5 p-2 mb-3 text-[11px]"><b class="text-slate-200">What changed the result</b> · any size, every alert ' + altTxt(other)
+          + steps.map(x => ' → <span data-why="' + x[0] + '">' + esc(x[1]) + (x[2] ? ' (' + esc(x[2]) + ')' : '') + ' ' + chg(x[4].end - x[3].end) + '</span>').join('')
+          + ' = ' + altTxt(run) + '. Each step adds one rule to the ones before; fees are in every step, as in Signals.'
+          + (W.venue && sigCoinMode() !== (dcx ? 'dcx' : 'delta') ? ' <button type="button" onclick="setSigCoins(\'' + (dcx ? 'dcx' : 'delta') + '\')" class="underline text-sky-300">Show only ' + esc(bkl) + ' coins on the tab</button> so Signals and this account count the same alerts.' : '')
+          + '</div>';
+      }
       const feeLine = '<div id="sigDemoFeeLine" class="rounded-lg border p-2 mb-3 text-[11px] ' + (cfg.feesOn ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/5') + '">'
         + (cfg.feesOn
           ? '<b class="text-emerald-400">Fees on</b> · ' + esc(bkl) + ' · ' + esc(ord.label.toLowerCase()) + ': ' + legs + ' = <b class="text-slate-100">' + cfg.feePct.toFixed(4) + '%</b> of each position.'
@@ -12160,8 +12274,8 @@
           return '<tr class="border-t border-terminal-border/60' + (mine ? ' bg-amber-500/10' : '') + '"><td class="py-1 pr-2 text-slate-200">' + p + '%' + (mine ? ' <span class="text-amber-300 text-[10px]">yours</span>' : '') + (r2.blownAt != null ? ' <span class="text-rose-400 text-[10px]">blown</span>' : '') + '</td><td class="pr-2 text-right font-bold ' + tone(r2.ret) + '">' + m(r2.end) + '</td><td class="pr-2 text-right ' + tone(r2.ret) + '">' + (pfmt(r2.ret) || '0.00%') + '</td><td class="pr-2 text-right text-rose-400">-' + r2.maxDDPct.toFixed(2) + '%</td><td class="text-right text-slate-300">' + m(r2.low) + '</td>' + (cfg.real ? '<td class="pl-2 text-right text-slate-400" title="Placed as real orders, of the alerts">' + r2.trades.length + ' / ' + (r2.trades.length + r2.skips.length) + '</td>' : '') + '</tr>'; }).join('')
         + '</tbody></table></div></div>';
 
-      if (!n) { out.innerHTML = notes.join('') + realLine + feeLine + '<p class="text-amber-300 mb-3">None of these ' + rows.length + ' alerts can be placed as real ' + esc(bkl) + ' orders at this balance and risk. Raise the balance or the risk, ' + (cfg.lot1 === 'skip' ? 'pick Take 1 if too small' : cfg.lot1 === 'one' && cfg.lot1Cap ? 'raise the Take 1 limit' : 'pick another broker') + ' above, or turn real orders off.</p>' + demoTipsHtml() + trades; return; }
-      out.innerHTML = notes.join('') + realLine + feeLine + stats + curve + demoKeysHtml(card) + demoTipsHtml() + prog
+      if (!n) { out.innerHTML = notes.join('') + realLine + whyLine + feeLine + '<p class="text-amber-300 mb-3">None of these ' + rows.length + ' alerts can be placed as real ' + esc(bkl) + ' orders at this balance and risk. Raise the balance or the risk, ' + (cfg.lot1 === 'skip' ? 'pick Take 1 if too small' : cfg.lot1 === 'one' && cfg.lot1Cap ? 'raise the Take 1 limit' : 'pick another broker') + ' above, or turn real orders off.</p>' + demoTipsHtml() + trades; return; }
+      out.innerHTML = notes.join('') + realLine + whyLine + feeLine + stats + curve + demoKeysHtml(card) + demoTipsHtml() + prog
         + (cfg.real && cfg.lot1 === 'always' ? '' : '<div class="mb-4">' + cmp + '</div>')
         + trades
         + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. Fees come off on top: position × the round trip above (position = risk ÷ stop distance), per trade under Fee; Result is in R after them. With real orders on, the position is rounded down to whole contracts (Size), so a trade can risk a little less than planned, never more unless Take 1 is picked. Stop slippage (0.05%) counts either way, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
@@ -14877,6 +14991,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-13.189', pr: 103, title: 'Coins: Crypto, xStocks, CoinDCX, Delta', pts: ['Coins row (Signals and Analysis) adds Crypto, xStocks, CoinDCX and Delta: CoinDCX / Delta keep only what that broker lists, the same list the Demo account uses, so both count the same alerts', 'Backtest report compares xStocks vs crypto and each broker\'s coins', 'Demo account: new "What changed the result" line, from any size to real orders one rule at a time (not listed, min stop, coin leverage, whole orders)'] },
       { v: '2026-11-13.188', pr: 102, title: 'Signals: partial exits', pts: ['New Partial row in How each trade is played: book 25%, 50% or 75% of the position at a level you pick (R, or % with a % target); the rest runs to the TP or SL', 'Move SL now has book: close a share where BE / SL shift fires (e.g. BE at 0.75%, book 50%), the rest goes on at breakeven', 'Headline, compare tables, Demo account, By outcome (Part + Target, Part + BE...) and CSV all follow it; the independent retest plays it too'] },
       { v: '2026-11-13.187', pr: 101, title: 'Move SL compared: numbers, not "same"', pts: ['Cells that read "same" now show their real total R, in grey', 'Grey = the move starts at or past that exit, so price hits the target first and the stop never moves: the result equals the No move row', 'Hover a grey cell for its win rate and average R'] },
       { v: '2026-11-12.186', pr: 100, title: 'Signals: backtest = retest, faster', pts: ['Every Exit at walk now uses 15m candles. It used to pick 1m to 1d by the alert\'s age, so the same alert scored differently by the day you looked and retests disagreed; old results are redone once', 'Candles are kept on the device and read in parallel, only as far as each trade needs (a full fib view: 309 reads to 193, ~30% faster; the next visit reads only the newest block). A Not final line shows while prices load', 'Export CSV now gives the what-if R shown (it gave the scanner\'s) with fill and exit per trade. A new test holds the tab equal to an independent retest on real alerts'] },

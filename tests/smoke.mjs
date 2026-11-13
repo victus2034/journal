@@ -2885,6 +2885,123 @@ async function demoAccountRun(seed) {
 // 60% won, avg 480m; Top 5 (+BNB SOL): 7 trades +4; All: 9 trades +4.
 // Exit at times: A long 100 / 99 on 15m candles reaches 1R on the candle 15m after the fill;
 // B short 200 / 202 never does and leaves on time 320 candles (4800m) after its fill.
+// Coins row: Crypto / xStocks / CoinDCX / Delta (lakky, 2026-11-13), and the Demo account's
+// "What changed the result" line from any size to real orders, one rule at a time.
+async function coinVenueRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const usd = v => (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const susd = v => (v >= 0 ? '+' : '-') + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pf = v => (v >= 0 ? '+' : '-') + Math.abs(v).toFixed(2) + '%';
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded, null, { timeout: 5000 });
+    // Pure: what each symbol is and which broker lists it (the Demo account's own lists).
+    const kinds = await page.evaluate(() => ['BTCUSD', 'MAGICUSD', 'MNT', '0G', 'NVDAXUSD', 'SOXLBUSD', 'MRVL', 'XAUTUSD', 'SLVONUSD', 'RELIANCE'].map(sym => {
+      const g = { symbol: sym, market: sym === 'RELIANCE' ? 'NSE' : 'CRYPTO' };
+      return sym + ':' + symKind(g) + ':' + (onVenue(g, 'coindcx') ? 'D' : '-') + (onVenue(g, 'delta') ? 'd' : '-');
+    }).join(' '));
+    check(kinds === 'BTCUSD:coin:Dd MAGICUSD:coin:D- MNT:coin:-- 0G:coin:D- NVDAXUSD:stock:-d SOXLBUSD:stock:-d MRVL:stock:-d XAUTUSD:other:-d SLVONUSD:other:-d RELIANCE:nse:--', 'kinds and brokers: ' + kinds);
+    // The CoinDCX test is the Demo account's: an alert it lists has a spec there, one it does not has none.
+    const same = await page.evaluate(() => ['BTCUSD', 'MAGICUSD', 'MNT', '0G', 'NVDAXUSD', 'MRVL', 'XAUTUSD', '1000PEPEUSD', 'SUSD', 'US'].every(sym => {
+      const g = { symbol: sym, market: 'CRYPTO', side: 'long', entry: 10, price: 10, stop: 9 };
+      return onVenue(g, 'coindcx') === !!demoSpec(g, Object.assign(demoCfg(), { broker: 'coindcx' })) && onVenue(g, 'delta') === !!demoSpec(g, Object.assign(demoCfg(), { broker: 'delta' }));
+    }));
+    check(same, 'Coins CoinDCX / Delta use the same list as the Demo account');
+    // Signals: 7 alerts. BTC +2, MAGIC -1, MNT +2 (coins); NVDAX +2, MRVL -1 (xStocks); XAUT -1; RELIANCE -1 (NSE).
+    const v = await page.evaluate(() => {
+      const text = id => ((document.getElementById(id) || {}).innerText || '').replace(/\s+/g, ' ');
+      const plan = [['BTCUSD', 2], ['MAGICUSD', -1], ['MNT', 2], ['NVDAXUSD', 2], ['MRVL', -1], ['XAUTUSD', -1], ['RELIANCE', -1]];
+      state.signals = plan.map(([sym, r], i) => ({ id: 'cv' + i, key: 'cv' + i, kind: 'fib', date: '2026-10-0' + (i + 1), time: '10:00', symbol: sym, side: 'long', score: '',
+        market: sym === 'RELIANCE' ? 'NSE' : 'CRYPTO', timeframe: '1D', channel: (sym === 'RELIANCE' ? 'NSE' : 'CRYPTO') + ' 1D', filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 98, entry: 100 }));
+      Object.assign(state.ui, { sigKind: 'fib', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigTgt: '', sigNoFee: false,
+        sigStop: { mode: 'off' }, sigTrail: { on: false }, sigHold: 'tp', sigCoins: '', sigCoinRank: 'cap', sigCoinPicks: undefined, sigFold: {}, sigLvl: '' });
+      switchTab('signals'); renderAll();
+      const out = { buttons: [...document.querySelectorAll('#sigCoinBar button[data-coins]')].map(b => b.innerText).join() };
+      const read = () => [text('sigEdgeStrip').match(/Alerts (\d+)/)[1], (text('sigEdgeStrip').match(/Total R ([+-][\d.]+R)/) || [])[1], text('sigCoinTest'), text('sigWhichSum'), text('sigPeriodHint')];
+      out.all = read();
+      ['crypto', 'xstock', 'dcx', 'delta'].forEach(k => { document.querySelector('#sigCoinBar button[data-coins="' + k + '"]').click(); out[k] = read(); });
+      // The report's compare, with CoinDCX picked: markets rows and the xStocks vs crypto gap.
+      setSigCoins('dcx'); setSigSec('report');
+      out.rows = [...document.querySelectorAll('#sigCoinCmp tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').trim());
+      out.cur = (document.querySelector('#sigCoinCmp tr.cur') || {}).innerText;
+      out.gap = text('sigMktGap');
+      setSigSec('alerts'); setSigCoins('');
+      return out;
+    });
+    check(v.buttons === 'All,Top 3,Top 5,Picks,Crypto,xStocks,CoinDCX,Delta', 'Coins buttons: ' + v.buttons);
+    check(v.all[0] === '7' && v.all[1] === '+2.00R', 'all: ' + JSON.stringify(v.all));
+    check(v.crypto[0] === '3' && v.crypto[1] === '+3.00R' && /^3 alerts on crypto coins, 3 symbols · left out 4: /.test(v.crypto[2]) && /Crypto only: 3 of 7 symbols/.test(v.crypto[3]) && /Crypto only/.test(v.crypto[4]), 'Crypto: ' + JSON.stringify(v.crypto));
+    check(v.xstock[0] === '2' && v.xstock[1] === '+1.00R' && /^2 alerts on tokenised US stocks, 2 symbols · left out 5: /.test(v.xstock[2]), 'xStocks: ' + JSON.stringify(v.xstock));
+    check(v.dcx[0] === '2' && v.dcx[1] === '+1.00R' && /^2 alerts on CoinDCX \(list of 7 Nov 2026\), 2 symbols · left out 5: /.test(v.dcx[2]) && /MNT 1, MRVL 1, NVDAX 1, RELIANCE 1, XAUT 1$/.test(v.dcx[2]), 'CoinDCX: ' + JSON.stringify(v.dcx));
+    check(v.delta[0] === '4' && v.delta[1] === '+2.00R' && /^4 alerts on Delta \(list of 7 Nov 2026\), 4 symbols · left out 3: /.test(v.delta[2]) && /MAGIC 1/.test(v.delta[2]), 'Delta: ' + JSON.stringify(v.delta));
+    const row = k => v.rows.find(r => r.startsWith(k)) || '';
+    check(/^xStocks tokenised US stocks 2 2 50% \+0\.50R .* \+1\.00R/.test(row('xStocks')) && /^On CoinDCX what its futures list 2 2 50% \+0\.50R/.test(row('On CoinDCX'))
+      && /^On Delta what its futures list 4 4 50% \+0\.50R/.test(row('On Delta')) && /^Gold, silver, oil 1 1 0% -1\.00R/.test(row('Gold, silver, oil')) && /^All crypto 3 coins 3 3 67% \+1\.00R/.test(row('All crypto')), 'markets rows: ' + v.rows.join(' | '));
+    check(/^On CoinDCX/.test(v.cur || '') && /^xStocks \+0\.50R vs \+1\.00R a trade for crypto \(2 vs 3\)/.test(v.gap), 'current row and xStocks vs crypto: ' + JSON.stringify([v.cur, v.gap]));
+    // Demo account: 8 alerts on Delta at 2% of $100 (the real-orders test's set), with "What changed the result".
+    const A = [['BTCUSD', 'long', 75000, 72000, -1], ['ETHUSD', 'long', 2240, 2228.8, 2], ['DOGEUSD', 'short', 0.0718, 0.07185, 2], ['VELVETUSD', 'long', 0.05, 0.0498, -1],
+      ['RLCUSD', 'long', 0.43, 0.43 * (1 - 0.0012), -1.5], ['MAGICUSD', 'long', 0.1, 0.098, 1], ['MRVL', 'long', 140, 137.2, 1], ['SOLUSD', 'short', 90, 91.8, -1]];
+    const slps = await page.evaluate(A => {
+      state.signals = A.map((a, i) => ({ id: 'wy' + i, key: 'w' + i, kind: 'trendline', date: '2026-10-0' + (i + 1), time: '10:00', symbol: a[0], side: a[1], score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: true, outcome: a[4] > 0 ? '+' + a[4] + 'R' : 'SL', resultR: a[4], hasReportR: true, price: a[2], entry: a[2], stop: a[3] }));
+      Object.assign(state.ui, { sigKind: 'trendline', sigCoins: '', sigSec: 'demo' });
+      state.ui.sigDemo = { start: 100, mode: 'pct', pct: 2 };
+      switchTab('signals'); renderAll();
+      return state.signals.map(slPct);
+    }, A);
+    // Worked out here: compound 2% a trade, skipping and capping one rule at a time (fees net out: Delta's = the scanner's).
+    const play = (skip, capRlc) => { let b = 100; A.forEach((a, i) => { if (skip.includes(a[0])) return; let pos = b * 0.02 / (slps[i] / 100); if (capRlc && a[0] === 'RLCUSD' && pos > b * 10) pos = b * 10; b += pos * slps[i] / 100 * a[4]; }); return b; };
+    const s0 = play([], false), s1 = play(['MAGICUSD'], false), s2 = play(['MAGICUSD', 'DOGEUSD', 'VELVETUSD'], false), s3 = play(['MAGICUSD', 'DOGEUSD', 'VELVETUSD'], true), s4 = 102.10266;
+    const why = await page.$eval('#sigDemoWhy', el => el.innerText.replace(/\s+/g, ' '));
+    const want = ['any size, every alert ' + usd(s0) + ' (' + pf(s0 - 100) + ')',
+      'not on Delta (1 skipped) ' + susd(s1 - s0) + ' (' + pf(s1 - s0) + ')',
+      'stop too tight (2 skipped) ' + susd(s2 - s1) + ' (' + pf(s2 - s1) + ')',
+      'coin\'s max leverage (1 sized down) ' + susd(s3 - s2) + ' (' + pf(s3 - s2) + ')',
+      'whole contracts (1 skipped', '= ' + usd(s4) + ' (' + pf(s4 - 100) + ')'];
+    want.forEach(w => check(why.includes(w), 'what changed: wants "' + w + '" in: ' + why));
+    // The steps add up: any size + each change = the result.
+    const steps = await page.$$eval('#sigDemoWhy [data-why] b', bs => bs.map(b => parseFloat(b.innerText.replace(/[^\d.+-]/g, '').replace(/\(.*$/, ''))));
+    check(steps.length === 4, 'four steps: ' + JSON.stringify(steps));
+    // The button keeps only Delta's coins on the tab: MAGIC goes, so nothing is "not on Delta".
+    await page.click('#sigDemoWhy button');
+    const after = await page.evaluate(() => ({ coins: state.ui.sigCoins, why: document.getElementById('sigDemoWhy').innerText.replace(/\s+/g, ' '), real: document.getElementById('sigDemoRealLine').innerText.replace(/\s+/g, ' ') }));
+    check(after.coins === 'delta' && !/not on Delta/.test(after.why) && !/not on Delta/.test(after.real) && /Placed 4 of 7/.test(after.real) && after.why.includes('any size, every alert ' + usd(s1)) && after.why.includes('= ' + usd(s4)) && !/Show only/.test(after.why),
+      'Show only Delta coins: ' + JSON.stringify(after));
+    // CoinDCX broker with Coins on CoinDCX: nothing "not on CoinDCX" either.
+    await page.evaluate(() => { setSigCoins('dcx'); demoFees('coindcx'); });
+    const dcx = await page.evaluate(() => document.getElementById('sigDemoRealLine').innerText.replace(/\s+/g, ' '));
+    // CoinDCX lists 7 of the 8 (not MRVL): the Demo plays exactly those 7.
+    check(!/not on CoinDCX/.test(dcx) && /Placed \d of 7[,.]/.test(dcx), 'Coins CoinDCX + Demo on CoinDCX play the same 7 alerts: ' + dcx);
+    // Real orders off: no "What changed" line; Always 1 (a test) has none either.
+    await page.evaluate(() => { demoSet('real', false); });
+    check(!(await page.$('#sigDemoWhy')), 'no What changed line with real orders off');
+    await page.evaluate(() => { demoSet('real', true); demoSet('lot1', 'always'); });
+    check(!(await page.$('#sigDemoWhy')), 'no What changed line for Always 1 order');
+    await page.evaluate(() => { demoReset(); setSigCoins(''); });
+    // Analysis's Coins row has the same options and filters trades with them.
+    const an = await page.evaluate(() => {
+      switchTab('analysis'); renderAll();
+      return [...document.querySelectorAll('#anCoinBar button[data-coins]')].map(b => b.innerText).join();
+    });
+    check(an === '' || an === 'All,Top 3,Top 5,Picks,Crypto,xStocks,CoinDCX,Delta', 'Analysis Coins buttons: ' + an);
+    // Phone: no sideways scroll with a broker line showing.
+    await page.evaluate(() => { switchTab('signals'); setSigSec('alerts'); setSigCoins('delta'); });
+    await page.setViewportSize({ width: 390, height: 844 });
+    check(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'phone width scrolls sideways with Coins on Delta');
+    await page.evaluate(() => setSigCoins(''));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Coins: Crypto / xStocks / CoinDCX / Delta, and the Demo account\'s What changed the result');
+  errs.forEach(e => { console.log('     ' + e); failures.push('coins venue: ' + e); });
+}
 async function demoDeepRun(seed) {
   const errs = [];
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
@@ -3651,7 +3768,7 @@ async function anDemoRun(seed) {
     const look = await page.evaluate(() => ({ which: !!document.querySelector('#anWhichPanel[open] #anPeriodBar'), rules: !!document.querySelector('#anRulesPanel[open] #anTgtBar'),
       exits: [...document.querySelectorAll('#anTgtBar button')].map(b => b.innerText).join(), cards: document.querySelectorAll('#anStrip > div').length,
       coins: [...document.querySelectorAll('#anCoinBar button[data-coins]')].map(b => b.innerText).join(), line: document.getElementById('anDemoLine').classList.contains('hidden') }));
-    check(look.which && look.rules && look.exits === 'My exit,1R,1.5R,2R,3R,1%,2%,3%' && look.cards === 8 && look.coins === 'All,Top 3,Top 5,Picks' && look.line, 'Signals-style panels: ' + JSON.stringify(look));
+    check(look.which && look.rules && look.exits === 'My exit,1R,1.5R,2R,3R,1%,2%,3%' && look.cards === 8 && look.coins === 'All,Top 3,Top 5,Picks,Crypto,xStocks,CoinDCX,Delta' && look.line, 'Signals-style panels: ' + JSON.stringify(look));
     await page.waitForTimeout(300);
     check(reads.length === 0, 'no candles read with My exit: ' + reads.join());
     // Fold a panel: it says in one line what it is set to, and stays folded after a reload.
@@ -3739,6 +3856,13 @@ async function anDemoRun(seed) {
     await page.waitForFunction(() => !anDemoBusy, null, { timeout: 15000 });
     const top = await page.evaluate(() => ({ ids: [...document.querySelectorAll('#anDemoTable tbody tr')].map(tr => tr.getAttribute('data-demorow')).sort().join(), list: (document.getElementById('anCoinList') || {}).innerText }));
     check(top.ids === 'dBTC,dETH,dXRP' && top.list === 'BTC, ETH, XRP', 'Top 3 coins: ' + JSON.stringify(top));
+    // xStocks: none of these trades; CoinDCX lists every coin here, so it keeps what All keeps.
+    const anIds = async k => { await page.click('#anCoinBar button[data-coins="' + k + '"]'); await page.waitForFunction(() => !anDemoBusy, null, { timeout: 15000 });
+      return page.evaluate(() => ({ ids: [...document.querySelectorAll('#anDemoTable tbody tr[data-demorow]')].map(tr => tr.getAttribute('data-demorow')).sort().join(), line: ((document.getElementById('anCoinTest') || {}).innerText || '').replace(/\s+/g, ' ') })); };
+    const anAll = await anIds(''), anX = await anIds('xstock'), anD = await anIds('dcx');
+    check(anAll.ids.split(',').length >= 3 && anX.ids === '' && /^0 trades on tokenised US stocks/.test(anX.line) && anD.ids === anAll.ids && /none left out/.test(anD.line), 'Analysis xStocks / CoinDCX: ' + JSON.stringify([anAll, anX, anD]));
+    await page.click('#anCoinBar button[data-coins="top3"]');
+    await page.waitForFunction(() => !anDemoBusy, null, { timeout: 15000 });
     // Reset puts back My exit: no demo line, the usual cards.
     await page.click('#anRulesResetBtn');
     const off = await page.evaluate(() => ({ line: document.getElementById('anDemoLine').classList.contains('hidden'), checked: [...document.querySelectorAll('#anStrip > div')].some(d => /Trades checked/.test(d.innerText)), tgt: anTgt(), quick: document.querySelectorAll('#anDemoQuick button').length }));
@@ -6228,6 +6352,7 @@ await sigBacktestRun(data);
 await sigRedesignRun(data);
 await demoAccountRun(data);
 await demoRealRun(data);
+await coinVenueRun(data);
 await demoDeepRun(data);
 await cleanupRun(data);
 await behaviourRun(data);
