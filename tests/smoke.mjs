@@ -4897,7 +4897,7 @@ async function stopMoveRun(seed) {
     await page.click('#sigStopGrid td[data-cell="2R~be|1"]');
     const picked = await page.evaluate(() => ({ t: state.ui.sigTgt, s: JSON.stringify(stopRaw()) }));
     check(picked.t === '2R' && /"mode":"be","beAt":1/.test(picked.s), 'grid click sets both: ' + JSON.stringify(picked));
-    // A trigger at or past an R target never fires: greyed out, warned, "same" in the grid.
+    // A trigger at or past an R target never fires: greyed out, warned, and in the grid the No move number in grey.
     await page.evaluate(() => setSigTgt('1.5R'));
     const offAt = await page.evaluate(() => [...document.querySelectorAll('#sigStopAt option')].filter(o => o.disabled).map(o => o.value).join(','));
     check(offAt === '1.5,2,2.5,3', 'at 1.5R, triggers from +1.5R are off: ' + offAt);
@@ -4905,7 +4905,17 @@ async function stopMoveRun(seed) {
     await page.evaluate(() => setSigStop('beAt', '2'));
     const warn = await page.evaluate(() => (document.getElementById('sigStopWarn') || {}).innerText || '');
     check(/below your 1\.5R target/.test(warn), 'trigger past the target is warned: ' + warn);
-    check(await cell('be|1', '1R') === 'same' && await cell('be|1', '2R') !== 'same', 'grid: BE at 1R with a 1R target is "same": ' + await cell('be|1', '1R'));
+    // BE at 1R / 1.5R / 2R at the 1R exit: the stop never moves, so the No move number (+1.13R), grey, not clickable.
+    const nm = await page.evaluate(() => [...document.querySelectorAll('#sigStopGrid td[data-cell^="1R~"]')].map(td => ({ k: td.dataset.cell, t: td.innerText.trim(), grey: td.dataset.nomove === '1' && td.classList.contains('text-slate-500'), click: !!td.getAttribute('onclick'), tip: td.title })));
+    const nmOf = k => nm.find(x => x.k === '1R~' + k) || {};
+    check(nmOf('').t === '+1.13R' && ['be|1', 'be|1.5', 'be|2', 'shift|1|0.5', 'shift|2|1.5'].every(k => nmOf(k).t === '+1.13R' && nmOf(k).grey && !nmOf(k).click) && /BE at 1R starts at or past the 1R exit/.test(nmOf('be|1').tip) && /Same result as No move/.test(nmOf('be|1').tip), 'grid: a trigger at or past the target shows No move\'s number in grey: ' + JSON.stringify(nm));
+    check(nmOf('be|0.5').t === '+0.78R' && !nmOf('be|0.5').grey && nmOf('be|0.5').click, 'a trigger under the target keeps its own number and click: ' + JSON.stringify(nmOf('be|0.5')));
+    check(!(await page.$$eval('#sigStopGrid td', tds => tds.some(td => td.innerText.trim() === 'same'))), 'no cell reads "same" any more');
+    const note = await page.$eval('#sigStopGrid', t => t.closest('div').parentElement.innerText);
+    check(/Grey numbers: the move starts at or past that exit/.test(note) && /Every cell scores the same 2 alerts/.test(note), 'grid note explains the grey numbers: ' + note.slice(-400));
+    // Each grey number is what the engine scores with that rule too (the trigger never fires).
+    const eq = await page.evaluate(() => inSigScope(() => sigView.pairs.every(pr => { const w = tgtPath(pr.signal); if (!w) return true; return ['1R', '1.5R', '2R'].every(k => { const tg = SIG_TGTS.find(x => x.k === k), base = tgtScore(pr.signal, w, tg, false, null, null); return [stopMove('be', 2), stopMove('be', 3), stopMove('shift', 2, 1.5)].every(m => { const o = tgtScore(pr.signal, w, tg, false, m, null); return !!o === !!base && (!o || Math.abs(o.r - base.r) < 1e-12); }); }); })));
+    check(eq, 'a trigger at or past the target scores exactly as No move');
     // A % target: the trigger and level are in % too, greyed out from the target up.
     await page.evaluate(() => setSigTgt('2%'));
     const pctBar = await page.evaluate(() => ({ unit: document.getElementById('sigStopAt').dataset.unit, off: [...document.querySelectorAll('#sigStopAt option')].filter(o => o.disabled).map(o => o.value).join(','), txt: document.getElementById('sigStopAt').selectedOptions[0].innerText }));
@@ -5212,9 +5222,9 @@ async function trailRun(seed) {
     check(on.r && on.r.label === 'Trail TP' && Math.abs(on.r.r - 0.8669) < 1e-9, 'Trail TP result: ' + JSON.stringify(on.r));
     const out = await page.evaluate(() => document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' '));
     check(/Trail TP\s*1\s*100%/.test(out), 'By outcome shows Trail TP: ' + out);
-    // Move SL works up to the target: triggers at or past 1R stay greyed out with Trail TP on (lakky), and read "same".
+    // Move SL works up to the target: triggers at or past 1R stay greyed out with Trail TP on (lakky); the grid shows No move's number in grey.
     await page.evaluate(() => setSigStop('mode', 'shift'));
-    const mv = await page.evaluate(() => ({ dis: [...document.querySelectorAll('#sigStopAt option[disabled]')].map(o => o.value).join(','), warn: (document.getElementById('sigStopWarn') || {}).innerText || '', same: [...document.querySelectorAll('#sigStopGrid td')].filter(t => t.innerText === 'same').length, head: document.getElementById('sigTgtCmp').innerText.includes('Trail TP +0.25R'), r: inSigScope(() => outcomeNow(sigView.pairs[0])) }));
+    const mv = await page.evaluate(() => ({ dis: [...document.querySelectorAll('#sigStopAt option[disabled]')].map(o => o.value).join(','), warn: (document.getElementById('sigStopWarn') || {}).innerText || '', same: [...document.querySelectorAll('#sigStopGrid td[data-nomove="1"]')].filter(t => /^[+-]\d+\.\d\dR$/.test(t.innerText.trim())).length, head: document.getElementById('sigTgtCmp').innerText.includes('Trail TP +0.25R'), r: inSigScope(() => outcomeNow(sigView.pairs[0])) }));
     check(mv.dis === '1,1.25,1.5,2,2.5,3' && /Trail TP moves it/.test(mv.warn) && mv.same > 0 && mv.head && mv.r && Math.abs(mv.r.r - 0.8669) < 1e-9, 'Move SL with Trail TP: ' + JSON.stringify(mv));
     await page.evaluate(() => setSigStop('mode', 'off'));
     // SL 0.5R behind: the TP is locked once hit (lakky), so at 1R the stop goes to +1R (not +0.5R) and the
