@@ -9,7 +9,7 @@
 // of the sync repo's "nse-candles" branch (no history kept). The journal reads it
 // there with its sync token (tree + blobs, cached on the device by blob sha).
 //
-// Until v.189 this job walked each graded alert itself and wrote one summary per
+// Until v.190 this job walked each graded alert itself and wrote one summary per
 // alert (nse-paths.json): only the alert's own stop could be scored, so every other
 // SL type left NSE out (lakky, 2026-11-13: "fix this", NSE 1D trendlines all dashes).
 //

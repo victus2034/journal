@@ -8,8 +8,8 @@ candle on Delta's 15m candles (no path summary). tests/smoke.mjs (parityRun) run
 on the same alerts and candles and fails if any trade differs, so the two cannot drift apart.
 
 The rules (each one lakky's):
-- Alerts: crypto fib / trendline rebuild rows, news-window rows left out, channel = CRYPTO 4H /
-  1D / 1W / 1MO, IST date range, trendline type (support / resistance / support broken /
+- Alerts: fib / trendline rebuild rows, crypto and NSE, news-window rows left out, channel =
+  CRYPTO / NSE 4H / 1D / 1W / 1MO (none: both markets), IST date range, trendline type (support / resistance / support broken /
   resistance broken = line 0/1 x side), fib level from the key's tag (old keys: zone 1 = L1,
   zone 2 = L3).
 - Fill: a history touch row waits for the first 15m candle reaching the band (0.75%, 3% on
@@ -23,7 +23,15 @@ The rules (each one lakky's):
   only its close. Move SL (BE / SL shift) and Trail TP move the stop from the next candle,
   the higher stop wins; a Move SL trigger at or past the target never fires; Trail TP
   locks the first target. Hold: till TP / SL, or 20 candles after the fill (closed at the
-  last close). Costs: 0.0826% round trip (off with no fees), every stop fills 0.05% past it.
+  last close). Costs: 0.0826% round trip (NSE 0.1063%; off with no fees), every stop fills
+  0.05% past it.
+- NSE (2026-11-13): played on the 60m candles the journal's NSE job publishes from Yahoo
+  (fixture "nse": its files, float32 prices written short). "20 candles" (the fill window and
+  the hold) counts NSE candles of the alert's timeframe: 4H = 09:15-13:15 and 13:15-15:30 IST,
+  days, Monday weeks, calendar months (IST), so nights, weekends and holidays don't count.
+  The candle SL looks at the job's own 4H / 1D / 1W / 1M candles closed before the alert
+  (4H at 13:15 / 15:30, a day at 15:30, a week at the next Monday 09:15, a month at the next
+  month's first 09:15 IST), 300 back.
 - Partial (2026-11-13): a share of the position closes at a level (a limit, no slippage) on
   the first candle reaching it, after the stop check (the fill candle: its close); another
   share at the Move SL trigger when "book" is set. Shares of the whole position, lowest
@@ -31,18 +39,50 @@ The rules (each one lakky's):
   books nothing. Every later exit is for the rest; fees stay one round trip on the whole.
 
 python3 tools/signals-retest.py FIXTURE.json.gz COMBOS.json OUT.json [--app APP.json]
-FIXTURE: {now, records, results, candles: {"SYM_15m": [[time s, open, high, low, close], ...]}}.
+FIXTURE: {now, records, results, candles: {"SYM_15m": [[time s, open, high, low, close], ...]},
+nse: {"SYM.a.json": file text, "SYM.b.json": ...}}.
 With --app (the journal's own per-alert results, {combo: {key: r}}), every trade is compared
 and the exit code is 1 if any differs.
 """
-import gzip, json, math, sys
+import gzip, json, math, struct, sys
 from bisect import bisect_left
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 
 IST = timezone(timedelta(hours=5, minutes=30))
 TFM = {"4h": 240, "1d": 1440, "1w": 10080, "1M": 43200}
-CHAN = {"4h": "CRYPTO 4H", "1d": "CRYPTO 1D", "1w": "CRYPTO 1W", "1M": "CRYPTO 1MO"}
-COST, SLIP, BARS, RESM = 0.0826, 0.05, 20, 15
+CHAN = {"4h": "4H", "1d": "1D", "1w": "1W", "1M": "1MO"}
+COST, SLIP, BARS, RESM = {"crypto": 0.0826, "nse": 0.1063}, 0.05, 20, 15
+NSE_TF = {"4h": "4H", "1d": "1D", "1w": "1W", "1M": "1M"}
+
+
+def f32(v):
+    return struct.unpack("f", struct.pack("f", v))[0]
+
+
+def nse_bucket(ms, tf):
+    """The NSE candle of timeframe tf (minutes) the moment ms is in, as a growing number."""
+    d = datetime.fromtimestamp(ms / 1000, IST)
+    day = date(d.year, d.month, d.day).toordinal()
+    if tf >= 43200:
+        return d.year * 12 + d.month
+    if tf >= 10080:
+        return day - d.weekday()
+    if tf >= 1440:
+        return day
+    return day * 2 + (1 if d.hour * 60 + d.minute >= 13 * 60 + 15 else 0)
+
+
+def nse_closed_at(t, tf):
+    """When the NSE candle opened at t (s) has closed, in ms."""
+    d = datetime.fromtimestamp(t, IST)
+    if tf == 240:
+        return (t + (4 * 3600 if d.hour * 60 + d.minute < 13 * 60 + 15 else 2 * 3600 + 15 * 60)) * 1000
+    if tf == 1440:
+        return (t + 6 * 3600 + 15 * 60) * 1000
+    if tf == 10080:
+        return (t + 7 * 86400) * 1000
+    nxt = (d.replace(day=1) + timedelta(days=32)).replace(day=1, hour=9, minute=15, second=0, microsecond=0)
+    return nxt.timestamp() * 1000
 TOL = 2e-3
 
 
@@ -60,6 +100,19 @@ def main(argv):
     for k, rows in fx["candles"].items():
         rows = sorted((r for r in rows if r[0] <= now and min(r[1:5]) > 0), key=lambda r: r[0])
         series[k] = ([r[0] for r in rows], rows)
+    # NSE: each symbol's two files, laid together; "SYM_60", "SYM_4H", ... like the crypto ones.
+    nse = {}
+    for name, text in sorted((fx.get("nse") or {}).items()):
+        if not name.endswith((".a.json", ".b.json")):
+            continue
+        j = json.loads(text)
+        for k, rows in j["s"].items():
+            got = nse.setdefault(name[:-7] + "_" + k, {})
+            for r in rows:
+                got[r[0]] = [r[0]] + [f32(v) if j.get("f32") else float(v) for v in r[1:5]]
+    for k, got in nse.items():
+        rows = sorted((r for r in got.values() if r[0] <= now and min(r[1:5]) > 0), key=lambda r: r[0])
+        series["NSE:" + k] = ([r[0] for r in rows], rows)
 
     def between(sym, res, a, b):
         t, rows = series.get(sym + "_" + res, ([], []))
@@ -68,12 +121,12 @@ def main(argv):
     def alerts(c):
         out = []
         for r in fx["records"]:
-            if r.get("market") != "crypto" or r.get("kind") != c["kind"]:
+            if r.get("market") not in ("crypto", "nse") or r.get("kind") != c["kind"]:
                 continue
             if fx["results"].get(r["id"], {}).get("news_window"):
                 continue
             day = datetime.fromtimestamp(r["sent_ts"], IST).strftime("%Y-%m-%d")
-            if (c.get("chan") and CHAN.get(r["tf"]) != c["chan"]) or not (c["from"] <= day <= c["to"]):
+            if (c.get("chan") and r["market"].upper() + " " + CHAN.get(r["tf"], "") != c["chan"]) or not (c["from"] <= day <= c["to"]):
                 continue
             side = r["plan"]["side"]
             if c.get("tl"):
@@ -108,10 +161,14 @@ def main(argv):
             out = out[1:]
         return [o for o in out if o[5].timestamp() * 1000 <= t0][-300:]
 
-    def candle_stop(sym, tf, t0, entry, s, mode, gap):
+    def nse_candles_before(sym, tf, t0):
+        rows = series.get("NSE:" + sym + "_" + NSE_TF[tf], ([], []))[1]
+        return [r for r in rows if nse_closed_at(r[0], TFM[tf]) <= t0][-300:]
+
+    def candle_stop(sym, tf, t0, entry, s, mode, gap, mkt):
         T = entry * (1 - s * gap / 100)
         w = b = None
-        for k in reversed(tf_candles_before(sym, tf, t0)):
+        for k in reversed(nse_candles_before(sym, tf, t0) if mkt == "nse" else tf_candles_before(sym, tf, t0)):
             lw = k[3] if s > 0 else k[2]
             bd = min(k[1], k[4]) if s > 0 else max(k[1], k[4])
             if w is None and (lw <= T if s > 0 else lw >= T):
@@ -126,10 +183,10 @@ def main(argv):
             return b
         return b if w is None else w if b is None else (max(w, b) if s > 0 else min(w, b))
 
-    def play(sym, tf, t0, late, s, c, entry, stop):
+    def play(sym, tf, t0, late, s, c, entry, stop, mkt):
         tfms, rk = TFM[tf] * 60000, abs(entry - stop) / entry
         risk = rk * 100
-        cost = 0 if c.get("nofee") else COST / risk
+        cost = 0 if c.get("nofee") else COST[mkt] / risk
         tg = c["tgt"]
         pc = tg.endswith("%")
         tR = float(tg[:-1]) / risk if pc else float(tg[:-1])
@@ -168,20 +225,39 @@ def main(argv):
             if label == "Partial":
                 return {"filled": True, "r": bk["got"] - cost, "label": label}
             return {"filled": True, "r": bk["got"] + bk["left"] * r - cost, "label": ("Part + " if bk["n"] else "") + label}
-        resms = RESM * 60000
-        bars = [b for b in between(sym, "15m", (t0 - resms) // 1000, now + 1) if b[0] * 1000 + resms > t0]
+        if mkt == "nse":
+            # NSE: Yahoo's 60m candles; "20 candles" are NSE candles of the alert's timeframe.
+            resms = 60 * 60000
+            bars = [b for b in series.get("NSE:" + sym + "_60", ([], []))[1] if b[0] * 1000 + resms > t0]
+            idx, last = [], None
+            for b in bars:
+                k = nse_bucket(b[0] * 1000, TFM[tf])
+                if k != last:
+                    idx.append((idx[-1] + 1) if idx else 0)
+                    last = k
+                else:
+                    idx.append(idx[-1])
+            in_window = lambda i: idx[i] < BARS
+        else:
+            resms = RESM * 60000
+            bars = [b for b in between(sym, "15m", (t0 - resms) // 1000, now + 1) if b[0] * 1000 + resms > t0]
+            in_window = lambda i: bars[i][0] * 1000 < t0 + BARS * tfms
         i0 = 0
         if late:
             edge = entry * (1 + s * (3 if TFM[tf] >= 10080 else 0.75) / 100)
             bi = next((i for i, b in enumerate(bars) if (b[3] <= edge if s > 0 else b[2] >= edge)), None)
             i0 = len(bars) if bi is None else bi + 1
-        fi = next((i for i in range(i0, len(bars)) if bars[i][0] * 1000 < t0 + BARS * tfms and (bars[i][3] <= entry if s > 0 else bars[i][2] >= entry)), None)
+        fi = next((i for i in range(i0, len(bars)) if in_window(i) and (bars[i][3] <= entry if s > 0 else bars[i][2] >= entry)), None)
         if fi is None:
             return {"filled": False, "r": None, "label": "no fill"}
         R = lambda p: s * (p - entry) / entry / rk
         sl_r = -1 - (stop / entry) * SLIP / risk
         exit_at = lambda lvl: lvl - (1 + s * lvl * risk / 100) * SLIP / risk
         end = math.inf if c.get("hold", "tp") == "tp" else bars[fi][0] * 1000 + BARS * tfms
+        nse_over = False
+        if mkt == "nse" and end != math.inf:
+            eb = next((b for i, b in enumerate(bars) if idx[i] >= idx[fi] + BARS), None)
+            end, nse_over = (eb[0] * 1000, True) if eb else (math.inf, False)
         f = bars[fi]
         hit = lambda b, p: (b[3] <= p if s > 0 else b[2] >= p)
         if hit(f, stop):
@@ -222,7 +298,7 @@ def main(argv):
             if step is None and hi >= tR - 1e-9:
                 return done(tR, "Target")
             pend = events(hi)
-        if end != math.inf and last[0] * 1000 + resms >= end:
+        if (end != math.inf and last[0] * 1000 + resms >= end) or nse_over:
             return done(R(last[4]), "Time exit")
         return {"filled": True, "r": None, "label": "open"}
 
@@ -231,18 +307,21 @@ def main(argv):
         res = {}
         for r in alerts(c):
             t0, s = r["sent_ts"] * 1000, 1 if r["plan"]["side"] == "long" else -1
-            sym = r["symbol"]
+            mkt = r["market"]
+            sym = r["symbol"].split("/")[0].upper() if mkt == "nse" else r["symbol"]
+            if mkt == "nse" and sym.endswith(".NS"):
+                sym = sym[:-3]
             late = bool(r.get("rebuild")) and r["kind"] in ("fib", "trendline") and not r["key"].endswith("|br")
             entry, stop = float(r["plan"]["entry"]), float(r["plan"]["sl"])
             sl = c.get("sl") or {}
             if sl.get("mode") in ("wick", "body", "near"):
-                stop = candle_stop(sym, r["tf"], t0, entry, s, sl["mode"], sl.get("gap", 0.75))
+                stop = candle_stop(sym, r["tf"], t0, entry, s, sl["mode"], sl.get("gap", 0.75), mkt)
             elif sl.get("mode") == "pct":
                 stop = entry * (1 - s * sl.get("pct", 1) / 100)
             if stop is None or not (stop < entry if s > 0 else stop > entry):
                 res[r["id"]] = {"filled": None, "r": None, "label": "no stop"}
                 continue
-            res[r["id"]] = play(sym, r["tf"], t0, late, s, c, entry, stop)
+            res[r["id"]] = play(sym, r["tf"], t0, late, s, c, entry, stop, mkt)
         report[c["name"]] = res
         graded = [v["r"] for v in res.values() if v["r"] is not None]
         line = f"{c['name']}: {len(res)} alerts, {len(graded)} with a result, {sum(graded):+.2f}R"

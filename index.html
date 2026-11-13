@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-13.189">
+  <meta name="app-version" content="2026-11-13.190">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -4147,7 +4147,7 @@
       sigView.preCoin = coinKeep ? (skipTiny ? preCoin.filter(pr => !isTiny(pr)) : preCoin) : sigView.pairs;
       // The coins in view first, then the rest for the report's Top coins compare.
       tgtGen++;
-      if (sigTgt()) { const ps = sigView.pairs.concat(coinKeep ? sigView.preCoin.filter(pr => !coinKeep(pr.signal)) : []); setTimeout(() => { slcLoad(slcWant(ps)); tgtLoad(ps.concat(slCmpPairs(sigView.pairs))); nseLoad(ps); }, 0); }
+      if (sigTgt()) { const ps = sigView.pairs.concat(coinKeep ? sigView.preCoin.filter(pr => !coinKeep(pr.signal)) : []); setTimeout(() => { slcLoad(slcWant(ps)); tgtLoad(ps.concat(slCmpPairs(sigView.pairs))); }, 0); }
       renderSignalEdgeAnalysis(sigView.pairs);
       drawSigSec(sigCurSec());
 
@@ -9332,7 +9332,7 @@
     // fibs): BTC L4 of 15 Oct filled on 30 Oct, the scanner said "no fill", and the
     // what-if left the stopped trade out (lakky, 2026-11-08).
     function tgtBase(pair) {
-      return outcomeBase(pair) || (!!sigTgt() && !isNseSig(pair.signal) && !tgtWhy(pair.signal) ? { r: null, source: "walk" } : null);
+      return outcomeBase(pair) || (!!sigTgt() && !tgtWhy(pair.signal) ? { r: null, source: "walk" } : null);
     }
     // Filled, never filled (false) or not known yet (null), as the target walk sees it.
     function tgtFilled(pair) {
@@ -9599,7 +9599,7 @@
       if (r.mode === "pct") v = e * (1 - s * r.v / 100);
       else if (r.mode === "next" || r.mode === "box") v = slFibStop(sig, r.mode);
       else {
-        if (isNseSig(sig)) return null;
+        if (isNseSig(sig) && (!syncReady() || !NSE_KEYS[tfMinutes(sig.timeframe)])) return null;
         if (!st) return undefined;
         if (st.none || !Array.isArray(st.w)) return null;
         const T = e * (1 - s * r.v / 100), first = list => { const x = (list || []).find(p => s > 0 ? p <= T : p >= T); return x != null ? x : null; };
@@ -9625,7 +9625,7 @@
     // slNone: no stop this way (no candle that far back, not a fib, NSE).
     const sigSlMemo = new WeakMap();
     function sigWithSl(sig, r) {
-      const stop = slStopFor(sig, r, tgtCache()[slcKey(sig)]);
+      const stop = slStopFor(sig, r, tgtCache()[slcKey(sig)] || slcLive[slcKey(sig)]);
       let m = sigSlMemo.get(sig);
       if (!m) { m = {}; sigSlMemo.set(sig, m); }
       const ck = String(stop);
@@ -9638,9 +9638,16 @@
     }
     // Reads the candles before each alert that has none kept yet, four at a time.
     let slcBusy = false, slcProg = null, slcFail = 0;
-    const slcTried = {}, slcQ = [], slcQIn = {};
+    // slcLive: an NSE symbol the job has no candles for yet, this visit only (read again next time).
+    const slcTried = {}, slcQ = [], slcQIn = {}, slcLive = {};
     async function slcOne(sig) {
       const tf = tfMinutes(sig.timeframe), t0 = tgtAlertMs(sig), s = sig.side === "short" ? -1 : 1;
+      // NSE: the job's own candles of the alert's timeframe (nseBarEnd: closed before the alert).
+      if (isNseSig(sig)) {
+        const c = await nseSeries(sig.symbol), rows = c && NSE_KEYS[tf] ? c[NSE_KEYS[tf]] || [] : [];
+        const bars = rows.filter(k => nseBarEnd(k.time, tf) <= t0).slice(-SLC_BARS).map(k => ({ t: k.time * 1000, o: k.open, h: k.high, l: k.low, c: k.close }));
+        return bars.length ? Object.assign({ n: bars.length }, slcStairs(bars, s)) : { none: "no NSE candles" };
+      }
       const res = AI_RES.slice().reverse().find(x => tf % x[0] === 0) || AI_RES[0];
       const n = Math.min(1900, Math.ceil(SLC_BARS * tf / res[0]));
       const rows = await tgtRead(tgtSym(sig.symbol), res[1], t0 - n * res[0] * 60000, t0);
@@ -9652,7 +9659,7 @@
       const seen = {}, todo = sigs.filter(g => {
         const k = slcKey(g);
         tgtWant[k] = tgtGen;
-        if (seen[k] || slcQIn[k] || slcTried[k] || tgtCache()[k] || isNseSig(g) || !tfMinutes(g.timeframe) || !isFinite(tgtAlertMs(g))) return false;
+        if (seen[k] || slcQIn[k] || slcTried[k] || tgtCache()[k] || (isNseSig(g) && (!syncReady() || !NSE_KEYS[tfMinutes(g.timeframe)])) || !tfMinutes(g.timeframe) || !isFinite(tgtAlertMs(g))) return false;
         return (seen[k] = true);
       });
       if (!todo.length) return;
@@ -9669,7 +9676,7 @@
           delete slcQIn[k];
           if ((tgtWant[k] || 0) < tgtGen - 1) { slcProg.total--; continue; }
           slcTried[k] = 1;
-          try { tgtCache()[k] = await slcOne(g); ok++; } catch (e) { slcFail++; missed++; }
+          try { const st = await slcOne(g); if (st.none === "no NSE candles") slcLive[k] = st; else tgtCache()[k] = st; ok++; } catch (e) { slcFail++; missed++; }
           slcProg.done++;
           if (Date.now() - drawn > 1500) { drawn = Date.now(); tgtSave(); renderSignalsTable(); }
         }
@@ -9699,7 +9706,7 @@
     function slCoverBits(pairs) {
       const r = sigSlOn();
       if (!r) return [];
-      const wait = pairs.filter(pr => pr.signal.slWait).length, none = pairs.filter(pr => pr.signal.slNone).length, bits = [];
+      const wait = pairs.filter(pr => pr.signal.slWait).length, none = pairs.filter(pr => pr.signal.slNone && !(isNseSig(pr.signal) && !syncReady())).length, bits = [];
       if (wait) bits.push(wait + " waiting for candles to set the SL" + (slcProg ? " (" + slcProg.done + "/" + slcProg.total + ")" : navigator.onLine === false ? "" : ""));
       if (none) bits.push(none + " with no " + (SL_CANDLE[r.mode] ? "candle " + r.v + "% past entry in " + SLC_BARS + " candles" : r.mode === "pct" ? "price" : "fib level") + " (no result)");
       if (slcFail && !slcProg) bits.push(slcFail + " candle read" + (slcFail === 1 ? "" : "s") + " failed");
@@ -9729,7 +9736,7 @@
       const mvOf = tg => stopRuleOf(cfg, tg), trOf = tg => trailRuleOf(td, tg), pxOf = tg => partRuleOf(pd, tg, mvOf(tg));
       const head = '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">SL compared</h3><span class="text-[11px] text-slate-500">Total R with each stop at each exit · ' + holdTxt() + '</span></div>';
       const seen = new Set(), origs = [];
-      pairs.forEach(pr => { const g = pr.signal.slFrom || pr.signal; if (!seen.has(g) && !isNseSig(g) && tgtBase({ signal: g })) { seen.add(g); origs.push(g); } });
+      pairs.forEach(pr => { const g = pr.signal.slFrom || pr.signal; if (!seen.has(g) && tgtBase({ signal: g })) { seen.add(g); origs.push(g); } });
       const sets = [];
       let need = 0, noStop = 0;
       origs.forEach(g => {
@@ -9743,7 +9750,7 @@
       });
       const prog = slcProg ? 'reading candles ' + slcProg.done + '/' + slcProg.total + '… ' : tgtProg ? 'reading prices ' + tgtProg.done + '/' + tgtProg.total + '… ' : '';
       const btn = !slCmpOn || (!slcProg && !tgtProg && need) ? '<button type="button" id="sigSlCmpRead" onclick="slCmpRead()" class="underline text-amber-300">' + (slCmpOn ? 'Retry' : 'Read prices for every SL') + '</button>' : '';
-      const status = '<p class="text-[11px] text-slate-500 mb-2">' + prog + (need ? need + ' alert' + (need === 1 ? '' : 's') + ' still need prices for some SL types' + (slCmpOn ? '' : ' (each SL is its own walk on Delta\'s candles, about ' + (need * (rules.length - 1)) + ' reads, kept on the device after)') + ' ' : '') + btn + '</p>';
+      const status = '<p class="text-[11px] text-slate-500 mb-2">' + prog + (need ? need + ' alert' + (need === 1 ? '' : 's') + ' still need prices for some SL types' + (slCmpOn ? '' : ' (each SL is its own walk on the candles, about ' + (need * (rules.length - 1)) + ' reads, kept on the device after)') + ' ' : '') + btn + '</p>';
       if (!sets.length) return head + status + '<p class="text-slate-500">' + (sigTgt() ? 'No alert has a result with every SL yet.' : 'Pick an Exit at target to read prices.') + '</p></div>';
       const cells = rules.map((r, i) => tgs.map((tg, j) => {
         const rs = sets.map(x => x.row[i][j].r), w = rs.filter(v => v > 0).length;
@@ -9768,7 +9775,7 @@
       });
       const mv = sigStopRule(), tr = sigTrailRule(), px = sigPartRule();
       return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. R is measured on each row\'s own stop, so a tighter stop makes each R smaller (fees and the 0.05% stop slippage weigh more in R). Avg SL = the average stop distance from entry. '
-        + (mv || tr || px ? 'Move SL / Trail TP / Partial as picked (R targets in R, % targets in %). ' : '') + (noStop ? noStop + ' alert' + (noStop === 1 ? ' has' : 's have') + ' no stop for some type (no candle that far back in ' + SLC_BARS + ' candles) and ' + (noStop === 1 ? 'is' : 'are') + ' left out. ' : '') + 'Crypto only. Click a cell to use it on the whole tab.</p></div>';
+        + (mv || tr || px ? 'Move SL / Trail TP / Partial as picked (R targets in R, % targets in %). ' : '') + (noStop ? noStop + ' alert' + (noStop === 1 ? ' has' : 's have') + ' no stop for some type (no candle that far back in ' + SLC_BARS + ' candles) and ' + (noStop === 1 ? 'is' : 'are') + ' left out. ' : '') + 'Click a cell to use it on the whole tab.</p></div>';
     }
     // Runs fn with the picked target applied to every alert result it reads.
     function inSigScope(fn) { const was = tgtScope; tgtScope = true; try { return fn(); } finally { tgtScope = was; } }
@@ -9782,6 +9789,9 @@
     // Delta's own name: US stocks are "bStocks" there (an MRVL alert reads MRVLBUSD).
     function tgtSym(s) { return deltaSymOf(s) || tgtPlain(s); }
     // A "no candles" kept from before the bStocks names were known is read again once.
+    // No candles at all (Delta doesn't list the coin, or the NSE job has none for the stock
+    // yet): kept for this visit only, so it is read again next time.
+    function tgtNoData(w) { return !!w && (w.none === "no candles on Delta" || w.none === "no NSE candles"); }
     function tgtStale(sig, w) { return !!w && w.none === "no candles on Delta" && !w.via && tgtSym(sig.symbol) !== tgtPlain(sig.symbol); }
     function tgtKey(sig) { return [sig.key || sig.symbol + "|" + sig.date + "|" + sig.time, sig.side, signalEntry(sig), sig.stop].join("|"); }
     // Each hold has its own walk: the 20-candle one (kept under the plain key) and "|tp".
@@ -9799,7 +9809,8 @@
     function tgtAlertMs(sig) { return new Date(sig.date + "T" + String(sig.time || "00:00").slice(0, 5).padStart(5, "0") + ":00+05:30").getTime(); }
     // Why an alert can't be re-scored, or "" when it can.
     function tgtWhy(sig) {
-      if (/^nse$/i.test(sig.market || "")) return "NSE";
+      // NSE: candles from the sync repo (nseSeries), on 4H and up only (the walk is on 60m candles).
+      if (isNseSig(sig)) { if (!syncReady()) return "NSE: GitHub sync off"; if (!NSE_KEYS[tfMinutes(sig.timeframe)]) return "NSE: timeframe"; }
       if (!tfMinutes(sig.timeframe) || !(slPct(sig) > 0) || !isFinite(tgtAlertMs(sig))) return "no data";
       return "";
     }
@@ -9826,6 +9837,26 @@
       if (fi < 0) return seenTo < t0 + TGT_BARS * tfMs ? { none: "entry not reached", wait: 1 } : { none: "entry not reached" };
       const tp = hold === "tp";
       return walkFrom(entry, stop, s, bars, fi, tp ? Infinity : bars[fi].t + TGT_BARS * tfMs, resMs);
+    }
+    // Pure: tgtWalk for an NSE alert, on Yahoo's 60m candles. The fill window (20 candles
+    // of the alert's timeframe, its own first) and the 20-candle hold count NSE candles
+    // (nseBucket), so nights, weekends and holidays don't count; the rest is tgtWalk's.
+    function tgtWalkNse(sig, candles, hold) {
+      const entry = signalEntry(sig), stop = sig.stop, s = sig.side === "short" ? -1 : 1, tf = tfMinutes(sig.timeframe), resMs = NSE_RES * 60000, t0 = tgtAlertMs(sig);
+      const bars = candles.map(k => ({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close })).filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + resMs > t0).sort((a, b) => a.t - b.t);
+      let i = -1, last = null, from = 0;
+      bars.forEach(k => { const b = nseBucket(k.t, tf); if (b !== last) { i++; last = b; } k.i = i; });
+      if (tgtLate(sig)) {
+        const edge = entry * (1 + s * tgtBandFrac(sig)), bi = bars.findIndex(k => s > 0 ? k.l <= edge : k.h >= edge);
+        from = bi < 0 ? bars.length : bi + 1;
+      }
+      const fi = bars.findIndex((k, j) => j >= from && k.i < TGT_BARS && (s > 0 ? k.l <= entry : k.h >= entry));
+      if (fi < 0) return bars.some(k => k.i >= TGT_BARS) ? { none: "entry not reached" } : { none: "entry not reached", wait: 1 };
+      if (hold === "tp") return walkFrom(entry, stop, s, bars, fi, Infinity, resMs);
+      // The hold ends where the 20th NSE candle after the fill's starts (not there yet: still open).
+      const eb = bars.find(k => k.i >= bars[fi].i + TGT_BARS), w = walkFrom(entry, stop, s, bars, fi, eb ? eb.t : 8.64e15, resMs);
+      if (eb && !w.sl) w.done = 1;
+      return w;
     }
     // Pure: the walk itself, from the fill candle bars[fi] until end (Infinity: till
     // the stop, or settled past the biggest target). Shared with Analysis's demo of
@@ -9860,7 +9891,6 @@
     // the one before it, in candle order; ta = the worst move after the last one.
     // From that a stop moved at any trigger, and any target, can be replayed.
     // rk = stop distance as a fraction of entry; m0 = the fill candle's close move.
-    // tools/nse-paths.mjs keeps the same copy for NSE.
     // timed: also pt, each point's candle times [best, dip] in minutes after the fill
     // (bar's tm), and tta, the last dip's; the exit time of any rule is read from them.
     function tgtRec(rk, m0, timed) {
@@ -9999,31 +10029,92 @@
     // read again, so it is left out until then.
     function tgtPath(sig, hold) {
       const tp = (hold || sigHold()) === "tp", ok = w => w && (!tp || w.none || w.tr) ? w : null;
-      if (isNseSig(sig)) return ok(nsePaths && nsePaths[nseKey(sig) + (tp ? "|tp" : "")]);
       const k = tgtHoldKey(sig, hold); return ok(tgtCache()[k] || tgtLive[k]);
     }
-    // NSE: Delta has no NSE stocks and Yahoo doesn't answer web pages, so a GitHub
-    // job in the sync repo (tools/nse-paths.mjs, twice a day) reads each graded NSE
-    // alert's candles from Yahoo, walks them like tgtWalk (20 NSE candles of the
-    // alert's timeframe) and writes the summaries to nse-paths.json. Read with the
-    // sync token, kept in memory only (storage is tight), at most every 30 min.
-    let nsePaths = null, nseAt = 0, nseBusy = false, nseErr = "";
-    const NSE_PATHS_FILE = "nse-paths.json";
+    // ---- NSE candles (lakky, 2026-11-13: "fix this": NSE 1D trendlines all dashes) ----
+    // Delta has no NSE stocks and Yahoo doesn't answer web pages, so a GitHub job in the
+    // sync repo (tools/nse-candles.mjs, twice a day) reads every NSE symbol's candles from
+    // Yahoo and publishes them as the sync repo's "nse-candles" branch. Read here with the
+    // sync token: the branch's file list (at most every 30 min), then each symbol's two
+    // files by blob sha, kept on this device (IndexedDB) until the sha changes. NSE alerts
+    // then walk like crypto ones: Yahoo's 60m candles for the walk, NSE's own 4H / 1D /
+    // 1W / 1M candles for the candle SL. Until v.190 the job wrote one summary per graded
+    // alert (nse-paths.json), for the alert's own stop only: every other SL type, and the
+    // walk's own fill, left NSE out.
+    const NSE_BRANCH = "nse-candles", NSE_RES = 60, NSE_KEYS = { 240: "4H", 1440: "1D", 10080: "1W", 43200: "1M" };
+    let nseIdx = null, nseIdxAt = 0, nseIdxP = null, nseErr = "";
+    const nseSer = {};
     function isNseSig(sig) { return /^nse$/i.test(sig.market || ""); }
-    function nseKey(sig) { return [sig.symbol, sig.side, sig.stop, sig.date + " " + sig.time].join("|"); }
-    async function nseLoad(pairs) {
-      if (nseBusy || !syncReady() || (nsePaths && Date.now() - nseAt < 30 * 60000)) return;
-      if (!pairs.some(pr => isNseSig(pr.signal) && outcomeBase(pr))) return;
-      nseBusy = true;
-      try {
-        const c = syncCfg();
-        const res = await syncApi("/contents/" + NSE_PATHS_FILE + "?ref=" + encodeURIComponent(c.branch || "main"), { headers: { Accept: "application/vnd.github.raw" } });
-        if (res.status === 404) { nsePaths = {}; nseErr = "the NSE price job hasn't run yet"; }
-        else if (!res.ok) { nseErr = "could not read NSE prices (GitHub " + res.status + ")"; }
-        else { const j = await res.json(); nsePaths = (j && j.paths && typeof j.paths === "object") ? j.paths : {}; nseErr = ""; }
-      } catch (e) { nseErr = "could not read NSE prices"; }
-      nseAt = Date.now(); nseBusy = false;
-      renderSignalsTable();
+    // The branch's files: path -> blob sha. A symbol whose files changed is read again.
+    function nseTree() {
+      if (nseIdx && Date.now() - nseIdxAt < 30 * 60000) return Promise.resolve(nseIdx);
+      if (!nseIdxP) nseIdxP = (async () => {
+        try {
+          const res = await syncApi("/git/trees/" + NSE_BRANCH);
+          let ix = {};
+          if (res.status === 404 || res.status === 409) nseErr = "the NSE price job hasn't run yet (Actions → NSE candles in the sync repo)";
+          else if (!res.ok) { nseErr = "could not read NSE prices (GitHub " + res.status + ")"; throw new Error(nseErr); }
+          else { const j = await res.json(); (j && Array.isArray(j.tree) ? j.tree : []).forEach(e => { if (e && e.type === "blob" && e.path && e.sha) ix[e.path] = e.sha; }); nseErr = ""; }
+          if (nseIdx) Object.keys(nseSer).forEach(sy => { if (["a", "b"].some(p => ix[sy + "." + p + ".json"] !== nseIdx[sy + "." + p + ".json"])) delete nseSer[sy]; });
+          nseIdx = ix; nseIdxAt = Date.now();
+          return ix;
+        } catch (e) { if (!nseErr) nseErr = "could not read NSE prices"; throw e; }
+        finally { nseIdxP = null; }
+      })();
+      return nseIdxP;
+    }
+    async function nseFile(path, sha) {
+      const k = "nsec|" + path;
+      if (sigIdbOk) { const v = await idbGet(k).catch(() => null); if (v && v.sha === sha && typeof v.t === "string") return v.t; }
+      const res = await syncApi("/git/blobs/" + sha, { headers: { Accept: "application/vnd.github.raw" } });
+      if (!res.ok) throw new Error("GitHub " + res.status);
+      const t = await res.text();
+      if (sigIdbOk) idbPut(k, { sha, t }).catch(() => {});
+      return t;
+    }
+    // Pure: one file -> { key: rows }, rows like Delta's ({ time (s), open, high, low, close }).
+    // f32: the prices are Yahoo's float32 values written short; Math.fround gives them back.
+    function nseDecode(text) {
+      let j = null; try { j = JSON.parse(text); } catch (e) { return null; }
+      if (!j || !j.s || typeof j.s !== "object") return null;
+      const out = {}, f = j.f32 ? Math.fround : (v => +v);
+      ["60", "4H", "1D", "1W", "1M"].forEach(k => {
+        out[k] = (Array.isArray(j.s[k]) ? j.s[k] : []).filter(r => Array.isArray(r) && r.length === 5).map(r => ({ time: +r[0], open: f(r[1]), high: f(r[2]), low: f(r[3]), close: f(r[4]) }))
+          .filter(k => k.time > 0 && k.open > 0 && k.high > 0 && k.low > 0 && k.close > 0);
+      });
+      return out;
+    }
+    // A symbol's candles (both files), or null when the job has none for it.
+    function nseSeries(symbol) {
+      const sy = String(symbol || "").replace(/\.NS$/i, "").toUpperCase();
+      if (!nseSer[sy]) {
+        const p = nseSer[sy] = nseTree().then(ix => Promise.all(["a", "b"].map(x => ix[sy + "." + x + ".json"] ? nseFile(sy + "." + x + ".json", ix[sy + "." + x + ".json"]) : null))).then(ts => {
+          const out = {}; let any = false;
+          ts.forEach(t => { const d = t ? nseDecode(t) : null; if (d) Object.keys(d).forEach(k => { out[k] = (out[k] || []).concat(d[k]); if (d[k].length) any = true; }); });
+          Object.keys(out).forEach(k => { const seen = {}; out[k] = out[k].sort((a, b) => a.time - b.time).filter(r => !seen[r.time] && (seen[r.time] = 1)); });
+          return any ? out : null;
+        });
+        p.catch(() => { if (nseSer[sy] === p) delete nseSer[sy]; });
+      }
+      return nseSer[sy];
+    }
+    // Which NSE candle of the alert's timeframe the moment ms is in (a number that grows
+    // by one or more per candle): 4H = 09:15-13:15 and 13:15-15:30 IST, days, Monday
+    // weeks, calendar months, all IST.
+    function nseBucket(ms, tf) {
+      const d = new Date(ms + 330 * 60000), day = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 864e5;
+      if (tf >= 43200) return d.getUTCFullYear() * 12 + d.getUTCMonth();
+      if (tf >= 10080) return day - (d.getUTCDay() + 6) % 7;
+      if (tf >= 1440) return day;
+      return day * 2 + (d.getUTCHours() * 60 + d.getUTCMinutes() >= 795 ? 1 : 0);
+    }
+    // When an NSE candle (opened at t s, stamped at 09:15 / 13:15 IST) has closed, in ms.
+    function nseBarEnd(t, tf) {
+      const ms = t * 1000, d = new Date(ms + 330 * 60000);
+      if (tf === 240) return ms + (d.getUTCHours() * 60 + d.getUTCMinutes() < 795 ? 240 : 135) * 60000;
+      if (tf === 1440) return ms + 375 * 60000;
+      if (tf === 10080) return ms + 7 * 864e5;
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1) + (555 - 330) * 60000;
     }
     // ---- The candles behind every walk (lakky, 2026-11-12: "i told you to recheck backtest
     // result of journal and most of the times its differ") ----
@@ -10144,6 +10235,12 @@
     // Till TP / SL = from the alert to now.
     function tgtEnd(sig, hold, now) { return hold === "tp" ? now : Math.min(now, tgtAlertMs(sig) + 2 * TGT_BARS * tfMinutes(sig.timeframe) * 60000); }
     async function tgtOne(sig, hold) {
+      // NSE: the job's 60m candles, all in one read per symbol (nseSeries).
+      if (isNseSig(sig)) {
+        const c = await nseSeries(sig.symbol), rows = c && c["60"];
+        if (!rows || !rows.length) return { none: "no NSE candles", v: TGT_WALK_V };
+        return Object.assign(tgtWalkNse(sig, rows, hold), { v: TGT_WALK_V });
+      }
       // Block by block: most walks end (SL, target settled, window over) in the first one
       // or two, so only those are read; a walk still going reads the next block and is
       // walked again from the start (the same result as one read of everything).
@@ -10178,7 +10275,7 @@
         // With the Demo account open, a walk kept before times (no ft) is read once more for its hold time.
         // A walk kept by a build before v.186 (no v: its candle size came from the alert's age) is walked again on 15m.
         // A walk still open is walked again after TGT_LIVE_MS, as new candles come in.
-        const live = tgtLive[k], again = !!live && live.none !== "no candles on Delta" && Date.now() - (live.at || 0) > TGT_LIVE_MS;
+        const live = tgtLive[k], again = !!live && !tgtNoData(live) && Date.now() - (live.at || 0) > TGT_LIVE_MS;
         if (seen[k] || (c && c.v === TGT_WALK_V && ((c.none && !tgtStale(g, c) && !tgtNoneEarly(g)) || (Array.isArray(c.p) && (hold !== "tp" || c.tr) && (c.ft != null || !times)))) || (tgtTried[k] && !again) || tgtWhy(g) || !tgtBase({ signal: g })) return false;
         return (seen[k] = true);
       });
@@ -10208,10 +10305,10 @@
             ok++;
             // Read again only for its times or for 15m: the old walk stays if the candles are gone now.
             const prev = tgtCache()[k];
-            if (w.none === "no candles on Delta" && prev && Array.isArray(prev.p)) { /* keep prev */ }
+            if (tgtNoData(w) && prev && Array.isArray(prev.p)) { /* keep prev */ }
             // Kept for good only once it has ended, from blocks with no hole; "no candles"
             // only for this visit (a coin Delta lists later is read again next time).
-            else if (!w.hole && ((w.none && !w.wait && w.none !== "no candles on Delta") || w.sl || w.done)) { tgtCache()[k] = w; delete tgtLive[k]; }
+            else if (!w.hole && ((w.none && !w.wait && !tgtNoData(w)) || w.sl || w.done)) { tgtCache()[k] = w; delete tgtLive[k]; }
             else { tgtLive[k] = Object.assign(w, { at: Date.now() }); delete tgtCache()[k]; }
           } catch (e) { tgtFail++; missed++; }
           tgtProg.done++;
@@ -10227,6 +10324,7 @@
     function tgtPrefetch(items) {
       const step = TGT_CHUNK * TGT_RES * 60000;
       items.forEach(it => {
+        if (isNseSig(it.g)) return;
         const from = tgtAlertMs(it.g) - TGT_RES * 60000;
         if (isFinite(from) && from <= Date.now()) tgtChunk(tgtSym(it.g.symbol), TGT_RES_K, Math.floor(from / step), step, Date.now());
       });
@@ -10239,11 +10337,17 @@
     // One line on what the target covers, for the strip and the compare card.
     function tgtCoverNote(pairs) {
       const graded = pairs.filter(pr => tgtBase(pr));
-      const nse = graded.filter(pr => isNseSig(pr.signal) && !tgtPath(pr.signal)).length;
       const need = !!(sigStopRule() || sigTrailRule() || sigPartRule());
       const have = graded.filter(pr => { const w = tgtPath(pr.signal); return w && (w.none || !need || Array.isArray(w.p)); }).length;
       const bits = [`${have} of ${graded.length} graded alerts have price data`];
-      if (nse) bits.push(`${nse} NSE ` + (!syncReady() ? "without prices: turn on GitHub sync in Settings to read them" : nseBusy ? "prices loading…" : nseErr ? "without prices: " + nseErr : "without prices yet (the NSE price job runs twice a day)"));
+      // NSE: candles from the sync repo's nse-candles branch (nseSeries).
+      const nse = pairs.filter(pr => isNseSig(pr.signal));
+      if (nse.length && !syncReady()) bits.push(`${nse.length} NSE without prices: turn on GitHub sync in Settings to read them`);
+      else if (nse.length) {
+        const noC = nse.filter(pr => tgtNoData(tgtPath(pr.signal)) || pr.signal.slNone && slcLive[slcKey(pr.signal.slFrom || pr.signal)]).length;
+        if (nseErr) bits.push("NSE prices: " + nseErr);
+        else if (noC) bits.push(`${noC} NSE with no candles yet (the NSE price job runs twice a day)`);
+      }
       const tg = sigTgt();
       if (tg && sigHold() === "tp") {
         const mv = sigStopRule(), tr = sigTrailRule(), px = sigPartRule(), open = graded.filter(pr => { const w = tgtPath(pr.signal); return w && !w.none && !tgtScore(pr.signal, w, tg, false, mv, tr, px); }).length;
@@ -11562,7 +11666,7 @@
       const tg = sigTgt(), rules = tg ? inSigScope(() => [tg.k, sigSlOn() ? sigSlOn().label : "", sigStopMove() ? sigStopMove().label : "", sigTrail() ? sigTrail().label : "", sigPart() ? sigPart().label : "", holdTxt(), sigNoFee() ? "no fees" : ""].filter(Boolean).join("; ")) : "";
       const istTime = ms => { const d = new Date(ms + 330 * 60000); return d.toISOString().slice(0, 16).replace("T", " "); };
       const rows = withOutcomeCache(() => inSigScope(() => btLast.slice().sort((a, b) => sbtWhen(a.signal) < sbtWhen(b.signal) ? -1 : 1).map(pr => {
-        const g = pr.signal, o = outcomeOf(pr), sp = slPct(g), mo = myOutcome(pr), b = outcomeBase(pr), w = tg && !isNseSig(g) ? tgtPath(g) : null, wf = tg ? tgtFilled(pr) : null;
+        const g = pr.signal, o = outcomeOf(pr), sp = slPct(g), mo = myOutcome(pr), b = outcomeBase(pr), w = tg ? tgtPath(g) : null, wf = tg ? tgtFilled(pr) : null;
         return [g.date, g.time, g.kind || "zone", chanLabel(chanKey(g)), g.symbol, g.side, signalEntry(g), g.stop, sp != null ? sp.toFixed(3) : "", g.score || "",
           g.filled === true ? "yes" : g.filled === false ? "no" : "", g.outcome || "", o ? o.r.toFixed(3) : "", o && sp != null ? (o.r * sp).toFixed(3) : "", pr.trade ? "yes" : "", mo ? mo.r.toFixed(3) : "",
           b && b.r != null ? b.r.toFixed(3) : "", rules, tg && !isNseSig(g) ? tgtSym(g.symbol) : "", wf === true ? "yes" : wf === false ? "no" : "",
@@ -12496,7 +12600,7 @@
     // "Edge & breakdowns": best and worst setups, and R by score, channel, hour and more.
     function renderSigEdge(pairs) {
       renderTgtCompare(pairs);
-      setTimeout(() => { slcLoad(slcWant(pairs)); tgtLoad(pairs.concat(slCmpPairs(pairs))); nseLoad(pairs); }, 0);
+      setTimeout(() => { slcLoad(slcWant(pairs)); tgtLoad(pairs.concat(slCmpPairs(pairs))); }, 0);
       renderSetups(pairs);
       const note = pairs.length ? "Only alerts with a result from the scanner (or an exit price you add) can be measured." : "Import some signals first.";
       // Cards in the order they stack. A breakdown with a single group says nothing
@@ -15018,6 +15122,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-13.190', pr: 104, title: 'Signals: NSE alerts get results', pts: ['NSE alerts showed only dashes with any SL but Alert (e.g. NSE 1D trendlines, Wick or body): no NSE candles in the app', 'Now a twice-a-day job puts Yahoo\'s NSE candles in your sync repo, and NSE alerts are played like crypto: every SL type, Move SL, Trail TP, Partial, Hold, Demo account', '"20 candles" counts NSE candles (no nights or weekends). Needs GitHub sync on'] },
       { v: '2026-11-13.189', pr: 103, title: 'Assets row + CoinDCX / Delta coins', pts: ['New Assets row (Signals and Analysis): Both / Crypto / xStocks. Coins adds CoinDCX and Delta: only what that broker lists, the same list the Demo account uses, so both count the same alerts', 'Backtest report compares xStocks vs crypto and each broker\'s coins', 'Demo account: new "What changed the result" line, from any size to real orders one rule at a time (not listed, min stop, coin leverage, whole orders)'] },
       { v: '2026-11-13.188', pr: 102, title: 'Signals: partial exits', pts: ['New Partial row in How each trade is played: book 25%, 50% or 75% of the position at a level you pick (R, or % with a % target); the rest runs to the TP or SL', 'Move SL now has book: close a share where BE / SL shift fires (e.g. BE at 0.75%, book 50%), the rest goes on at breakeven', 'Headline, compare tables, Demo account, By outcome (Part + Target, Part + BE...) and CSV all follow it; the independent retest plays it too'] },
       { v: '2026-11-13.187', pr: 101, title: 'Move SL compared: numbers, not "same"', pts: ['Cells that read "same" now show their real total R, in grey', 'Grey = the move starts at or past that exit, so price hits the target first and the stop never moves: the result equals the No move row', 'Hover a grey cell for its win rate and average R'] },
