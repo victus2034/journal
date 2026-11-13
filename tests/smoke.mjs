@@ -2429,6 +2429,9 @@ async function sigBacktestRun(seed) {
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
   try {
     await page.goto(base, { waitUntil: 'load' });
+    // The Exit-at cache and the alert store load from IndexedDB after "load"; the cache draws
+    // the Signals tab again when it lands.
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded, null, { timeout: 5000 });
     const v = await page.evaluate(() => {
       // In time order: +2 -1 -1 +1 | -1 +2 -1, then one never filled and one still open.
       // Equity 2 1 0 1 0 2 1: total +1R, peak 2, deepest fall 2R, 4 alerts under the peak.
@@ -2476,6 +2479,10 @@ async function sigBacktestRun(seed) {
       head: document.querySelector('#sigBtChart .dc-head').innerText.replace(/\s+/g, ' '), days: ['2026-10-01', '2026-10-02', '2026-10-04', '2026-10-05', '2026-10-07'].map(fmtDay) }));
     check(JSON.stringify(c.y) === '["0R","+0.5R","+1.0R","+1.5R","+2.0R"]' && c.start === 'start 0R' && JSON.stringify(c.y2) === '["0R","-2.0R"]' && c.dd === 'Drawdown from the last high · max -2.00R', 'R curve axis 0-2R, drawdown 2R: ' + JSON.stringify(c));
     check(JSON.stringify(c.x) === JSON.stringify(c.days) && /^Equity curve, every alert at 1R total \+1\.00R · /.test(c.head), 'dates of alerts 1, 2, 4, 5, 7 and the total: ' + JSON.stringify(c));
+    // Each draw starts the price loaders (Exit-at walks, SL candles, NSE paths); the last one to
+    // finish draws the tab again. Hover only once they are idle, or that draw lands between the
+    // pointer move and the read and the tip comes back empty (CI, 13 Nov).
+    await page.waitForFunction(() => tgtReady && signalsLoaded && !tgtBusy && !slcBusy && !nseBusy, null, { timeout: 8000 });
     await page.$eval('#sigBtPlot', el => el.scrollIntoView({ block: 'center' }));
     const pb = await page.$eval('#sigBtPlot', el => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
     await page.mouse.move(pb.x + pb.w - 1, pb.y + pb.h / 2);
@@ -2885,7 +2892,7 @@ async function demoAccountRun(seed) {
 // 60% won, avg 480m; Top 5 (+BNB SOL): 7 trades +4; All: 9 trades +4.
 // Exit at times: A long 100 / 99 on 15m candles reaches 1R on the candle 15m after the fill;
 // B short 200 / 202 never does and leaves on time 320 candles (4800m) after its fill.
-// Coins row: Crypto / xStocks / CoinDCX / Delta (lakky, 2026-11-13), and the Demo account's
+// Assets row (Both / Crypto / xStocks) and Coins CoinDCX / Delta (lakky, 2026-11-13), and the Demo account's
 // "What changed the result" line from any size to real orders, one rule at a time.
 async function coinVenueRun(seed) {
   const errs = [];
@@ -2922,10 +2929,20 @@ async function coinVenueRun(seed) {
       Object.assign(state.ui, { sigKind: 'fib', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigTgt: '', sigNoFee: false,
         sigStop: { mode: 'off' }, sigTrail: { on: false }, sigHold: 'tp', sigCoins: '', sigCoinRank: 'cap', sigCoinPicks: undefined, sigFold: {}, sigLvl: '' });
       switchTab('signals'); renderAll();
-      const out = { buttons: [...document.querySelectorAll('#sigCoinBar button[data-coins]')].map(b => b.innerText).join() };
+      const out = { buttons: [...document.querySelectorAll('#sigCoinBar button[data-coins]')].map(b => b.innerText).join(), assets: [...document.querySelectorAll('#sigAssetBar button[data-asset]')].map(b => b.innerText.replace(/\s+/g, ' ')).join() };
       const read = () => [text('sigEdgeStrip').match(/Alerts (\d+)/)[1], (text('sigEdgeStrip').match(/Total R ([+-][\d.]+R)/) || [])[1], text('sigCoinTest'), text('sigWhichSum'), text('sigPeriodHint')];
+      const asset = k => document.querySelector('#sigAssetBar button[data-asset="' + k + '"]').click(), coins = k => document.querySelector('#sigCoinBar button[data-coins="' + k + '"]').click();
       out.all = read();
-      ['crypto', 'xstock', 'dcx', 'delta'].forEach(k => { document.querySelector('#sigCoinBar button[data-coins="' + k + '"]').click(); out[k] = read(); });
+      asset('crypto'); out.crypto = read();
+      asset('xstock'); out.xstock = read();
+      out.xTop3 = (coins('top3'), read()); coins('');
+      asset(''); coins('dcx'); out.dcx = read();
+      coins('delta'); out.delta = read();
+      // Assets and Coins together: xStocks on Delta, crypto on Delta, crypto on CoinDCX.
+      asset('xstock'); out.xDelta = read();
+      asset('crypto'); out.cDelta = read();
+      coins('dcx'); out.cDcx = read();
+      asset(''); coins('');
       // The report's compare, with CoinDCX picked: markets rows and the xStocks vs crypto gap.
       setSigCoins('dcx'); setSigSec('report');
       out.rows = [...document.querySelectorAll('#sigCoinCmp tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').trim());
@@ -2934,10 +2951,14 @@ async function coinVenueRun(seed) {
       setSigSec('alerts'); setSigCoins('');
       return out;
     });
-    check(v.buttons === 'All,Top 3,Top 5,Picks,Crypto,xStocks,CoinDCX,Delta', 'Coins buttons: ' + v.buttons);
+    check(v.buttons === 'All,Top 3,Top 5,Picks,CoinDCX,Delta' && v.assets === 'Both 7,Crypto 3,xStocks 2', 'Coins and Assets buttons: ' + JSON.stringify([v.buttons, v.assets]));
     check(v.all[0] === '7' && v.all[1] === '+2.00R', 'all: ' + JSON.stringify(v.all));
-    check(v.crypto[0] === '3' && v.crypto[1] === '+3.00R' && /^3 alerts on crypto coins, 3 symbols · left out 4: /.test(v.crypto[2]) && /Crypto only: 3 of 7 symbols/.test(v.crypto[3]) && /Crypto only/.test(v.crypto[4]), 'Crypto: ' + JSON.stringify(v.crypto));
-    check(v.xstock[0] === '2' && v.xstock[1] === '+1.00R' && /^2 alerts on tokenised US stocks, 2 symbols · left out 5: /.test(v.xstock[2]), 'xStocks: ' + JSON.stringify(v.xstock));
+    check(v.crypto[0] === '3' && v.crypto[1] === '+3.00R' && /Crypto only/.test(v.crypto[3]) && /Crypto only/.test(v.crypto[4]), 'Crypto: ' + JSON.stringify(v.crypto));
+    check(v.xstock[0] === '2' && v.xstock[1] === '+1.00R' && /xStocks only/.test(v.xstock[3]), 'xStocks: ' + JSON.stringify(v.xstock));
+    check(v.xTop3[0] === '2', 'xStocks + Top 3: no coins, so Top 3 is off: ' + JSON.stringify(v.xTop3));
+    check(v.xDelta[0] === '2' && v.xDelta[1] === '+1.00R' && /^2 alerts on Delta .* · none left out/.test(v.xDelta[2]), 'xStocks + Delta: ' + JSON.stringify(v.xDelta));
+    check(v.cDelta[0] === '1' && v.cDelta[1] === '+2.00R' && /left out 2: MAGIC 1, MNT 1$/.test(v.cDelta[2]) && /Crypto only · Delta only: 1 of 3 symbols/.test(v.cDelta[3]), 'Crypto + Delta: ' + JSON.stringify(v.cDelta));
+    check(v.cDcx[0] === '2' && v.cDcx[1] === '+1.00R' && /left out 1: MNT 1$/.test(v.cDcx[2]), 'Crypto + CoinDCX: ' + JSON.stringify(v.cDcx));
     check(v.dcx[0] === '2' && v.dcx[1] === '+1.00R' && /^2 alerts on CoinDCX \(list of 7 Nov 2026\), 2 symbols · left out 5: /.test(v.dcx[2]) && /MNT 1, MRVL 1, NVDAX 1, RELIANCE 1, XAUT 1$/.test(v.dcx[2]), 'CoinDCX: ' + JSON.stringify(v.dcx));
     check(v.delta[0] === '4' && v.delta[1] === '+2.00R' && /^4 alerts on Delta \(list of 7 Nov 2026\), 4 symbols · left out 3: /.test(v.delta[2]) && /MAGIC 1/.test(v.delta[2]), 'Delta: ' + JSON.stringify(v.delta));
     const row = k => v.rows.find(r => r.startsWith(k)) || '';
@@ -2989,7 +3010,7 @@ async function coinVenueRun(seed) {
       switchTab('analysis'); renderAll();
       return [...document.querySelectorAll('#anCoinBar button[data-coins]')].map(b => b.innerText).join();
     });
-    check(an === '' || an === 'All,Top 3,Top 5,Picks,Crypto,xStocks,CoinDCX,Delta', 'Analysis Coins buttons: ' + an);
+    check(an === '' || an === 'All,Top 3,Top 5,Picks,CoinDCX,Delta', 'Analysis Coins buttons: ' + an);
     // Phone: no sideways scroll with a broker line showing.
     await page.evaluate(() => { switchTab('signals'); setSigSec('alerts'); setSigCoins('delta'); });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -2999,7 +3020,7 @@ async function coinVenueRun(seed) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
   await ctx.close();
-  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Coins: Crypto / xStocks / CoinDCX / Delta, and the Demo account\'s What changed the result');
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Assets (Both / Crypto / xStocks), Coins CoinDCX / Delta, and the Demo account\'s What changed the result');
   errs.forEach(e => { console.log('     ' + e); failures.push('coins venue: ' + e); });
 }
 async function demoDeepRun(seed) {
@@ -3768,7 +3789,7 @@ async function anDemoRun(seed) {
     const look = await page.evaluate(() => ({ which: !!document.querySelector('#anWhichPanel[open] #anPeriodBar'), rules: !!document.querySelector('#anRulesPanel[open] #anTgtBar'),
       exits: [...document.querySelectorAll('#anTgtBar button')].map(b => b.innerText).join(), cards: document.querySelectorAll('#anStrip > div').length,
       coins: [...document.querySelectorAll('#anCoinBar button[data-coins]')].map(b => b.innerText).join(), line: document.getElementById('anDemoLine').classList.contains('hidden') }));
-    check(look.which && look.rules && look.exits === 'My exit,1R,1.5R,2R,3R,1%,2%,3%' && look.cards === 8 && look.coins === 'All,Top 3,Top 5,Picks,Crypto,xStocks,CoinDCX,Delta' && look.line, 'Signals-style panels: ' + JSON.stringify(look));
+    check(look.which && look.rules && look.exits === 'My exit,1R,1.5R,2R,3R,1%,2%,3%' && look.cards === 8 && look.coins === 'All,Top 3,Top 5,Picks,CoinDCX,Delta' && look.line, 'Signals-style panels: ' + JSON.stringify(look));
     await page.waitForTimeout(300);
     check(reads.length === 0, 'no candles read with My exit: ' + reads.join());
     // Fold a panel: it says in one line what it is set to, and stays folded after a reload.
@@ -3857,10 +3878,11 @@ async function anDemoRun(seed) {
     const top = await page.evaluate(() => ({ ids: [...document.querySelectorAll('#anDemoTable tbody tr')].map(tr => tr.getAttribute('data-demorow')).sort().join(), list: (document.getElementById('anCoinList') || {}).innerText }));
     check(top.ids === 'dBTC,dETH,dXRP' && top.list === 'BTC, ETH, XRP', 'Top 3 coins: ' + JSON.stringify(top));
     // xStocks: none of these trades; CoinDCX lists every coin here, so it keeps what All keeps.
-    const anIds = async k => { await page.click('#anCoinBar button[data-coins="' + k + '"]'); await page.waitForFunction(() => !anDemoBusy, null, { timeout: 15000 });
-      return page.evaluate(() => ({ ids: [...document.querySelectorAll('#anDemoTable tbody tr[data-demorow]')].map(tr => tr.getAttribute('data-demorow')).sort().join(), line: ((document.getElementById('anCoinTest') || {}).innerText || '').replace(/\s+/g, ' ') })); };
-    const anAll = await anIds(''), anX = await anIds('xstock'), anD = await anIds('dcx');
-    check(anAll.ids.split(',').length >= 3 && anX.ids === '' && /^0 trades on tokenised US stocks/.test(anX.line) && anD.ids === anAll.ids && /none left out/.test(anD.line), 'Analysis xStocks / CoinDCX: ' + JSON.stringify([anAll, anX, anD]));
+    const anIds = async (sel) => { await page.click(sel); await page.waitForFunction(() => !anDemoBusy, null, { timeout: 15000 });
+      return page.evaluate(() => ({ ids: [...document.querySelectorAll('#anDemoTable tbody tr[data-demorow]')].map(tr => tr.getAttribute('data-demorow')).sort().join(), line: ((document.getElementById('anCoinTest') || {}).innerText || '').replace(/\s+/g, ' '), sum: document.getElementById('anWhichSum').innerText })); };
+    const anAll = await anIds('#anCoinBar button[data-coins=""]'), anX = await anIds('#anAssetBar button[data-asset="xstock"]'), anC = await anIds('#anAssetBar button[data-asset="crypto"]'), anD = await anIds('#anCoinBar button[data-coins="dcx"]');
+    check(anAll.ids.split(',').length >= 3 && anX.ids === '' && /xStocks only/.test(anX.sum) && anC.ids === anAll.ids && anD.ids === anAll.ids && /none left out/.test(anD.line) && /Crypto only · CoinDCX only/.test(anD.sum), 'Analysis Assets / CoinDCX: ' + JSON.stringify([anAll, anX, anC, anD]));
+    await page.click('#anAssetBar button[data-asset=""]');
     await page.click('#anCoinBar button[data-coins="top3"]');
     await page.waitForFunction(() => !anDemoBusy, null, { timeout: 15000 });
     // Reset puts back My exit: no demo line, the usual cards.
