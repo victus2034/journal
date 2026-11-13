@@ -2479,14 +2479,16 @@ async function sigBacktestRun(seed) {
       head: document.querySelector('#sigBtChart .dc-head').innerText.replace(/\s+/g, ' '), days: ['2026-10-01', '2026-10-02', '2026-10-04', '2026-10-05', '2026-10-07'].map(fmtDay) }));
     check(JSON.stringify(c.y) === '["0R","+0.5R","+1.0R","+1.5R","+2.0R"]' && c.start === 'start 0R' && JSON.stringify(c.y2) === '["0R","-2.0R"]' && c.dd === 'Drawdown from the last high · max -2.00R', 'R curve axis 0-2R, drawdown 2R: ' + JSON.stringify(c));
     check(JSON.stringify(c.x) === JSON.stringify(c.days) && /^Equity curve, every alert at 1R total \+1\.00R · /.test(c.head), 'dates of alerts 1, 2, 4, 5, 7 and the total: ' + JSON.stringify(c));
-    // Each draw starts the price loaders (Exit-at walks, SL candles, NSE paths); the last one to
-    // finish draws the tab again. Hover only once they are idle, or that draw lands between the
-    // pointer move and the read and the tip comes back empty (CI, 13 Nov).
-    await page.waitForFunction(() => tgtReady && signalsLoaded && !tgtBusy && !slcBusy && !nseBusy, null, { timeout: 8000 });
-    await page.$eval('#sigBtPlot', el => el.scrollIntoView({ block: 'center' }));
-    const pb = await page.$eval('#sigBtPlot', el => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
-    await page.mouse.move(pb.x + pb.w - 1, pb.y + pb.h / 2);
-    const tip7 = await page.$eval('#sigBtPlot .dc-tip', t => t.innerText.replace(/\s+/g, ' ').trim());
+    // Each draw starts the price loaders (Exit-at walks, SL candles); the last one to finish
+    // draws the tab again. Hover only once they are idle (CI, 13 Nov), and send the pointer event
+    // to the plot itself, as the touch check below does: a real mouse could land off a plot that a
+    // redraw had moved or replaced, and the tip came back empty.
+    await page.waitForFunction(() => tgtReady && signalsLoaded && !tgtBusy && !slcBusy, null, { timeout: 8000 });
+    const tip7 = await page.evaluate(() => {
+      const plot = document.getElementById('sigBtPlot'), r = plot.getBoundingClientRect();
+      plot.dispatchEvent(new PointerEvent('pointermove', { clientX: r.right - 1, clientY: r.top + r.height / 2, pointerType: 'mouse', bubbles: true }));
+      return plot.querySelector('.dc-tip').innerText.replace(/\s+/g, ' ').trim();
+    });
     check(/^#7 · .* 10:00 S6USD Long 1D -1\.00R SL Total \+1\.00R -1\.00R from the high$/.test(tip7), 'tip at the last alert: ' + tip7);
     // On a phone or iPad a finger lifting also "leaves": the tip stays until a tap elsewhere.
     const touch = await page.evaluate(() => {
