@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-12.186">
+  <meta name="app-version" content="2026-11-13.187">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -10784,14 +10784,16 @@
         h += '<tr class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold whitespace-nowrap' + (curM === mk ? ' text-amber-300' : ' text-slate-300') + '">' + (m ? esc(m.label) : 'No move') + '</td>';
         tgs.forEach((tg, j) => {
           const c = cells[i][j], on = curM === mk && cur === tg.k, top = best.i === i && best.j === j;
-          // Trigger at or past an R target: the target comes first, so it is the same as No move.
-          if (same(m, tg)) { h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" class="pr-2 py-1 text-right text-slate-600" title="Trigger at or past the ' + esc(tg.k) + ' target: the stop never moves, same as No move">same</td>'; return; }
+          // Trigger at or past the target: price reaches the target first and the stop never
+          // moves, so the cell is No move's number, in grey (lakky, 2026-11-13: "same" read as a
+          // puzzle). Not clickable: the bar greys these triggers out too.
+          if (same(m, tg)) { const n = cells[0][j]; h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" data-nomove="1" class="pr-2 py-1 text-right text-slate-500" title="' + esc(m.label + ' starts at or past the ' + tg.k + ' exit: price reaches the target first, so the stop never moves. Same result as No move: ' + pct(n.wr) + ' won, ' + rfmt(n.avg) + ' a trade.') + '">' + rfmt(n.tot) + '</td>'; return; }
           h += '<td data-cell="' + esc(tg.k + '~' + mk) + '" onclick="setSigTgtStop(\'' + tg.k + '\',\'' + mk + '\')" title="' + esc((m ? m.label : 'No move') + ' · exit at ' + tg.k + ': ' + pct(c.wr) + ' won, ' + rfmt(c.avg) + ' a trade. Click to score the whole tab with it.') + '" class="pr-2 py-1 text-right cursor-pointer hover:bg-white/5 '
             + (c.tot >= 0 ? 'text-emerald-400' : 'text-rose-400') + (on ? ' bg-amber-500/15 font-bold' : '') + (top ? ' underline' : '') + '">' + rfmt(c.tot) + '</td>';
         });
         h += '</tr>';
       });
-      return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">' + (pc ? 'Triggers and levels are % moves from entry, like the targets. ' : '') + '"same": the trigger is at or past that target, so the stop never moves. Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. BE: at the trigger the stop goes to entry. SL shift: at the trigger it goes to the level shown. The stop moves from the next candle and slips 0.05% like any stop. ' + (trR ? 'Trail TP as picked in every cell (the higher stop counts). ' : '') + 'Click a cell to use it on the whole tab.</p></div>';
+      return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">' + (pc ? 'Triggers and levels are % moves from entry, like the targets. ' : '') + 'Grey numbers: the move starts at or past that exit, so price reaches the target first and the stop never moves; they are the No move result. Every cell scores the same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + '; best underlined. BE: at the trigger the stop goes to entry. SL shift: at the trigger it goes to the level shown. The stop moves from the next candle and slips 0.05% like any stop. ' + (trR ? 'Trail TP as picked in every cell (the higher stop counts). ' : '') + 'Click a cell to use it on the whole tab.</p></div>';
     }
     function sumPct(list) { const v = list.filter(x => x != null && isFinite(x)); return v.length ? sum(v) : null; }
     // The Victus Alert System backtest and paper trading do not take a trade whose
@@ -14780,6 +14782,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-13.187', pr: 101, title: 'Move SL compared: numbers, not "same"', pts: ['Cells that read "same" now show their real total R, in grey', 'Grey = the move starts at or past that exit, so price hits the target first and the stop never moves: the result equals the No move row', 'Hover a grey cell for its win rate and average R'] },
       { v: '2026-11-12.186', pr: 100, title: 'Signals: backtest = retest, faster', pts: ['Every Exit at walk now uses 15m candles. It used to pick 1m to 1d by the alert\'s age, so the same alert scored differently by the day you looked and retests disagreed; old results are redone once', 'Candles are kept on the device and read in parallel, only as far as each trade needs (a full fib view: 309 reads to 193, ~30% faster; the next visit reads only the newest block). A Not final line shows while prices load', 'Export CSV now gives the what-if R shown (it gave the scanner\'s) with fill and exit per trade. A new test holds the tab equal to an independent retest on real alerts'] },
       { v: '2026-11-12.184', pr: 98, title: 'Signals: history fills only after the alert', pts: ['A history (rebuilt) fib or trendline alert is stamped at the start of the candle the scanner checked, up to 4 hours (1D) or a day (1W / 1M) before the alert really went out, and Exit at counted fills from that start', 'Now a fill counts only after the first candle that reaches the alert band (0.75%, 3% on 1W / 1M); a fill in that same candle is one your order would have missed', 'Fixed Exit at results change a little (one 1000PEPE trade was +5.6R of a month); those alerts are read once more, so the first open takes longer'] },
       { v: '2026-11-11.183', pr: 97, title: 'Signals: switch fib levels on or off', pts: ['Under Fib alerts, Levels on: L1 L2 L3 L4 as buttons. Switch a level off and every number on the tab leaves out the alerts that entered there, so you can check L2 on its own, or L2-L4 without L1', 'The Level row (score every alert at one level) is unchanged; the scanner stopped alerting L1 on 11 Nov'] },
