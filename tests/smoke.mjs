@@ -4940,6 +4940,110 @@ async function stopMoveRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals Move SL (BE / SL shift): re-scored by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('move sl: ' + e); });
 }
+// "Partial" (lakky, 2026-11-13: "half quantity exit and also in break even when it hit
+// specific r or % it booked some sort of quantity"): a share closed at a level, or where
+// Move SL fires, the rest on to the TP / stop. Same two coins as Move SL, re-scored by hand.
+async function partialRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const t0 = Date.parse('2026-10-01T10:00:00+05:30') / 1000, Q = 900;
+  // A long 100 / 99 (1R = 1%): fill, close +0.1R; +1.6R (low 0R); +2.1R (low +1R); stopped.
+  // B short 200 / 202 (1R = 1%): fill, close +0.05R; +0.75R (high -0.25R); then +0.5R / 0R, last close +0.3R.
+  const bars = { AUSD: [[t0, 100.2, 99.9, 100.1], [t0 + Q, 101.6, 100, 101.5], [t0 + 2 * Q, 102.1, 101, 101.2], [t0 + 3 * Q, 101, 98.9, 99]], BUSD: [] };
+  for (let i = 0; i < 320; i++) bars.BUSD.push(i === 0 ? [t0, 200.1, 199.8, 199.9] : i === 1 ? [t0 + Q, 200.5, 198.5, 199] : [t0 + i * Q, 200, 199, 199.4]);
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const b = bars[new URL(route.request().url()).searchParams.get('symbol')];
+    if (!b) return route.abort();
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: b.map(([time, high, low, close]) => ({ time, open: close, high, low, close })) }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const strip = () => page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+  const tot = async () => ((await strip()).match(/Total R\s*([+-]?[\d.]+R)/) || [])[1];
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => {
+      const sg = (id, sym, side, entry, stop, r) => ({ id, key: 'k' + id, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: sym, side, score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: true, outcome: r > 0 ? '+1R' : 'SL', resultR: r, hasReportR: true, price: entry, stop, entry });
+      state.signals = [sg('a', 'A', 'long', 100, 99, 0.9), sg('b', 'B', 'short', 200, 202, -1)];
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '2R', sigNoFee: false, sigStop: { mode: 'off' }, sigTrail: { on: false }, sigPart: {}, sigHold: '20' });
+      state.ui.sigDemo = Object.assign({}, state.ui.sigDemo || {}, { real: false });
+      switchTab('signals'); renderAll();
+    });
+    await page.waitForFunction(() => /2 of 2 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText) && !/reading/.test(document.getElementById('sigTgtCmp').innerText), null, { timeout: 10000 });
+    // Off: 2R as before. A +2R - 0.0826 = 1.9174; B time exit 0.3 - 0.0826 = 0.2174.
+    check(await tot() === '+2.13R' && !(await page.$('#sigPartAt')), 'partial off = plain 2R: ' + await tot());
+    // 50% at 1R (the default level): A half at +1R, half at +2R: 1.5 - 0.0826 = 1.4174; B never reaches 1R: 0.2174.
+    await page.click('#sigPartBar button[data-part="50"]');
+    let st = await strip();
+    check(/50% off at \+1R/.test(st) && await tot() === '+1.63R', '50% at 1R strip: ' + st);
+    const sel = await page.evaluate(() => ({ at: document.getElementById('sigPartAt').value, off: [...document.querySelectorAll('#sigPartAt option')].filter(o => o.disabled).map(o => o.value).join(','), raw: JSON.stringify(partRaw()) }));
+    check(sel.at === '1' && sel.off === '2,2.5,3' && sel.raw === '{"q":50,"at":1,"atP":0.5,"beQ":0}', 'levels from the 2R target up are off: ' + JSON.stringify(sel));
+    const out = await page.evaluate(() => document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' '));
+    check(/Part \+ Target 1/.test(out) && /Time exit 1/.test(out), 'By outcome names the partial: ' + out);
+    // The compare table, every target with the same partial. 1R: the level is not under it, so plain 1R: A 0.9174, B 0.2174.
+    // 3R: A half at +1R, half stopped: 0.5 + 0.5 x (-1 - 0.99 x 0.05) - 0.0826 = -0.1074; B 0.2174 => +0.11R.
+    const rows = await page.$$eval('#sigTgtCmp > div > table tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
+    check(rows[1] === '1R 2 100% +1.13R +0.57R ∞ +1.13%' && /^3R 2 50% \+0\.11R \+0\.06R 2\.03/.test(rows[4]) && /50% off at \+1R/.test(await page.evaluate(() => document.getElementById('sigTgtCmp').innerText)), 'compare rows with 50% at 1R:\n       ' + rows.join('\n       '));
+    // Level at the target without Trail TP: warned; with Trail TP it books on the way up.
+    await page.evaluate(() => setSigPart('at', '2'));
+    check(/below your 2R target/.test(await page.evaluate(() => (document.getElementById('sigPartWarn') || {}).innerText || '')) && await tot() === '+2.13R', 'level at the target: warned, books nothing: ' + await tot());
+    await page.evaluate(() => setSigTrail('on', true));
+    check(!(await page.$('#sigPartWarn')), 'with Trail TP the level is fine');
+    // BE at 1R, book 50% (partial row off), 3R: A half at +1R, then the stop at entry: 0.5 + 0.5 x (0 - 0.05) - 0.0826 = 0.3924; B 0.2174.
+    await page.evaluate(() => { setSigTrail('on', false); setSigPart('q', 0); setSigTgt('3R'); setSigStop('mode', 'be'); });
+    check(await page.$('#sigStopBook') && !(await page.$('#anStopBook')), 'book picker in Signals\' Move SL row');
+    const plainBe = await tot();
+    await page.selectOption('#sigStopBook', '50');
+    st = await strip();
+    check(plainBe === '+0.08R' && /BE at 1R/.test(st) && /50% off at the BE trigger/.test(st) && await tot() === '+0.61R', 'BE at 1R book 50%: ' + plainBe + ' -> ' + st);
+    const out2 = await page.evaluate(() => document.getElementById('sigByOutcome').innerText.replace(/\s+/g, ' '));
+    check(/Part \+ BE 1/.test(out2), 'By outcome: Part + BE: ' + out2);
+    // Both: 75% at 0.5R, then 25% (all that is left) at the BE trigger: A closed in full, 0.375 + 0.25 - 0.0826 = 0.5424;
+    // B: 75% at 0.5R, the rest a time exit: 0.375 + 0.25 x 0.3 - 0.0826 = 0.3674. Total 0.9098.
+    await page.evaluate(() => { setSigPart('q', 75); setSigPart('at', 0.5); });
+    check(await tot() === '+0.91R', 'never more than the whole position: ' + await tot());
+    const pure = await page.evaluate(() => {
+      const sig = { side: 'long', entry: 100, stop: 99 };
+      const w = { m: 0.021, sl: 1, e: 0, done: 1, p: [[0.1, 0.1], [1.6, 0], [2.1, 1]], ta: -1.1 };
+      const px = q => ({ q, at: 0.5, unit: 'R', beQ: 0.5 });
+      return { full: tgtScore(sig, w, { r: 3 }, true, { at: 1, to: 0 }, null, px(0.75)), be: tgtScore(sig, w, { r: 3 }, true, { at: 1, to: 0 }, null, px(0)), sl: tgtScore(sig, w, { r: 3 }, true, null, null, px(0.5)),
+        none: tgtScore(sig, w, { r: 3 }, true, null, null, null) };
+    });
+    // No fees: Partial 0.375 + 0.25; BE book: 0.5 x 1 + 0.5 x -0.05; 50% at 0.5R then stopped: 0.25 + 0.5 x -1.0495.
+    check(pure.full.label === 'Partial' && Math.abs(pure.full.r - 0.625) < 1e-9 && pure.be.label === 'Part + BE' && Math.abs(pure.be.r - 0.475) < 1e-9
+      && pure.sl.label === 'Part + SL' && Math.abs(pure.sl.r - (0.25 + 0.5 * (-1 - 0.99 * 0.05))) < 1e-9 && pure.none.label === 'SL', 'pure scores: ' + JSON.stringify(pure));
+    // The demo account and CSV follow; Reset turns it off.
+    await page.evaluate(() => { setSigPart('q', 50); setSigPart('at', 1); setSigPart('beQ', 0); setSigStop('mode', 'off'); setSigTgt('2R'); setSigSec('demo'); });
+    await page.waitForFunction(() => document.getElementById('sigDemoOut') && /Final balance/i.test(document.getElementById('sigDemoOut').innerText));
+    // $100 at 1%: A +1.4174R -> 101.4174; B 1.014174 x 0.2174 -> 101.64
+    const demo = await page.evaluate(() => document.getElementById('sigDemoOut').innerText.replace(/\s+/g, ' '));
+    check(/\$101\.64/.test(demo), 'demo account follows the partial: ' + demo.slice(0, 300));
+    await page.evaluate(() => setSigSec('report'));
+    await page.waitForFunction(() => btLast.length > 0, null, { timeout: 10000 });
+    const csv = await page.evaluate(() => { let out = null; const real = URL.createObjectURL; URL.createObjectURL = b => { out = b; return 'blob:x'; }; try { exportSigBacktestCsv(); } finally { URL.createObjectURL = real; } return out ? out.text() : ''; });
+    check(/50% off at \+1R/.test(csv) && /1\.417,/.test(csv) && /Part \+ Target/.test(csv), 'CSV has the rule, R and exit: ' + csv.split('\r\n').slice(0, 3).join(' / ').slice(0, 500));
+    const sum = await page.evaluate(() => document.getElementById('sigRulesSum').innerText);
+    check(/50% off at \+1R/.test(sum), 'folded panel line: ' + sum);
+    await page.evaluate(() => resetSigRules());
+    check(await page.evaluate(() => JSON.stringify(partRaw())) === '{"q":0,"at":1,"atP":0.5,"beQ":0}', 'Reset turns Partial off');
+    // % target: the level is in %.
+    await page.evaluate(() => { setSigTgt('2%'); setSigPart('q', 25); });
+    const pc = await page.evaluate(() => ({ unit: document.getElementById('sigPartAt').dataset.unit, txt: document.getElementById('sigPartAt').selectedOptions[0].innerText, off: [...document.querySelectorAll('#sigPartAt option')].filter(o => o.disabled).map(o => o.value).join(',') }));
+    check(pc.unit === '%' && pc.txt === '+0.5%' && pc.off === '2,2.5,3', '% target: level in %: ' + JSON.stringify(pc));
+    // Analysis keeps its own rules: no Partial there.
+    await page.evaluate(() => { switchTab('analysis'); setAnTgt('1R'); setAnStop('mode', 'be'); });
+    check(!(await page.$('#anStopBook')) && !(await page.$('#anPartBar')), 'Analysis has no partial controls');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals Partial (a share at a level / at the Move SL trigger): re-scored by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('partial: ' + e); });
+}
 // "SL" (lakky, 2026-11-10: "so many ways to see sl ... below or above candle, wick"):
 // each alert played with another stop, re-scored by hand. Two 4H trendline alerts at
 // 10:00 IST (04:30 UTC) on 1 Oct. 4H candles before it (newest first; the 04:00 UTC one
@@ -5997,6 +6101,11 @@ const PARITY_COMBOS = [
   { name: 'fib L3 2%, SL to +0.5% at 1%', kind: 'fib', lvl: 'L3', from: '2026-10-10', to: '2026-10-25', tgt: '2%', stop: { mode: 'shift', shAtP: 1, shToP: 0.5 } },
   { name: 'support TL 1.5R, body SL 1%', kind: 'trendline', tl: 'support', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', sl: { mode: 'body', gap: 1 } },
   { name: 'TL 1D 2%, 1% SL, trail in %', kind: 'trendline', chan: 'CRYPTO 1D', from: '2026-10-10', to: '2026-10-25', tgt: '2%', sl: { mode: 'pct', pct: 1 }, trail: { on: true, stepP: 0.25, gapP: 0.25 } },
+  // Partial (lakky, 2026-11-13): a share closed at a level, or where Move SL fires.
+  { name: 'fib 2R, 50% off at 1R', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '2R', part: { q: 50, at: 1 } },
+  { name: 'TL 4H 1.5R, BE at 0.75R book 50%, 25% at 0.5R, 20 candles', kind: 'trendline', chan: 'CRYPTO 4H', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', stop: { mode: 'be', beAt: 0.75 }, part: { q: 25, at: 0.5, beQ: 50 }, hold: '20' },
+  { name: 'fib 1%, 75% off at 0.5%, SL to +0.25% at 0.75% book 50%, trail', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '1%', stop: { mode: 'shift', shAtP: 0.75, shToP: 0.25 }, part: { q: 75, atP: 0.5, beQ: 50 }, trail: { on: true, stepP: 0.25, gapP: 0.25 } },
+  { name: 'TL 1R, wick SL, trail, 50% at 2.5R past the target', kind: 'trendline', from: '2026-10-10', to: '2026-10-25', tgt: '1R', sl: { mode: 'wick', gap: 0.75 }, part: { q: 50, at: 2.5 }, trail: { on: true, step: 0.5, gap: 0.5 } },
 ];
 async function parityRun() {
   const errs = [];
@@ -6040,6 +6149,7 @@ async function parityRun() {
         u.sigSl = Object.assign({ mode: '', gap: 0.75, pct: 1 }, c.sl || {});
         u.sigStop = Object.assign({ mode: 'off', beAt: 1, shAt: 1, shTo: 0.75, beAtP: 1, shAtP: 1, shToP: 0.5 }, c.stop || {});
         u.sigTrail = Object.assign({ on: false, step: 0.25, gap: 0.25, stepP: 0.25, gapP: 0.25 }, c.trail || {});
+        u.sigPart = Object.assign({ q: 0, at: 1, atP: 0.5, beQ: 0 }, c.part || {});
         save(); renderSignalsTable();
       }, c);
       // Until the tab's own reads settle and a redraw asks for nothing more.
@@ -6135,6 +6245,7 @@ await syncSettingsRun(data);
 await keysLockRun(data);
 await exitTargetRun(data);
 await stopMoveRun(data);
+await partialRun(data);
 await slTypeRun(data);
 await holdPctRun(data);
 await trailRun(data);
