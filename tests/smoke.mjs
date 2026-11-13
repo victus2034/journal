@@ -2479,14 +2479,16 @@ async function sigBacktestRun(seed) {
       head: document.querySelector('#sigBtChart .dc-head').innerText.replace(/\s+/g, ' '), days: ['2026-10-01', '2026-10-02', '2026-10-04', '2026-10-05', '2026-10-07'].map(fmtDay) }));
     check(JSON.stringify(c.y) === '["0R","+0.5R","+1.0R","+1.5R","+2.0R"]' && c.start === 'start 0R' && JSON.stringify(c.y2) === '["0R","-2.0R"]' && c.dd === 'Drawdown from the last high · max -2.00R', 'R curve axis 0-2R, drawdown 2R: ' + JSON.stringify(c));
     check(JSON.stringify(c.x) === JSON.stringify(c.days) && /^Equity curve, every alert at 1R total \+1\.00R · /.test(c.head), 'dates of alerts 1, 2, 4, 5, 7 and the total: ' + JSON.stringify(c));
-    // Each draw starts the price loaders (Exit-at walks, SL candles, NSE paths); the last one to
-    // finish draws the tab again. Hover only once they are idle, or that draw lands between the
-    // pointer move and the read and the tip comes back empty (CI, 13 Nov).
-    await page.waitForFunction(() => tgtReady && signalsLoaded && !tgtBusy && !slcBusy && !nseBusy, null, { timeout: 8000 });
-    await page.$eval('#sigBtPlot', el => el.scrollIntoView({ block: 'center' }));
-    const pb = await page.$eval('#sigBtPlot', el => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
-    await page.mouse.move(pb.x + pb.w - 1, pb.y + pb.h / 2);
-    const tip7 = await page.$eval('#sigBtPlot .dc-tip', t => t.innerText.replace(/\s+/g, ' ').trim());
+    // Each draw starts the price loaders (Exit-at walks, SL candles); the last one to finish
+    // draws the tab again. Hover only once they are idle (CI, 13 Nov), and send the pointer event
+    // to the plot itself, as the touch check below does: a real mouse could land off a plot that a
+    // redraw had moved or replaced, and the tip came back empty.
+    await page.waitForFunction(() => tgtReady && signalsLoaded && !tgtBusy && !slcBusy, null, { timeout: 8000 });
+    const tip7 = await page.evaluate(() => {
+      const plot = document.getElementById('sigBtPlot'), r = plot.getBoundingClientRect();
+      plot.dispatchEvent(new PointerEvent('pointermove', { clientX: r.right - 1, clientY: r.top + r.height / 2, pointerType: 'mouse', bubbles: true }));
+      return plot.querySelector('.dc-tip').innerText.replace(/\s+/g, ' ').trim();
+    });
     check(/^#7 · .* 10:00 S6USD Long 1D -1\.00R SL Total \+1\.00R -1\.00R from the high$/.test(tip7), 'tip at the last alert: ' + tip7);
     // On a phone or iPad a finger lifting also "leaves": the tip stays until a tap elsewhere.
     const touch = await page.evaluate(() => {
@@ -5245,7 +5247,8 @@ async function slTypeRun(seed) {
     // 1R on the wick: A 1 - 0.0826/1.2 = +0.9312; B 1 - 0.0826/0.9 = +0.9082 => +1.84R
     let st = await strip();
     check(/exited at 1R \(SL at the last candle wick 0\.75%\+ past entry, no breakeven, closed after 20 candles\)/.test(st) && /Total R \+1\.84R/.test(st), 'wick 0.75% at 1R: ' + st);
-    check(/1 with no candle 0\.75% past entry/.test(st), 'the NSE alert has no candle stop: ' + st);
+    // NSE candles come from the sync repo (v.190): with sync off the line says so, not "no candle".
+    check(/1 NSE without prices: turn on GitHub sync/.test(st) && !/with no candle/.test(st), 'the NSE alert (no sync) says how to get prices: ' + st);
     // Candles come in fixed blocks shared by a coin's alerts: one or two per coin here.
     const slcReads = reads['4h'];
     check(slcReads >= 2 && slcReads <= 4, '4H blocks read per crypto coin, none for NSE: ' + slcReads);
@@ -5548,8 +5551,6 @@ async function trailRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals Trail TP (target steps up, stop follows) in R and %: by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('trail TP: ' + e); });
 }
-// NSE "Exit at": the sync repo's job reads Yahoo candles (a fake one here) and writes
-// nse-paths.json; the journal reads it with its sync token and re-scores NSE alerts.
 // Old alerts read 15m candles for their first ~18 days (backtest 2026-11-09: on 1h-1d
 // candles the pullbacks inside a candle are invisible and Trail TP read far better than
 // it was). A long 100 / 99, 40 days old: 1.1R, a dip to +0.4R and 2.6R all inside one
@@ -5622,137 +5623,171 @@ async function tgtHeadRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
-async function nsePathsRun() {
+// NSE (lakky, 2026-11-13: "fix this": NSE 1D trendlines all dashes, "0 of 0 graded alerts
+// have price data"). The sync repo's job (tools/nse-candles.mjs) reads Yahoo (a fake one
+// here) and writes each symbol's candles; the journal reads them from the nse-candles
+// branch with its sync token and plays NSE alerts like crypto ones, every SL type included.
+async function nseCandlesRun() {
   const errs = [];
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
-  // A 4H NSE zone alert, long 100, stop 98 (2%), sent Tue 20 Oct 2026 10:00 IST.
-  // 15m candles: fills at 10:00 (close 100.2), best 103.1 (+3.1%) on 22 Oct 11:00,
-  // stopped (97.9) on 27 Oct 14:00, still inside its 20 4H candles (10 NSE days).
-  const alertMs = Date.parse('2026-10-20T10:00:00+05:30');
-  const zone = { market: 'NSE', symbol: 'ABC.NS', side: 'long', filled: true, net_realized_r: 0.9, stop_price: 98, zone_bottom: 99, zone_top: 100, alert_time: '2026-10-20T10:00:00+05:30', timeframe: '4h', rebuild: true, news_window: false };
-  const files = {
-    'zone_rebuild_4h.jsonl': [zone, Object.assign({}, zone, { market: 'CRYPTO', symbol: 'BTCUSD' }), Object.assign({}, zone, { symbol: 'NOPE.NS', filled: false })].map(x => JSON.stringify(x)).join('\n'),
-    'fibtl_rebuild_records.jsonl': JSON.stringify({ id: 'f1', market: 'nse', symbol: 'XYZ.NS', tf: '1d', sent_ts: alertMs / 1000, plan: { entry: 50, sl: 49, side: 'short' } }),
-    'fibtl_rebuild_results.json': JSON.stringify({ f1: { filled: true, outcome: 'timeout' } })
+  const IST = 5.5 * 3600e3, f = Math.fround;
+  const at = s => Date.parse(s + '+05:30');
+  const tradingDays = (from, to) => { const out = []; for (let d = at(from + 'T00:00:00'); d <= at(to + 'T00:00:00'); d += 864e5) { const w = new Date(d + IST).getUTCDay(); if (w && w !== 6) out.push(d); } return out; };
+  // ABC: 60m candles 13 Oct - 6 Nov, 7 a day from 09:15 IST, [o, h, l, c] = 100 / 100.5 / 99.5 / 100 but:
+  const special = {
+    '2026-10-16T13:15': [100, 100.4, 99.6, 100], '2026-10-16T14:15': [100, 100.3, 98.5, 99.5], '2026-10-16T15:15': [99.5, 99.8, 98.9, 99.0], // 4H 13:15: low 98.5, body down to 99
+    '2026-10-20T09:15': [100.1, 100.5, 99.5, 100.2], // holds the alert (10:00): fills, closes 100.2
+    '2026-10-22T11:15': [100.5, 103.1, 100.5, 102], // best +3.1%
+    '2026-10-27T14:15': [99, 100, 97.9, 98.5] // under the alert's stop (98)
   };
-  const bars = [];
-  for (let d = 20; d <= 31; d++) {
-    const day = Date.parse('2026-10-' + d + 'T09:15:00+05:30'), dow = new Date(day + 5.5 * 3600e3).getUTCDay();
-    if (dow === 0 || dow === 6) continue;
-    for (let i = 0; i < 25; i++) {
-      const t = day + i * 900e3;
-      let b = [100.5, 99.5, 100];
-      if (t === alertMs) b = [100.3, 99.9, 100.2];
-      if (t === Date.parse('2026-10-22T11:00:00+05:30')) b = [103.1, 100.5, 102];
-      if (t === Date.parse('2026-10-27T14:00:00+05:30')) b = [100, 97.9, 98.5];
-      bars.push([t / 1000, ...b]);
-    }
-  }
-  let put = null, yahooAsks = [], existing = null;
+  const h1 = [];
+  tradingDays('2026-10-13', '2026-11-06').forEach(d => { for (let i = 0; i < 7; i++) { const t = d + (555 + 60 * i) * 60000, k = new Date(t + IST).toISOString().slice(0, 16); h1.push([t / 1000, ...(special[k] || [100, 100.5, 99.5, 100])]); } });
+  const d1 = tradingDays('2026-09-01', '2026-11-06').map(d => [(d + 555 * 60000) / 1000, 100, d === at('2026-09-30T00:00:00') ? 107 : 100.5, 99.5, 100]);
+  const files = { 'fibtl_rebuild_records.jsonl': [{ market: 'nse', symbol: 'ABC.NS' }, { market: 'nse', symbol: 'M&M.NS' }, { market: 'crypto', symbol: 'BTCUSD' }].map(x => JSON.stringify(x)).join('\n') };
+  let mode = 'all', asks = [];
   const fake = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
-    if (u.pathname.startsWith('/scanner/')) { const f = files[u.pathname.slice(9)]; res.writeHead(f ? 200 : 404); return res.end(f || ''); }
-    if (u.pathname.startsWith('/v8/finance/chart/')) {
-      yahooAsks.push(decodeURIComponent(u.pathname.slice(18)) + ' ' + u.searchParams.get('interval'));
-      const p1 = +u.searchParams.get('period1'), p2 = +u.searchParams.get('period2'), list = decodeURIComponent(u.pathname.slice(18)) === 'ABC.NS' ? bars.filter(b => b[0] >= p1 && b[0] <= p2) : [];
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ chart: { result: [{ timestamp: list.map(b => b[0]), indicators: { quote: [{ high: list.map(b => b[1]), low: list.map(b => b[2]), close: list.map(b => b[3]) }] } }] } }));
-    }
-    if (u.pathname === '/repos/victus/sync/contents/nse-paths.json') {
-      if (req.method === 'GET') {
-        if (!existing) { res.writeHead(404); return res.end('{}'); }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(/raw/.test(req.headers.accept || '') ? JSON.stringify(existing) : JSON.stringify({ sha: 'abc' }));
-      }
-      let body = ''; req.on('data', c => body += c); req.on('end', () => { put = JSON.parse(body); res.writeHead(201); res.end('{}'); }); return;
-    }
-    res.writeHead(404); res.end();
+    if (u.pathname.startsWith('/scanner/')) { const t = files[u.pathname.slice(9)]; res.writeHead(t ? 200 : 404); return res.end(t || ''); }
+    const s = decodeURIComponent(u.pathname.slice(18)), iv = u.searchParams.get('interval'), p1 = +u.searchParams.get('period1'), p2 = +u.searchParams.get('period2');
+    asks.push(s + ' ' + iv);
+    if (mode === 'later' && s === 'M&M.NS') { res.writeHead(403); return res.end('no'); }
+    const from = mode === 'later' ? at('2026-11-02T00:00:00') / 1000 : 0;
+    const list = (iv === '60m' ? h1 : d1).filter(b => b[0] >= Math.max(p1, from) && b[0] <= p2);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ chart: { result: [{ timestamp: list.map(b => b[0]), indicators: { quote: [{ open: list.map(b => f(b[1])), high: list.map(b => f(b[2])), low: list.map(b => f(b[3])), close: list.map(b => f(b[4])) }] } }] } }));
   });
   await new Promise(r => fake.listen(0, r));
-  const fb = 'http://127.0.0.1:' + fake.address().port;
-  Object.assign(process.env, { SCANNER_BASE: fb + '/scanner', YAHOO_BASE: fb, GITHUB_API_URL: fb, GITHUB_REPOSITORY: 'victus/sync', GITHUB_TOKEN: 'tok', JOURNAL_BRANCH: 'main' });
-  let file = null;
+  const fb = 'http://127.0.0.1:' + fake.address().port, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nsec-'));
+  Object.assign(process.env, { SCANNER_BASE: fb + '/scanner', YAHOO_BASE: fb, NSE_CANDLES_DIR: dir });
+  const read = n => fs.readFileSync(path.join(dir, n), 'utf8');
+  let tool = null, out = {};
   try {
-    const tool = await import('../tools/nse-paths.mjs?' + Date.now());
-    const log = console.log; console.log = () => {};
-    try { await tool.main(Date.parse('2026-11-20T12:00:00Z')); } finally { console.log = log; }
-    file = put && JSON.parse(Buffer.from(put.content, 'base64').toString());
-    const p = file && file.paths['ABC|long|98|2026-10-20 10:00'];
-    check(p && p.m === 0.031 && p.sl === 1 && p.done === 1, 'ABC walked: ' + JSON.stringify(file && file.paths));
-    const pt = file && file.paths['ABC|long|98|2026-10-20 10:00|tp'];
-    check(pt && pt.sl === 1 && pt.done === 1 && pt.tr === 1 && JSON.stringify(pt.p) === JSON.stringify(p.p), 'ABC till TP / SL walk (stopped inside the window, same path, walked for Trail TP): ' + JSON.stringify(pt));
-    // Move SL's path: fill close +0.1R, +0.25R (dip -0.25R), +1.55R, then stopped at -1.05R.
-    check(p && JSON.stringify(p.p) === '[[0.1,0.1],[0.25,-0.25],[1.55,-0.25]]' && p.ta === -1.05, 'ABC path for Move SL: ' + JSON.stringify(p));
-    // A summary kept before Move SL (no path) is walked again on the next run.
-    existing = { v: 1, paths: { 'ABC|long|98|2026-10-20 10:00': { m: 0.031, sl: 1, e: 0, done: 1 } } }; put = null; yahooAsks = [];
-    const log2 = console.log; console.log = () => {};
-    try { await tool.main(Date.parse('2026-11-20T12:00:00Z')); } finally { console.log = log2; }
-    const again = put && JSON.parse(Buffer.from(put.content, 'base64').toString()).paths['ABC|long|98|2026-10-20 10:00'];
-    check(again && Array.isArray(again.p) && again.p.length === 3 && put.sha === 'abc', 'old NSE summary walked again: ' + JSON.stringify(again));
-    // A "till TP / SL" summary kept before Trail TP (no tr) is walked again too.
-    existing = { v: 1, paths: { 'ABC|long|98|2026-10-20 10:00': p, 'ABC|long|98|2026-10-20 10:00|tp': { m: 0.06, sl: 0, e: 0.06, done: 1, p: [[3, 0.1]], ta: 2.9 } } }; put = null; yahooAsks = [];
-    console.log = () => {};
-    try { await tool.main(Date.parse('2026-11-20T12:00:00Z')); } finally { console.log = log2; }
-    const againTp = put && JSON.parse(Buffer.from(put.content, 'base64').toString()).paths['ABC|long|98|2026-10-20 10:00|tp'];
-    check(againTp && againTp.tr === 1 && againTp.sl === 1 && yahooAsks.length === 1, 'old till TP / SL summary walked again for Trail TP: ' + JSON.stringify(againTp));
-    existing = null;
-    check(file && JSON.stringify(Object.keys(file.paths)) === '["ABC|long|98|2026-10-20 10:00","ABC|long|98|2026-10-20 10:00|tp"]', 'only graded NSE alerts (no crypto, no unfilled, no timeout), both holds: ' + JSON.stringify(file && Object.keys(file.paths)));
-    check(JSON.stringify(yahooAsks) === '["ABC.NS 15m"]', 'one 15m read for the one symbol: ' + JSON.stringify(yahooAsks));
-    // Window: 20 NSE 4H candles after the fill. A stop on the 11th trading day is outside it.
-    const w = tool.walkAlert({ side: 'long', entry: 100, stop: 98, alertMs, tf: '4h' }, bars.map(b => ({ t: b[0] * 1000, h: b[1], l: b[0] * 1000 >= Date.parse('2026-10-27T09:15:00+05:30') ? 100 : b[2], c: b[3] })).concat(['2026-11-02T09:15', '2026-11-02T13:15', '2026-11-03T09:15'].map(x => ({ t: Date.parse(x + ':00+05:30'), h: 100.4, l: x.endsWith('03T09:15') ? 90 : 99.8, c: 100.1 }))), 15);
-    check(w && w.sl === 0 && w.done === 1 && w.e === 0.001, 'stop after 20 NSE candles is outside the window: ' + JSON.stringify(w));
-    const wTp = tool.walkAlert({ side: 'long', entry: 100, stop: 98, alertMs, tf: '4h' }, bars.map(b => ({ t: b[0] * 1000, h: b[1], l: b[0] * 1000 >= Date.parse('2026-10-27T09:15:00+05:30') ? 100 : b[2], c: b[3] })).concat(['2026-11-02T09:15', '2026-11-02T13:15', '2026-11-03T09:15'].map(x => ({ t: Date.parse(x + ':00+05:30'), h: 100.4, l: x.endsWith('03T09:15') ? 90 : 99.8, c: 100.1 }))), 15, 'tp');
-    check(wTp && wTp.sl === 1 && wTp.done === 1, 'till TP / SL: the same stop on the 11th day counts: ' + JSON.stringify(wTp));
-    // Long 100, stop 99 (1%): past the biggest target (3R / 3%) the walk goes on until price falls back
-    // 2R / 2% (the biggest Trail TP step + gap) from its best on a later candle.
-    const tw = extra => tool.walkAlert({ side: 'long', entry: 100, stop: 99, alertMs, tf: '4h' }, [[0, 100.2, 99.9, 100.1], [1, 104, 101, 103.5], [2, 103.8, 102.5, 103]].concat(extra).map(([i, h, l, c]) => ({ t: alertMs + i * 900e3, h, l, c })), 15, 'tp');
-    const twOpen = tw([]), twDone = tw([[3, 103, 101.9, 102]]);
-    check(twOpen && twOpen.done === 0 && twOpen.tr === 1 && twDone && twDone.done === 1 && twDone.tr === 1 && twDone.ta === 1.9, 'NSE till TP / SL past 3R: open until a 2R fall back: ' + JSON.stringify([twOpen, twDone]));
-    check(tool.tfBucket(Date.parse('2026-10-20T13:14:00+05:30'), 240) !== tool.tfBucket(Date.parse('2026-10-20T13:15:00+05:30'), 240), 'NSE 4H candle turns at 13:15');
+    tool = await import('../tools/nse-candles.mjs?' + Date.now());
+    const now = Date.parse('2026-11-09T12:00:00Z'), quiet = async () => { const log = console.log; console.log = () => {}; try { return await tool.main(now); } finally { console.log = log; } };
+    await quiet();
+    const names = fs.readdirSync(dir).sort();
+    check(JSON.stringify(names) === '["ABC.a.json","ABC.b.json","M&M.a.json","M&M.b.json","index.json"]', 'NSE symbols only, two files each + index: ' + JSON.stringify(names));
+    const a = JSON.parse(read('ABC.a.json')), b = JSON.parse(read('ABC.b.json')), all = {};
+    tool.KEYS.forEach(k => { all[k] = tool.decode(read('ABC.a.json'))[k].concat(tool.decode(read('ABC.b.json'))[k]); });
+    const ist = t => new Date(t * 1000 + IST).toISOString().slice(0, 16);
+    // 4H: 09:15-13:15 and 13:15-15:30. 16 Oct afternoon = its three 60m candles.
+    const pm = all['4H'].find(r => ist(r[0]) === '2026-10-16T13:15');
+    check(all['4H'].length === 2 * 19 && pm && JSON.stringify(pm.slice(1)) === '[100,100.4000015258789,98.5,99]', '4H from 60m at 09:15 / 13:15 (16 Oct pm o/h/l/c by hand): ' + JSON.stringify(pm));
+    check(all['60'].length === 7 * 19 && all['60'].every(r => Math.fround(r[1]) === r[1]) && a.f32 === 1 && b.f32 === 1 && /,100\.4,/.test(read('ABC.b.json')), '60m kept as Yahoo gave them, float32 written short: ' + read('ABC.b.json').slice(0, 120));
+    check(all['1W'].every(r => new Date(r[0] * 1000 + IST).getUTCDay() === 1 && ist(r[0]).endsWith('09:15')) && all['1W'].length === 10, 'weeks open Monday 09:15 IST: ' + all['1W'].map(r => ist(r[0])).join(' '));
+    check(JSON.stringify(all['1M'].map(r => [ist(r[0]), r[2]])) === '[["2026-09-01T09:15",107],["2026-10-01T09:15",100.5],["2026-11-01T09:15",100.5]]', 'months open the 1st 09:15 IST, Sep high = its 30th: ' + JSON.stringify(all['1M'].map(r => [ist(r[0]), r[2]])));
+    // a = before the previous month (1 Oct IST), b = the rest.
+    const cut = at('2026-10-01T00:00:00') / 1000;
+    check(tool.KEYS.every(k => a.s[k].every(r => r[0] < cut) && b.s[k].every(r => r[0] >= cut)) && a.s['1M'].length === 1 && b.s['1M'].length === 2 && JSON.parse(read('index.json')).cut === cut, 'split at 1 Oct: a ' + a.s['1M'].length + ' month(s), b ' + b.s['1M'].length);
+    // Next run: Yahoo has only 2 Nov on, and M&M's read fails: nothing is lost, nothing changes.
+    const before = names.filter(n => n !== 'index.json').map(read);
+    mode = 'later'; asks = [];
+    await quiet();
+    check(JSON.stringify(names.filter(n => n !== 'index.json').map(read)) === JSON.stringify(before), 'a later run keeps candles Yahoo no longer gives and a failed read keeps the last files, byte for byte');
+    check(asks.filter(x => /^ABC/.test(x)).sort().join() === 'ABC.NS 1d,ABC.NS 60m', 'two Yahoo reads a symbol: ' + JSON.stringify(asks));
+    mode = 'all';
+    names.forEach(n => { out[n] = read(n); });
   } catch (e) { errs.push('tool threw: ' + e.message); }
   fake.close();
 
-  // The journal side: same alert, its summary read from the sync repo.
+  // The journal side: the same files from the sync repo's nse-candles branch.
+  const blobs = {};
+  Object.entries(out).forEach(([p, text]) => { blobs[crypto.createHash('sha1').update(text).digest('hex')] = { p, text }; });
+  let treeReads = 0, blobReads = 0, branch = true;
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
-  let reads = 0;
   await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
   await ctx.route('https://api.github.com/**', route => {
-    if (/\/repos\/victus\/sync\/contents\/nse-paths\.json/.test(route.request().url())) { reads++; return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify(file || {}) }); }
-    return route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' }, body: '{}' });
+    const u = route.request().url(), h = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+    if (/\/repos\/victus\/sync\/git\/trees\/nse-candles$/.test(u)) { treeReads++; return branch ? route.fulfill({ status: 200, headers: h, body: JSON.stringify({ tree: Object.keys(blobs).map(sha => ({ path: blobs[sha].p, type: 'blob', sha })) }) }) : route.fulfill({ status: 404, headers: h, body: '{"message":"Not Found"}' }); }
+    const m = u.match(/\/repos\/victus\/sync\/git\/blobs\/([0-9a-f]+)$/);
+    if (m && blobs[m[1]]) { blobReads++; return route.fulfill({ status: 200, headers: h, body: blobs[m[1]].text }); }
+    return route.fulfill({ status: 404, headers: h, body: '{}' });
   });
   const page = await ctx.newPage();
   page.on('pageerror', e => errs.push('page error: ' + e.message));
+  // A 4H NSE trendline alert, long 100, stop 98 (2%), Tue 20 Oct 2026 10:00 IST.
+  const sigA = { id: 'n1', key: 'tl|ABC.NS|4h|0|1|2', kind: 'trendline', scoredDaily: true, date: '2026-10-20', time: '10:00', symbol: 'ABC', side: 'long', score: '', market: 'NSE', timeframe: '4H', channel: 'NSE 4H', filled: true, outcome: 'SL', resultR: -1.1, hasReportR: true, price: 100.3, stop: 98, entry: 100 };
+  const rowsOf = () => page.$$eval('#sigTgtCmp > div > table tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
+  const strip = () => page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+  const settle = () => page.waitForFunction(() => !tgtBusy && !slcBusy && !tgtQ.length && !slcQ.length, null, { timeout: 10000 }).then(() => page.waitForTimeout(300));
   try {
     await page.goto(base, { waitUntil: 'load' });
-    await page.evaluate(() => {
-      state.signals = [{ id: 'n1', key: 'nk1', date: '2026-10-20', time: '10:00', symbol: 'ABC', side: 'long', score: '', market: 'NSE', timeframe: '4h', channel: 'NSE 4h', filled: true, outcome: '+1R', resultR: 0.9, price: 100, stop: 98, zoneLow: 99, zoneHigh: 100, srcRank: 3 }];
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && typeof signalsReady !== 'undefined');
+    await page.evaluate(async sig => {
+      await signalsReady;
+      state.signals = [sig];
       state.sync = { token: 'tok', repo: 'victus/sync', branch: 'main', auto: false, lastAt: '', lastSha: '' };
-      Object.assign(state.ui, { sigKind: 'zone', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '1R', sigNoFee: false });
-      switchTab('signals'); renderAll();
-    });
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigCoins: '', sigSec: 'edge', mktFilter: '', sigTgt: '1R', sigHold: 'tp', sigNoFee: false, sigSl: { mode: '', gap: 0.75, pct: 1 }, sigStop: { mode: 'off' }, sigTrail: { on: false }, sigPart: { q: 0 } });
+      save(); switchTab('signals'); renderAll();
+    }, sigA);
     await page.waitForFunction(() => /1 of 1 graded alerts have price data/.test(document.getElementById('sigTgtCmp').innerText), null, { timeout: 10000 });
-    const rows = await page.$$eval('#sigTgtCmp > div > table tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
-    // NSE fee 0.1063% on a 2% stop = 0.0532R; stop = -1 - 0.98*0.05/2 - 0.0532 = -1.0777R
-    const has = (k, t) => check(rows.some(r => r.startsWith(k + ' ') && r.includes(t)), k + ' row should show ' + t + ': ' + JSON.stringify(rows));
-    has('1R', '+0.95R'); has('1.5R', '+1.45R'); has('2R', '-1.08R'); has('3R', '-1.08R'); has('1%', '+0.45R'); has('3%', '+1.45R');
-    check(reads === 1, 'nse-paths.json read once: ' + reads);
-    // BE at 1R: armed at +1.55R, back through entry before 2R: 0 - 0.05/2 - 0.0532 = -0.08R.
+    await settle();
+    // NSE fee 0.1063% on a 2% stop = 0.0532R; stop = -1 - 0.98 x 0.05 / 2 - 0.0532 = -1.0777R
+    const rows = await rowsOf(), has = (rs, k, t) => check(rs.some(r => r.startsWith(k + ' ') && r.includes(t)), k + ' row should show ' + t + ': ' + JSON.stringify(rs));
+    has(rows, '1R', '+0.95R'); has(rows, '1.5R', '+1.45R'); has(rows, '2R', '-1.08R'); has(rows, '3R', '-1.08R'); has(rows, '1%', '+0.45R'); has(rows, '3%', '+1.45R');
+    // BE at 1R: armed at +1.55R, back through entry before 2R: 0 - 0.05 / 2 - 0.0532 = -0.08R.
     await page.evaluate(() => { state.ui.sigStop = { mode: 'be', beAt: 1 }; renderSignalsTable(); });
-    const rowsBe = await page.$$eval('#sigTgtCmp > div > table tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
-    check(rowsBe.some(r => r.startsWith('2R ') && r.includes('-0.08R')) && rowsBe.some(r => r.startsWith('1R ') && r.includes('+0.95R')), 'NSE with BE at 1R: ' + JSON.stringify(rowsBe));
-    await page.evaluate(() => { state.ui.sigStop = { mode: 'off' }; renderSignalsTable(); });
-    const strip = await page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
-    check(/Total R \+0\.95R/.test(strip) && !/NSE without prices/.test(strip), 'NSE strip at 1R: ' + strip);
-    // No sync: says how to get NSE prices.
-    await page.evaluate(() => { state.sync = null; nsePaths = null; renderSignalsTable(); });
-    const off = await page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
-    check(/1 NSE without prices: turn on GitHub sync/.test(off), 'no-sync note: ' + off);
+    await settle();
+    const rowsBe = await rowsOf();
+    has(rowsBe, '2R', '-0.08R'); has(rowsBe, '1R', '+0.95R');
+    // The screenshot's case: Wick or body 0.75%. The last closed NSE 4H candle before the
+    // alert at least 0.75% under 100 is 16 Oct 13:15-15:30: wick 98.5, body 99 -> SL 99 (1%).
+    // 1R = 101: +1R - 0.1063 = +0.89R; 2R = 102: +1.89R; 3R = 103 (best 103.1): +2.89R.
+    await page.evaluate(() => { state.ui.sigStop = { mode: 'off' }; state.ui.sigSl = { mode: 'near', gap: 0.75, pct: 1 }; renderSignalsTable(); });
+    await page.waitForFunction(() => /Total R \+0\.89R/.test(document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' ')), null, { timeout: 10000 }).catch(() => {});
+    await settle();
+    const near = await page.evaluate(() => { const g = sigSlPairs(sigView.pairs)[0].signal; return { stop: g.stop, wait: !!g.slWait, none: !!g.slNone, s: document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '), note: document.getElementById('sigTgtCmp').innerText.replace(/\s+/g, ' ') }; });
+    check(near.stop === 99 && /Total R \+0\.89R/.test(near.s) && !/no candle/.test(near.note), 'NSE wick or body 0.75%: SL 99, +0.89R at 1R: ' + JSON.stringify(near).slice(0, 600));
+    const sls = await page.evaluate(() => ['wick', 'body'].map(m => slStopFor(sigView.pairs[0].signal.slFrom || sigView.pairs[0].signal, { mode: m, v: 0.75 }, tgtCache()[slcKey(sigView.pairs[0].signal.slFrom || sigView.pairs[0].signal)])));
+    check(JSON.stringify(sls) === '[98.5,99]', 'NSE wick SL 98.5, body SL 99: ' + JSON.stringify(sls));
+    await page.evaluate(() => { state.ui.sigTgt = '3R'; renderSignalsTable(); });
+    await settle();
+    check(/Total R \+2\.89R/.test(await strip()), 'NSE body SL at 3R: ' + await strip());
+    check(treeReads === 1 && blobReads === 2, 'branch list read once, ABC\'s two files once: ' + treeReads + ' / ' + blobReads);
+    // Pure walk: "20 candles" count NSE 4H candles (2 a day), not 80 hours.
+    const walk = await page.evaluate(() => {
+      const day = d => Date.parse(d + 'T00:00:00+05:30'), rows = [];
+      for (let d = day('2026-10-20'); d <= day('2026-11-13'); d += 864e5) {
+        const w = new Date(d + 5.5 * 3600e3).getUTCDay(); if (!w || w === 6) continue;
+        for (let i = 0; i < 7; i++) { const t = d + (555 + 60 * i) * 60000; rows.push({ time: t / 1000, open: 50.5, high: 51, low: 50.2, close: 50.5 }); }
+      }
+      const put = (s, o) => { const r = rows.find(x => x.time === Date.parse(s + '+05:30') / 1000); Object.assign(r, o); };
+      const sig = { market: 'NSE', timeframe: '4H', date: '2026-10-20', time: '10:00', side: 'long', entry: 50, price: 50.3, stop: 49, symbol: 'XYZ' };
+      // Reached on the 9th trading day (NSE 4H candle 17 < 20): a fill. 80 hours would say no fill.
+      put('2026-10-30T10:15', { low: 49.9, close: 50.1 });
+      const fill = tgtWalkNse(sig, rows, '20'), crypto = tgtWalk(Object.assign({}, sig, { market: 'CRYPTO' }), rows, 60, '20');
+      // Stopped on the 10th trading day after the fill (candle 20 after it): outside 20 candles, inside Till TP / SL.
+      put('2026-11-13T14:15', { low: 48.5 });
+      const hold20 = tgtWalkNse(sig, rows, '20'), tillTp = tgtWalkNse(sig, rows, 'tp');
+      put('2026-11-12T14:15', { low: 48.5 });
+      const inside = tgtWalkNse(sig, rows, '20');
+      return { fill: !fill.none, crypto: crypto.none || '', hold: [hold20.sl, hold20.done], tp: [tillTp.sl, tillTp.done], inside: [inside.sl, inside.done] };
+    });
+    check(walk.fill && walk.crypto === 'entry not reached', 'fill window counts NSE 4H candles: ' + JSON.stringify(walk));
+    check(JSON.stringify(walk.hold) === '[0,1]' && JSON.stringify(walk.tp) === '[1,1]' && JSON.stringify(walk.inside) === '[1,1]', '20-candle hold counts NSE candles (stop on the 21st outside, on the 20th inside): ' + JSON.stringify(walk));
+    // Kept on the device: after a reload the files come from IndexedDB, only the list is read.
+    await page.waitForTimeout(400);
+    await page.evaluate(() => tgtSave());
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady);
+    const b0 = blobReads, t0r = treeReads;
+    const again = await page.evaluate(async sig => { const w = await tgtOne(sig, 'tp'); return [w.sl, w.v]; }, sigA);
+    check(JSON.stringify(again) === '[1,3]' && blobReads === b0 && treeReads === t0r + 1, 'after a reload: list read, files from the device: ' + JSON.stringify(again) + ' blobs ' + (blobReads - b0));
+    // No branch yet: says so. No sync: says how.
+    branch = false;
+    await page.evaluate(sig => { nseIdx = null; Object.keys(nseSer).forEach(k => delete nseSer[k]); tgtRetry(); state.signals = [Object.assign({}, sig, { id: 'n2', key: 'tl|ABC.NS|4h|0|1|3', date: '2026-10-21' })]; Object.assign(state.ui, { sigKind: 'trendline', sigChan: '', sigPeriod: { mode: 'all', from: '', to: '' }, sigTgt: '1R', sigSl: { mode: '', gap: 0.75, pct: 1 } }); save(); switchTab('signals'); renderAll(); }, sigA);
+    await page.waitForFunction(() => /NSE price job hasn't run yet/.test(document.getElementById('sigEdgeStrip').innerText), null, { timeout: 8000 }).catch(() => {});
+    check(/NSE prices: the NSE price job hasn't run yet/.test(await strip()), 'no branch note: ' + await strip());
+    await page.evaluate(() => { state.sync = null; renderSignalsTable(); });
+    check(/1 NSE without prices: turn on GitHub sync/.test(await strip()), 'no-sync note: ' + await strip());
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
   await ctx.close();
-  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'NSE exit at: Yahoo job + journal re-score, by hand');
-  errs.forEach(e => { console.log('     ' + e); failures.push('nse paths: ' + e); });
+  fs.rmSync(dir, { recursive: true, force: true });
+  const label = 'NSE: Yahoo job writes candles, journal plays NSE alerts on them (every SL type, NSE candle counts), by hand';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push('nse candles: ' + e); });
 }
 // Alerts live in IndexedDB. An older build's alerts in localStorage (4.2 MB,
 // enough to trip the 80% warning) move across on first open, leave
@@ -6252,6 +6287,11 @@ const PARITY_COMBOS = [
   { name: 'TL 4H 1.5R, BE at 0.75R book 50%, 25% at 0.5R, 20 candles', kind: 'trendline', chan: 'CRYPTO 4H', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', stop: { mode: 'be', beAt: 0.75 }, part: { q: 25, at: 0.5, beQ: 50 }, hold: '20' },
   { name: 'fib 1%, 75% off at 0.5%, SL to +0.25% at 0.75% book 50%, trail', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '1%', stop: { mode: 'shift', shAtP: 0.75, shToP: 0.25 }, part: { q: 75, atP: 0.5, beQ: 50 }, trail: { on: true, stepP: 0.25, gapP: 0.25 } },
   { name: 'TL 1R, wick SL, trail, 50% at 2.5R past the target', kind: 'trendline', from: '2026-10-10', to: '2026-10-25', tgt: '1R', sl: { mode: 'wick', gap: 0.75 }, part: { q: 50, at: 2.5 }, trail: { on: true, step: 0.5, gap: 0.5 } },
+  // NSE (lakky, 2026-11-13: NSE 1D trendlines all dashes): on the NSE job's Yahoo candles.
+  // The combos above with no channel take the 5 NSE stocks' alerts too.
+  { name: 'NSE 1D TL 1.5R, wick or body SL, shift 0.5R to 0.25R, trail', kind: 'trendline', chan: 'NSE 1D', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', sl: { mode: 'near', gap: 0.75 }, stop: { mode: 'shift', shAt: 0.5, shTo: 0.25 }, trail: { on: true, step: 0.5, gap: 0.5 } },
+  { name: 'NSE 4H fib 2R, 20 candles', kind: 'fib', chan: 'NSE 4H', from: '2026-10-10', to: '2026-10-25', tgt: '2R', hold: '20' },
+  { name: 'NSE 4H TL 1%, body SL 1%, BE at 0.5%, 20 candles', kind: 'trendline', chan: 'NSE 4H', from: '2026-10-10', to: '2026-10-25', tgt: '1%', sl: { mode: 'body', gap: 1 }, stop: { mode: 'be', beAtP: 0.5 }, hold: '20' },
 ];
 async function parityRun() {
   const errs = [];
@@ -6263,11 +6303,23 @@ async function parityRun() {
     'fibtl_rebuild_results.json': JSON.stringify(fx.results),
     'fibtl_rebuild_meta.json': JSON.stringify(fx.meta),
   };
+  const nseBlobs = {};
+  Object.entries(fx.nse || {}).forEach(([p, text]) => { nseBlobs[crypto.createHash('sha1').update(text).digest('hex')] = { path: p, text }; });
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
   let reads = 0;
   await ctx.route(url => !url.href.startsWith(base), r => {
     const u = r.request().url();
     if (u.includes('/scanner-runtime-state/')) return r.fulfill({ status: 200, contentType: 'text/plain', body: files[u.split('/').pop().split('?')[0]] || '' });
+    // NSE: the sync repo's nse-candles branch (tools/nse-candles.mjs's files).
+    if (u.startsWith('https://api.github.com/repos/victus/sync/git/trees/nse-candles')) {
+      reads++;
+      return r.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ tree: Object.keys(nseBlobs).map(sha => ({ path: nseBlobs[sha].path, type: 'blob', sha })) }) });
+    }
+    if (u.startsWith('https://api.github.com/repos/victus/sync/git/blobs/')) {
+      const b = nseBlobs[u.split('/').pop()];
+      reads++;
+      return r.fulfill({ status: b ? 200 : 404, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'text/plain' }, body: b ? b.text : '{}' });
+    }
     if (u.startsWith('https://api.india.delta.exchange/v2/history/candles')) {
       const q = new URL(u).searchParams, a = +q.get('start'), b = +q.get('end');
       const ser = fx.candles[q.get('symbol') + '_' + q.get('resolution')];
@@ -6286,11 +6338,17 @@ async function parityRun() {
     await page.clock.resume();
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && typeof signalsReady !== 'undefined', null, { timeout: 20000 });
-    await page.evaluate(async () => { await signalsReady; while (sigAutoBusy) await new Promise(r => setTimeout(r, 100)); await autoRefreshAlerts(true); switchTab('signals'); });
+    await page.evaluate(async () => {
+      await signalsReady; while (sigAutoBusy) await new Promise(r => setTimeout(r, 100));
+      // Both markets; NSE candles read with the sync token.
+      state.ui.sigMkt = 'all';
+      state.sync = { token: 'tok', repo: 'victus/sync', branch: 'main', auto: false, lastAt: '', lastSha: '' };
+      await autoRefreshAlerts(true); switchTab('signals');
+    });
     for (const c of PARITY_COMBOS) {
       await page.evaluate(c => {
         const u = state.ui;
-        Object.assign(u, { sigKind: c.kind, sigChan: c.chan || '', sigMkt: 'crypto', sigPeriod: { mode: 'custom', from: c.from, to: c.to }, sigDay: '', sigCoins: '', mktFilter: '', sigSkipTiny: false,
+        Object.assign(u, { sigKind: c.kind, sigChan: c.chan || '', sigMkt: 'all', sigPeriod: { mode: 'custom', from: c.from, to: c.to }, sigDay: '', sigCoins: '', mktFilter: '', sigSkipTiny: false,
           sigTgt: c.tgt, sigHold: c.hold || 'tp', sigNoFee: !!c.nofee, sigLvl: c.lvl || '', sigLvlOff: [], sigTlType: c.tl || '', sigSec: 'edge' });
         u.sigSl = Object.assign({ mode: '', gap: 0.75, pct: 1 }, c.sl || {});
         u.sigStop = Object.assign({ mode: 'off', beAt: 1, shAt: 1, shTo: 0.75, beAtP: 1, shAtP: 1, shToP: 0.5 }, c.stop || {});
@@ -6340,7 +6398,9 @@ async function parityRun() {
   const n = Object.values(app).reduce((t, x) => t + Object.values(x).filter(v => v != null).length, 0);
   check(n >= 400, 'trades compared: ' + n);
   fs.rmSync(dir, { recursive: true, force: true });
-  const label = `Signals parity: journal = independent retest on real alerts + Delta candles (${PARITY_COMBOS.length} settings, ${n} trades)`;
+  const nNse = Object.entries(app).filter(([k]) => /^NSE /.test(k)).reduce((t, [, x]) => t + Object.values(x).filter(v => v != null).length, 0);
+  check(nNse >= 40, 'NSE trades compared: ' + nNse);
+  const label = `Signals parity: journal = independent retest on real alerts + Delta / NSE candles (${PARITY_COMBOS.length} settings, ${n} trades, ${nNse} in NSE-only settings)`;
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push('parity: ' + e); });
 }
@@ -6398,7 +6458,7 @@ await holdPctRun(data);
 await trailRun(data);
 await tgtHeadRun(data);
 await sigBreakdownRun(data);
-await nsePathsRun();
+await nseCandlesRun();
 await badInputRun(data);
 await tgtStoreRun(data);
 await parityRun();
