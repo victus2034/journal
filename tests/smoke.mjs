@@ -55,9 +55,9 @@ function fixture() {
   }
   const goals = [{ id: 'g1', title: 'Test goal', target: 20, metric: 'net_pnl', targets: { net_pnl: 20 }, period: 'month', accountId: 'all', days: 'weekdays', updatedAt: now }];
   const playbook = [{ id: 'pb1', name: 'Breakout', rules: ['Volume spike', 'Above VWAP'], updatedAt: now }];
-  // The Signals tests play symbols the scanner has since dropped (MAGIC, MRVL, RLC...): Dropped is Shown for them.
-  // bestSettingsRun covers the Hidden default.
-  return { version: 1, savedAt: now, accounts, trades, signals: [], goals, playbook, aliases: [], tombstones: [], reviews: [], reviewsAt: [], ui: { sigDropped: 'show' } };
+  // The Signals tests play symbols the scanner has since dropped (MAGIC, MRVL, RLC...) and made-up ones: a scanner
+  // list of "*" keeps them all. droppedCoinsRun covers the real list (alerts on other symbols are deleted).
+  return { version: 1, savedAt: now, accounts, trades, signals: [], goals, playbook, aliases: [], tombstones: [], reviews: [], reviewsAt: [], ui: { sigLive: { list: ['*'], at: 0 } } };
 }
 
 const server = http.createServer((req, res) => {
@@ -6580,68 +6580,114 @@ async function parityRun() {
   errs.forEach(e => { console.log('     ' + e); failures.push('parity: ' + e); });
 }
 
-// Dropped coins + Top 10 / 20 / 30 by volume (lakky, 2026-11-14: "remove all those cryptos from backtest report which
-// we have removed" and "backtest with top 10-20-30 volume cryptos").
+// Dropped coins are deleted, Top 10 / 20 / 30 by volume on both brokers (lakky, 2026-11-14: "remove all those unnecessary
+// alerts ... do not put hidden or show ... make sure top30 cryptos are available in coindcx and delta"). An older build's
+// device (alerts on every symbol, Dropped "Shown") opens this one: alerts on symbols off the scanner's list go from memory
+// and from IndexedDB, a real trade keeps its alert (as a trade copy), the scanner's config.py list is followed when it
+// changes, and Top 10 / 20 / 30 count only coins CoinDCX and Delta both list.
 async function droppedCoinsRun(seed) {
   const errs = [];
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
-  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
-  const clean = Object.assign({}, seed, { ui: {} });   // no sigDropped: the default (Hidden) is what is under test
-  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(clean));
+  const cfgOf = crypto => 'CRYPTO_WATCHLIST: list[str] = [\n    # 2026-11-08: removed\n    # "QNTUSD",\n' + crypto.map(c => '    "' + c + 'USD",  # ' + c).join('\n') + '\n]\n\nOTHER_WATCHLIST = [\n    "SLVONUSD",\n    "XAUTUSD",\n]\n\nXSTOCK_WATCHLIST = [\n    "TSLAXUSD",\n    "SNDKBUSD",\n    "QQQXUSD",\n    # "SOXLBUSD",\n]\n';
+  const NOV14 = ['BTC', 'ETH', 'ZEC', 'SOL', 'XRP', 'NEAR', 'HYPE', 'DOGE', 'SUI', 'UNI', 'BNB', 'ENA', '1000PEPE', 'WLD', 'ADA', 'LINK', 'AVAX', 'INJ', 'FIL', 'AAVE', 'TAO', 'ARB'];
+  let cfg = cfgOf(NOV14);
+  // The scanner's live trendline file: BTC (kept), QNT (dropped, one of your trades is on it), STRK (dropped, no trade).
+  const sent = Date.parse('2026-10-15T09:30:00+05:30') / 1000;
+  const tl = sym => JSON.stringify({ id: 'tl|' + sym + '|4h|0|1790236800|1790596800@' + sent, key: 'tl|' + sym + '|4h|0|1790236800|1790596800', kind: 'trendline', line: 0, market: 'crypto', plan: { entry: 100, side: 'long', sl: 98, target_r: 1 }, price: 100.5, sent_ts: sent, symbol: sym, tf: '4h' });
+  const files = { 'fib_trendline_alert_records.jsonl': ['BTCUSD', 'QNTUSD', 'STRKUSD'].map(tl).join('\n') + '\n' };
+  await ctx.route(url => !url.href.startsWith(base), r => {
+    const u = r.request().url();
+    if (u.includes('/scanner-runtime-state/')) return r.fulfill({ status: 200, contentType: 'text/plain', body: files[u.split('/').pop().split('?')[0]] || '' });
+    if (u.endsWith('/victus-indicator-strategy/main/config.py')) return r.fulfill({ status: 200, contentType: 'text/plain', body: cfg });
+    return r.abort();
+  });
+  // 12 live coins (+2 / -1 R by index), AAVE (back on 14 Nov, +3), 4 dropped (STRK, QNT, MRVL, META), a live xStock, gold, NSE.
+  const live = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'LINK', 'SUI', 'UNI', 'ENA', 'WLD', 'NEAR'];
+  const plan = live.map((c, i) => [c + 'USD', i % 2 ? -1 : 2]).concat([['AAVEUSD', 3], ['STRKUSD', -1], ['QNTUSD', -1], ['MRVLBUSD', -1], ['METAXUSD', -1], ['TSLAXUSD', 2], ['XAUTUSD', 1], ['RELIANCE', -1]]);
+  const sigs = plan.map(([sym, r], i) => ({ id: 'dc' + i, key: 'dc' + i, kind: 'fib', date: '2026-10-' + String(i + 1).padStart(2, '0'), time: '10:00', symbol: sym, side: 'long', score: '',
+    market: sym === 'RELIANCE' ? 'NSE' : 'CRYPTO', timeframe: '1D', channel: (sym === 'RELIANCE' ? 'NSE' : 'CRYPTO') + ' 1D', filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 98, entry: 100 }));
+  const t0 = seed.trades.find(t => t.accountId === 'acc_cry');
+  const qnt = Object.assign({}, t0, { id: 'trq', date: '2026-10-15', exitDate: '2026-10-15', time: '10:30', exitTime: '12:00', symbol: 'QNTUSD', direction: 'long', entry: 100, stop: 98, exit: 102, setup: '', playRules: undefined });
+  const st = Object.assign({}, seed, { trades: seed.trades.concat([qnt]), ui: { sigDropped: 'show', sigMkt: 'crypto', sigKind: 'fib' } });
+  await ctx.addInitScript(([s, g]) => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); localStorage.setItem('tapeAndTarget.signals', g); sessionStorage.setItem('seeded', '1'); } }, [JSON.stringify(st), JSON.stringify(sigs)]);
   const page = await ctx.newPage();
   page.on('pageerror', e => errs.push('page error: ' + e.message));
+  page.on('dialog', d => d.dismiss());
+  const settle = () => page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded && state.ui.sigAutoAt && !sigAutoBusy, null, { timeout: 10000 });
+  const stored = () => page.evaluate(async () => { const v = JSON.parse(await idbGet(SIG_KEY) || '[]'), c = JSON.parse(await idbGet('tapeAndTarget.sentSigs') || '[]'); return { n: v.length, syms: v.map(g => g.symbol).sort().join(','), copies: c.filter(g => /^trade:/.test(g.id)).map(g => g.key).sort().join(',') }; });
   try {
     await page.goto(base, { waitUntil: 'load' });
-    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded, null, { timeout: 5000 });
+    await settle();
+    await page.waitForTimeout(400);
     const v = await page.evaluate(() => {
       const text = id => ((document.getElementById(id) || {}).innerText || '').replace(/\s+/g, ' ');
-      // 12 live coins (+2 R each by index parity), 2 dropped crypto (STRK -1, AAVE +3), 2 dropped xStocks (MRVL, META), 2 live xStock / gold, 1 NSE.
-      const live = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'LINK', 'SUI', 'UNI', 'ENA', 'WLD', 'NEAR'];
-      const plan = live.map((c, i) => [c + 'USD', i % 2 ? -1 : 2]).concat([['STRKUSD', -1], ['AAVEUSD', 3], ['MRVLBUSD', -1], ['METAXUSD', -1], ['TSLAXUSD', 2], ['XAUTUSD', 1], ['RELIANCE', -1]]);
-      state.signals = plan.map(([sym, r], i) => ({ id: 'dc' + i, key: 'dc' + i, kind: 'fib', date: '2026-10-' + String(i + 1).padStart(2, '0'), time: '10:00', symbol: sym, side: 'long', score: '',
-        market: sym === 'RELIANCE' ? 'NSE' : 'CRYPTO', timeframe: '1D', channel: (sym === 'RELIANCE' ? 'NSE' : 'CRYPTO') + ' 1D', filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 98, entry: 100 }));
-      Object.assign(state.ui, { sigKind: 'fib', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigTgt: '', sigNoFee: false, sigCoins: '', sigAsset: '', sigMarket: '', sigFold: {}, sigLvl: '' });
-      delete state.ui.sigDropped;
+      Object.assign(state.ui, { sigKind: 'fib', sigMkt: 'crypto', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigTgt: '', sigNoFee: false, sigCoins: '', sigAsset: '', sigMarket: '', sigFold: {}, sigLvl: '' });
       switchTab('signals'); renderAll();
-      const strip = () => { const t = text('sigEdgeStrip'); return [t.match(/Alerts (\d+)/)[1], (t.match(/Total R ([+-][\d.]+R)/) || [])[1]]; };
-      const out = { def: strip(), note: text('sigDropNote'), mode: sigDroppedMode(), wrapHidden: document.getElementById('sigDropWrap').classList.contains('hidden') };
-      document.querySelector('#sigDropBar button[data-dropped="show"]').click(); out.shown = strip(); out.shownNote = text('sigDropNote');
-      document.querySelector('#sigDropBar button[data-dropped="hide"]').click(); out.again = strip();
-      // Top 10 / 20 / 30 by volume, on the live coins only.
+      const strip = () => { const t = text('sigEdgeStrip'); return [(t.match(/Alerts (\d+)/) || [])[1], (t.match(/Total R ([+-][\d.]+R)/) || [])[1]]; };
+      const out = { def: strip(), syms: state.signals.map(g => g.symbol).sort().join(','), left: state.signals.filter(g => sigDropped(g)).length, row: !!document.getElementById('sigDropWrap') || !!document.getElementById('sigDropBar'),
+        uiDropped: state.ui.sigDropped === undefined ? 'gone' : state.ui.sigDropped, list: (state.ui.sigLive || {}).list, tlKeys: state.signals.filter(g => g.kind === 'trendline').map(g => g.symbol).join(','),
+        copies: sentSigs.filter(isTradeCopy).map(g => g.key).sort().join(','), qntAlert: ((tradeAlertMap().trq || {}).sig || {}).symbol || '' };
       const coins = k => document.querySelector('#sigCoinBar button[data-coins="' + k + '"]').click();
-      coins('top10'); out.t10 = [strip()[0], text('sigCoinVol'), text('sigPeriodHint')];
+      coins('top10'); out.t10 = [strip()[0], text('sigCoinVol')];
       coins('top20'); out.t20 = [strip()[0], text('sigCoinVol')];
       coins('top30'); out.t30 = [strip()[0], text('sigCoinVol')];
-      // Dropped shown: the 2 dropped coins have volume too (STRK 194, AAVE 96), so Top 20 holds all 14.
-      document.querySelector('#sigDropBar button[data-dropped="show"]').click(); coins('top10'); out.t10s = [strip()[0], text('sigCoinVol')];
-      coins('top20'); out.t20s = [strip()[0], text('sigCoinVol')];
       coins('top3'); out.rankOpts = [...document.querySelectorAll('#sigCoinRank option')].map(o => o.value).join();
-      document.getElementById('sigCoinRank').value = 'vol'; document.getElementById('sigCoinRank').onchange && document.getElementById('sigCoinRank').dispatchEvent(new Event('change'));
+      document.getElementById('sigCoinRank').value = 'vol'; document.getElementById('sigCoinRank').dispatchEvent(new Event('change'));
       out.t3vol = text('sigCoinList');
       coins('');
       setSigSec('report'); out.cmp = [...document.querySelectorAll('#sigCoinCmp tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').trim()).filter(x => /^Top (10|20|30)/.test(x));
       setSigSec('alerts');
-      // The tab's own filter is what the rule says: a symbol not on the list, any market but NSE.
-      out.rule = ['BTCUSD', 'BTCUSDT', 'btc/usdt', '1000PEPEUSD', 'AAVEUSD', 'MRVLBUSD', 'SOXLBUSD', 'METAXUSD', 'TSLAXUSD', 'SNDKBUSD', 'QQQXUSD', 'XAUTUSD', 'SLVONUSD', 'PAXGUSD', 'QNTUSD'].map(sym => sym + ':' + (sigDropped({ symbol: sym, market: 'CRYPTO' }) ? 'x' : '-')).join(' ')
-        + ' RELIANCE:' + (sigDropped({ symbol: 'RELIANCE', market: 'NSE' }) ? 'x' : '-') + ' AAVE-in-NSE:' + (sigDropped({ symbol: 'AAVE', market: 'NSE' }) ? 'x' : '-');
+      // What counts as dropped: a symbol off the list, any market but NSE.
+      out.rule = ['BTCUSD', 'BTCUSDT', 'btc/usdt', '1000PEPEUSD', 'AAVEUSD', 'AVAXUSD', 'ARBUSD', 'MRVLBUSD', 'SOXLBUSD', 'METAXUSD', 'TSLAXUSD', 'SNDKBUSD', 'QQQXUSD', 'XAUTUSD', 'SLVONUSD', 'PAXGUSD', 'QNTUSD', 'STRKUSD'].map(sym => sym + ':' + (sigDropped({ symbol: sym, market: 'CRYPTO' }) ? 'x' : '-')).join(' ')
+        + ' RELIANCE:' + (sigDropped({ symbol: 'RELIANCE', market: 'NSE' }) ? 'x' : '-') + ' QNT-in-NSE:' + (sigDropped({ symbol: 'QNT', market: 'NSE' }) ? 'x' : '-');
       return out;
     });
-    // 19 alerts: 12 live coins + TSLAX + XAUT + RELIANCE = 15 shown; 4 dropped (STRK, AAVE, MRVL, META) hidden.
-    check(v.def[0] === '15' && v.mode === 'hide' && !v.wrapHidden, 'Dropped is Hidden by default: ' + JSON.stringify([v.def, v.mode, v.wrapHidden]));
-    check(/4 alerts on 4 symbols/.test(v.note) && /STRK/.test(v.note) && /AAVE/.test(v.note) && /MRVL/.test(v.note) && /left out of every number/.test(v.note), 'dropped note: ' + v.note);
-    // Total R of the 15: coins 2,-1,2,-1,2,-1,2,-1,2,-1,2,-1 = +6; TSLAX +2, XAUT +1, RELIANCE -1 = +8; with the 4 dropped (-1 +3 -1 -1 = 0) the same +8 over 19.
-    check(v.def[1] === '+8.00R' && v.shown[0] === '19' && v.shown[1] === '+8.00R' && v.again[0] === '15', 'Hidden / Shown counts and R: ' + JSON.stringify([v.def, v.shown, v.again]));
-    // Volume order of the 12: BTC 10498, ETH 7409, SOL 1471, NEAR 637, XRP 621, DOGE 300, ENA 257, WLD 233, SUI 202, UNI 202 (tie: alphabetical), ADA 139, LINK 119.
-    check(v.t10[0] === '10' && /BTC, ETH, SOL, NEAR, XRP, DOGE, ENA, WLD, SUI, UNI/.test(v.t10[1]) && !/ADA|LINK/.test(v.t10[1].split(':')[1] || ''), 'Top 10 by volume: ' + JSON.stringify(v.t10));
-    check(v.t20[0] === '12' && /every coin with alerts here \(12\)/.test(v.t20[1]) && v.t30[0] === '12' && /every coin with alerts here \(12\)/.test(v.t30[1]), 'Top 20 / Top 30 = all 12: ' + JSON.stringify([v.t20, v.t30]));
-    check(v.t10s[0] === '10' && /BTC, ETH, SOL, NEAR, XRP, DOGE, ENA, WLD, SUI, UNI/.test(v.t10s[1]) && v.t20s[0] === '14' && /every coin with alerts here \(14\)/.test(v.t20s[1]), 'with dropped coins shown: ' + JSON.stringify([v.t10s, v.t20s]));
+    const s1 = await stored();
+    // 21 fib alerts: 12 live + AAVE + TSLAX + XAUT + RELIANCE = 16 kept; STRK, QNT, MRVL, META deleted.
+    // R: live coins 2,-1,... = +6, AAVE +3, TSLAX +2, XAUT +1, RELIANCE -1 = +11.
+    check(v.def[0] === '16' && v.def[1] === '+11.00R', 'fib strip after the purge (16 alerts, +11R): ' + JSON.stringify(v.def));
+    check(v.left === 0 && !/STRK|QNT|MRVL|METAX/.test(v.syms) && /AAVEUSD/.test(v.syms) && /RELIANCE/.test(v.syms), 'dropped symbols deleted from memory: ' + v.syms);
+    check(s1.n === 17 && !/STRK|QNT|MRVL|METAX/.test(s1.syms), 'IndexedDB holds the shorter list (16 fib + BTC TL): ' + JSON.stringify(s1));
+    check(!v.row && v.uiDropped === 'gone', 'no Hidden / Shown row, old setting cleared: ' + JSON.stringify([v.row, v.uiDropped]));
+    check(v.tlKeys === 'BTCUSD', 'scanner read takes BTC, never QNT or STRK: ' + v.tlKeys);
+    check(v.copies === 'dc14,tl|QNTUSD|4h|0|1790236800|1790596800@1792036800' && s1.copies === v.copies, 'your QNT trade keeps its alerts as trade copies (STRK has none): ' + JSON.stringify([v.copies, s1.copies]));
+    check(v.qntAlert === 'QNTUSD', 'the QNT trade still matches its alert: ' + v.qntAlert);
+    check(Array.isArray(v.list) && v.list.length === 30 && v.list.indexOf('AAVE') !== -1 && v.list.indexOf('TSLA') !== -1 && v.list.indexOf('QNT') === -1, 'watchlist read from config.py (22 crypto + gold, silver, 3 xStocks + Bitunix names): ' + JSON.stringify(v.list));
+    // Volume order of the 13 coins (14 Nov): BTC 11051, ETH 7662, SOL 1443, XRP 643, NEAR 536, DOGE 301, ENA 247, WLD 203, UNI 194, SUI 180, ADA 127, LINK 119, AAVE 95.
+    check(v.t10[0] === '10' && /BTC, ETH, SOL, XRP, NEAR, DOGE, ENA, WLD, UNI, SUI/.test(v.t10[1]) && /on both CoinDCX and Delta/.test(v.t10[1]) && !/ADA|LINK|AAVE/.test(v.t10[1].split(':')[1] || ''), 'Top 10 by volume: ' + JSON.stringify(v.t10));
+    check(v.t20[0] === '13' && /every coin with alerts here \(13\)/.test(v.t20[1]) && v.t30[0] === '13' && /every coin with alerts here \(13\)/.test(v.t30[1]) && !/not on both/.test(v.t30[1]), 'Top 20 / Top 30 = all 13: ' + JSON.stringify([v.t20, v.t30]));
     check(v.rankOpts === 'cap,vol,alerts' && /BTC, ETH, SOL/.test(v.t3vol), 'Top 3 by volume: ' + JSON.stringify([v.rankOpts, v.t3vol]));
-    check(v.cmp.length === 3 && /^Top 10 by volume/.test(v.cmp[0]) && /every coin here \(14\)/.test(v.cmp[1]), 'report compare rows: ' + JSON.stringify(v.cmp));
-    check(v.rule === 'BTCUSD:- BTCUSDT:- btc/usdt:- 1000PEPEUSD:- AAVEUSD:x MRVLBUSD:x SOXLBUSD:x METAXUSD:x TSLAXUSD:- SNDKBUSD:- QQQXUSD:- XAUTUSD:- SLVONUSD:- PAXGUSD:x QNTUSD:x RELIANCE:- AAVE-in-NSE:-', 'what counts as dropped: ' + v.rule);
+    check(v.cmp.length === 3 && /^Top 10 by volume/.test(v.cmp[0]) && /every coin here on both brokers \(13\)/.test(v.cmp[1]), 'report compare rows: ' + JSON.stringify(v.cmp));
+    check(v.rule === 'BTCUSD:- BTCUSDT:- btc/usdt:- 1000PEPEUSD:- AAVEUSD:- AVAXUSD:- ARBUSD:- MRVLBUSD:x SOXLBUSD:x METAXUSD:x TSLAXUSD:- SNDKBUSD:- QQQXUSD:- XAUTUSD:- SLVONUSD:- PAXGUSD:x QNTUSD:x STRKUSD:x RELIANCE:- QNT-in-NSE:-', 'what counts as dropped: ' + v.rule);
+    // config.py read: comments and type hints skipped; a file that is not the scanner's config changes nothing.
+    const p = await page.evaluate(cfgs => cfgs.map(t => { const r = parseScannerWatchlist(t); return r ? r.join(',') : 'null'; }), [cfgOf(['BTC', 'ETH', '1000PEPE']), cfgOf(['ETH', 'SOL', 'XRP', 'DOGE']), 'CRYPTO_WATCHLIST = [\n "BTCUSD",\n]\n', '']);
+    check(p[0] === '1000PEPE,BTC,ETH,QQQ,QQQX,SLVON,SNDK,SNDKB,TSLA,TSLAX,XAUT' && p.slice(1).every(x => x === 'null'), 'parseScannerWatchlist: ' + JSON.stringify(p));
+    // The scanner drops WLD and adds ATOM (CoinDCX lists it, Delta does not): WLD goes at the next read; ATOM is kept
+    // but left out of Top 10 / 20 / 30.
+    cfg = cfgOf(NOV14.filter(c => c !== 'WLD').concat(['ATOM']));
+    const w = await page.evaluate(async () => {
+      const text = id => ((document.getElementById(id) || {}).innerText || '').replace(/\s+/g, ' ');
+      state.ui.sigAutoAt = 0; await autoRefreshAlerts(true);
+      const out = { syms: state.signals.filter(g => g.kind === 'fib').map(g => g.symbol).sort().join(','), list: state.ui.sigLive.list.join(',') };
+      state.signals = state.signals.concat([{ id: 'dcatom', key: 'dcatom', kind: 'fib', date: '2026-10-25', time: '10:00', symbol: 'ATOMUSD', side: 'long', market: 'CRYPTO', timeframe: '1D', channel: 'CRYPTO 1D', filled: true, outcome: 'SL', resultR: -1, hasReportR: true, price: 100, stop: 98, entry: 100 }]);
+      out.kept = purgeDropped(); save();
+      document.querySelector('#sigCoinBar button[data-coins="top30"]').click(); out.t30 = text('sigCoinVol');
+      document.querySelector('#sigCoinBar button[data-coins=""]').click();
+      return out;
+    });
+    check(!/WLD/.test(w.syms) && /AAVE/.test(w.syms) && /ATOM/.test(w.list) && !/WLD/.test(w.list) && w.kept === 0, 'scanner list change followed: ' + JSON.stringify(w));
+    check(/12 coins/.test(w.t30) && /every coin with alerts here \(12\)/.test(w.t30) && /not on both: ATOM/.test(w.t30) && !/ATOM,|, ATOM/.test(w.t30.split('·')[1] || ''), 'Top 30 leaves out a coin Delta does not list, and says so: ' + w.t30);
+    // Reopened: the shorter list and the trade copies stay. The store write is async: wait until IndexedDB has ATOM.
+    for (let i = 0; i < 50 && !/ATOMUSD/.test((await stored()).syms); i++) await page.waitForTimeout(100);
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => signalsLoaded, null, { timeout: 10000 });
+    await page.waitForTimeout(600);
+    const r = await page.evaluate(() => ({ n: state.signals.filter(g => g.kind === 'fib').length, left: state.signals.filter(g => sigDropped(g)).length, copies: sentSigs.filter(isTradeCopy).length, qnt: ((tradeAlertMap().trq || {}).sig || {}).symbol || '' }));
+    check(r.n === 16 && r.left === 0 && r.copies === 2 && r.qnt === 'QNTUSD', 'after reopening: ' + JSON.stringify(r));
   } catch (e) { errs.push('threw: ' + String(e.message).split('\n').slice(0, 2).join(' | ')); }
   await ctx.close();
-  const label = 'Signals: dropped coins hidden by default, Top 10 / 20 / 30 by volume';
+  const label = 'Signals: dropped coins deleted (store, scanner reads, config.py list), trades keep their alert, Top 10 / 20 / 30 on both brokers';
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
@@ -6678,7 +6724,7 @@ async function bestSettingsRun() {
     await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && typeof signalsReady !== 'undefined', null, { timeout: 20000 });
     await page.evaluate(async () => {
       await signalsReady; while (sigAutoBusy) await new Promise(r => setTimeout(r, 100));
-      state.ui.sigMkt = 'all'; state.ui.sigDropped = 'show';
+      state.ui.sigMkt = 'all';
       state.sync = { token: 'tok', repo: 'victus/sync', branch: 'main', auto: false, lastAt: '', lastSha: '' };
       await autoRefreshAlerts(true); switchTab('signals');
       Object.assign(state.ui, { sigKind: 'fib', sigPeriod: { mode: 'custom', from: '2026-10-10', to: '2026-10-25' }, sigDay: '', sigChan: '', sigMarket: '', sigCoins: '', mktFilter: '', sigTgt: '', sigHold: 'tp', sigNoFee: false, sigLvl: '', sigLvlOff: [], sigTlType: '', sigSec: 'edge' });
@@ -6749,20 +6795,6 @@ async function bestSettingsRun() {
         return { n, bad };
       });
       check(chain.n > 100 && chain.bad.length === 0, 'search filter chain = the tab (' + chain.n + ' options): ' + JSON.stringify(chain.bad.slice(0, 5)));
-      // 2b) Dropped coins Hidden: the search must leave them out exactly as the tab does.
-      const hid = await page.evaluate(() => {
-        const key = pr => pr.signal.key, was = state.ui.sigPeriod; state.ui.sigPeriod = { mode: 'all', from: '', to: '' }; Object.assign(state.ui, { sigCoins: '', sigChan: '', sigMarket: '', sigAsset: '', sigLvl: '', sigDay: '', mktFilter: '', sigTgt: '', sigHold: 'tp' });
-        const extra = state.signals.filter(x => x.kind === 'fib' && x.market !== 'NSE').slice(0, 3).map((x, i) => Object.assign({}, x, { id: 'dz' + i, key: 'dz' + i, symbol: 'AAVEUSD' }));
-        state.signals = state.signals.concat(extra);
-        const snap = bsSnap();
-        const keys = () => bsWith(snap, () => inSigScope(() => bsPairs(matchSignals(sigKind()), sigPeriodRange()).pairs.map(key).sort().join('|')));
-        const shown = keys();
-        state.ui.sigDropped = 'hide'; sigFixCoins = true; renderSignalsTable();
-        const tab = sigView.pairs.map(key).sort().join('|'), mine = keys();
-        state.ui.sigDropped = 'show'; state.ui.sigPeriod = was; state.signals = state.signals.filter(x => !/^dz\d$/.test(x.id)); renderSignalsTable();
-        return { same: tab === mine, fewer: mine.split('|').length < shown.split('|').length };
-      });
-      check(hid.same && hid.fewer, 'Hidden dropped coins: search = the tab, and fewer alerts than Shown: ' + JSON.stringify(hid));
       // 3) The tab is left exactly as it was before the search (nothing leaks out of bsEval).
       const left = await page.evaluate(() => {
         const was = JSON.stringify(bsSnap());
