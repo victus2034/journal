@@ -2957,7 +2957,7 @@ async function coinVenueRun(seed) {
     check(v.all[0] === '7' && v.all[1] === '+2.00R', 'all: ' + JSON.stringify(v.all));
     check(v.crypto[0] === '3' && v.crypto[1] === '+3.00R' && /Crypto only/.test(v.crypto[3]) && /Crypto only/.test(v.crypto[4]), 'Crypto: ' + JSON.stringify(v.crypto));
     check(v.xstock[0] === '2' && v.xstock[1] === '+1.00R' && /xStocks only/.test(v.xstock[3]), 'xStocks: ' + JSON.stringify(v.xstock));
-    check(v.xTop3[0] === '2', 'xStocks + Top 3: no coins, so Top 3 is off: ' + JSON.stringify(v.xTop3));
+    check(v.xTop3[0] === '2', 'xStocks + Top 3: Top 3 is greyed (no coins), so the tap leaves All on: ' + JSON.stringify(v.xTop3));
     check(v.xDelta[0] === '2' && v.xDelta[1] === '+1.00R' && /^2 alerts on Delta .* · none left out/.test(v.xDelta[2]), 'xStocks + Delta: ' + JSON.stringify(v.xDelta));
     check(v.cDelta[0] === '1' && v.cDelta[1] === '+2.00R' && /left out 2: MAGIC 1, MNT 1$/.test(v.cDelta[2]) && /Crypto only · Delta only: 1 of 3 symbols/.test(v.cDelta[3]), 'Crypto + Delta: ' + JSON.stringify(v.cDelta));
     check(v.cDcx[0] === '2' && v.cDcx[1] === '+1.00R' && /left out 1: MNT 1$/.test(v.cDcx[2]), 'Crypto + CoinDCX: ' + JSON.stringify(v.cDcx));
@@ -3024,6 +3024,144 @@ async function coinVenueRun(seed) {
   await ctx.close();
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Assets (Both / Crypto / xStocks), Coins CoinDCX / Delta, and the Demo account\'s What changed the result');
   errs.forEach(e => { console.log('     ' + e); failures.push('coins venue: ' + e); });
+}
+// Market (All / Crypto / Indian) above Channel, and Assets x Coins that keep nothing (lakky,
+// 2026-11-14: xStocks + CoinDCX showed "0 of 7 symbols" and a row of dashes). Every combo either
+// shows alerts or says which filter left none, with the way back; a Coins option that can keep
+// nothing is greyed and a tap says why; picking Assets / Market / Channel puts such a pick back
+// to All. Indian narrows Channel to NSE channels and hides Assets / Coins; Analysis the same.
+async function marketFilterRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  // [symbol, channel, R]: coins on CoinDCX (BTC, MAGIC), one coin on neither (MNT), xStocks (NVDAX, MRVL: Delta only), gold, NSE.
+  const PLAN = [['BTCUSD', 'CRYPTO 1D', 2], ['MAGICUSD', 'CRYPTO 4H', -1], ['MNT', 'CRYPTO 1D', 2], ['NVDAXUSD', 'CRYPTO 4H', 2], ['MRVL', 'CRYPTO 1D', -1],
+    ['XAUTUSD', 'CRYPTO 4H', -1], ['RELIANCE', 'NSE 1D', -1], ['TCS', 'NSE 4H', 2], ['INFY', 'NSE 1D', 2]];
+  const isNse = c => /^NSE/.test(c);
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded, null, { timeout: 5000 });
+    await page.evaluate(PLAN => {
+      state.signals = PLAN.map(([sym, ch, r], i) => ({ id: 'mk' + i, key: 'mk' + i, kind: 'trendline', date: '2026-10-0' + (i + 1), time: '10:00', symbol: sym, side: 'long', score: '',
+        market: /^NSE/.test(ch) ? 'NSE' : 'CRYPTO', timeframe: ch.split(' ')[1], channel: ch, filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 98, entry: 100 }));
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigMarket: '', sigAsset: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigTgt: '', sigNoFee: false,
+        sigStop: { mode: 'off' }, sigTrail: { on: false }, sigHold: 'tp', sigCoins: '', sigCoinRank: 'cap', sigCoinPicks: undefined, sigFold: {}, sigLvl: '', sigTlType: '' });
+      switchTab('signals'); renderAll();
+    }, PLAN);
+    const read = () => page.evaluate(() => {
+      const t = id => ((document.getElementById(id) || {}).innerText || '').replace(/\s+/g, ' ');
+      const m = t('sigEdgeStrip').match(/Alerts (\d+)/), r = t('sigEdgeStrip').match(/Total R ([+-][\d.]+R)/);
+      const empty = document.getElementById('sigEmpty');
+      return { n: m ? +m[1] : null, r: r ? r[1] : '', empty: empty ? empty.dataset.why : '', emptyTxt: empty ? empty.innerText.replace(/\s+/g, ' ') : '', dashes: /Win rate — /.test(t('sigEdgeStrip')),
+        market: [...document.querySelectorAll('#sigMarketBar button')].map(b => b.innerText.replace(/\s+/g, ' ')).join(), chans: [...document.querySelectorAll('#sigChanSel option')].map(o => o.innerText),
+        chan: state.ui.sigChan, assetsOn: !document.getElementById('sigAssetWrap').classList.contains('hidden'), coinsOn: !document.getElementById('sigCoinWrap').classList.contains('hidden'),
+        grey: [...document.querySelectorAll('#sigCoinBar button[aria-disabled]')].map(b => b.dataset.coins).join(), coins: state.ui.sigCoins, note: t('sigCoinNote'), warn: t('sigCoinWarn'), sum: t('sigWhichSum'),
+        rows: [...document.querySelectorAll('#sigMarketWrap, #sigChanBar, #sigAssetWrap, #sigCoinWrap')].map(el => el.closest('.sig-row').querySelector('.sig-lab').innerText).join() };
+    });
+    const click = (sel) => page.evaluate(s => document.querySelector(s).click(), sel);
+    const chanPick = v => page.evaluate(v => { const s = document.getElementById('sigChanSel'); s.value = v; s.onchange(); }, v);
+    // Worked out here, not by the app: what each pick keeps.
+    const want = f => { const k = PLAN.filter(f); return { n: k.length, r: (k.reduce((t, x) => t + x[2], 0) >= 0 ? '+' : '') + k.reduce((t, x) => t + x[2], 0).toFixed(2) + 'R' }; };
+    const all = await read();
+    check(all.rows === 'Market,Channel,Assets,Coins', 'Market sits above Channel: ' + all.rows);
+    check(all.market === 'All 9,Crypto 6,Indian 3' && all.n === 9, 'Market buttons: ' + JSON.stringify(all));
+    // Indian: NSE channels only, Assets and Coins hidden, the NSE alerts' own R.
+    await click('#sigMarketBar button[data-market="nse"]');
+    const nse = await read(), wN = want(x => isNse(x[1]));
+    check(nse.n === wN.n && nse.r === wN.r && !nse.assetsOn && !nse.coinsOn, 'Indian: ' + JSON.stringify(nse) + ' want ' + JSON.stringify(wN));
+    check(JSON.stringify(nse.chans) === JSON.stringify(['All Indian channels (3)', 'NSE 4h (1)', 'NSE 1D (2)']), 'Indian channels: ' + JSON.stringify(nse.chans));
+    check(/Indian market/.test(nse.sum), 'summary names the market: ' + nse.sum);
+    await chanPick('NSE 1D');
+    const n1d = await read();
+    check(n1d.n === 2 && n1d.r === '-0.00R' || n1d.n === 2 && n1d.r === '+1.00R', 'Indian + NSE 1D: ' + JSON.stringify(n1d));
+    // Crypto: the NSE channel goes, crypto channels only; Assets and Coins back.
+    await click('#sigMarketBar button[data-market="crypto"]');
+    const cr = await read(), wC = want(x => !isNse(x[1]));
+    check(cr.chan === '' && cr.n === wC.n && cr.r === wC.r && cr.assetsOn && cr.coinsOn && JSON.stringify(cr.chans) === JSON.stringify(['All crypto channels (6)', 'CRYPTO 4h (3)', 'CRYPTO 1D (3)']), 'Crypto: ' + JSON.stringify(cr));
+    // All + an NSE channel: Assets / Coins hidden and off even if set.
+    await page.evaluate(() => { state.ui.sigAsset = 'crypto'; state.ui.sigCoins = 'dcx'; });
+    await click('#sigMarketBar button[data-market=""]');
+    await chanPick('NSE 4H');
+    const n4 = await read();
+    check(n4.n === 1 && n4.r === '+2.00R' && !n4.assetsOn && !n4.coinsOn && !/Crypto only|CoinDCX/.test(n4.sum), 'All + NSE 4H ignores Assets / Coins: ' + JSON.stringify(n4));
+    await chanPick('');
+    await page.evaluate(() => { state.ui.sigAsset = ''; state.ui.sigCoins = ''; renderSignalsTable(); });
+    // The state lakky had saved: xStocks + CoinDCX. It says why, and the button gets the alerts back.
+    await page.evaluate(() => { state.ui.sigAsset = 'xstock'; state.ui.sigCoins = 'dcx'; renderSignalsTable(); });
+    const xd = await read();
+    check(xd.n === null && xd.empty === 'coins' && /CoinDCX lists none of these xStocks alerts\. 2 xStocks alerts before Coins\./.test(xd.emptyTxt) && /Coins: All \(2\)/.test(xd.emptyTxt) && /Assets: Both/.test(xd.emptyTxt)
+      && /CoinDCX lists none of these xStocks alerts, so 0 alerts/.test(xd.warn), 'xStocks + CoinDCX says why: ' + JSON.stringify(xd));
+    await click('#sigEmpty button');
+    const xa = await read(), wX = want(x => /^(NVDAX|MRVL)/.test(x[0]));
+    check(xa.coins === '' && xa.n === wX.n && xa.r === wX.r && xa.grey === 'top3,top5,picks,dcx', 'Coins: All, and greyed what keeps no xStocks: ' + JSON.stringify(xa));
+    // A greyed option does nothing but say why.
+    await click('#sigCoinBar button[data-coins="dcx"]');
+    const toast = await page.evaluate(() => { const c = document.getElementById('toastContainer'); return c && c.lastElementChild ? c.lastElementChild.innerText : ''; });
+    check(await page.evaluate(() => state.ui.sigCoins) === '' && /CoinDCX lists none of these xStocks alerts/.test(toast), 'tap on greyed CoinDCX: ' + toast);
+    // CoinDCX picked first, then xStocks: Coins goes back to All and says so.
+    await click('#sigAssetBar button[data-asset=""]');
+    await click('#sigCoinBar button[data-coins="dcx"]');
+    await click('#sigAssetBar button[data-asset="xstock"]');
+    const back = await read();
+    check(back.coins === '' && back.n === 2 && back.note === 'Coins back to All: CoinDCX lists none of these xStocks alerts', 'xStocks after CoinDCX: ' + JSON.stringify(back));
+    // Every Assets x Coins pick, clicked: numbers, or a line saying why - never a row of dashes.
+    const combos = [];
+    for (const a of ['', 'crypto', 'xstock']) for (const c of ['', 'top3', 'top5', 'picks', 'dcx', 'delta']) {
+      await page.evaluate(() => { state.ui.sigAsset = ''; state.ui.sigCoins = ''; state.ui.sigMarket = ''; renderSignalsTable(); });
+      await click('#sigAssetBar button[data-asset="' + a + '"]');
+      await click('#sigCoinBar button[data-coins="' + c + '"]');
+      const v = await read();
+      combos.push((a || 'both') + '+' + (c || 'all') + '=' + (v.n != null ? v.n : v.empty) + (v.coins !== c ? '(' + (v.coins || 'all') + ')' : ''));
+      check((v.n > 0 && !v.dashes) || v.empty, 'combo ' + a + '+' + c + ': ' + JSON.stringify(v));
+    }
+    // Both keeps NSE too; Crypto = BTC, MAGIC, MNT (CoinDCX: BTC, MAGIC; Delta: BTC); xStocks = NVDAX, MRVL (Delta lists both,
+    // CoinDCX neither); Delta also lists XAUT.
+    check(combos.join(' ') === 'both+all=9 both+top3=1 both+top5=1 both+picks=1 both+dcx=2 both+delta=4 crypto+all=3 crypto+top3=1 crypto+top5=1 crypto+picks=1 crypto+dcx=2 crypto+delta=1 '
+      + 'xstock+all=2 xstock+top3=2(all) xstock+top5=2(all) xstock+picks=2(all) xstock+dcx=2(all) xstock+delta=2', 'every combo: ' + combos.join(' '));
+    // Indian with nothing: a device with no NSE alerts greys it and says how to get them.
+    await page.evaluate(() => { state.signals = state.signals.filter(g => !isNseSig(g)); Object.assign(state.ui, { sigAsset: '', sigCoins: '', sigMarket: '' }); renderSignalsTable(); });
+    const noNse = await page.evaluate(() => { const b = document.querySelector('#sigMarketBar button[data-market="nse"]'); return { dis: b.getAttribute('aria-disabled'), title: b.title }; });
+    check(noNse.dis === 'true' && /Load scanner alerts/.test(noNse.title), 'no NSE alerts: Indian greyed: ' + JSON.stringify(noNse));
+    await page.evaluate(() => { state.ui.sigMarket = 'nse'; renderSignalsTable(); });
+    const nn = await read();
+    check(nn.empty === 'market' && /No Indian trendline alerts on this device/.test(nn.emptyTxt), 'Indian with no NSE alerts: ' + JSON.stringify(nn));
+    await page.evaluate(() => setSigMarket(''));
+    // Phone: the Market row fits, no sideways scroll.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => { setSigMarket('crypto'); });
+    check(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'phone scrolls sideways with the Market row');
+    await page.setViewportSize({ width: 1180, height: 820 });
+    // Analysis: the same Market row on trades (the sample's NSE book and crypto book).
+    const an = await page.evaluate(() => {
+      switchTab('analysis'); anResetFilters();
+      const t = id => ((document.getElementById(id) || {}).innerText || '').replace(/\s+/g, ' ');
+      const out = { buttons: [...document.querySelectorAll('#anMarketBar button')].map(b => b.innerText.replace(/\s+/g, ' ')).join(), rows: [...document.querySelectorAll('#anMarketWrap, #anChanBar')].map(el => el.closest('.sig-row').querySelector('.sig-lab').innerText).join() };
+      const nT = () => statScoped().filter(x => anPassCoin(x) && anInRange(dayOf(x), anRangeFull())).length;
+      document.querySelector('#anMarketBar button[data-market="nse"]').click();
+      out.nse = { n: nT(), chan0: (document.querySelector('#anChanSel option') || {}).innerText, assets: !document.getElementById('anAssetWrap').classList.contains('hidden'), coins: !document.getElementById('anCoinWrap').classList.contains('hidden'), sum: t('anWhichSum') };
+      document.querySelector('#anMarketBar button[data-market="crypto"]').click();
+      out.crypto = { n: nT(), chan0: (document.querySelector('#anChanSel option') || {}).innerText, assets: !document.getElementById('anAssetWrap').classList.contains('hidden') };
+      document.querySelector('#anAssetBar button[data-asset="xstock"]').click();
+      const e = document.getElementById('anEmpty');
+      out.empty = e ? e.dataset.why + ': ' + e.innerText.replace(/\s+/g, ' ') : '';
+      anResetFilters();
+      return out;
+    });
+    const nseT = seed.trades.filter(t => t.accountId === 'acc_nse').length, cryT = seed.trades.length - nseT;
+    check(an.rows === 'Market,Channel' && an.buttons === 'All ' + seed.trades.length + ',Crypto ' + cryT + ',Indian ' + nseT, 'Analysis Market row: ' + JSON.stringify(an));
+    check(an.nse.n === nseT && /^All Indian channels/.test(an.nse.chan0) && !an.nse.assets && !an.nse.coins && /Indian market/.test(an.nse.sum), 'Analysis Indian: ' + JSON.stringify(an.nse));
+    check(an.crypto.n === cryT && /^All crypto channels/.test(an.crypto.chan0) && an.crypto.assets, 'Analysis Crypto: ' + JSON.stringify(an.crypto));
+    check(/^assets: No xStocks trades here\. Assets: Both$/.test(an.empty), 'Analysis says why it is empty: ' + an.empty);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Market (All / Crypto / Indian) narrows Channel; Assets x Coins that keep nothing are greyed, reset or explained (Signals + Analysis)');
+  errs.forEach(e => { console.log('     ' + e); failures.push('market filter: ' + e); });
 }
 async function demoDeepRun(seed) {
   const errs = [];
@@ -6435,6 +6573,7 @@ await sigRedesignRun(data);
 await demoAccountRun(data);
 await demoRealRun(data);
 await coinVenueRun(data);
+await marketFilterRun(data);
 await demoDeepRun(data);
 await cleanupRun(data);
 await behaviourRun(data);

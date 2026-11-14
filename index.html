@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-13.190">
+  <meta name="app-version" content="2026-11-14.191">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -757,6 +757,7 @@
               <span class="text-slate-500 text-xs">to</span>
               <input type="date" id="sigCustomTo" onchange="setSigPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
             </div></div></div>
+          <div id="sigMarketWrap" class="sig-row"><span class="sig-lab">Market</span><div id="sigMarketBar" class="sig-ctl"></div></div>
           <div class="sig-row"><span class="sig-lab">Channel</span><div id="sigChanBar" class="sig-ctl"></div></div>
           <div id="sigAssetWrap" class="sig-row"><span class="sig-lab">Assets</span><div id="sigAssetBar" class="sig-ctl"></div></div>
           <div id="sigCoinWrap" class="sig-row"><span class="sig-lab">Coins</span><div id="sigCoinBar" class="sig-ctl"></div></div>
@@ -1250,6 +1251,7 @@
               <span class="text-slate-500 text-xs">to</span>
               <input type="date" id="anCustomTo" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
             </div></div></div>
+          <div id="anMarketWrap" class="sig-row"><span class="sig-lab">Market</span><div id="anMarketBar" class="sig-ctl"></div></div>
           <div class="sig-row"><span class="sig-lab">Channel</span><div id="anChanBar" class="sig-ctl fsel"></div></div>
           <div id="anAssetWrap" class="sig-row"><span class="sig-lab">Assets</span><div id="anAssetBar" class="sig-ctl"></div></div>
           <div id="anCoinWrap" class="sig-row"><span class="sig-lab">Coins</span><div id="anCoinBar" class="sig-ctl"></div></div>
@@ -3916,7 +3918,7 @@
     function renderSigKindBar(kind) {
       const bar = document.getElementById('sigKindBar');
       if (!bar) return;
-      const n = {}; (state.signals || []).forEach(g => { const k = g.kind || "zone"; n[k] = (n[k] || 0) + 1; });
+      const m = sigMarketMode(), n = {}; (state.signals || []).forEach(g => { if (m && mktOfSig(g) !== m) return; const k = g.kind || "zone"; n[k] = (n[k] || 0) + 1; });
       bar.innerHTML = '';
       SIG_KINDS.forEach(x => {
         const b = document.createElement('button'); b.type = 'button';
@@ -4051,44 +4053,62 @@
       const hint = document.getElementById('sigPeriodHint');
       if (hint) hint.innerText = state.ui.sigDay ? `Showing ${state.ui.sigDay} only. Click the day again to go back.` : ((range.from || range.to) ? `${range.from || "start"} → ${range.to || "now"}` : "All available history");
       const rawPairs = matchSignals(kind), allPairs = sigSlPairs(sigLvlPairs(rawPairs));
-      // Coins: which ones the filter keeps, from the coins in this channel and period.
-      const chanPairs = state.ui.sigChan ? allPairs.filter(pr => chanKey(pr.signal) === state.ui.sigChan) : allPairs;
-      const inRange = chanPairs.filter(pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to));
+      const inPer = pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to);
+      // Market (All / Crypto / Indian) first: the Channel list below holds only its channels.
+      const mkt = sigMarketMode(), mktKeep = marketTestOf(mkt);
+      const has = { crypto: allPairs.some(pr => !isNseSig(pr.signal)), nse: allPairs.some(pr => isNseSig(pr.signal)) };
+      renderMarketBar('sig', mkt, marketCounts(allPairs.filter(inPer), pr => pr.signal), has, 'setSigMarket', 'alerts');
+      const mktPairs = mktKeep ? allPairs.filter(pr => mktKeep(pr.signal)) : allPairs;
+      // A channel of the other market goes back to all channels.
+      if (state.ui.sigChan && mktKeep && !mktPairs.some(pr => chanKey(pr.signal) === state.ui.sigChan) && allPairs.some(pr => chanKey(pr.signal) === state.ui.sigChan)) { state.ui.sigChan = ""; save(); }
+      const chan = state.ui.sigChan || "";
+      const chanPairs = chan ? mktPairs.filter(pr => chanKey(pr.signal) === chan) : mktPairs;
+      const inRange = chanPairs.filter(inPer);
       // Assets (Both / Crypto / xStocks) first, then Coins on what is left; both as one test.
-      const assetKeep = assetTestOf(sigAssetMode());
-      renderAssetBar('sig', sigAssetMode(), assetCounts(inRange, pr => pr.signal), 'setSigAsset', 'alerts');
+      // Both are crypto filters: with the Indian market (or an NSE channel) they are hidden and off.
+      const cryptoHere = has.crypto && mkt !== "nse" && !(chan && chanPairs.length && chanPairs.every(pr => isNseSig(pr.signal)));
+      const assetMode = cryptoHere ? sigAssetMode() : "", assetKeep = assetTestOf(assetMode);
+      renderAssetBar('sig', assetMode, assetCounts(inRange, pr => pr.signal), 'setSigAsset', 'alerts', !cryptoHere);
       const coinPool = assetKeep ? inRange.filter(pr => assetKeep(pr.signal)) : inRange;
+      // Coins options that would keep nothing here are greyed; a pick that Assets, Market or
+      // Channel just emptied goes back to All, and says why.
+      const blocks = cryptoHere ? coinBlocks(coinPool, pr => pr.signal, assetMode, 'alerts') : {};
+      let coinNote = "";
+      if (cryptoHere && sigFixCoins && blocks[sigCoinMode()]) { coinNote = 'Coins back to All: ' + blocks[sigCoinMode()]; state.ui.sigCoins = ""; save(); }
+      sigFixCoins = false;
       const coinCounts = sigCoinCounts(coinPool);
-      const coinSet = coinSetFor(COINS.sig, coinCounts, coinPool, pr => pr.signal);
+      const coinSet = cryptoHere ? coinSetFor(COINS.sig, coinCounts, coinPool, pr => pr.signal) : null;
       const coinKeep = bothKeep(assetKeep, coinKeepOf(coinSet));
-      renderSigCoinBar(coinCounts, coinSet, coinPool.some(pr => !isNseSig(pr.signal)));
-      if (sigCoinMode() === "delta") demoSpecsLoad(); // Delta's live list, when it can be read
+      renderCoinBar(COINS.sig, coinCounts, coinSet, !cryptoHere, blocks, coinNote);
+      if (cryptoHere && sigCoinMode() === "delta") demoSpecsLoad(); // Delta's live list, when it can be read
       renderSigCalendar(coinKeep ? chanPairs.filter(pr => coinKeep(pr.signal)) : chanPairs, range);
-      if (hint && assetKeep) hint.innerText += ` · ${assetOf(sigAssetMode()).label} only`;
+      if (hint && mkt) hint.innerText += ` · ${marketOf(mkt).label} market`;
+      if (hint && assetKeep) hint.innerText += ` · ${assetOf(assetMode).label} only`;
       if (hint && coinSet) hint.innerText += ` · ${coinSetTxt(coinSet)}`;
       if (hint && mktFilter()) hint.innerText += ` · BTC ${MKT_LABEL[mktFilter()].toLowerCase()} days only`;
       if (hint && sigLvl()) hint.innerText += ` · entered at ${sigLvl()}`;
       if (hint && sigTlType()) hint.innerText += ` · ${sigTlType().label} only`;
 
       // --- signals scoped to the period, matched against trades ---
-      let pairs = allPairs;
+      let pairs = mktPairs;
       // Channel filter (market + timeframe) applies to everything on the tab.
-      const chan = state.ui.sigChan || "";
       const chanCount = {}; pairs.forEach(pr => { const k = chanKey(pr.signal); chanCount[k] = (chanCount[k] || 0) + 1; });
       const chanBar = document.getElementById('sigChanBar');
       if (chanBar) {
         chanBar.innerHTML = '';
-        // Zone channels always show; fib and trendline show the ones that have alerts, in timeframe order.
-        const keys = kind === "zone" ? SIG_CHANNELS.concat(Object.keys(chanCount).filter(k => SIG_CHANNELS.indexOf(k) === -1))
+        // Zone channels show when they have alerts (or the market has none of that kind yet);
+        // fib and trendline show the ones that have alerts, in timeframe order.
+        const inMkt = k => !mkt || (mkt === "nse") === /^NSE\b/.test(k);
+        const keys = kind === "zone" ? SIG_CHANNELS.filter(inMkt).concat(Object.keys(chanCount).filter(k => SIG_CHANNELS.indexOf(k) === -1))
           : FIBTL_CHANNELS.filter(k => chanCount[k]).concat(Object.keys(chanCount).filter(k => FIBTL_CHANNELS.indexOf(k) === -1));
         // One dropdown instead of a row of buttons; empty channels are left out.
         const sel = document.createElement('select');
         sel.id = 'sigChanSel';
         sel.className = 'border text-xs px-2.5 py-1.5 rounded-lg focus:outline-none';
         const opt = (label, k, n) => { const o = document.createElement('option'); o.value = k; o.innerText = label + (n != null ? ' (' + n + ')' : ''); if (chan === k) o.selected = true; sel.appendChild(o); };
-        opt('All channels', "", pairs.length);
+        opt(mkt ? 'All ' + (mkt === 'nse' ? 'Indian' : 'crypto') + ' channels' : 'All channels', "", pairs.length);
         keys.filter(k => chanCount[k] || chan === k).forEach(k => opt(chanLabel(k), k, chanCount[k] || 0));
-        sel.onchange = () => { state.ui.sigChan = sel.value; sigVisible = SIG_PAGE; save(); renderSignalsTable(); };
+        sel.onchange = () => { state.ui.sigChan = sel.value; sigFixCoins = true; sigVisible = SIG_PAGE; save(); renderSignalsTable(); };
         chanBar.appendChild(sel);
       }
       if (chan) pairs = pairs.filter(pr => chanKey(pr.signal) === chan);
@@ -4097,11 +4117,12 @@
       // The same alerts before the coin filter, for the report's Top coins compare.
       let preCoin = pairs;
       if (coinKeep) pairs = pairs.filter(pr => coinKeep(pr.signal));
+      const coinN = pairs.length;
       // Market-day filter (bullish / bearish / sideways BTC days) comes last, after the card has seen everything.
       {
         const cur0 = viewCur();
         const tradesInRange = state.trades.filter(t => (!range.from || t.date >= range.from) && (!range.to || t.date <= range.to)).map(hydrate).map(t => toView(t, cur0));
-        sigView.mkt = { pairs, trades: tradesInRange, cur: cur0, rerender: renderSignalsTable, scope: (range.from || range.to) ? (range.from || 'start') + ' to ' + (range.to || 'now') + (chan ? ', ' + chanLabel(chan) : '') : 'all history' + (chan ? ', ' + chanLabel(chan) : '') };
+        sigView.mkt = { pairs, trades: tradesInRange, cur: cur0, rerender: renderSignalsTable, scope: ((range.from || range.to) ? (range.from || 'start') + ' to ' + (range.to || 'now') : 'all history') + (mkt && !chan ? ', ' + marketOf(mkt).label + ' market' : '') + (chan ? ', ' + chanLabel(chan) : '') };
         // The card itself is drawn when Market days is open, but the BTC days behind
         // the BTC-day filter are loaded either way.
         mktCtx['mktCalSignals'] = sigView.mkt;
@@ -4120,7 +4141,7 @@
       renderSigLvlBar(kind);
       renderSigTlBar(kind);
       renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
-      renderSigPanelSums(kind, coinSet);
+      renderSigPanelSums(kind, coinSet, assetMode);
       if (mfSig) { pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig); preCoin = preCoin.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig); }
 
       // Alerts whose stop is under 0.2% cannot be traded profitably: the 0.10% round-trip
@@ -4144,6 +4165,10 @@
         }
       }
       sigView.pairs = skipTiny ? pairs.filter(pr => !isTiny(pr)) : pairs;
+      // Nothing left: the strip says which filter emptied the view, with the way back,
+      // instead of a row of dashes (lakky, 2026-11-14: xStocks + CoinDCX showed only dashes).
+      sigView.empty = sigView.pairs.length ? null : sigEmptyWhy({ kind, all: allPairs.length, mkt, mktN: mktPairs.length, chan, chanN: chanPairs.length, rangeN: inRange.length,
+        asset: assetMode, assetN: coinPool.length, coinSet, coinN, blocks, dayN: pairs.length, mf: mfSig });
       sigView.preCoin = coinKeep ? (skipTiny ? preCoin.filter(pr => !isTiny(pr)) : preCoin) : sigView.pairs;
       // The coins in view first, then the rest for the report's Top coins compare.
       tgtGen++;
@@ -4164,6 +4189,7 @@
       if (range.from) orphans = orphans.filter(t => t.date >= range.from);
       if (range.to) orphans = orphans.filter(t => t.date <= range.to);
       if (mfSig) orphans = orphans.filter(t => mktBiasOn(t.date, t.time) === mfSig);
+      if (mkt) orphans = orphans.filter(t => mktOfSig(anSigOf(t)) === mkt);
       if (coinKeep) orphans = orphans.filter(t => coinKeep({ symbol: t.symbol }));
       orphans = orphans.map(hydrate).sort((a, b) => -byWhen(a, b));
 
@@ -4391,7 +4417,7 @@
     function anNoFee() { return state.ui.anNoFee === true; }
     function anResetFilters() {
       // Fees are a rule of play now: the other panel's Reset puts them back.
-      Object.assign(state.ui, { anKind: "", anChan: "", anLvl: "", anTlType: "", anCoins: "", anAsset: "", anPeriod: "all", mktFilter: "", anPair: "" });
+      Object.assign(state.ui, { anKind: "", anMarket: "", anChan: "", anLvl: "", anTlType: "", anCoins: "", anAsset: "", anPeriod: "all", mktFilter: "", anPair: "" });
       anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis();
     }
     function anSet(k, v) { state.ui[k] = v; anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis(); }
@@ -4448,8 +4474,24 @@
     function setAnCoinRank(v) { anSet('anCoinRank', v === "alerts" ? "alerts" : "cap"); }
     function toggleAnCoinPick(c) { const p = anCoinPicks(), i = p.indexOf(c); if (i === -1) p.push(c); else p.splice(i, 1); anSet('anCoinPicks', p); }
     // The coins the Coins row keeps (null: every trade), from the trades in view.
-    let anCoinCur = null, anCoinKeep = null; // anCoinKeep: Assets and Coins together
+    let anCoinCur = null, anCoinKeep = null; // anCoinKeep: Market, Assets and Coins together
     function anPassCoin(t) { return !anCoinKeep || anCoinKeep(anSigOf(t)); }
+    // Why Analysis has no trades to show: the first filter that left none, and a button back.
+    let anEmptyCtx = null;
+    function anEmptyWhy(c) {
+      const btn = (label, js) => '<button type="button" class="px-2 py-0.5 rounded border border-amber-500/50 text-amber-200 hover:bg-amber-500/10 whitespace-nowrap" onclick="' + js + '">' + esc(label) + '</button>';
+      const clear = btn('Clear filters', 'anResetFilters()'), al = c && c.asset ? assetOf(c.asset).label + ' ' : '';
+      if (!c || !c.baseN) return { why: 'period', msg: 'No trades in this period.', fix: anPeriodMode() !== 'all' ? btn('All history', "setAnPeriod('all')") : '' };
+      if (!c.mktN) return { why: 'market', msg: 'No ' + marketOf(c.mkt).label + ' trades in this period.', fix: btn('Market: All', "setAnMarket('')") };
+      if (!c.setupN) return { why: 'setup', msg: 'No trades of this alert type or channel here.', fix: clear };
+      if (!c.assetN) return { why: 'assets', msg: 'No ' + al + 'trades here.', fix: btn('Assets: Both', "setAnAsset('')") };
+      if (!c.coinN) {
+        const cm = SIG_COIN_MODES.find(x => x.k === anCoinMode()) || SIG_COIN_MODES[0];
+        return { why: 'coins', msg: 'No trades left: ' + (c.blocks[cm.k] || 'none of these ' + al + 'trades are on ' + coinSetTxt(anCoinCur, cm.label)) + '. ' + c.assetN + ' ' + al + 'trade' + (c.assetN === 1 ? '' : 's') + ' before Coins.',
+          fix: btn('Coins: All (' + c.assetN + ')', "setAnCoins('')") + (c.asset ? ' ' + btn('Assets: Both', "setAnAsset('')") : '') };
+      }
+      return { why: 'other', msg: 'No trades match these filters.', fix: clear };
+    }
     // A row of buttons; fn is called with the picked key.
     function anSegBar(id, items, cur, fn, attr, title) {
       const bar = document.getElementById(id);
@@ -4480,9 +4522,15 @@
         if (f && !f.value) f.value = c.from || todayDay();
         if (t && !t.value) t.value = c.to || todayDay();
       }
-      // Channel: the alerts behind the trades of this alert type.
+      // Market (All / Crypto / Indian): the trade's book (an NSE book is Indian), above Channel.
+      const mkt = anMarketMode(), mktKeep = marketTestOf(mkt), sigOfX = x => anSigOf(x.t);
+      const everyT = statScoped(), has = { crypto: everyT.some(t => !isNseSig(anSigOf(t))), nse: everyT.some(t => isNseSig(anSigOf(t))) };
+      renderMarketBar('an', mkt, marketCounts(base, sigOfX), has, 'setAnMarket', 'trades');
+      // Channel: the alerts behind the trades of this alert type, in this market.
       const cb = document.getElementById('anChanBar');
-      const pool = base.filter(x => anPassSetup(x.s, true));
+      const pool = base.filter(x => anPassSetup(x.s, true) && (!mktKeep || mktKeep(sigOfX(x))));
+      // A channel of the other market goes back to all channels.
+      if (state.ui.anChan && mktKeep && (mkt === "nse") !== /^NSE\b/.test(state.ui.anChan)) state.ui.anChan = "";
       if (cb) {
         const cnt = {};
         pool.forEach(x => { if (x.s.chan) cnt[x.s.chan] = (cnt[x.s.chan] || 0) + 1; });
@@ -4493,33 +4541,45 @@
         sel.className = '';
         sel.title = "The alert's market and timeframe. A trade with no alert behind it has no channel.";
         const opt = (label, k, c) => { const o = document.createElement('option'); o.value = k; o.innerText = label + ' (' + c + ')'; if (chan === k) o.selected = true; sel.appendChild(o); };
-        opt('All channels', "", pool.length);
+        opt(mkt ? 'All ' + (mkt === 'nse' ? 'Indian' : 'crypto') + ' channels' : 'All channels', "", pool.length);
         keys.forEach(k => opt(chanLabel(k), k, cnt[k] || 0));
-        sel.onchange = () => anSet('anChan', sel.value);
+        sel.onchange = () => { anFixCoins = true; anSet('anChan', sel.value); };
         if (chan) sel.className += ' set';
         cb.innerHTML = ''; cb.appendChild(sel);
       }
-      // Coins: from the trades of this type and channel in the period.
+      // Assets and Coins: crypto filters, hidden and off with the Indian market or an NSE channel.
+      const cryptoHere = has.crypto && mkt !== "nse" && !(state.ui.anChan && /^NSE\b/.test(state.ui.anChan));
       const coinCnt = {};
-      const setupPool = pool.filter(x => anPassSetup(x.s)), anAssetKeep = assetTestOf(anAssetMode());
-      renderAssetBar('an', anAssetMode(), assetCounts(setupPool, x => anSigOf(x.t)), 'setAnAsset', 'trades');
-      const coinPool = anAssetKeep ? setupPool.filter(x => anAssetKeep(anSigOf(x.t))) : setupPool;
+      const setupPool = pool.filter(x => anPassSetup(x.s)), anAsset = cryptoHere ? anAssetMode() : "", anAssetKeep = assetTestOf(anAsset);
+      renderAssetBar('an', anAsset, assetCounts(setupPool, sigOfX), 'setAnAsset', 'trades', !cryptoHere);
+      const coinPool = anAssetKeep ? setupPool.filter(x => anAssetKeep(sigOfX(x))) : setupPool;
       coinPool.forEach(x => { const c = anCoinOf(x.t); if (c) coinCnt[c] = (coinCnt[c] || 0) + 1; });
-      anCoinCur = coinSetFor(COINS.an, coinCnt, coinPool, x => anSigOf(x.t)); anCoinKeep = bothKeep(anAssetKeep, coinKeepOf(anCoinCur));
-      renderCoinBar(COINS.an, coinCnt, anCoinCur, coinPool.some(x => !isNseSig(anSigOf(x.t))));
-      if (anCoinMode() === "delta") demoSpecsLoad();
+      // Options that keep none of these trades are greyed; a pick that Assets, Market or Channel just emptied goes back to All.
+      const blocks = cryptoHere ? coinBlocks(coinPool, sigOfX, anAsset, 'trades') : {};
+      let coinNote = "";
+      if (cryptoHere && anFixCoins && blocks[anCoinMode()]) { coinNote = 'Coins back to All: ' + blocks[anCoinMode()]; state.ui.anCoins = ""; save(); }
+      anFixCoins = false;
+      anCoinCur = cryptoHere ? coinSetFor(COINS.an, coinCnt, coinPool, sigOfX) : null;
+      anCoinKeep = bothKeep(mktKeep, bothKeep(anAssetKeep, coinKeepOf(anCoinCur)));
+      renderCoinBar(COINS.an, coinCnt, anCoinCur, !cryptoHere, blocks, coinNote);
+      if (cryptoHere && anCoinMode() === "delta") demoSpecsLoad();
+      // How many trades each filter leaves, for the empty view's "why".
+      const ck = coinKeepOf(anCoinCur);
+      anEmptyCtx = { baseN: base.length, mkt, mktN: mktKeep ? base.filter(x => mktKeep(sigOfX(x))).length : base.length, setupN: setupPool.length, asset: anAsset, assetN: coinPool.length,
+        coinN: ck ? coinPool.filter(x => ck(sigOfX(x))).length : coinPool.length, blocks };
       document.getElementById('anLvlWrap').classList.toggle('hidden', kind !== 'fib');
       anSegBar('anLvlBar', [["", "All"]].concat(FIB_LEVEL_KEYS.map(k => [k, k])), anLvl(), "setAnLvl", "lvl", "The fib level the trade was taken at");
       document.getElementById('anTlWrap').classList.toggle('hidden', kind !== 'trendline');
       anSegBar('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.k ? x.label : "All"]), anTlType() ? anTlType().k : "", "setAnTlType", "tltype", "Support / resistance bounce, or a break of the line");
       renderMktFilterBar('anMktBar', 'mktCalAnalysis');
       renderPlayTgtBar(PLAY.an); renderPlayStopBar(PLAY.an); renderPlayTrailBar(PLAY.an); renderPlayHoldBar(PLAY.an); renderPlayFeeBar(PLAY.an);
-      const anyOn = !!(anKind() || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anCoinMode() || anAssetMode() || mktFilter() || anPeriodMode() !== "all");
+      const anyOn = !!(anKind() || mkt || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anCoinMode() || anAssetMode() || mktFilter() || anPeriodMode() !== "all");
       document.getElementById('anReset').classList.toggle('hidden', !anyOn);
       const r = anRangeFull(), hint = [];
       hint.push(r.from || r.to ? (r.from || "start") + " → " + (r.to || "now") : "All history");
+      if (mkt) hint.push(marketOf(mkt).label + " market");
       if (state.ui.anChan) hint.push(chanLabel(state.ui.anChan));
-      if (anAssetMode()) hint.push(assetOf(anAssetMode()).label + " only");
+      if (anAsset) hint.push(assetOf(anAsset).label + " only");
       if (anCoinCur) hint.push(coinSetTxt(anCoinCur));
       if (anLvl()) hint.push("fib " + anLvl());
       if (anTlType()) hint.push(anTlType().label);
@@ -4530,8 +4590,10 @@
       const ws = document.getElementById('anWhichSum');
       if (ws) {
         const cm = SIG_COIN_MODES.find(x => x.k === anCoinMode());
-        const bits = [(AN_KINDS.find(x => x.k === kind) || AN_KINDS[0]).label, (AN_PERIODS.find(p => p.k === mode) || AN_PERIODS[3]).label, state.ui.anChan ? chanLabel(state.ui.anChan) : "all channels"];
-        if (anAssetMode()) bits.push(assetOf(anAssetMode()).label + " only");
+        const bits = [(AN_KINDS.find(x => x.k === kind) || AN_KINDS[0]).label, (AN_PERIODS.find(p => p.k === mode) || AN_PERIODS[3]).label];
+        if (mkt) bits.push(marketOf(mkt).label + " market");
+        bits.push(state.ui.anChan ? chanLabel(state.ui.anChan) : "all channels");
+        if (anAsset) bits.push(assetOf(anAsset).label + " only");
         if (anCoinCur) bits.push(coinSetTxt(anCoinCur, cm.label));
         if (anLvl()) bits.push(anLvl());
         if (anTlType()) bits.push(anTlType().label);
@@ -5658,7 +5720,9 @@
       if (mfAn) assume.innerText += ` Showing trades on BTC ${MKT_LABEL[mfAn].toLowerCase()} days only.`;
       if (!rows.length) {
         if (anChartInstance) { anChartInstance.destroy(); anChartInstance = null; }
-        strip.innerHTML = '';
+        // Say which filter left nothing, with the way back (not a blank strip).
+        const ew = anEmptyWhy(anEmptyCtx);
+        strip.innerHTML = '<div id="anEmpty" data-why="' + ew.why + '" class="col-span-full flex flex-wrap items-center gap-2 text-[12px] font-mono px-3 py-3"><div class="text-amber-200">' + esc(ew.msg) + '</div>' + ew.fix + '</div>';
         document.getElementById('anBuckets').innerHTML = '<div class="text-slate-500 text-center py-4">No trades in this period.</div>';
         document.getElementById('anFlags').innerHTML = '';
         ['anInsights', 'anBreakdown'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
@@ -10799,21 +10863,67 @@
     function assetOf(k) { return SIG_ASSETS.find(x => x.k === k) || SIG_ASSETS[0]; }
     function sigAssetMode() { return assetOf(state.ui.sigAsset).k; }
     function anAssetMode() { return assetOf(state.ui.anAsset).k; }
-    function setSigAsset(k) { state.ui.sigAsset = assetOf(k).k; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
-    function setAnAsset(k) { anSet('anAsset', assetOf(k).k); }
+    // Picking Assets, Market or Channel can leave the Coins pick with nothing (xStocks + CoinDCX:
+    // CoinDCX lists no xStocks). The next draw then puts Coins back to All and says why.
+    let sigFixCoins = false, anFixCoins = false;
+    function setSigAsset(k) { state.ui.sigAsset = assetOf(k).k; sigFixCoins = true; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
+    function setAnAsset(k) { anFixCoins = true; anSet('anAsset', assetOf(k).k); }
     // The Assets test on one alert (null: Both), and both filters as one test.
     function assetTestOf(k) { const a = assetOf(k); return a.only ? (sig => symKind(sig) === a.only) : null; }
     function bothKeep(a, b) { return a && b ? (g => a(g) && b(g)) : a || b || null; }
     // The Assets row: Both / Crypto / xStocks with how many each has in view (n: {crypto, xstock, all}).
-    function renderAssetBar(id, cur, n, fn, what) {
+    // hide: no crypto here (Indian market, an NSE channel, or no crypto alerts at all).
+    function renderAssetBar(id, cur, n, fn, what, hide) {
       const wrap = document.getElementById(id + 'AssetWrap'), bar = document.getElementById(id + 'AssetBar');
       if (!wrap || !bar) return;
-      wrap.classList.toggle('hidden', !n.crypto && !n.xstock && !cur);
+      wrap.classList.toggle('hidden', !!hide);
       bar.innerHTML = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="Both: every ' + what.replace(/s$/, '') + ' (gold, silver and NSE too). Crypto: coins only. xStocks: tokenised US stocks only (TSLAX, NVDAX, SOXLB...). Works with Coins: e.g. xStocks + Delta.">'
         + SIG_ASSETS.map(x => '<button type="button" data-asset="' + x.k + '" onclick="' + fn + '(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : SEG_OFF) + '">' + x.label + ' <span class="text-[10px] opacity-60">' + (x.k ? n[x.k] || 0 : n.all || 0) + '</span></button>').join('') + '</div>';
     }
     // How many alerts (trades) of each asset are in view.
     function assetCounts(items, sigOf) { const n = { all: 0, crypto: 0, xstock: 0 }; items.forEach(it => { const k = symKind(sigOf(it)); n.all++; if (k === 'coin') n.crypto++; else if (k === 'stock') n.xstock++; }); return n; }
+    // Market (lakky, 2026-11-14: "add one more option of market like indian or crypto then
+    // select channel"): All / Crypto / Indian, above Channel; the Channel list then holds only
+    // that market's channels. Crypto is every alert not on NSE (coins, xStocks, gold, silver);
+    // Indian is NSE. Assets and Coins are crypto filters, so with Indian they are hidden and off.
+    const SIG_MARKETS = [{ k: "", label: "All" }, { k: "crypto", label: "Crypto" }, { k: "nse", label: "Indian" }];
+    function marketOf(k) { return SIG_MARKETS.find(x => x.k === k) || SIG_MARKETS[0]; }
+    function sigMarketMode() { return marketOf(state.ui.sigMarket).k; }
+    function anMarketMode() { return marketOf(state.ui.anMarket).k; }
+    function setSigMarket(k) { state.ui.sigMarket = marketOf(k).k; sigFixCoins = true; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
+    function setAnMarket(k) { anFixCoins = true; anSet('anMarket', marketOf(k).k); }
+    // "nse" or "crypto" for one alert (or a trade's anSigOf).
+    function mktOfSig(sig) { return sig && isNseSig(sig) ? "nse" : "crypto"; }
+    function marketTestOf(k) { return k ? (sig => mktOfSig(sig) === k) : null; }
+    function marketCounts(items, sigOf) { const n = { all: 0, crypto: 0, nse: 0 }; items.forEach(it => { n.all++; n[mktOfSig(sigOf(it))]++; }); return n; }
+    // The Market row. n: how many in view; has: {crypto, nse} - the market has any at all. One
+    // with none is greyed, and a tap on it says why (iPads show no hover tips).
+    const SEG_DIS = 'text-slate-600 opacity-60 cursor-not-allowed';
+    function renderMarketBar(id, cur, n, has, fn, what) {
+      const wrap = document.getElementById(id + 'MarketWrap'), bar = document.getElementById(id + 'MarketBar');
+      if (!wrap || !bar) return;
+      wrap.classList.toggle('hidden', !n.all && !has.crypto && !has.nse && !cur);
+      const none = { crypto: 'No crypto ' + what + ' here yet', nse: 'No Indian (NSE) ' + what + ' here yet' + (what === 'alerts' ? ': Load scanner alerts with market NSE or All' : '') };
+      bar.innerHTML = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="Crypto: coins, xStocks, gold and silver. Indian: NSE stocks. The Channel list below then shows only that market\'s channels.">'
+        + SIG_MARKETS.map(x => {
+          const off = x.k && x.k !== cur && !has[x.k];
+          return '<button type="button" data-market="' + x.k + '" onclick="' + (off ? 'toast(this.title)' : fn + '(\'' + x.k + '\')') + '"' + (off ? ' aria-disabled="true" title="' + esc(none[x.k]) + '"' : '') + ' class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : off ? SEG_DIS : SEG_OFF) + '">' + x.label + ' <span class="text-[10px] opacity-60">' + (x.k ? n[x.k] || 0 : n.all || 0) + '</span></button>';
+        }).join('') + '</div>';
+    }
+    // Coins options that keep nothing of these alerts (trades): { mode: why }. A broker that
+    // lists none of them, or Top 3 / Top 5 / Picks with no crypto coin among them (xStocks only).
+    function coinBlocks(items, sigOf, asset, what) {
+      const out = {};
+      if (!items.length) return out;
+      const a = asset ? assetOf(asset).label + ' ' : '';
+      const anyCoin = items.some(it => coinOf(sigOf(it)));
+      SIG_COIN_MODES.forEach(m => {
+        if (!m.k) return;
+        if (m.venue ? !items.some(it => onVenue(sigOf(it), m.venue)) : !anyCoin)
+          out[m.k] = m.venue ? m.label + ' lists none of these ' + a + what : 'no crypto coins among these ' + a + what;
+      });
+      return out;
+    }
     const SIG_COIN_PICKS = ["BTC", "ETH", "SOL"];
     const SIG_NOT_COIN = { XAUT: 1, PAXG: 1, SLVON: 1, CL: 1 };
     const SIG_STOCK_RE = /^(TSLA|META|NVDA|NVDL|AAPL|GOOGL|GOOG|AMZN|MSFT|NFLX|COIN|CRCL|SPY|QQQ|TQQQ|SOXL|SOXX|SNDK|MRVL|MSTR|HOOD|INTC|NBIS|DELL|AVGO|BABA|IBM|AMD|PLTR|ORCL|MU|TSM|AXTI|OPENAI|SPCX)[XB]?$/;
@@ -10873,7 +10983,8 @@
     // .out ({name: how many} kept and left out) and .mode.
     function coinSetFor(C, counts, items, sigOf) {
       const m = SIG_COIN_MODES.find(x => x.k === C.mode()), test = coinModeTest(m);
-      if (!test) return Object.keys(counts).length ? sigCoinSet(counts, null, C) : null;
+      // A coin list stays on with no coins in view: it keeps none, and the Coins row says so.
+      if (!test) return sigCoinSet(counts, null, C);
       const keep = {}, out = {};
       items.forEach(it => { const g = sigOf(it); if (!g) return; const nm = coinNameOf(g), t = test(g) ? keep : out; t[nm] = (t[nm] || 0) + 1; });
       if (!Object.keys(keep).length && !Object.keys(out).length) return null;
@@ -10912,17 +11023,25 @@
       an: { id: "an", mode: () => anCoinMode(), rank: () => anCoinRank(), picks: () => anCoinPicks(), fn: { mode: "setAnCoins", rank: "setAnCoinRank", pick: "toggleAnCoinPick" }, what: "trades",
         tip: "Top 3 / Top 5: only your trades on the biggest coins (by market cap, or the coins you trade most). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. CoinDCX / Delta: only what that broker's futures list." }
     };
-    function renderSigCoinBar(counts, set, any) { renderCoinBar(COINS.sig, counts, set, any); }
-    // any: there are alerts (trades) in view that are not NSE, so Crypto / xStocks / a broker can pick from them.
-    function renderCoinBar(C, counts, set, any) {
+    // hide: no crypto here (Indian market, an NSE channel, or no crypto at all). blocks: the
+    // options that keep nothing here ({mode: why}), greyed; a tap says why. note: Coins was just
+    // put back to All, and why.
+    function renderCoinBar(C, counts, set, hide, blocks, note) {
       const wrap = document.getElementById(C.id + 'CoinWrap'), bar = document.getElementById(C.id + 'CoinBar');
       if (!wrap || !bar) return;
+      blocks = blocks || {};
       const cur = C.mode(), coins = Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)), mode = SIG_COIN_MODES.find(x => x.k === cur);
-      wrap.classList.toggle('hidden', !coins.length && !any && !cur);
+      wrap.classList.toggle('hidden', !!hide);
       let h = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="' + esc(C.tip) + '">'
-        + SIG_COIN_MODES.map(x => '<button type="button" data-coins="' + x.k + '" onclick="' + C.fn.mode + '(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : SEG_OFF) + '">' + x.label + '</button>').join('') + '</div>';
-      if (coinModeTest(mode)) h += coinTestLine(C, set);
-      else if (cur && !coins.length) h += '<span class="text-[11px] text-slate-500">no crypto ' + C.what + ' in this view, so it is off</span>';
+        + SIG_COIN_MODES.map(x => {
+          const off = x.k !== cur && blocks[x.k];
+          return '<button type="button" data-coins="' + x.k + '" onclick="' + (off ? 'toast(this.title)' : C.fn.mode + '(\'' + x.k + '\')') + '"' + (off ? ' aria-disabled="true" title="' + esc(blocks[x.k].charAt(0).toUpperCase() + blocks[x.k].slice(1)) + '"' : '')
+            + ' class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : off ? SEG_DIS : SEG_OFF) + '">' + x.label + '</button>';
+        }).join('') + '</div>';
+      if (note) h += '<span id="' + C.id + 'CoinNote" class="text-[11px] text-amber-300 font-mono">' + esc(note) + '</span>';
+      // The pick keeps nothing here: say so plainly, with the way out.
+      if (cur && blocks[cur]) h += '<span id="' + C.id + 'CoinWarn" class="text-[11px] text-amber-300 font-mono">' + esc(blocks[cur]) + ', so 0 ' + C.what + ' · <button type="button" class="underline" onclick="' + C.fn.mode + '(\'\')">Coins: All</button></span>';
+      else if (coinModeTest(mode)) h += coinTestLine(C, set);
       else if (cur === 'top3' || cur === 'top5') {
         const rk = C.rank();
         h += '<select id="' + C.id + 'CoinRank" onchange="' + C.fn.rank + '(this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200 text-[11px] font-mono"><option value="cap"' + (rk === 'cap' ? ' selected' : '') + '>by market cap</option><option value="alerts"' + (rk === 'alerts' ? ' selected' : '') + '>by most ' + C.what + '</option></select>'
@@ -10958,14 +11077,16 @@
       });
     }
     // One line per panel, shown when it is folded (and the rules' Reset button).
-    function renderSigPanelSums(kind, coinSet) {
+    function renderSigPanelSums(kind, coinSet, assetMode) {
       initPanelFolds();
       const which = document.getElementById('sigWhichSum');
       if (which) {
         const per = state.ui.sigDay ? state.ui.sigDay : (SIG_PERIODS.find(x => x.k === sigPeriod().mode) || SIG_PERIODS[3]).label;
         const cm = SIG_COIN_MODES.find(x => x.k === sigCoinMode());
-        const bits = [(SIG_KINDS.find(x => x.k === kind) || SIG_KINDS[0]).label, per, state.ui.sigChan ? chanLabel(state.ui.sigChan) : 'all channels'];
-        if (sigAssetMode()) bits.push(assetOf(sigAssetMode()).label + ' only');
+        const bits = [(SIG_KINDS.find(x => x.k === kind) || SIG_KINDS[0]).label, per];
+        if (sigMarketMode()) bits.push(marketOf(sigMarketMode()).label + ' market');
+        bits.push(state.ui.sigChan ? chanLabel(state.ui.sigChan) : 'all channels');
+        if (assetMode) bits.push(assetOf(assetMode).label + ' only');
         if (coinSet) bits.push(coinSetTxt(coinSet, cm.label));
         if (sigLvl()) bits.push(sigLvl());
         if (sigTlType()) bits.push(sigTlType().label);
@@ -12484,10 +12605,31 @@
       }
       host.innerHTML = h;
     }
+    // Why the Signals view is empty: the first filter that left nothing, and a button back.
+    // st: how many alerts are left after each filter, in the order the tab applies them.
+    function sigEmptyWhy(st) {
+      const kl = (SIG_KINDS.find(x => x.k === st.kind) || SIG_KINDS[0]).label.toLowerCase();
+      const btn = (label, js) => '<button type="button" class="px-2 py-0.5 rounded border border-amber-500/50 text-amber-200 hover:bg-amber-500/10 whitespace-nowrap" onclick="' + js + '">' + esc(label) + '</button>';
+      const al = st.asset ? assetOf(st.asset).label + ' ' : '';
+      if (!st.all) return { why: 'none', msg: 'No ' + kl + ' loaded yet.', fix: btn('Load scanner alerts', 'openScannerImport()') };
+      if (!st.mktN) return { why: 'market', msg: 'No ' + marketOf(st.mkt).label + ' ' + kl + ' on this device' + (st.mkt === 'nse' ? ': load scanner alerts with market NSE or All.' : '.'), fix: btn('Market: All', "setSigMarket('')") };
+      if (!st.chanN) return { why: 'channel', msg: 'No ' + kl + ' on ' + chanLabel(st.chan) + '.', fix: btn('All channels', "state.ui.sigChan='';save();renderSignalsTable()") };
+      if (!st.rangeN) return { why: 'period', msg: 'No ' + (st.mkt ? marketOf(st.mkt).label + ' ' : '') + kl + (st.chan ? ' on ' + chanLabel(st.chan) : '') + ' in this period.', fix: btn('All history', "setSigPeriod('all')") };
+      if (!st.assetN) return { why: 'assets', msg: 'No ' + al + kl + ' in this view.', fix: btn('Assets: Both', "setSigAsset('')") };
+      if (!st.coinN) {
+        const cm = SIG_COIN_MODES.find(x => x.k === sigCoinMode()) || SIG_COIN_MODES[0];
+        const why = st.blocks[cm.k] || (cm.venue ? cm.label + ' lists none of these ' + al + 'alerts' : 'none of these ' + al + 'alerts are on ' + coinSetTxt(st.coinSet, cm.label));
+        return { why: 'coins', msg: 'No alerts left: ' + why + '. ' + st.assetN + ' ' + al + 'alert' + (st.assetN === 1 ? '' : 's') + ' before Coins.', fix: btn('Coins: All (' + st.assetN + ')', "setSigCoins('')") + (st.asset ? ' ' + btn('Assets: Both', "setSigAsset('')") : '') };
+      }
+      if (!st.dayN && st.mf) return { why: 'btcday', msg: 'No alerts here on BTC ' + MKT_LABEL[st.mf].toLowerCase() + ' days.', fix: btn('All days', "setMktFilter('mktCalSignals','')") };
+      return { why: 'tiny', msg: 'Every alert here has a tiny stop, and those are left out of the stats.', fix: btn('Include them', 'state.ui.sigSkipTiny=false;save();renderSignalsTable()') };
+    }
     function renderSignalEdgeAnalysis(pairs) {
       const scored = pairs.filter(outcomeOf);
       const strip = document.getElementById('sigEdgeStrip');
-      if (strip) {
+      if (strip && !pairs.length && sigView.empty) {
+        strip.innerHTML = '<div id="sigEmpty" data-why="' + sigView.empty.why + '" class="col-span-full flex flex-wrap items-center gap-2 text-[12px] font-mono px-3 py-3"><div class="text-amber-200">' + esc(sigView.empty.msg) + '</div>' + sigView.empty.fix + '</div>';
+      } else if (strip) {
         strip.innerHTML = '';
         // Numbers over part of the alerts look final but are not (lakky, 2026-11-12: "sometimes
         // it gives wrong data"): say so above them while prices load or some are missing.
@@ -15122,6 +15264,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-14.191', pr: 105, title: 'Market filter + no more empty dashes', pts: ['New Market row (Signals and Analysis): All / Crypto / Indian, above Channel. The Channel list then shows only that market\'s channels; Indian hides Assets and Coins', 'xStocks + CoinDCX showed 0 and a row of dashes: CoinDCX lists no xStocks. Coins options that keep nothing are now greyed (a tap says why), and picking xStocks with CoinDCX on puts Coins back to All', 'An empty view says which filter left nothing, with a button back'] },
       { v: '2026-11-13.190', pr: 104, title: 'Signals: NSE alerts get results', pts: ['NSE alerts showed only dashes with any SL but Alert (e.g. NSE 1D trendlines, Wick or body): no NSE candles in the app', 'Now a twice-a-day job puts Yahoo\'s NSE candles in your sync repo, and NSE alerts are played like crypto: every SL type, Move SL, Trail TP, Partial, Hold, Demo account', '"20 candles" counts NSE candles (no nights or weekends). Needs GitHub sync on'] },
       { v: '2026-11-13.189', pr: 103, title: 'Assets row + CoinDCX / Delta coins', pts: ['New Assets row (Signals and Analysis): Both / Crypto / xStocks. Coins adds CoinDCX and Delta: only what that broker lists, the same list the Demo account uses, so both count the same alerts', 'Backtest report compares xStocks vs crypto and each broker\'s coins', 'Demo account: new "What changed the result" line, from any size to real orders one rule at a time (not listed, min stop, coin leverage, whole orders)'] },
       { v: '2026-11-13.188', pr: 102, title: 'Signals: partial exits', pts: ['New Partial row in How each trade is played: book 25%, 50% or 75% of the position at a level you pick (R, or % with a % target); the rest runs to the TP or SL', 'Move SL now has book: close a share where BE / SL shift fires (e.g. BE at 0.75%, book 50%), the rest goes on at breakeven', 'Headline, compare tables, Demo account, By outcome (Part + Target, Part + BE...) and CSV all follow it; the independent retest plays it too'] },
