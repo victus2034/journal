@@ -55,7 +55,9 @@ function fixture() {
   }
   const goals = [{ id: 'g1', title: 'Test goal', target: 20, metric: 'net_pnl', targets: { net_pnl: 20 }, period: 'month', accountId: 'all', days: 'weekdays', updatedAt: now }];
   const playbook = [{ id: 'pb1', name: 'Breakout', rules: ['Volume spike', 'Above VWAP'], updatedAt: now }];
-  return { version: 1, savedAt: now, accounts, trades, signals: [], goals, playbook, aliases: [], tombstones: [], reviews: [], reviewsAt: [] };
+  // The Signals tests play symbols the scanner has since dropped (MAGIC, MRVL, RLC...): Dropped is Shown for them.
+  // bestSettingsRun covers the Hidden default.
+  return { version: 1, savedAt: now, accounts, trades, signals: [], goals, playbook, aliases: [], tombstones: [], reviews: [], reviewsAt: [], ui: { sigDropped: 'show' } };
 }
 
 const server = http.createServer((req, res) => {
@@ -2988,7 +2990,7 @@ async function coinVenueRun(seed) {
       setSigSec('alerts'); setSigCoins('');
       return out;
     });
-    check(v.buttons === 'All,Top 3,Top 5,Picks,CoinDCX,Delta' && v.assets === 'Both 7,Crypto 3,xStocks 2', 'Coins and Assets buttons: ' + JSON.stringify([v.buttons, v.assets]));
+    check(v.buttons === 'All,Top 3,Top 5,Top 10,Top 20,Top 30,Picks,CoinDCX,Delta' && v.assets === 'Both 7,Crypto 3,xStocks 2', 'Coins and Assets buttons: ' + JSON.stringify([v.buttons, v.assets]));
     check(v.all[0] === '7' && v.all[1] === '+2.00R', 'all: ' + JSON.stringify(v.all));
     check(v.crypto[0] === '3' && v.crypto[1] === '+3.00R' && /Crypto only/.test(v.crypto[3]) && /Crypto only/.test(v.crypto[4]), 'Crypto: ' + JSON.stringify(v.crypto));
     check(v.xstock[0] === '2' && v.xstock[1] === '+1.00R' && /xStocks only/.test(v.xstock[3]), 'xStocks: ' + JSON.stringify(v.xstock));
@@ -3047,7 +3049,7 @@ async function coinVenueRun(seed) {
       switchTab('analysis'); renderAll();
       return [...document.querySelectorAll('#anCoinBar button[data-coins]')].map(b => b.innerText).join();
     });
-    check(an === '' || an === 'All,Top 3,Top 5,Picks,CoinDCX,Delta', 'Analysis Coins buttons: ' + an);
+    check(an === '' || an === 'All,Top 3,Top 5,Top 10,Top 20,Top 30,Picks,CoinDCX,Delta', 'Analysis Coins buttons: ' + an);
     // Phone: no sideways scroll with a broker line showing.
     await page.evaluate(() => { switchTab('signals'); setSigSec('alerts'); setSigCoins('delta'); });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -3132,7 +3134,7 @@ async function marketFilterRun(seed) {
       && /CoinDCX lists none of these xStocks alerts, so 0 alerts/.test(xd.warn), 'xStocks + CoinDCX says why: ' + JSON.stringify(xd));
     await click('#sigEmpty button');
     const xa = await read(), wX = want(x => /^(NVDAX|MRVL)/.test(x[0]));
-    check(xa.coins === '' && xa.n === wX.n && xa.r === wX.r && xa.grey === 'top3,top5,picks,dcx', 'Coins: All, and greyed what keeps no xStocks: ' + JSON.stringify(xa));
+    check(xa.coins === '' && xa.n === wX.n && xa.r === wX.r && xa.grey === 'top3,top5,top10,top20,top30,picks,dcx', 'Coins: All, and greyed what keeps no xStocks: ' + JSON.stringify(xa));
     // A greyed option does nothing but say why.
     await click('#sigCoinBar button[data-coins="dcx"]');
     const toast = await page.evaluate(() => { const c = document.getElementById('toastContainer'); return c && c.lastElementChild ? c.lastElementChild.innerText : ''; });
@@ -3964,7 +3966,7 @@ async function anDemoRun(seed) {
     const look = await page.evaluate(() => ({ which: !!document.querySelector('#anWhichPanel[open] #anPeriodBar'), rules: !!document.querySelector('#anRulesPanel[open] #anTgtBar'),
       exits: [...document.querySelectorAll('#anTgtBar button')].map(b => b.innerText).join(), cards: document.querySelectorAll('#anStrip > div').length,
       coins: [...document.querySelectorAll('#anCoinBar button[data-coins]')].map(b => b.innerText).join(), line: document.getElementById('anDemoLine').classList.contains('hidden') }));
-    check(look.which && look.rules && look.exits === 'My exit,1R,1.5R,2R,3R,1%,2%,3%' && look.cards === 8 && look.coins === 'All,Top 3,Top 5,Picks,CoinDCX,Delta' && look.line, 'Signals-style panels: ' + JSON.stringify(look));
+    check(look.which && look.rules && look.exits === 'My exit,1R,1.5R,2R,3R,1%,2%,3%' && look.cards === 8 && look.coins === 'All,Top 3,Top 5,Top 10,Top 20,Top 30,Picks,CoinDCX,Delta' && look.line, 'Signals-style panels: ' + JSON.stringify(look));
     await page.waitForTimeout(300);
     check(reads.length === 0, 'no candles read with My exit: ' + reads.join());
     // Fold a panel: it says in one line what it is set to, and stays folded after a reload.
@@ -6578,6 +6580,216 @@ async function parityRun() {
   errs.forEach(e => { console.log('     ' + e); failures.push('parity: ' + e); });
 }
 
+// Dropped coins + Top 10 / 20 / 30 by volume (lakky, 2026-11-14: "remove all those cryptos from backtest report which
+// we have removed" and "backtest with top 10-20-30 volume cryptos").
+async function droppedCoinsRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  const clean = Object.assign({}, seed, { ui: {} });   // no sigDropped: the default (Hidden) is what is under test
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(clean));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded, null, { timeout: 5000 });
+    const v = await page.evaluate(() => {
+      const text = id => ((document.getElementById(id) || {}).innerText || '').replace(/\s+/g, ' ');
+      // 12 live coins (+2 R each by index parity), 2 dropped crypto (STRK -1, AAVE +3), 2 dropped xStocks (MRVL, META), 2 live xStock / gold, 1 NSE.
+      const live = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'LINK', 'SUI', 'UNI', 'ENA', 'WLD', 'NEAR'];
+      const plan = live.map((c, i) => [c + 'USD', i % 2 ? -1 : 2]).concat([['STRKUSD', -1], ['AAVEUSD', 3], ['MRVLBUSD', -1], ['METAXUSD', -1], ['TSLAXUSD', 2], ['XAUTUSD', 1], ['RELIANCE', -1]]);
+      state.signals = plan.map(([sym, r], i) => ({ id: 'dc' + i, key: 'dc' + i, kind: 'fib', date: '2026-10-' + String(i + 1).padStart(2, '0'), time: '10:00', symbol: sym, side: 'long', score: '',
+        market: sym === 'RELIANCE' ? 'NSE' : 'CRYPTO', timeframe: '1D', channel: (sym === 'RELIANCE' ? 'NSE' : 'CRYPTO') + ' 1D', filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 98, entry: 100 }));
+      Object.assign(state.ui, { sigKind: 'fib', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'alerts', mktFilter: '', sigTgt: '', sigNoFee: false, sigCoins: '', sigAsset: '', sigMarket: '', sigFold: {}, sigLvl: '' });
+      delete state.ui.sigDropped;
+      switchTab('signals'); renderAll();
+      const strip = () => { const t = text('sigEdgeStrip'); return [t.match(/Alerts (\d+)/)[1], (t.match(/Total R ([+-][\d.]+R)/) || [])[1]]; };
+      const out = { def: strip(), note: text('sigDropNote'), mode: sigDroppedMode(), wrapHidden: document.getElementById('sigDropWrap').classList.contains('hidden') };
+      document.querySelector('#sigDropBar button[data-dropped="show"]').click(); out.shown = strip(); out.shownNote = text('sigDropNote');
+      document.querySelector('#sigDropBar button[data-dropped="hide"]').click(); out.again = strip();
+      // Top 10 / 20 / 30 by volume, on the live coins only.
+      const coins = k => document.querySelector('#sigCoinBar button[data-coins="' + k + '"]').click();
+      coins('top10'); out.t10 = [strip()[0], text('sigCoinVol'), text('sigPeriodHint')];
+      coins('top20'); out.t20 = [strip()[0], text('sigCoinVol')];
+      coins('top30'); out.t30 = [strip()[0], text('sigCoinVol')];
+      // Dropped shown: the 2 dropped coins have volume too (STRK 194, AAVE 96), so Top 20 holds all 14.
+      document.querySelector('#sigDropBar button[data-dropped="show"]').click(); coins('top10'); out.t10s = [strip()[0], text('sigCoinVol')];
+      coins('top20'); out.t20s = [strip()[0], text('sigCoinVol')];
+      coins('top3'); out.rankOpts = [...document.querySelectorAll('#sigCoinRank option')].map(o => o.value).join();
+      document.getElementById('sigCoinRank').value = 'vol'; document.getElementById('sigCoinRank').onchange && document.getElementById('sigCoinRank').dispatchEvent(new Event('change'));
+      out.t3vol = text('sigCoinList');
+      coins('');
+      setSigSec('report'); out.cmp = [...document.querySelectorAll('#sigCoinCmp tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').trim()).filter(x => /^Top (10|20|30)/.test(x));
+      setSigSec('alerts');
+      // The tab's own filter is what the rule says: a symbol not on the list, any market but NSE.
+      out.rule = ['BTCUSD', 'BTCUSDT', 'btc/usdt', '1000PEPEUSD', 'AAVEUSD', 'MRVLBUSD', 'SOXLBUSD', 'METAXUSD', 'TSLAXUSD', 'SNDKBUSD', 'QQQXUSD', 'XAUTUSD', 'SLVONUSD', 'PAXGUSD', 'QNTUSD'].map(sym => sym + ':' + (sigDropped({ symbol: sym, market: 'CRYPTO' }) ? 'x' : '-')).join(' ')
+        + ' RELIANCE:' + (sigDropped({ symbol: 'RELIANCE', market: 'NSE' }) ? 'x' : '-') + ' AAVE-in-NSE:' + (sigDropped({ symbol: 'AAVE', market: 'NSE' }) ? 'x' : '-');
+      return out;
+    });
+    // 19 alerts: 12 live coins + TSLAX + XAUT + RELIANCE = 15 shown; 4 dropped (STRK, AAVE, MRVL, META) hidden.
+    check(v.def[0] === '15' && v.mode === 'hide' && !v.wrapHidden, 'Dropped is Hidden by default: ' + JSON.stringify([v.def, v.mode, v.wrapHidden]));
+    check(/4 alerts on 4 symbols/.test(v.note) && /STRK/.test(v.note) && /AAVE/.test(v.note) && /MRVL/.test(v.note) && /left out of every number/.test(v.note), 'dropped note: ' + v.note);
+    // Total R of the 15: coins 2,-1,2,-1,2,-1,2,-1,2,-1,2,-1 = +6; TSLAX +2, XAUT +1, RELIANCE -1 = +8; with the 4 dropped (-1 +3 -1 -1 = 0) the same +8 over 19.
+    check(v.def[1] === '+8.00R' && v.shown[0] === '19' && v.shown[1] === '+8.00R' && v.again[0] === '15', 'Hidden / Shown counts and R: ' + JSON.stringify([v.def, v.shown, v.again]));
+    // Volume order of the 12: BTC 10498, ETH 7409, SOL 1471, NEAR 637, XRP 621, DOGE 300, ENA 257, WLD 233, SUI 202, UNI 202 (tie: alphabetical), ADA 139, LINK 119.
+    check(v.t10[0] === '10' && /BTC, ETH, SOL, NEAR, XRP, DOGE, ENA, WLD, SUI, UNI/.test(v.t10[1]) && !/ADA|LINK/.test(v.t10[1].split(':')[1] || ''), 'Top 10 by volume: ' + JSON.stringify(v.t10));
+    check(v.t20[0] === '12' && /every coin with alerts here \(12\)/.test(v.t20[1]) && v.t30[0] === '12' && /every coin with alerts here \(12\)/.test(v.t30[1]), 'Top 20 / Top 30 = all 12: ' + JSON.stringify([v.t20, v.t30]));
+    check(v.t10s[0] === '10' && /BTC, ETH, SOL, NEAR, XRP, DOGE, ENA, WLD, SUI, UNI/.test(v.t10s[1]) && v.t20s[0] === '14' && /every coin with alerts here \(14\)/.test(v.t20s[1]), 'with dropped coins shown: ' + JSON.stringify([v.t10s, v.t20s]));
+    check(v.rankOpts === 'cap,vol,alerts' && /BTC, ETH, SOL/.test(v.t3vol), 'Top 3 by volume: ' + JSON.stringify([v.rankOpts, v.t3vol]));
+    check(v.cmp.length === 3 && /^Top 10 by volume/.test(v.cmp[0]) && /every coin here \(14\)/.test(v.cmp[1]), 'report compare rows: ' + JSON.stringify(v.cmp));
+    check(v.rule === 'BTCUSD:- BTCUSDT:- btc/usdt:- 1000PEPEUSD:- AAVEUSD:x MRVLBUSD:x SOXLBUSD:x METAXUSD:x TSLAXUSD:- SNDKBUSD:- QQQXUSD:- XAUTUSD:- SLVONUSD:- PAXGUSD:x QNTUSD:x RELIANCE:- AAVE-in-NSE:-', 'what counts as dropped: ' + v.rule);
+  } catch (e) { errs.push('threw: ' + String(e.message).split('\n').slice(0, 2).join(' | ')); }
+  await ctx.close();
+  const label = 'Signals: dropped coins hidden by default, Top 10 / 20 / 30 by volume';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
+// Best settings (Edge & breakdowns): every number is what the tab shows once "Use" is pressed. Real fixture alerts
+// and Delta candles, the same as parityRun, through the whole search.
+async function bestSettingsRun() {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const fx = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'signals-parity.json.gz'))).toString('utf8'));
+  const files = { 'fibtl_rebuild_records.jsonl': fx.records.map(r => JSON.stringify(r)).join('\n') + '\n', 'fibtl_rebuild_results.json': JSON.stringify(fx.results), 'fibtl_rebuild_meta.json': JSON.stringify(fx.meta) };
+  const nseBlobs = {};
+  Object.entries(fx.nse || {}).forEach(([p, text]) => { nseBlobs[crypto.createHash('sha1').update(text).digest('hex')] = { path: p, text }; });
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => {
+    const u = r.request().url();
+    if (u.includes('/scanner-runtime-state/')) return r.fulfill({ status: 200, contentType: 'text/plain', body: files[u.split('/').pop().split('?')[0]] || '' });
+    if (u.startsWith('https://api.github.com/repos/victus/sync/git/trees/nse-candles')) return r.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ tree: Object.keys(nseBlobs).map(sha => ({ path: nseBlobs[sha].path, type: 'blob', sha })) }) });
+    if (u.startsWith('https://api.github.com/repos/victus/sync/git/blobs/')) { const b = nseBlobs[u.split('/').pop()]; return r.fulfill({ status: b ? 200 : 404, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'text/plain' }, body: b ? b.text : '{}' }); }
+    if (u.startsWith('https://api.india.delta.exchange/v2/history/candles')) {
+      const q = new URL(u).searchParams, a = +q.get('start'), b = +q.get('end'), ser = fx.candles[q.get('symbol') + '_' + q.get('resolution')];
+      const rows = (ser || []).filter(x => x[0] >= a && x[0] <= b);
+      return r.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: rows.map(([time, open, high, low, close]) => ({ time, open, high, low, close, volume: 1 })) }) });
+    }
+    return r.abort();
+  });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  page.on('dialog', d => d.dismiss());
+  try {
+    await page.clock.install({ time: new Date(fx.now * 1000) });
+    await page.clock.resume();
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && typeof signalsReady !== 'undefined', null, { timeout: 20000 });
+    await page.evaluate(async () => {
+      await signalsReady; while (sigAutoBusy) await new Promise(r => setTimeout(r, 100));
+      state.ui.sigMkt = 'all'; state.ui.sigDropped = 'show';
+      state.sync = { token: 'tok', repo: 'victus/sync', branch: 'main', auto: false, lastAt: '', lastSha: '' };
+      await autoRefreshAlerts(true); switchTab('signals');
+      Object.assign(state.ui, { sigKind: 'fib', sigPeriod: { mode: 'custom', from: '2026-10-10', to: '2026-10-25' }, sigDay: '', sigChan: '', sigMarket: '', sigCoins: '', mktFilter: '', sigTgt: '', sigHold: 'tp', sigNoFee: false, sigLvl: '', sigLvlOff: [], sigTlType: '', sigSec: 'edge' });
+      save(); renderSignalsTable();
+    });
+    const settle = async () => {
+      for (let i = 0, quiet = 0; i < 400 && quiet < 3; i++) {
+        await page.waitForTimeout(150);
+        if (await page.evaluate(() => tgtBusy || slcBusy || tgtQ.length > 0 || slcQ.length > 0)) { quiet = 0; continue; }
+        quiet++; await page.evaluate(() => renderSignalsTable());
+      }
+    };
+    await settle();
+    // Before the search: the card is there, with the warning, and nothing is claimed.
+    const pre = await page.evaluate(() => ({ btn: !!document.getElementById('sigBestRun'), warn: (document.getElementById('sigBestWarn') || {}).innerText || '', table: !!document.getElementById('sigBestTable') }));
+    check(pre.btn && /partly luck/.test(pre.warn) && !pre.table, 'card before the search: ' + JSON.stringify(pre));
+    const out = await page.evaluate(async () => {
+      await bsRun();
+      const r = BS.res;
+      if (!r || r.err) return { err: r && r.err || 'no result' };
+      const res = { universe: r.universe, split: r.split, evals: r.evals, minN: r.minN, ids: r.dims.map(d => d.id).join(), rnd: r.rnd, verdict: (document.getElementById('sigBestVerdict') || {}).innerText || '', warn: (document.getElementById('sigBestWarn') || {}).innerText || '',
+        rows: document.querySelectorAll('#sigBestTable tbody tr[data-bs]').length, hasCombo: !!document.getElementById('sigBestCombo'), hasOos: !!document.getElementById('sigBestOos'), luck: (document.getElementById('sigBestLuck') || {}).innerText || '',
+        full: document.querySelectorAll('#sigBestFull .grid > div').length, nowOk: r.dims.every(d => d.opts.some(o => o.now)), bestIn: r.dims.every(d => !d.bestTot || d.opts.indexOf(d.bestTot) !== -1),
+        ptoo: r.dims.every(d => !d.bestTot || d.bestTot.st.n >= r.minN), comboOpts: r.combo.lines.map(x => x.label).join(), oosTrainMin: r.minTrain, cur: r.cur };
+      // 1) Each config's numbers = the tab with it set (every setting's best, the best combination).
+      const cfgs = [['combo', r.combo.cfg, r.combo.st]];
+      r.dims.forEach(d => { if (d.bestTot) cfgs.push([d.id + ': ' + d.bestTot.label, d.bestTot.cfg, d.bestTot.st]); });
+      res.configs = cfgs.map(c => c[0]);
+      window.__bsCfgs = cfgs;
+      return res;
+    });
+    check(!out.err, 'search failed: ' + out.err);
+    if (!out.err) {
+      check(out.universe >= 60 && out.split.nTrain + out.split.nTest === out.universe && out.split.nTrain >= out.universe * 0.5 && out.split.nTrain <= out.universe * 0.7, 'universe and the 60 / 40 split: ' + JSON.stringify([out.universe, out.split]));
+      check(out.ids === 'tgt,sl,stop,part,trail,hold,chan,mkt,coins,lvls,lvl,btc', 'a row for every setting a fib tab has: ' + out.ids);
+      check(out.rows === 12 && out.hasCombo && out.hasOos && out.full >= 20, 'the card draws: ' + JSON.stringify([out.rows, out.hasCombo, out.hasOos, out.full]));
+      check(out.nowOk && out.bestIn && out.ptoo && out.minN >= 30, 'now / best rows: ' + JSON.stringify([out.nowOk, out.bestIn, out.ptoo, out.minN]));
+      check(/partly luck/.test(out.warn) && /out-of-sample/.test(out.warn) && out.verdict.length > 20 && /Luck check: /.test(out.luck), 'warning, verdict and luck check: ' + JSON.stringify([out.warn.slice(0, 40), out.verdict, out.luck.slice(0, 60)]));
+      check(out.rnd && out.rnd.k >= 0, 'random settings tried: ' + JSON.stringify(out.rnd));
+      // Fixed, same-run numbers.
+      const par = await page.evaluate(async () => {
+        const bad = [];
+        for (const [name, cfg, st] of window.__bsCfgs) {
+          BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(JSON.stringify(cfg[k])); });
+          sigFixCoins = true; renderSignalsTable();
+          for (let i = 0, quiet = 0; i < 400 && quiet < 3; i++) { await new Promise(r => setTimeout(r, 150)); if (tgtBusy || slcBusy || tgtQ.length || slcQ.length) { quiet = 0; continue; } quiet++; renderSignalsTable(); }
+          const rows = withOutcomeCache(() => inSigScope(() => sigGraded(sigView.pairs)));
+          const tot = rows.reduce((t, x) => t + x.o.r, 0);
+          const wins = rows.filter(x => x.o.r > 0).length;
+          const strip = (document.getElementById('sigEdgeStrip').innerText.match(/Total R\s*([+-]?[\d.]+)R/) || [])[1];
+          if (rows.length !== st.n || Math.abs(tot - st.tot) > 1e-6 || wins !== st.wins || Math.abs(+strip - tot) > 0.006) bad.push([name, rows.length, st.n, tot, st.tot, strip]);
+        }
+        return { n: window.__bsCfgs.length, bad };
+      });
+      check(par.n >= 8 && par.bad.length === 0, 'numbers on the card = the tab once Use is pressed (' + par.n + ' settings): ' + JSON.stringify(par.bad.slice(0, 3)));
+      // 2) bsPairs = the tab's own filter chain, on every option of every setting.
+      const chain = await page.evaluate(async () => {
+        const r = BS.res, bad = []; let n = 0;
+        for (const d of r.dims) for (const o of d.opts) {
+          BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(JSON.stringify(o.cfg[k])); });
+          sigFixCoins = true; renderSignalsTable();
+          // A Coins option that keeps nothing here is put back to All by the tab (and says why): not comparable.
+          if (state.ui.sigCoins !== o.cfg.sigCoins) continue;
+          const a = sigView.pairs.map(pr => pr.signal.key).sort().join('|');
+          const b = bsWith(o.cfg, () => inSigScope(() => bsPairs(matchSignals(sigKind()), sigPeriodRange()).pairs.map(pr => pr.signal.key).sort().join('|')));
+          n++; if (a !== b) bad.push(d.id + ':' + o.label);
+        }
+        return { n, bad };
+      });
+      check(chain.n > 100 && chain.bad.length === 0, 'search filter chain = the tab (' + chain.n + ' options): ' + JSON.stringify(chain.bad.slice(0, 5)));
+      // 2b) Dropped coins Hidden: the search must leave them out exactly as the tab does.
+      const hid = await page.evaluate(() => {
+        const key = pr => pr.signal.key, was = state.ui.sigPeriod; state.ui.sigPeriod = { mode: 'all', from: '', to: '' }; Object.assign(state.ui, { sigCoins: '', sigChan: '', sigMarket: '', sigAsset: '', sigLvl: '', sigDay: '', mktFilter: '', sigTgt: '', sigHold: 'tp' });
+        const extra = state.signals.filter(x => x.kind === 'fib' && x.market !== 'NSE').slice(0, 3).map((x, i) => Object.assign({}, x, { id: 'dz' + i, key: 'dz' + i, symbol: 'AAVEUSD' }));
+        state.signals = state.signals.concat(extra);
+        const snap = bsSnap();
+        const keys = () => bsWith(snap, () => inSigScope(() => bsPairs(matchSignals(sigKind()), sigPeriodRange()).pairs.map(key).sort().join('|')));
+        const shown = keys();
+        state.ui.sigDropped = 'hide'; sigFixCoins = true; renderSignalsTable();
+        const tab = sigView.pairs.map(key).sort().join('|'), mine = keys();
+        state.ui.sigDropped = 'show'; state.ui.sigPeriod = was; state.signals = state.signals.filter(x => !/^dz\d$/.test(x.id)); renderSignalsTable();
+        return { same: tab === mine, fewer: mine.split('|').length < shown.split('|').length };
+      });
+      check(hid.same && hid.fewer, 'Hidden dropped coins: search = the tab, and fewer alerts than Shown: ' + JSON.stringify(hid));
+      // 3) The tab is left exactly as it was before the search (nothing leaks out of bsEval).
+      const left = await page.evaluate(() => {
+        const was = JSON.stringify(bsSnap());
+        const r = bsEval(Object.assign(bsSnap(), { sigTgt: '2R', sigHold: '20', sigChan: 'CRYPTO 1D' }), { raw: matchSignals(sigKind()), range: sigPeriodRange(), memo: {} });
+        return { same: was === JSON.stringify(bsSnap()), n: r.st.n };
+      });
+      check(left.same, 'bsEval leaves state.ui as it found it');
+      // 4) Use buttons: the combination, and one option.
+      const use = await page.evaluate(async () => {
+        const r = BS.res; renderBestCard();
+        document.getElementById('sigBestUse').click();
+        const a = JSON.stringify(bsSnap()) === JSON.stringify(Object.assign(bsSnap(), r.combo.cfg, {}));
+        const set = bsSnap(), want = r.combo.cfg;
+        return { tgt: set.sigTgt === want.sigTgt, stop: JSON.stringify(set.sigStop) === JSON.stringify(stopRaw(want.sigStop)), trail: JSON.stringify(set.sigTrail) === JSON.stringify(trailRaw(want.sigTrail)), hold: set.sigHold === want.sigHold, chan: set.sigChan === want.sigChan, a };
+      });
+      check(use.tgt && use.stop && use.trail && use.hold && use.chan, 'Use puts the best combination on the tab: ' + JSON.stringify(use));
+      // 5) A search is stale once the Period moves.
+      const stale = await page.evaluate(() => { state.ui.sigPeriod = { mode: 'all', from: '', to: '' }; renderSignalsTable(); return !!document.getElementById('sigBestStale'); });
+      check(stale, 'the card says so when the Period changed since the search');
+    }
+  } catch (e) { errs.push('threw: ' + String(e.message).split('\n').slice(0, 2).join(' | ')); }
+  await ctx.close();
+  const label = 'Signals best settings: every setting tried, best combination, out-of-sample check, numbers = the tab';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push('best settings: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -6636,6 +6848,8 @@ await nseCandlesRun();
 await badInputRun(data);
 await tgtStoreRun(data);
 await parityRun();
+await droppedCoinsRun(data);
+await bestSettingsRun();
 
 await browser.close();
 server.close();
