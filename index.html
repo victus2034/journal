@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-14.191">
+  <meta name="app-version" content="2026-11-14.192">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -33,6 +33,8 @@
     @media (min-width:640px) and (max-width:1365px){
       .hdr-row{gap:.5rem}.hdr-left{gap:.5rem}
       .top-nav button{padding-left:.4rem;padding-right:.4rem}
+      /* The balance tag is a date and time now ("14 Nov, 2:57 PM"), a little longer than LAST KNOWN: tighter padding keeps the header as wide as it was. */
+      .hdr-balbox{padding-left:.45rem;padding-right:.45rem}
     }
     @media (min-width:1900px){ .hdr-bal{display:inline!important} }
     @media (max-width:639px){
@@ -438,7 +440,7 @@
         </nav>
 
         <button type="button" id="themeBtn" onclick="toggleTheme()" title="Switch light / dark" class="px-2 py-1.5 rounded-lg border border-terminal-border bg-black/40 text-slate-300 hover:text-white text-xs font-mono">☀</button>
-        <div class="flex items-center gap-2 text-xs font-mono text-slate-400 bg-black/40 px-3 py-1.5 rounded-lg border border-terminal-border whitespace-nowrap">
+        <div class="flex items-center gap-2 text-xs font-mono text-slate-400 bg-black/40 px-3 py-1.5 rounded-lg border border-terminal-border whitespace-nowrap hdr-balbox">
           <span><span class="hdr-bal">Balance: </span> <strong id="topBalVal" title="Balance" class="text-amber-400">$29.45</strong> <span id="topBalLive" class="hidden text-[9px] font-bold px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 align-middle" title="">LIVE</span></span>
         </div>
       </div>
@@ -5861,7 +5863,19 @@
       if (!a || !a.reportBroker) return null;
       const f = btState().files.find(x => x.id === CDX_FILE && x.broker === a.reportBroker);
       const v = f && f.wallet ? f.wallet[a.currency === "INR" ? "INR" : "USD"] : undefined;
-      return typeof v === "number" && isFinite(v) ? { value: v, at: f.wallet.at, old: !!f.note, note: f.note || "" } : null;
+      return typeof v === "number" && isFinite(v) ? { value: v, at: f.wallet.at, seen: f.updatedAt, old: !!f.note, note: f.note || "" } : null;
+    }
+    // When a wallet figure was read, as "14 Nov, 8:30 PM" in India time: the header
+    // and Trading Books show it in place of the words "last known" (lakky, 14 Nov),
+    // so how old the balance is shows at a glance. Takes ms or an ISO string.
+    let balTimeFmt = null;
+    function balTimeText(t) {
+      const d = new Date(typeof t === "number" ? t : Date.parse(t));
+      if (!isFinite(d.getTime()) || d.getTime() <= 0) return "";
+      balTimeFmt = balTimeFmt || new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true });
+      const p = {};
+      balTimeFmt.formatToParts(d).forEach(x => { p[x.type] = x.value; });
+      return p.day + " " + p.month + ", " + p.hour + ":" + p.minute + " " + String(p.dayPeriod || "").toUpperCase();
     }
     function bookBalance(a) {
       if (a.id === deltaAccountId() && deltaLiveKnown()) return liveDeltaBalance.value;
@@ -5888,7 +5902,7 @@
         row.innerHTML = `
           <div>
             <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${empty[a.id] ? ' <span class="text-[10px] font-normal text-slate-500" title="Not on the book bar until it has a trade or a starting balance">· hidden from the bar (empty)</span>' : ''}${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Delta wallet, from your PC\'s import' : 'Last known Delta wallet — nothing newer from your PC\'s import'}"></span>` : ''}</div>
-            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'Delta wallet' : 'last known'}</span>` : wallet ? (wallet.old ? ` <span class="text-amber-400">· CoinDCX wallet, last known (import failing)</span>` : ` <span class="text-emerald-400">· CoinDCX wallet</span>`) : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
+            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'Delta wallet' : esc('Delta wallet from ' + (balTimeText(liveDeltaBalance.at) || 'before'))}</span>` : wallet ? (wallet.old ? ` <span class="text-amber-400">· CoinDCX wallet from ${esc(balTimeText(wallet.at) || 'before')} (import failing)</span>` : ` <span class="text-emerald-400">· CoinDCX wallet</span>`) : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
           </div>
           <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
         host.appendChild(row);
@@ -7966,12 +7980,22 @@
         // A CoinDCX wallet from before the import started failing is not today's figure either.
         const cdxOld = wallets.some(w => w.old);
         const ok = (!deltaIn || fresh) && !cdxOld;
-        tag.innerText = ok ? 'WALLET' : 'LAST KNOWN';
+        // The date and time of the figure (lakky, 14 Nov: easier than "LAST KNOWN"). A total is
+        // as old as its oldest stale part (amber); with none stale, the newest read (green).
+        // CoinDCX dates its wallet by when it last changed, so a working import also counts its last update.
+        const ms = v => typeof v === "number" ? v : Date.parse(v) || 0;
+        const reads = (deltaIn ? [{ t: ms(liveDeltaBalance.at), stale: !fresh }] : [])
+          .concat(wallets.map(w => ({ t: w.old ? ms(w.at) : Math.max(ms(w.at), ms(w.seen)), stale: w.old }))).filter(x => x.t > 0);
+        const staleReads = reads.filter(x => x.stale), asOf = staleReads.length ? Math.min(...staleReads.map(x => x.t)) : reads.length ? Math.max(...reads.map(x => x.t)) : 0;
+        // An amber tag never shows a fresh part's time: no date on the stale part keeps the words.
+        const when = asOf && (ok || staleReads.length) ? balTimeText(asOf) : "";
+        tag.innerText = when || (ok ? 'WALLET' : 'LAST KNOWN');
         tag.className = 'text-[9px] font-bold px-1 py-0.5 rounded border align-middle '
           + (ok ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40');
         const since = deltaIn ? "Delta " + liveDeltaBalance.field + ", " + deltaFetchedText() : "";
         const cdx = wallets.length ? cdxWalletTitle(wallets.find(w => w.old) || wallets[0]) : "";
-        tag.title = [since + (deltaIn && !fresh ? " — nothing newer since (is the PC on?); holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
+        tag.title = (when ? (ok ? "Balance read " : "Nothing newer since ") + when + " (India time). " : "")
+          + [since + (deltaIn && !fresh ? " — nothing newer since (is the PC on?); holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
           + ". Journal-computed balance: " + money(lastComputedBalance.value, cur);
         if (chartEl) { chartEl.innerText = money(liveTotal, cur); chartEl.title = tag.title; }
       } else {
@@ -15264,6 +15288,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-14.192', pr: 106, title: 'Balance shows its date and time', pts: ['The header balance tag shows when the wallet figure was read (e.g. 14 Nov, 8:30 PM, India time) instead of LAST KNOWN / WALLET', 'Green while it is fresh, amber when nothing newer came in; on All accounts it is the oldest stale figure', 'Trading Books says "Delta wallet from 14 Nov, 2:51 PM" in place of "last known"'] },
       { v: '2026-11-14.191', pr: 105, title: 'Market filter + no more empty dashes', pts: ['New Market row (Signals and Analysis): All / Crypto / Indian, above Channel. The Channel list then shows only that market\'s channels; Indian hides Assets and Coins', 'xStocks + CoinDCX showed 0 and a row of dashes: CoinDCX lists no xStocks. Coins options that keep nothing are now greyed (a tap says why), and picking xStocks with CoinDCX on puts Coins back to All', 'An empty view says which filter left nothing, with a button back'] },
       { v: '2026-11-13.190', pr: 104, title: 'Signals: NSE alerts get results', pts: ['NSE alerts showed only dashes with any SL but Alert (e.g. NSE 1D trendlines, Wick or body): no NSE candles in the app', 'Now a twice-a-day job puts Yahoo\'s NSE candles in your sync repo, and NSE alerts are played like crypto: every SL type, Move SL, Trail TP, Partial, Hold, Demo account', '"20 candles" counts NSE candles (no nights or weekends). Needs GitHub sync on'] },
       { v: '2026-11-13.189', pr: 103, title: 'Assets row + CoinDCX / Delta coins', pts: ['New Assets row (Signals and Analysis): Both / Crypto / xStocks. Coins adds CoinDCX and Delta: only what that broker lists, the same list the Demo account uses, so both count the same alerts', 'Backtest report compares xStocks vs crypto and each broker\'s coins', 'Demo account: new "What changed the result" line, from any size to real orders one rule at a time (not listed, min stop, coin leverage, whole orders)'] },
