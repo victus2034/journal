@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-14.193">
+  <meta name="app-version" content="2026-11-14.194">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -763,7 +763,6 @@
           <div class="sig-row"><span class="sig-lab">Channel</span><div id="sigChanBar" class="sig-ctl"></div></div>
           <div id="sigAssetWrap" class="sig-row"><span class="sig-lab">Assets</span><div id="sigAssetBar" class="sig-ctl"></div></div>
           <div id="sigCoinWrap" class="sig-row"><span class="sig-lab">Coins</span><div id="sigCoinBar" class="sig-ctl"></div></div>
-          <div id="sigDropWrap" class="sig-row hidden"><span class="sig-lab">Dropped</span><div id="sigDropBar" class="sig-ctl"></div></div>
           <div id="sigLvlOnWrap" class="sig-row"><span class="sig-lab">Levels on</span><div class="sig-ctl"><div id="sigLvlOnBar"></div></div></div>
           <div id="sigLvlWrap" class="sig-row"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="sigLvlBar"></div></div></div>
           <div id="sigTlWrap" class="sig-row"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="sigTlBar"></div></div></div>
@@ -2163,6 +2162,8 @@
       if (!s.accounts.length) s.accounts = defaultAccounts();
       ensureReportBooks(s);
       if (!s.ui || typeof s.ui !== "object") s.ui = {};
+      delete s.ui.sigDropped; // v.193's Hidden / Shown switch: dropped symbols are deleted now
+      if (s.ui.sigLive !== undefined && !(s.ui.sigLive && Array.isArray(s.ui.sigLive.list) && s.ui.sigLive.list.every(b => typeof b === "string" && b.length <= 20))) delete s.ui.sigLive;
       s.ui.account = cText(s.ui.account || "all", 40);
       if (s.ui.account !== "all" && !s.accounts.some(a => a.id === s.ui.account)) s.ui.account = "all";
       s.ui.month = cText(s.ui.month || "current", 10);
@@ -2200,7 +2201,7 @@
       try {
         const v = typeof stored === "string" ? JSON.parse(stored) : null;
         if (!Array.isArray(v)) return;
-        sentSigs = v.map(cleanSignal).filter(g => g && g.kind && g.key);
+        sentSigs = v.map(cleanSignal).filter(g => g && g.key && (g.kind || /^trade:/.test(g.id)));
         sentJson = stored; sentVer++; sentStored = true;
       } catch (e) {}
     }
@@ -2293,13 +2294,19 @@
         if (state.signals !== startRef) { savedSignalsRef = null; writeSignals(); return; } // changed while loading: keep what is on screen
         state.signals = sanitizeState({ accounts: state.accounts, trades: [], signals: list }).signals;
         savedSignalsRef = state.signals;
+        // Alerts on symbols the scanner dropped go for good, and the shorter list is saved.
+        if (purgeDropped()) save();
         renderAll();
       }, () => {
         // IndexedDB would not open: keep using localStorage as before.
         done(); sigIdbOk = false;
         savedSignalsRef = state.signals === startRef && legacy != null ? state.signals : null;
         writeSignals();
-      }).then(() => renderStorageUsage());
+      }).then(() => {
+        // Whatever path the list came by (an older build's localStorage copy too): dropped symbols go.
+        if (purgeDropped()) { save(); renderAll(); }
+        renderStorageUsage();
+      });
     }
     // Another tab saved alerts: read them back.
     if (sigChannel) sigChannel.onmessage = () => {
@@ -2311,6 +2318,7 @@
         signalsBytes = stored.length;
         state.signals = sanitizeState({ accounts: state.accounts, trades: [], signals: v }).signals;
         savedSignalsRef = state.signals;
+        if (purgeDropped()) save();
         renderAll();
       }).catch(() => {});
     };
@@ -4056,8 +4064,7 @@
       }
       const hint = document.getElementById('sigPeriodHint');
       if (hint) hint.innerText = state.ui.sigDay ? `Showing ${state.ui.sigDay} only. Click the day again to go back.` : ((range.from || range.to) ? `${range.from || "start"} → ${range.to || "now"}` : "All available history");
-      const rawPairs = matchSignals(kind), allPairs = sigSlPairs(sigLvlPairs(dropKeep(rawPairs)));
-      renderDropBar(rawPairs);
+      const rawPairs = matchSignals(kind), allPairs = sigSlPairs(sigLvlPairs(rawPairs));
       const inPer = pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to);
       // Market (All / Crypto / Indian) first: the Channel list below holds only its channels.
       const mkt = sigMarketMode(), mktKeep = marketTestOf(mkt);
@@ -6365,8 +6372,8 @@
     // it fits (classifyTrade), else the alert it was paired with on its day, the one
     // closest to its entry when several alert types paired it.
     function tradeAlertMap() {
-      const pair = {};
-      Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind).forEach(p => {
+      const pair = {}, copies = sentSigs.filter(isTradeCopy);
+      Object.keys(KIND_SETUP).forEach(kind => matchSignals(kind, copies).forEach(p => {
         if (!p.trade) return;
         const gap = priceGap(p.trade.entry, signalEntry(p.signal)), cur = pair[p.trade.id];
         if (!cur || gap < cur.gap) pair[p.trade.id] = { kind, sig: p.signal, gap };
@@ -7403,6 +7410,7 @@
         if (e.key === SIG_KEY && Array.isArray(p)) {
           state.signals = sanitizeState({ accounts: state.accounts, trades: [], signals: p }).signals;
           savedSignalsRef = state.signals;
+          if (purgeDropped()) save();
           renderAll();
         } else if (e.key === KEY && p && Array.isArray(p.trades) && Array.isArray(p.accounts)) {
           const sigs = state.signals;
@@ -9322,10 +9330,11 @@
     // P&L in the currency the prices are in. A CoinDCX rupee book books rupees
     // on USDT prices, so its P&L is turned into dollars at the book's rate.
     function pricePnl(t) { return t.rep ? (derive(t).pnl || 0) * fxk(acct(t.accountId), "USD") : derive(t).pnl; }
-    function matchSignals(kind) {
+    // extra: more alerts to pair with (tradeAlertMap's trade copies of dropped symbols).
+    function matchSignals(kind, extra) {
       const want = kind || "zone";
       const trades = signalTrades().sort(byWhen);
-      const sigs = (state.signals || []).filter(g => (g.kind || "zone") === want);
+      const sigs = (extra && extra.length ? (state.signals || []).concat(extra) : (state.signals || [])).filter(g => (g.kind || "zone") === want);
       const taken = {}; // signal id -> trade
       // Bucket alerts by day and side once, so each trade only looks at its own
       // day instead of scanning every alert (thousands once the scanner is loaded).
@@ -10885,38 +10894,127 @@
     // (DEMO_DCX; Delta's live product list, else DEMO_DELTA), so the two add up the same alerts.
     const SIG_TOP_CAP = ["BTC", "ETH", "XRP", "BNB", "SOL", "DOGE", "ADA", "HYPE", "LINK", "AVAX"];
     // Top 10 / 20 / 30 (lakky, 2026-11-14: "backtest with top 10-20-30 volume cryptos"): always by trading
-    // volume, the 30-day average on CoinDCX (Delta where CoinDCX has none), as the scanner's 8 Nov coin
-    // review measured it (research/out/coin_list). Only coins that have alerts in view count, so with 16
-    // coins on the scanner's list Top 20 and Top 30 are the same 16 (the row says so).
-    const SIG_VOL30 = { BTC: 10498, ETH: 7409, ZEC: 1706, SOL: 1471, HYPE: 640, NEAR: 637, XRP: 621, BNB: 345, "1000PEPE": 335, DOGE: 300, ENA: 257, WLD: 233, UNI: 202, SUI: 202, STRK: 194, BTW: 165, ADA: 139, LINK: 119, FIL: 119, AVAX: 114, TAO: 100, AAVE: 96, QNT: 94, ONDO: 80, RLC: 56 };
-    const SIG_VOL_AT = "8 Nov 2026";
+    // volume, the 30-day average on CoinDCX USDT futures, and only coins both CoinDCX and Delta list
+    // (same day: "make sure top30 cryptos are available in coindcx and delta"; coinOnBoth). The numbers are
+    // the market's top 30 on both brokers on 14 Nov (the scanner's research/top30_brokers.py, part top30,
+    // research/out/top30). Only coins with alerts in view count: the scanner watches 22 of that top 30 (the
+    // other 8 are pump/dump charts or have no Bitunix candles), so Top 30 is those 22 (the row says so).
+    const SIG_VOL30 = { BTC: 11051, ETH: 7662, ZEC: 1820, SOL: 1443, HYPE: 655, XRP: 643, NEAR: 536, "1000PEPE": 388, BNB: 362, DOGE: 301, JCT: 283, ENA: 247, WLD: 203, UNI: 194, AKE: 191,
+      SUI: 180, IRYS: 154, PUMP: 144, BTW: 129, ADA: 127, LINK: 119, AIN: 118, AVAX: 115, INIT: 102, INJ: 99, FIL: 96, AAVE: 95, TAO: 93, TRUMP: 87, ARB: 82 };
+    const SIG_VOL_AT = "14 Nov 2026";
     const SIG_COIN_MODES = [{ k: "", label: "All" }, { k: "top3", label: "Top 3", n: 3 }, { k: "top5", label: "Top 5", n: 5 },
       { k: "top10", label: "Top 10", n: 10, vol: true }, { k: "top20", label: "Top 20", n: 20, vol: true }, { k: "top30", label: "Top 30", n: 30, vol: true }, { k: "picks", label: "Picks" },
       { k: "dcx", label: "CoinDCX", venue: "coindcx" }, { k: "delta", label: "Delta", venue: "delta" }];
-    // Dropped coins (lakky, 2026-11-14: "remove all those cryptos from backtest report which we have removed"):
-    // the scanner's list on 8 Nov 2026 (config CRYPTO / OTHER / XSTOCK watchlists). An alert on any other
-    // crypto, gold, silver or xStock is from a symbol the scanner no longer watches; Signals hides those
-    // by default, with a switch to show them. NSE is its own market and is never touched.
-    const SIG_LIVE = { BTC: 1, ETH: 1, ZEC: 1, SOL: 1, XRP: 1, NEAR: 1, HYPE: 1, DOGE: 1, SUI: 1, UNI: 1, BNB: 1, ENA: 1, "1000PEPE": 1, WLD: 1, ADA: 1, LINK: 1, XAUT: 1, SLVON: 1, TSLAX: 1, SNDKB: 1, QQQX: 1, TSLA: 1, SNDK: 1, QQQ: 1 };
-    const SIG_LIVE_AT = "8 Nov";
+    // Dropped coins are deleted (lakky, 2026-11-14: "remove all those unnecessary alerts, it eventually makes the
+    // journal slow ... do not put hidden or show"). The scanner's watchlist is the list: an alert on any other
+    // crypto, gold, silver or xStock is deleted from this device and never loaded again. The list is read from
+    // the scanner's own config.py (CRYPTO_ / OTHER_ / XSTOCK_WATCHLIST) with every alert check, so a coin the
+    // scanner adds is kept from its first alert and a coin it drops goes; SIG_LIVE is the 14 Nov list, for a
+    // device that has not read it yet. NSE is its own market and is never touched.
+    // (the 14 Nov list: the 8 Nov 16 coins plus AVAX, INJ, FIL, AAVE, TAO, ARB, the rest of the top 30 on both
+    // CoinDCX and Delta with a clean chart, lakky's pick)
+    const SIG_LIVE = { BTC: 1, ETH: 1, ZEC: 1, SOL: 1, XRP: 1, NEAR: 1, HYPE: 1, DOGE: 1, SUI: 1, UNI: 1, BNB: 1, ENA: 1, "1000PEPE": 1, WLD: 1, ADA: 1, LINK: 1,
+      AVAX: 1, INJ: 1, FIL: 1, AAVE: 1, TAO: 1, ARB: 1, XAUT: 1, SLVON: 1, TSLAX: 1, SNDKB: 1, QQQX: 1, TSLA: 1, SNDK: 1, QQQ: 1 };
+    const SCANNER_CONFIG_URL = "https://raw.githubusercontent.com/victus2034/victus-indicator-strategy/main/config.py";
     function liveBaseOf(sig) { return String(sig && sig.symbol || "").toUpperCase().split(/[\/:]/)[0].replace(/[^A-Z0-9]/g, "").replace(/(USDT|USDC|USD)$/, ""); }
-    function sigDropped(sig) { if (!sig || isNseSig(sig)) return false; const b = liveBaseOf(sig); return !!b && !SIG_LIVE[b]; }
-    function sigDroppedMode() { return state.ui.sigDropped === "show" ? "show" : "hide"; }
-    function dropKeep(pairs) { return sigDroppedMode() === "show" ? pairs : pairs.filter(pr => !sigDropped(pr.signal)); }
-    // The Dropped row: hide (default) or show the alerts on symbols the scanner no longer watches, with the
-    // coins and how many alerts that is. Hidden altogether when there are none and they are not shown.
-    function renderDropBar(rawPairs) {
-      const wrap = document.getElementById('sigDropWrap'), bar = document.getElementById('sigDropBar');
-      if (!wrap || !bar) return;
-      const by = {};
-      rawPairs.forEach(pr => { if (sigDropped(pr.signal)) { const n = coinNameOf(pr.signal); by[n] = (by[n] || 0) + 1; } });
-      const names = Object.keys(by).sort((a, b) => by[b] - by[a] || a.localeCompare(b)), n = sumVals(by), mode = sigDroppedMode();
-      wrap.classList.toggle('hidden', !n && mode === 'hide');
-      bar.innerHTML = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="Symbols the scanner stopped watching on ' + SIG_LIVE_AT + ' (AAVE, AVAX, BTW, FIL, ONDO, QNT, RLC, STRK, TAO, and the xStocks META, NVDA, MRVL, SOXL). Hidden: every number on this tab uses only the scanner\'s current list.">'
-        + [['hide', 'Hidden'], ['show', 'Shown']].map(x => '<button type="button" data-dropped="' + x[0] + '" onclick="setSigDropped(\'' + x[0] + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x[0] === mode ? SEG_ON : SEG_OFF) + '">' + x[1] + ' <span class="text-[10px] opacity-60">' + n + '</span></button>').join('') + '</div>'
-        + '<span id="sigDropNote" class="text-[11px] text-slate-400 font-mono">' + (n ? n + ' alert' + (n === 1 ? '' : 's') + ' on ' + names.length + ' symbol' + (names.length === 1 ? '' : 's') + ' the scanner dropped by ' + SIG_LIVE_AT + ' (' + esc(names.slice(0, 12).join(', ') + (names.length > 12 ? ', +' + (names.length - 12) + ' more' : '')) + ') are ' + (mode === 'hide' ? 'left out of every number here' : 'counted') : 'none on this device') + '</span>';
+    // config.py -> the bases it scans ("BTC", "1000PEPE", "TSLAX" and Bitunix's "TSLA"), or null when it
+    // does not read as the scanner's config (all three lists, BTC among them).
+    function parseScannerWatchlist(text) {
+      const out = [];
+      let lists = 0;
+      [["CRYPTO_WATCHLIST", false], ["OTHER_WATCHLIST", false], ["XSTOCK_WATCHLIST", true]].forEach(([name, stock]) => {
+        const m = String(text || "").match(new RegExp("^" + name + "\\s*(?::[^=\\n]*)?=\\s*\\[([\\s\\S]*?)^\\]", "m"));
+        if (!m) return;
+        lists++;
+        m[1].split("\n").forEach(line => (line.replace(/#.*$/, "").match(/["']([A-Za-z0-9]+)["']/g) || []).forEach(q => {
+          const b = liveBaseOf({ symbol: q.slice(1, -1) });
+          if (!b) return;
+          out.push(b);
+          // Delta names xStocks TSLAX / SNDKB; Bitunix, whose candles the alerts use, the plain ticker.
+          if (stock && /[XB]$/.test(b) && b.length > 2) out.push(b.slice(0, -1));
+        }));
+      });
+      const bases = uniq(out);
+      return lists === 3 && bases.indexOf("BTC") !== -1 && bases.length >= 5 ? bases.sort() : null;
     }
-    function setSigDropped(v) { state.ui.sigDropped = v === "show" ? "show" : "hide"; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
+    let liveMemo = { src: null, set: SIG_LIVE, drop: new Map() };
+    function liveSet() {
+      const c = state && state.ui && state.ui.sigLive, list = c && Array.isArray(c.list) && (c.list.length >= 5 || c.list.indexOf("*") !== -1) ? c.list : null;
+      const src = list || SIG_LIVE;
+      if (liveMemo.src !== src) {
+        const o = {}; if (list) list.forEach(b => { o[String(b)] = 1; });
+        liveMemo = { src, set: list ? o : SIG_LIVE, drop: new Map() };
+      }
+      return liveMemo.set;
+    }
+    // Is this alert on a symbol the scanner no longer watches? (memoised per symbol and list)
+    function sigDropped(sig) {
+      if (!sig || isNseSig(sig)) return false;
+      const set = liveSet(), raw = String(sig.symbol || "");
+      if (set["*"]) return false; // a list of "*" keeps every symbol (the smoke test's made-up ones)
+      let v = liveMemo.drop.get(raw);
+      if (v === undefined) { const b = liveBaseOf(sig); v = !!b && !set[b]; liveMemo.drop.set(raw, v); }
+      return v;
+    }
+    // Takes the watchlist read from config.py. Returns how many symbols it adds to what this device keeps
+    // (their history is then read again in whole), or 0.
+    function setScannerWatchlist(list) {
+      if (!list) return 0;
+      const was = liveSet(), added = list.filter(b => !was[b]).length;
+      state.ui.sigLive = { list, at: Date.now() };
+      return added;
+    }
+    // Real trades keep their alert: a dropped alert one of your trades could have been taken from is kept,
+    // cut down, beside the sent copies, only to match that trade (never shown or scored). Could: the same
+    // symbol, and the trade on the alert's day (how matchSignals pairs them) or, for a fib or trendline, opened
+    // from 5 minutes before it to its timeframe's look-back after (how classifyTrade looks).
+    function tradeNearTest() {
+      const ts = signalTrades().map(t => ({ sym: t.symbol, date: t.date, ms: istMs(t.date, t.time) })).filter(x => x.date), memo = {};
+      return g => {
+        if (!g || !g.key || !ts.length) return false;
+        const s = String(g.symbol || ""), list = memo[s] || (memo[s] = ts.filter(x => symbolsAgree(x.sym, s)));
+        if (!list.length) return false;
+        if (list.some(x => x.date === g.date)) return true;
+        if (g.kind !== "fib" && g.kind !== "trendline") return false;
+        const ms = istMs(g.date, g.time), span = (ALERT_LOOK_DAYS[g.timeframe] || 4) * 864e5;
+        return isFinite(ms) && list.some(x => isFinite(x.ms) && x.ms >= ms - 5 * 60e3 && x.ms - ms <= span);
+      };
+    }
+    function tradeCopy(r) {
+      const o = Object.assign(sentCopy(r), { id: "trade:" + r.key });
+      if (!o.kind) delete o.kind;
+      ["zoneLow", "zoneHigh", "filled"].forEach(k => { if (r[k] !== undefined && r[k] !== null) o[k] = r[k]; });
+      return o;
+    }
+    function isTradeCopy(g) { return /^trade:/.test(String(g && g.id || "")); }
+    // Deletes the alerts this device holds on symbols the scanner no longer watches (and their sent copies),
+    // keeping only trade copies. Returns how many alerts went.
+    function purgeDropped() {
+      const sigs = state.signals || [];
+      let n = 0;
+      for (let i = 0; i < sigs.length; i++) if (sigDropped(sigs[i])) n++;
+      const sentGone = sentSigs.some(g => !isTradeCopy(g) && sigDropped(g));
+      if (!n && !sentGone) return 0;
+      // Your trades take what they need from the whole list once more before it goes (stop, setup, level).
+      if (n) { alertFillKey = ""; fillFromAlerts(); }
+      const near = tradeNearTest(), keep = [], copies = new Map(), rbGone = { crypto: 0, nse: 0 };
+      sigs.forEach(g => {
+        if (!sigDropped(g)) { keep.push(g); return; }
+        if (g.rb) rbGone[rbMkt(g)]++;
+        if (near(g)) copies.set(g.key, tradeCopy(g));
+      });
+      const sent = sentSigs.filter(g => {
+        if (!sigDropped(g)) return true;
+        if (isTradeCopy(g) || near(g)) { if (!copies.has(g.key)) copies.set(g.key, isTradeCopy(g) ? g : tradeCopy(g)); }
+        return false;
+      });
+      if (n) state.signals = keep;
+      // The rebuilt history this device holds shrinks by what went, so it is not taken again in whole.
+      const h = state.ui.rbHeld;
+      if (h && typeof h === "object") ["crypto", "nse"].forEach(m => { if (typeof h[m] === "number") h[m] = Math.max(0, h[m] - rbGone[m]); });
+      setSentSigs(sent.concat([...copies.values()]));
+      return n;
+    }
     const SIG_ASSETS = [{ k: "", label: "Both" }, { k: "crypto", label: "Crypto", only: "coin" }, { k: "xstock", label: "xStocks", only: "stock" }];
     function assetOf(k) { return SIG_ASSETS.find(x => x.k === k) || SIG_ASSETS[0]; }
     function sigAssetMode() { return assetOf(state.ui.sigAsset).k; }
@@ -11025,7 +11123,9 @@
     // Alerts per coin in these pairs.
     function sigCoinCounts(pairs) { const n = {}; pairs.forEach(pr => { const c = coinOf(pr.signal); if (c) n[c] = (n[c] || 0) + 1; }); return n; }
     // vol: by 30-day trading volume, the coins with alerts in view only (unknown volume last, by alerts).
-    function sigVolOrder(counts) { return Object.keys(counts).sort((a, b) => (SIG_VOL30[b] || 0) - (SIG_VOL30[a] || 0) || counts[b] - counts[a] || a.localeCompare(b)); }
+    // Listed on both brokers' futures (the lists the Demo account's real orders use).
+    function coinOnBoth(c) { const g = { symbol: c + "USD" }; return onVenue(g, "coindcx") && onVenue(g, "delta"); }
+    function sigVolOrder(counts) { return Object.keys(counts).filter(coinOnBoth).sort((a, b) => (SIG_VOL30[b] || 0) - (SIG_VOL30[a] || 0) || counts[b] - counts[a] || a.localeCompare(b)); }
     function sigTopCoins(n, counts, rank) {
       const rk = rank || sigCoinRank();
       if (rk === "alerts") return Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)).slice(0, n);
@@ -11081,7 +11181,7 @@
     // The Coins row, for Signals' alerts and Analysis's trades alike.
     const COINS = {
       sig: { id: "sig", mode: () => sigCoinMode(), rank: () => sigCoinRank(), picks: () => sigCoinPicks(), fn: { mode: "setSigCoins", rank: "setSigCoinRank", pick: "toggleSigCoinPick" }, what: "alerts",
-        tip: "Top 3 / Top 5: only the biggest coins' alerts (by market cap, volume, or the most alerts in view). Top 10 / 20 / 30: the coins with the most 30-day trading volume (only coins with alerts here count). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest. CoinDCX / Delta: only what that broker's futures list, the same list the Demo account's real orders use." },
+        tip: "Top 3 / Top 5: only the biggest coins' alerts (by market cap, volume, or the most alerts in view). Top 10 / 20 / 30: the coins with the most 30-day trading volume that both CoinDCX and Delta list (only coins with alerts here count). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest. CoinDCX / Delta: only what that broker's futures list, the same list the Demo account's real orders use." },
       an: { id: "an", mode: () => anCoinMode(), rank: () => anCoinRank(), picks: () => anCoinPicks(), fn: { mode: "setAnCoins", rank: "setAnCoinRank", pick: "toggleAnCoinPick" }, what: "trades",
         tip: "Top 3 / Top 5: only your trades on the biggest coins (by market cap, or the coins you trade most). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. CoinDCX / Delta: only what that broker's futures list." }
     };
@@ -11109,9 +11209,11 @@
         h += '<select id="' + C.id + 'CoinRank" onchange="' + C.fn.rank + '(this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200 text-[11px] font-mono"><option value="cap"' + (rk === 'cap' ? ' selected' : '') + '>by market cap</option><option value="vol"' + (rk === 'vol' ? ' selected' : '') + '>by volume</option><option value="alerts"' + (rk === 'alerts' ? ' selected' : '') + '>by most ' + C.what + '</option></select>'
           + '<span id="' + C.id + 'CoinList" class="text-[11px] text-slate-400 font-mono">' + esc((set || []).join(', ')) + '</span>';
       } else if (mode && mode.vol) {
-        // Top 10 / 20 / 30: by 30-day volume. A list longer than the coins here is every coin here, said plainly.
-        const have = coins.length, all = have <= mode.n;
-        h += '<span id="' + C.id + 'CoinVol" class="text-[11px] text-slate-400 font-mono">by 30-day volume (' + SIG_VOL_AT + ') · ' + (set || []).length + ' coin' + ((set || []).length === 1 ? '' : 's') + (all ? ' <span class="text-amber-300">= every coin with ' + C.what + ' here (' + have + ')</span>' : '') + ': ' + esc((set || []).join(', ')) + '</span>';
+        // Top 10 / 20 / 30: by 30-day volume, coins on both CoinDCX and Delta. A list longer than those coins
+        // is every one of them, said plainly, and a coin here that one broker does not list is named.
+        const both = coins.filter(coinOnBoth), off = coins.filter(c => !coinOnBoth(c)), all = both.length <= mode.n;
+        h += '<span id="' + C.id + 'CoinVol" class="text-[11px] text-slate-400 font-mono">by 30-day volume (' + SIG_VOL_AT + '), on both CoinDCX and Delta · ' + (set || []).length + ' coin' + ((set || []).length === 1 ? '' : 's') + (all ? ' <span class="text-amber-300">= every coin with ' + C.what + ' here (' + both.length + ')</span>' : '') + ': ' + esc((set || []).join(', '))
+          + (off.length ? ' · <span class="text-amber-300">not on both: ' + esc(off.join(', ')) + '</span>' : '') + '</span>';
       } else if (cur === 'picks') {
         const picks = C.picks(), list = coins.concat(picks.filter(c => coins.indexOf(c) === -1));
         h += '<div id="' + C.id + 'CoinPicks" class="coin-picks flex flex-wrap items-center gap-1">' + list.map(c => '<button type="button" data-coin="' + esc(c) + '" onclick="' + C.fn.pick + '(\'' + esc(c) + '\')" class="sig-coin' + (picks.indexOf(c) !== -1 ? ' on' : '') + '">' + esc(c) + '<span class="cnt">' + (counts[c] || 0) + '</span></button>').join('') + '</div>';
@@ -11643,7 +11745,7 @@
       if (!nn.length) return '';
       const graded = sigGraded(all), counts = sigCoinCounts(all), gradedNn = sigGraded(nn);
       const t3 = sigTopCoins(3, counts), t5 = sigTopCoins(5, counts), picks = sigCoinPicks(), cur = sigCoinMode(), asset = sigAssetMode();
-      const t10 = sigTopCoins(10, counts, 'vol'), t20 = sigTopCoins(20, counts, 'vol'), t30 = sigTopCoins(30, counts, 'vol'), nCoins = Object.keys(counts).length;
+      const t10 = sigTopCoins(10, counts, 'vol'), t20 = sigTopCoins(20, counts, 'vol'), t30 = sigTopCoins(30, counts, 'vol'), nCoins = Object.keys(counts).filter(coinOnBoth).length;
       const inS = set => c => set.indexOf(c) !== -1, notS = set => c => set.indexOf(c) === -1;
       const grp = (label, sub, keep, k) => {
         const rs = graded.filter(x => keep(coinOf(x.pr.signal))).map(x => x.o.r);
@@ -11651,7 +11753,7 @@
       };
       const rk = sigCoinRank() === 'alerts' ? 'most alerts' : 'market cap';
       const groups = !all.length ? [] : [grp('All crypto', Object.keys(counts).length + ' coins', () => true, ''), grp('Top 3', t3.join(', '), inS(t3), 'top3'), grp('Top 5', t5.join(', '), inS(t5), 'top5'),
-        grp('Top 10 by volume', t10.join(', '), inS(t10), 'top10'), grp('Top 20 by volume', t20.length >= nCoins ? 'every coin here (' + nCoins + ')' : t20.join(', '), inS(t20), 'top20'), grp('Top 30 by volume', t30.length >= nCoins ? 'every coin here (' + nCoins + ')' : t30.join(', '), inS(t30), 'top30'),
+        grp('Top 10 by volume', t10.join(', '), inS(t10), 'top10'), grp('Top 20 by volume', t20.length >= nCoins ? 'every coin here on both brokers (' + nCoins + ')' : t20.join(', '), inS(t20), 'top20'), grp('Top 30 by volume', t30.length >= nCoins ? 'every coin here on both brokers (' + nCoins + ')' : t30.join(', '), inS(t30), 'top30'),
         grp('Other coins', 'not in the top 5', notS(t5), null)];
       if (all.length && picks.length) groups.push(grp('Your picks', picks.join(', '), inS(picks), 'picks'));
       // Crypto against xStocks, and what each broker lists (lakky, 2026-11-13), over every alert in view.
@@ -11687,7 +11789,7 @@
         if (!g) return '<span class="text-slate-500">' + esc(la) + ' vs ' + esc(lb) + ': too few alerts on one side to compare</span>';
         return '<span id="sigMktGap"><b class="text-slate-200">' + esc(la) + '</b> <span class="' + tone(g.a.avg) + '">' + rfmt(g.a.avg) + '</span> vs <span class="' + tone(g.b.avg) + '">' + rfmt(g.b.avg) + '</span> a trade for ' + esc(lb) + ' (' + g.a.n + ' vs ' + g.b.n + ') · gap ' + rfmt(g.gap) + ' · <span class="' + w.c + '">' + w.w + '</span></span>';
       };
-      return '<div id="sigCoinCmp" class="mb-3"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-1"><span class="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Top coins vs all crypto</span><span class="text-[10px] text-slate-500">Top 3 / 5 by ' + rk + ', Top 10 / 20 / 30 by 30-day volume · same filters, before the Coins filter</span></div>'
+      return '<div id="sigCoinCmp" class="mb-3"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-1"><span class="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Top coins vs all crypto</span><span class="text-[10px] text-slate-500">Top 3 / 5 by ' + rk + ', Top 10 / 20 / 30 by 30-day volume on both CoinDCX and Delta · same filters, before the Coins filter</span></div>'
         + '<div class="overflow-x-auto"><table class="sig-cmp w-full text-left mono-num"><thead class="text-slate-500 text-[10px] uppercase"><tr><th>Coins</th><th class="text-right">Alerts</th><th class="text-right">Graded</th><th class="text-right">Win %</th><th class="text-right">Avg R</th><th class="text-right" title="Where the true average most likely sits">95% range</th><th class="text-right">Total R</th><th class="text-right">PF</th><th class="text-right">Max DD</th><th class="text-right" title="Most losses in a row">Loss run</th></tr></thead><tbody>'
         + groups.map(g => row(g, g.k != null && g.k === cur && (g.k || asset !== 'xstock'))).join('')
         + (markets.length ? '<tr class="grp"><td colspan="10">Markets and brokers</td></tr>' + markets.map(g => row(g, g.k != null && (asset ? g.k === asset && !cur : g.k === cur))).join('') : '')
@@ -12876,7 +12978,7 @@
     // renderSignalsNow's filter chain, without the drawing: market, channel, period, assets, coins, BTC day,
     // tiny stops (and, for the out-of-sample check, a date cut). The settings must already be on state.ui.
     function bsPairs(raw, range, when) {
-      const all = sigSlPairs(sigLvlPairs(dropKeep(raw)));
+      const all = sigSlPairs(sigLvlPairs(raw));
       const inPer = pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to);
       const mkt = sigMarketMode(), mktKeep = marketTestOf(mkt);
       const has = { crypto: all.some(pr => !isNseSig(pr.signal)) };
@@ -13099,7 +13201,7 @@
       } finally { BS.busy = false; BS.prog = null; renderBestCard(); }
     }
     // What the result was made from: a change in kind, period or the dropped-coin switch makes it stale.
-    function bsSig() { const r = sigPeriodRange(); return [sigKind(), r.from, r.to, sigDroppedMode(), state.ui.sigAsset || "", state.ui.sigSkipTiny === true ? 1 : 0, state.ui.sigNoFee === true ? 1 : 0, (state.signals || []).length].join("|"); }
+    function bsSig() { const r = sigPeriodRange(); return [sigKind(), r.from, r.to, state.ui.sigAsset || "", state.ui.sigSkipTiny === true ? 1 : 0, state.ui.sigNoFee === true ? 1 : 0, (state.signals || []).length].join("|"); }
     // Use these settings on the tab.
     function bsUse(path) {
       const o = path.split(".").reduce((x, k) => x && x[k], BS.res);
@@ -13677,8 +13779,10 @@
       }, () => {
         if (!found.length) { toast("Nothing to import yet"); return false; }
         state.signals = (state.signals || []).concat(found);
+        // A symbol the scanner no longer watches is not kept (lakky, 2026-11-14).
+        const gone = purgeDropped();
         save(); renderAll();
-        toast(`Imported ${found.length} signal${found.length === 1 ? "" : "s"}`);
+        toast(`Imported ${found.length - gone} signal${found.length - gone === 1 ? "" : "s"}` + (gone ? ` · ${gone} on symbols the scanner dropped left out` : ""));
         return true;
       });
     }
@@ -13987,13 +14091,20 @@
 
       // one record per alert: the most resolved version wins
       const best = new Map(), sent = new Map(), held = new Set();
+      // Symbols the scanner no longer watches are never taken (lakky, 2026-11-14), but a fib or trendline
+      // alert one of your trades could have come from is kept as a trade copy. Copies kept earlier carry over
+      // (a refresh that skips the rebuilt history does not read them again).
+      const near = tradeNearTest();
+      sentSigs.forEach(g => { if (isTradeCopy(g) && sigDropped(g)) sent.set(g.key, g); });
       all.forEach(r => {
+        const dropped = sigDropped(r);
         if (oldZone(r)) {
           // A fib or trendline alert Discord sent before the rebuild's cutoff: kept aside
           // (whatever the date window) only to match your trades.
-          if (r.kind && (!r.market || marketOk(r))) sent.set(r.key, sentCopy(r));
+          if (r.kind && (!r.market || marketOk(r)) && (!dropped || near(r))) sent.set(r.key, dropped ? tradeCopy(r) : sentCopy(r));
           return;
         }
+        if (dropped) { if ((!r.market || marketOk(r)) && near(r)) sent.set(r.key, tradeCopy(r)); return; }
         // rebuilt rows the device does not have yet come in whatever the date window
         if (cutoff && r.date < cutoff && !(rebuildAll && r.rb)) {
           if (!(reprice && r.hasReportR)) return;
@@ -14057,6 +14168,7 @@
       state.signals = (state.signals || []).filter(g => !(plan.staleIds && plan.staleIds.has(g.id))).concat(plan.fresh.map(stamp));
       sortSignals();
       if (plan.sent) setSentSigs(plan.sent);
+      purgeDropped();
     }
     // Alerts live on each device, and used to arrive only when you pressed "Load
     // scanner alerts". A device that had not pressed it lately had no alerts for its
@@ -14096,10 +14208,15 @@
         // scanner rebuilds it. Its small meta files say when; a device that already took
         // this rebuild, in this app version, skips the big files (2026-11-07).
         const isMeta = x => x[0] === "zrMeta" || x[0] === "ftrMeta";
-        await Promise.all(files.filter(isMeta).map(read));
+        // The scanner's watchlist (its config.py) comes with them: only its symbols are kept. Optional: a
+        // failed read keeps the list this device has.
+        const readList = () => fetch(SCANNER_CONFIG_URL, { cache: "no-store" }).then(res => res.ok ? res.text() : "").catch(() => "");
+        const [cfgText] = await Promise.all([readList()].concat(files.filter(isMeta).map(read)));
+        const listAdds = setScannerWatchlist(parseScannerWatchlist(cfgText));
         const rbNow = rebuildStamp(rebuildInfo(got.zrMeta), rebuildInfo(got.ftrMeta)), rbVer = rbNow ? rbNow + "|" + appVersion() : "";
-        // Taken in whole when it is new, or when this device no longer holds it all.
-        const mks = mk === "all" ? ["crypto", "nse"] : [mk], whole = !!rbNow && rbMissing(rbNow, mks);
+        // Taken in whole when it is new, when this device no longer holds it all, or when the scanner
+        // watches a symbol it did not (its history comes back from the rebuilt files).
+        const mks = mk === "all" ? ["crypto", "nse"] : [mk], whole = !!rbNow && (rbMissing(rbNow, mks) || listAdds > 0);
         // First read after an app update: every result is priced again by this build's rules.
         const reprice = state.ui.sigPriceVer !== appVersion();
         const skipRb = !!rbNow && state.ui.rbReadAt === rbVer && !whole && !reprice;
@@ -14124,6 +14241,8 @@
         let n = plan.fresh.length + plan.upgrades.length + plan.staleIds.size;
         if (n) applyScannerPlan(plan);
         else if (setSentSigs(plan.sent)) n = 1;
+        // A symbol the scanner stopped watching since the last read: its alerts go now.
+        if (purgeDropped()) n = n || 1;
         // Only once its files came in: a failed read is tried again next time.
         if (whole && (got.ftrRec || got.zr4h || got.zrHtf)) noteRbHeld(rbNow, mks);
         state.ui.sigAutoAt = Date.now();
@@ -14307,7 +14426,7 @@
           lists.forEach(k => { state[k] = p[k] || []; });
           // Backups carry no alerts (they reload from the scanner), so an empty list
           // in the file must not wipe the ones on this device.
-          if (Array.isArray(p.signals) && p.signals.length) state.signals = p.signals;
+          if (Array.isArray(p.signals) && p.signals.length) state.signals = p.signals.filter(g => !sigDropped(g));
           if (p.reviewsAt && typeof p.reviewsAt === "object") state.reviewsAt = p.reviewsAt;
           state.aliases = (p.aliases && typeof p.aliases === "object") ? p.aliases : {};
           state.tombstones = (p.tombstones && typeof p.tombstones === "object") ? p.tombstones : {};
@@ -15681,6 +15800,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-14.194', pr: 108, title: 'Dropped coins deleted, Top 30 on both brokers', pts: ['Alerts for coins the scanner no longer watches are deleted, not hidden: about 2,000 fewer alerts kept (25,565 to 23,539 on your data) and every scanner read skips them. The Hidden / Shown row is gone', 'A dropped coin keeps only the alerts one of your trades matches, so the trade keeps its setup', 'Top 10 / 20 / 30 count only coins on both CoinDCX and Delta (14 Nov volume). The scanner added AVAX, INJ, FIL, AAVE, TAO and ARB, and the list now comes from the scanner itself'] },
       { v: '2026-11-14.193', pr: 107, title: 'Current coins only, Top 10/20/30, best settings', pts: ['Coins dropped from the scanner on 8 Nov are hidden from every number by default (Shown switch under Coins); Coins gets Top 10 / 20 / 30 by 30-day volume', 'Edge & breakdowns: best option for every setting, the best full combination with all outputs, a 60/40 out-of-sample check and a luck check; Use puts it on the tab', 'Overfit warning on top: the best of many tries is partly luck, read the newest-40% lines'] },
       { v: '2026-11-14.192', pr: 106, title: 'Balance shows its date and time', pts: ['The header balance tag shows when the wallet figure was read (e.g. 14 Nov, 8:30 PM, India time) instead of LAST KNOWN / WALLET', 'Green while it is fresh, amber when nothing newer came in; on All accounts it is the oldest stale figure', 'Trading Books says "Delta wallet from 14 Nov, 2:51 PM" in place of "last known"'] },
       { v: '2026-11-14.191', pr: 105, title: 'Market filter + no more empty dashes', pts: ['New Market row (Signals and Analysis): All / Crypto / Indian, above Channel. The Channel list then shows only that market\'s channels; Indian hides Assets and Coins', 'xStocks + CoinDCX showed 0 and a row of dashes: CoinDCX lists no xStocks. Coins options that keep nothing are now greyed (a tap says why), and picking xStocks with CoinDCX on puts Coins back to All', 'An empty view says which filter left nothing, with a button back'] },
