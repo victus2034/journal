@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-14.192">
+  <meta name="app-version" content="2026-11-14.193">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -763,6 +763,7 @@
           <div class="sig-row"><span class="sig-lab">Channel</span><div id="sigChanBar" class="sig-ctl"></div></div>
           <div id="sigAssetWrap" class="sig-row"><span class="sig-lab">Assets</span><div id="sigAssetBar" class="sig-ctl"></div></div>
           <div id="sigCoinWrap" class="sig-row"><span class="sig-lab">Coins</span><div id="sigCoinBar" class="sig-ctl"></div></div>
+          <div id="sigDropWrap" class="sig-row hidden"><span class="sig-lab">Dropped</span><div id="sigDropBar" class="sig-ctl"></div></div>
           <div id="sigLvlOnWrap" class="sig-row"><span class="sig-lab">Levels on</span><div class="sig-ctl"><div id="sigLvlOnBar"></div></div></div>
           <div id="sigLvlWrap" class="sig-row"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="sigLvlBar"></div></div></div>
           <div id="sigTlWrap" class="sig-row"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="sigTlBar"></div></div></div>
@@ -846,6 +847,7 @@
 
       <section data-sigsec="edge" class="space-y-4 hidden">
         <div id="sigTinyBar" class="flex justify-end"></div>
+        <div id="sigBest" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
         <div id="sigTgtCmp" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
         <div id="sigSetups" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
       <!-- Breakdowns: one short row per group; the cards stack in columns, so a short
@@ -4054,7 +4056,8 @@
       }
       const hint = document.getElementById('sigPeriodHint');
       if (hint) hint.innerText = state.ui.sigDay ? `Showing ${state.ui.sigDay} only. Click the day again to go back.` : ((range.from || range.to) ? `${range.from || "start"} → ${range.to || "now"}` : "All available history");
-      const rawPairs = matchSignals(kind), allPairs = sigSlPairs(sigLvlPairs(rawPairs));
+      const rawPairs = matchSignals(kind), allPairs = sigSlPairs(sigLvlPairs(dropKeep(rawPairs)));
+      renderDropBar(rawPairs);
       const inPer = pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to);
       // Market (All / Crypto / Indian) first: the Channel list below holds only its channels.
       const mkt = sigMarketMode(), mktKeep = marketTestOf(mkt);
@@ -4470,10 +4473,10 @@
     function anSigOf(t) { const a = acct(t.accountId); return { symbol: aiDeltaSym(t.symbol), market: a && a.market === "nse" ? "NSE" : "" }; }
     function anCoinOf(t) { return coinOf(anSigOf(t)); }
     function anCoinMode() { return SIG_COIN_MODES.some(x => x.k === state.ui.anCoins) ? state.ui.anCoins : ""; }
-    function anCoinRank() { return state.ui.anCoinRank === "alerts" ? "alerts" : "cap"; }
+    function anCoinRank() { return state.ui.anCoinRank === "alerts" ? "alerts" : state.ui.anCoinRank === "vol" ? "vol" : "cap"; }
     function anCoinPicks() { return Array.isArray(state.ui.anCoinPicks) ? state.ui.anCoinPicks.filter(x => typeof x === "string" && x) : SIG_COIN_PICKS.slice(); }
     function setAnCoins(k) { anSet('anCoins', SIG_COIN_MODES.some(x => x.k === k) ? k : ""); }
-    function setAnCoinRank(v) { anSet('anCoinRank', v === "alerts" ? "alerts" : "cap"); }
+    function setAnCoinRank(v) { anSet('anCoinRank', v === "alerts" ? "alerts" : v === "vol" ? "vol" : "cap"); }
     function toggleAnCoinPick(c) { const p = anCoinPicks(), i = p.indexOf(c); if (i === -1) p.push(c); else p.splice(i, 1); anSet('anCoinPicks', p); }
     // The coins the Coins row keeps (null: every trade), from the trades in view.
     let anCoinCur = null, anCoinKeep = null; // anCoinKeep: Market, Assets and Coins together
@@ -10881,8 +10884,39 @@
     // that broker's futures list, by the very list the Demo account's real orders use
     // (DEMO_DCX; Delta's live product list, else DEMO_DELTA), so the two add up the same alerts.
     const SIG_TOP_CAP = ["BTC", "ETH", "XRP", "BNB", "SOL", "DOGE", "ADA", "HYPE", "LINK", "AVAX"];
-    const SIG_COIN_MODES = [{ k: "", label: "All" }, { k: "top3", label: "Top 3", n: 3 }, { k: "top5", label: "Top 5", n: 5 }, { k: "picks", label: "Picks" },
+    // Top 10 / 20 / 30 (lakky, 2026-11-14: "backtest with top 10-20-30 volume cryptos"): always by trading
+    // volume, the 30-day average on CoinDCX (Delta where CoinDCX has none), as the scanner's 8 Nov coin
+    // review measured it (research/out/coin_list). Only coins that have alerts in view count, so with 16
+    // coins on the scanner's list Top 20 and Top 30 are the same 16 (the row says so).
+    const SIG_VOL30 = { BTC: 10498, ETH: 7409, ZEC: 1706, SOL: 1471, HYPE: 640, NEAR: 637, XRP: 621, BNB: 345, "1000PEPE": 335, DOGE: 300, ENA: 257, WLD: 233, UNI: 202, SUI: 202, STRK: 194, BTW: 165, ADA: 139, LINK: 119, FIL: 119, AVAX: 114, TAO: 100, AAVE: 96, QNT: 94, ONDO: 80, RLC: 56 };
+    const SIG_VOL_AT = "8 Nov 2026";
+    const SIG_COIN_MODES = [{ k: "", label: "All" }, { k: "top3", label: "Top 3", n: 3 }, { k: "top5", label: "Top 5", n: 5 },
+      { k: "top10", label: "Top 10", n: 10, vol: true }, { k: "top20", label: "Top 20", n: 20, vol: true }, { k: "top30", label: "Top 30", n: 30, vol: true }, { k: "picks", label: "Picks" },
       { k: "dcx", label: "CoinDCX", venue: "coindcx" }, { k: "delta", label: "Delta", venue: "delta" }];
+    // Dropped coins (lakky, 2026-11-14: "remove all those cryptos from backtest report which we have removed"):
+    // the scanner's list on 8 Nov 2026 (config CRYPTO / OTHER / XSTOCK watchlists). An alert on any other
+    // crypto, gold, silver or xStock is from a symbol the scanner no longer watches; Signals hides those
+    // by default, with a switch to show them. NSE is its own market and is never touched.
+    const SIG_LIVE = { BTC: 1, ETH: 1, ZEC: 1, SOL: 1, XRP: 1, NEAR: 1, HYPE: 1, DOGE: 1, SUI: 1, UNI: 1, BNB: 1, ENA: 1, "1000PEPE": 1, WLD: 1, ADA: 1, LINK: 1, XAUT: 1, SLVON: 1, TSLAX: 1, SNDKB: 1, QQQX: 1, TSLA: 1, SNDK: 1, QQQ: 1 };
+    const SIG_LIVE_AT = "8 Nov";
+    function liveBaseOf(sig) { return String(sig && sig.symbol || "").toUpperCase().split(/[\/:]/)[0].replace(/[^A-Z0-9]/g, "").replace(/(USDT|USDC|USD)$/, ""); }
+    function sigDropped(sig) { if (!sig || isNseSig(sig)) return false; const b = liveBaseOf(sig); return !!b && !SIG_LIVE[b]; }
+    function sigDroppedMode() { return state.ui.sigDropped === "show" ? "show" : "hide"; }
+    function dropKeep(pairs) { return sigDroppedMode() === "show" ? pairs : pairs.filter(pr => !sigDropped(pr.signal)); }
+    // The Dropped row: hide (default) or show the alerts on symbols the scanner no longer watches, with the
+    // coins and how many alerts that is. Hidden altogether when there are none and they are not shown.
+    function renderDropBar(rawPairs) {
+      const wrap = document.getElementById('sigDropWrap'), bar = document.getElementById('sigDropBar');
+      if (!wrap || !bar) return;
+      const by = {};
+      rawPairs.forEach(pr => { if (sigDropped(pr.signal)) { const n = coinNameOf(pr.signal); by[n] = (by[n] || 0) + 1; } });
+      const names = Object.keys(by).sort((a, b) => by[b] - by[a] || a.localeCompare(b)), n = sumVals(by), mode = sigDroppedMode();
+      wrap.classList.toggle('hidden', !n && mode === 'hide');
+      bar.innerHTML = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="Symbols the scanner stopped watching on ' + SIG_LIVE_AT + ' (AAVE, AVAX, BTW, FIL, ONDO, QNT, RLC, STRK, TAO, and the xStocks META, NVDA, MRVL, SOXL). Hidden: every number on this tab uses only the scanner\'s current list.">'
+        + [['hide', 'Hidden'], ['show', 'Shown']].map(x => '<button type="button" data-dropped="' + x[0] + '" onclick="setSigDropped(\'' + x[0] + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x[0] === mode ? SEG_ON : SEG_OFF) + '">' + x[1] + ' <span class="text-[10px] opacity-60">' + n + '</span></button>').join('') + '</div>'
+        + '<span id="sigDropNote" class="text-[11px] text-slate-400 font-mono">' + (n ? n + ' alert' + (n === 1 ? '' : 's') + ' on ' + names.length + ' symbol' + (names.length === 1 ? '' : 's') + ' the scanner dropped by ' + SIG_LIVE_AT + ' (' + esc(names.slice(0, 12).join(', ') + (names.length > 12 ? ', +' + (names.length - 12) + ' more' : '')) + ') are ' + (mode === 'hide' ? 'left out of every number here' : 'counted') : 'none on this device') + '</span>';
+    }
+    function setSigDropped(v) { state.ui.sigDropped = v === "show" ? "show" : "hide"; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
     const SIG_ASSETS = [{ k: "", label: "Both" }, { k: "crypto", label: "Crypto", only: "coin" }, { k: "xstock", label: "xStocks", only: "stock" }];
     function assetOf(k) { return SIG_ASSETS.find(x => x.k === k) || SIG_ASSETS[0]; }
     function sigAssetMode() { return assetOf(state.ui.sigAsset).k; }
@@ -10986,12 +11020,16 @@
     // The name a symbol shows under in the Coins row: the coin, else the chart's name.
     function coinNameOf(sig) { return coinOf(sig) || String(sig && sig.symbol || "").toUpperCase().split(/[\/:]/)[0].replace(/(USDT|USDC|USD)$/, "").replace(/\.NS$/, "") || String(sig && sig.symbol || ""); }
     function sigCoinMode() { return SIG_COIN_MODES.some(x => x.k === state.ui.sigCoins) ? state.ui.sigCoins : ""; }
-    function sigCoinRank() { return state.ui.sigCoinRank === "alerts" ? "alerts" : "cap"; }
+    function sigCoinRank() { return state.ui.sigCoinRank === "alerts" ? "alerts" : state.ui.sigCoinRank === "vol" ? "vol" : "cap"; }
     function sigCoinPicks() { return Array.isArray(state.ui.sigCoinPicks) ? state.ui.sigCoinPicks.filter(x => typeof x === "string" && x) : SIG_COIN_PICKS.slice(); }
     // Alerts per coin in these pairs.
     function sigCoinCounts(pairs) { const n = {}; pairs.forEach(pr => { const c = coinOf(pr.signal); if (c) n[c] = (n[c] || 0) + 1; }); return n; }
+    // vol: by 30-day trading volume, the coins with alerts in view only (unknown volume last, by alerts).
+    function sigVolOrder(counts) { return Object.keys(counts).sort((a, b) => (SIG_VOL30[b] || 0) - (SIG_VOL30[a] || 0) || counts[b] - counts[a] || a.localeCompare(b)); }
     function sigTopCoins(n, counts, rank) {
-      if ((rank || sigCoinRank()) === "alerts") return Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)).slice(0, n);
+      const rk = rank || sigCoinRank();
+      if (rk === "alerts") return Object.keys(counts).sort((a, b) => counts[b] - counts[a] || a.localeCompare(b)).slice(0, n);
+      if (rk === "vol") return sigVolOrder(counts).slice(0, n);
       return SIG_TOP_CAP.slice(0, n);
     }
     // The coins a mode keeps, or null for all. C: whose settings (COINS.sig / COINS.an).
@@ -10999,7 +11037,7 @@
       C = C || COINS.sig;
       const m = SIG_COIN_MODES.find(x => x.k === (mode == null ? C.mode() : mode));
       if (!m || !m.k) return null;
-      return m.n ? sigTopCoins(m.n, counts, C.rank()) : C.picks();
+      return m.n ? sigTopCoins(m.n, counts, m.vol ? "vol" : C.rank()) : C.picks();
     }
     // What a Coins mode keeps, or null for all. items: the alerts (or trades) in view, sigOf
     // gives each one's alert. Top 3 / Top 5 / Picks give a list of coins; CoinDCX and Delta
@@ -11033,7 +11071,7 @@
         + (o ? ' · <span class="text-amber-300">left out ' + o + '</span>: ' + esc(outs.slice(0, 6).map(k => k + ' ' + set.out[k]).join(', ') + (outs.length > 6 ? ', +' + (outs.length - 6) + ' more' : '')) : ' · none left out') + '</span>';
     }
     function setSigCoins(k) { state.ui.sigCoins = k; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
-    function setSigCoinRank(v) { state.ui.sigCoinRank = v === "alerts" ? "alerts" : "cap"; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
+    function setSigCoinRank(v) { state.ui.sigCoinRank = v === "alerts" ? "alerts" : v === "vol" ? "vol" : "cap"; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
     function toggleSigCoinPick(c) {
       const p = sigCoinPicks(), i = p.indexOf(c);
       if (i === -1) p.push(c); else p.splice(i, 1);
@@ -11043,7 +11081,7 @@
     // The Coins row, for Signals' alerts and Analysis's trades alike.
     const COINS = {
       sig: { id: "sig", mode: () => sigCoinMode(), rank: () => sigCoinRank(), picks: () => sigCoinPicks(), fn: { mode: "setSigCoins", rank: "setSigCoinRank", pick: "toggleSigCoinPick" }, what: "alerts",
-        tip: "Top 3 / Top 5: only the biggest coins' alerts (by market cap, or by the most alerts in view). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest. CoinDCX / Delta: only what that broker's futures list, the same list the Demo account's real orders use." },
+        tip: "Top 3 / Top 5: only the biggest coins' alerts (by market cap, volume, or the most alerts in view). Top 10 / 20 / 30: the coins with the most 30-day trading volume (only coins with alerts here count). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. The Backtest report compares them with the rest. CoinDCX / Delta: only what that broker's futures list, the same list the Demo account's real orders use." },
       an: { id: "an", mode: () => anCoinMode(), rank: () => anCoinRank(), picks: () => anCoinPicks(), fn: { mode: "setAnCoins", rank: "setAnCoinRank", pick: "toggleAnCoinPick" }, what: "trades",
         tip: "Top 3 / Top 5: only your trades on the biggest coins (by market cap, or the coins you trade most). Picks: coins you choose. Gold, silver, US stocks and NSE are left out while a coin filter is on. CoinDCX / Delta: only what that broker's futures list." }
     };
@@ -11068,8 +11106,12 @@
       else if (coinModeTest(mode)) h += coinTestLine(C, set);
       else if (cur === 'top3' || cur === 'top5') {
         const rk = C.rank();
-        h += '<select id="' + C.id + 'CoinRank" onchange="' + C.fn.rank + '(this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200 text-[11px] font-mono"><option value="cap"' + (rk === 'cap' ? ' selected' : '') + '>by market cap</option><option value="alerts"' + (rk === 'alerts' ? ' selected' : '') + '>by most ' + C.what + '</option></select>'
+        h += '<select id="' + C.id + 'CoinRank" onchange="' + C.fn.rank + '(this.value)" class="bg-[#070A11] border border-terminal-border px-1.5 py-1 rounded text-slate-200 text-[11px] font-mono"><option value="cap"' + (rk === 'cap' ? ' selected' : '') + '>by market cap</option><option value="vol"' + (rk === 'vol' ? ' selected' : '') + '>by volume</option><option value="alerts"' + (rk === 'alerts' ? ' selected' : '') + '>by most ' + C.what + '</option></select>'
           + '<span id="' + C.id + 'CoinList" class="text-[11px] text-slate-400 font-mono">' + esc((set || []).join(', ')) + '</span>';
+      } else if (mode && mode.vol) {
+        // Top 10 / 20 / 30: by 30-day volume. A list longer than the coins here is every coin here, said plainly.
+        const have = coins.length, all = have <= mode.n;
+        h += '<span id="' + C.id + 'CoinVol" class="text-[11px] text-slate-400 font-mono">by 30-day volume (' + SIG_VOL_AT + ') · ' + (set || []).length + ' coin' + ((set || []).length === 1 ? '' : 's') + (all ? ' <span class="text-amber-300">= every coin with ' + C.what + ' here (' + have + ')</span>' : '') + ': ' + esc((set || []).join(', ')) + '</span>';
       } else if (cur === 'picks') {
         const picks = C.picks(), list = coins.concat(picks.filter(c => coins.indexOf(c) === -1));
         h += '<div id="' + C.id + 'CoinPicks" class="coin-picks flex flex-wrap items-center gap-1">' + list.map(c => '<button type="button" data-coin="' + esc(c) + '" onclick="' + C.fn.pick + '(\'' + esc(c) + '\')" class="sig-coin' + (picks.indexOf(c) !== -1 ? ' on' : '') + '">' + esc(c) + '<span class="cnt">' + (counts[c] || 0) + '</span></button>').join('') + '</div>';
@@ -11601,13 +11643,16 @@
       if (!nn.length) return '';
       const graded = sigGraded(all), counts = sigCoinCounts(all), gradedNn = sigGraded(nn);
       const t3 = sigTopCoins(3, counts), t5 = sigTopCoins(5, counts), picks = sigCoinPicks(), cur = sigCoinMode(), asset = sigAssetMode();
+      const t10 = sigTopCoins(10, counts, 'vol'), t20 = sigTopCoins(20, counts, 'vol'), t30 = sigTopCoins(30, counts, 'vol'), nCoins = Object.keys(counts).length;
       const inS = set => c => set.indexOf(c) !== -1, notS = set => c => set.indexOf(c) === -1;
       const grp = (label, sub, keep, k) => {
         const rs = graded.filter(x => keep(coinOf(x.pr.signal))).map(x => x.o.r);
         return { label, sub, k, alerts: all.filter(pr => keep(coinOf(pr.signal))).length, rs, st: sigRunStats(rs) };
       };
       const rk = sigCoinRank() === 'alerts' ? 'most alerts' : 'market cap';
-      const groups = !all.length ? [] : [grp('All crypto', Object.keys(counts).length + ' coins', () => true, ''), grp('Top 3', t3.join(', '), inS(t3), 'top3'), grp('Top 5', t5.join(', '), inS(t5), 'top5'), grp('Other coins', 'not in the top 5', notS(t5), null)];
+      const groups = !all.length ? [] : [grp('All crypto', Object.keys(counts).length + ' coins', () => true, ''), grp('Top 3', t3.join(', '), inS(t3), 'top3'), grp('Top 5', t5.join(', '), inS(t5), 'top5'),
+        grp('Top 10 by volume', t10.join(', '), inS(t10), 'top10'), grp('Top 20 by volume', t20.length >= nCoins ? 'every coin here (' + nCoins + ')' : t20.join(', '), inS(t20), 'top20'), grp('Top 30 by volume', t30.length >= nCoins ? 'every coin here (' + nCoins + ')' : t30.join(', '), inS(t30), 'top30'),
+        grp('Other coins', 'not in the top 5', notS(t5), null)];
       if (all.length && picks.length) groups.push(grp('Your picks', picks.join(', '), inS(picks), 'picks'));
       // Crypto against xStocks, and what each broker lists (lakky, 2026-11-13), over every alert in view.
       const mgrp = (label, sub, test, k) => {
@@ -11642,12 +11687,12 @@
         if (!g) return '<span class="text-slate-500">' + esc(la) + ' vs ' + esc(lb) + ': too few alerts on one side to compare</span>';
         return '<span id="sigMktGap"><b class="text-slate-200">' + esc(la) + '</b> <span class="' + tone(g.a.avg) + '">' + rfmt(g.a.avg) + '</span> vs <span class="' + tone(g.b.avg) + '">' + rfmt(g.b.avg) + '</span> a trade for ' + esc(lb) + ' (' + g.a.n + ' vs ' + g.b.n + ') · gap ' + rfmt(g.gap) + ' · <span class="' + w.c + '">' + w.w + '</span></span>';
       };
-      return '<div id="sigCoinCmp" class="mb-3"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-1"><span class="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Top coins vs all crypto</span><span class="text-[10px] text-slate-500">top by ' + rk + ' · same filters, before the Coins filter</span></div>'
+      return '<div id="sigCoinCmp" class="mb-3"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-1"><span class="text-[10px] uppercase tracking-wider text-amber-300 font-bold">Top coins vs all crypto</span><span class="text-[10px] text-slate-500">Top 3 / 5 by ' + rk + ', Top 10 / 20 / 30 by 30-day volume · same filters, before the Coins filter</span></div>'
         + '<div class="overflow-x-auto"><table class="sig-cmp w-full text-left mono-num"><thead class="text-slate-500 text-[10px] uppercase"><tr><th>Coins</th><th class="text-right">Alerts</th><th class="text-right">Graded</th><th class="text-right">Win %</th><th class="text-right">Avg R</th><th class="text-right" title="Where the true average most likely sits">95% range</th><th class="text-right">Total R</th><th class="text-right">PF</th><th class="text-right">Max DD</th><th class="text-right" title="Most losses in a row">Loss run</th></tr></thead><tbody>'
         + groups.map(g => row(g, g.k != null && g.k === cur && (g.k || asset !== 'xstock'))).join('')
         + (markets.length ? '<tr class="grp"><td colspan="10">Markets and brokers</td></tr>' + markets.map(g => row(g, g.k != null && (asset ? g.k === asset && !cur : g.k === cur))).join('') : '')
         + (each.length ? '<tr class="grp"><td colspan="10">Each coin</td></tr>' + each.map(g => row(g, false)).join('') : '')
-        + '</tbody></table></div><div class="sig-verdict">' + (all.length ? vs('Top 3', t3) + vs('Top 5', t5) + (picks.length ? vs('Your picks', picks) : '') : '') + vsMk('xStocks', 'crypto', kindIs('stock'), kindIs('coin')) + '</div>'
+        + '</tbody></table></div><div class="sig-verdict">' + (all.length ? vs('Top 3', t3) + vs('Top 5', t5) + vs('Top 10 by volume', t10) + (t20.length < nCoins ? vs('Top 20 by volume', t20) : '') + (t30.length < nCoins && t30.length !== t20.length ? vs('Top 30 by volume', t30) : '') + (picks.length ? vs('Your picks', picks) : '') : '') + vsMk('xStocks', 'crypto', kindIs('stock'), kindIs('coin')) + '</div>'
         + '<p class="text-[10px] text-slate-500 mt-1">A gap counts as likely real when it is about twice its own uncertainty (Welch t ≥ 2), each side with 10+ results. Pick a group with Coins above to see every number for it alone.</p></div>';
     }
     const sbtWhen = g => (g.date || "") + " " + (g.time || "");
@@ -12765,6 +12810,7 @@
     }
     // "Edge & breakdowns": best and worst setups, and R by score, channel, hour and more.
     function renderSigEdge(pairs) {
+      renderBestCard();
       renderTgtCompare(pairs);
       setTimeout(() => { slcLoad(slcWant(pairs)); tgtLoad(pairs.concat(slCmpPairs(pairs))); }, 0);
       renderSetups(pairs);
@@ -12794,6 +12840,353 @@
       if (top) top.innerHTML = !graded ? `<div class="card p-4 text-center text-[11px] text-slate-500">${note}</div>`
         : same.length ? `<span>Same for all ${graded} graded alert${graded === 1 ? '' : 's'}</span>` + same.map(x => `<span class="bd-same">${x}</span>`).join('') : '';
       bdLayout(true);
+    }
+
+
+    /* =================== BEST SETTINGS (Edge & breakdowns) ===================
+       lakky, 2026-11-14: "in breakdown i want you to give me best possible options including all information
+       which i put and also show me best input journal found it with every possible output it uses".
+       Every setting on the tab (Exit at, SL, Move SL, Partial, Trail TP, Hold, Channel, Market, Coins, Levels,
+       Level, Type, BTC day) is tried one option at a time with the others as they are now, and a search over
+       all of them together finds the best full combination. A number here is exactly what the tab shows once
+       you press Use: the same filters, the same walks, the same scoring (bsPairs is renderSignalsNow's filter
+       chain; the smoke test holds the two equal).
+       Picking the best of many tries flatters it, so the search runs twice: on the first 60% of the alerts
+       (by date) only, and the result is then read on the last 40% it never saw, next to what random settings
+       from the same lists score on those two halves. */
+    const BS_MIN_N = 30;            // fewest trades a setting needs before it can be called best
+    const BS_SPLIT = 0.6;           // share of the alerts (oldest first) the search may look at
+    const BS_RANDOM = 100;          // random settings (15+ trades on both halves) for the luck check
+    const BS_KEYS = ["sigTgt", "sigSl", "sigStop", "sigPart", "sigTrail", "sigHold", "sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter"];
+    const BS = { res: null, busy: false, prog: null, stop: false };
+    // The settings now, normalised the way the tab reads them.
+    function bsSnap() {
+      const tg = sigTgt();
+      return JSON.parse(JSON.stringify({ sigTgt: tg ? tg.k : "", sigSl: slRaw(), sigStop: stopRaw(), sigPart: partRaw(), sigTrail: trailRaw(), sigHold: sigHold(), sigChan: state.ui.sigChan || "",
+        sigMarket: sigMarketMode(), sigCoins: sigCoinMode(), sigLvlOff: sigLvlOff().slice().sort(), sigLvl: sigLvl(), sigTlType: sigTlType() ? sigTlType().k : "", mktFilter: mktFilter() }));
+    }
+    // Puts settings on the tab's state (not saved), returns what was there. Always undone in a finally.
+    function bsPut(c) {
+      const was = {};
+      BS_KEYS.forEach(k => { was[k] = state.ui[k] === undefined ? { none: 1 } : { v: state.ui[k] }; state.ui[k] = JSON.parse(JSON.stringify(c[k])); });
+      return was;
+    }
+    function bsUndo(was) { BS_KEYS.forEach(k => { if (was[k].none) delete state.ui[k]; else state.ui[k] = was[k].v; }); }
+    function bsWith(c, fn) { const was = bsPut(c); try { return fn(); } finally { bsUndo(was); } }
+    // renderSignalsNow's filter chain, without the drawing: market, channel, period, assets, coins, BTC day,
+    // tiny stops (and, for the out-of-sample check, a date cut). The settings must already be on state.ui.
+    function bsPairs(raw, range, when) {
+      const all = sigSlPairs(sigLvlPairs(dropKeep(raw)));
+      const inPer = pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to);
+      const mkt = sigMarketMode(), mktKeep = marketTestOf(mkt);
+      const has = { crypto: all.some(pr => !isNseSig(pr.signal)) };
+      const mktPairs = mktKeep ? all.filter(pr => mktKeep(pr.signal)) : all;
+      let chan = state.ui.sigChan || "";
+      if (chan && mktKeep && !mktPairs.some(pr => chanKey(pr.signal) === chan) && all.some(pr => chanKey(pr.signal) === chan)) chan = "";
+      const chanPairs = chan ? mktPairs.filter(pr => chanKey(pr.signal) === chan) : mktPairs;
+      const inRange = chanPairs.filter(inPer);
+      const cryptoHere = has.crypto && mkt !== "nse" && !(chan && chanPairs.length && chanPairs.every(pr => isNseSig(pr.signal)));
+      const assetMode = cryptoHere ? sigAssetMode() : "", assetKeep = assetTestOf(assetMode);
+      const coinPool = assetKeep ? inRange.filter(pr => assetKeep(pr.signal)) : inRange;
+      const coinSet = cryptoHere ? coinSetFor(COINS.sig, sigCoinCounts(coinPool), coinPool, pr => pr.signal) : null;
+      const coinKeep = bothKeep(assetKeep, coinKeepOf(coinSet));
+      let pairs = inRange;
+      if (coinKeep) pairs = pairs.filter(pr => coinKeep(pr.signal));
+      const mf = mktFilter();
+      if (mf) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mf);
+      if (state.ui.sigSkipTiny === true) pairs = pairs.filter(pr => { const p = slPct(pr.signal); return !(p != null && p < TINY_STOP_PCT); });
+      if (when) pairs = pairs.filter(pr => when(pr.signal));
+      return { pairs, mkt, chan, cryptoHere, coinKeepN: coinKeep ? pairs.length : null };
+    }
+    // The tab's numbers for these settings (sync). need: what is still unread (walks, candles for the SL).
+    function bsEval(c, ctx, when) {
+      return bsWith(c, () => inSigScope(() => withOutcomeCache(() => {
+        const { pairs } = bsPairs(ctx.raw, ctx.range, when), need = [], hold = sigHold(), on = !!sigTgt();
+        if (on) pairs.forEach(pr => {
+          const g = pr.signal;
+          if (g.slWait) { need.push({ t: "slc", g: g.slFrom }); return; }
+          if (g.slNone || tgtWhy(g) || !tgtBase(pr)) return;
+          if (!tgtPath(g, hold)) need.push({ t: "walk", g, hold });
+        });
+        const rows = sigGraded(pairs), rs = rows.map(x => x.o.r), run = sigRunStats(rs), ps = rows.map(x => sigOutPct(x.pr)).filter(v => v != null && isFinite(v));
+        let filled = 0, unfilled = 0;
+        pairs.forEach(pr => { const f = tgtFilled(pr); if (f === true) filled++; else if (f === false) unfilled++; });
+        const j = v => v == null || !isFinite(v) ? null : v;
+        return { need, st: { alerts: pairs.length, filled, unfilled, n: rs.length, wins: run.wins, losses: run.losses, win: run.win, tot: run.tot, avg: run.avg, sd: run.sd, avgWin: run.avgWin, avgLoss: run.avgLoss, payoff: run.payoff, pf: run.pf === Infinity ? 1e9 : run.pf, sqn: run.sqn,
+          dd: run.maxDD, longDD: run.longestDD, ls: run.maxLs, ws: run.maxWs, best: j(run.best), worst: j(run.worst), totPct: ps.length ? sum(ps) : null, avgPct: ps.length ? sum(ps) / ps.length : null }, keys: rows.map(x => [sbtWhen(x.pr.signal), x.pr.signal.key || x.pr.signal.symbol, x.o.r]) };
+      })));
+    }
+    // Reads what bsEval said is missing (candles around each alert for the SL, then the price walks), four at a time.
+    async function bsRead(need) {
+      const seen = {}, todo = need.filter(it => { const k = it.t === "slc" ? "s|" + slcKey(it.g) : "w|" + tgtHoldKey(it.g, it.hold); return seen[k] ? false : (seen[k] = true); });
+      let i = 0;
+      const one = async it => {
+        if (it.t === "slc") { const k = slcKey(it.g); if (tgtCache()[k] || slcLive[k]) return; const st = await slcOne(it.g); if (st.none === "no NSE candles") slcLive[k] = st; else tgtCache()[k] = st; return; }
+        if (tgtPath(it.g, it.hold)) return;
+        const k = tgtHoldKey(it.g, it.hold), w = await tgtOne(it.g, it.hold);
+        tgtLive[k] = Object.assign(w, { at: Date.now() });
+      };
+      const worker = async () => { while (i < todo.length) { const it = todo[i++]; try { await one(it); } catch (e) { /* left unread: the alert has no result, the card says how many */ } if (BS.prog) BS.prog.reads++; } };
+      await Promise.all([1, 2, 3, 4].map(worker));
+      return todo.length;
+    }
+    // Settings -> numbers, reading whatever is missing first. Cached for the search by settings + date cut.
+    async function bsScore(c, ctx, when, tag) {
+      const key = tag + "|" + JSON.stringify(c);
+      if (ctx.memo[key]) return ctx.memo[key];
+      let r = bsEval(c, ctx, when);
+      for (let pass = 0; r.need.length && pass < 3; pass++) {
+        if (BS.stop) break;
+        await bsRead(r.need);
+        r = bsEval(c, ctx, when);
+      }
+      BS.prog && BS.prog.evals++;
+      if (BS.prog && Date.now() - BS.drawn > 400) { BS.drawn = Date.now(); renderBestCard(); await new Promise(res => setTimeout(res, 0)); }
+      return (ctx.memo[key] = { st: r.st, left: r.need.length });
+    }
+    // ---- the option lists, one per setting ----
+    const bsPick = (c, patch) => Object.assign(JSON.parse(JSON.stringify(c)), JSON.parse(JSON.stringify(patch)));
+    const bsTg = c => SIG_TGTS.find(x => x.k && x.k === c.sigTgt) || null;
+    const bsUnit = c => { const t = bsTg(c); return t && t.p != null ? "%" : "R"; };
+    const bsTv = c => { const t = bsTg(c); return t ? (t.p != null ? t.p : t.r) : 0; };
+    const bsMove = c => stopRuleOf(stopRaw(c.sigStop), bsTg(c));
+    // Each setting: how its current value reads (key, a short label) and the options it can take.
+    const BS_DIMS = [
+      { id: "tgt", label: "Exit at", rule: true, key: c => c.sigTgt, text: c => c.sigTgt || "Scanner",
+        opts: c => SIG_TGTS.map(t => ({ label: t.k || "Scanner", patch: { sigTgt: t.k } })) },
+      { id: "sl", label: "SL", rule: true, key: c => { const d = slRaw(c.sigSl), t = SIG_SLS.find(x => x.k === d.mode); return !t || !t.k || (t.fib && sigKind() !== "fib") ? "" : slRuleOf(d.mode, d).k; },
+        text: c => { const r = slRuleOf(slRaw(c.sigSl).mode, c.sigSl); return r ? r.short : "Alert's own"; },
+        opts: c => { const d = slRaw(c.sigSl), out = [], fib = sigKind() === "fib";
+          SIG_SLS.filter(x => !x.fib || fib).forEach(x => {
+            if (SL_CANDLE[x.k]) SL_GAPS.forEach(g => out.push({ label: slRuleOf(x.k, { mode: x.k, gap: g, pct: d.pct }).short, patch: { sigSl: { mode: x.k, gap: g, pct: d.pct } } }));
+            else if (x.k === "pct") SL_PCTS.forEach(p => out.push({ label: slRuleOf("pct", { mode: "pct", gap: d.gap, pct: p }).short, patch: { sigSl: { mode: "pct", gap: d.gap, pct: p } } }));
+            else out.push({ label: x.k ? slRuleOf(x.k, d).short : "Alert's own", patch: { sigSl: { mode: x.k, gap: d.gap, pct: d.pct } } });
+          });
+          return out; } },
+      { id: "stop", label: "Move SL", rule: true, key: c => { const m = bsMove(c); return m ? m.k : "off"; }, text: c => { const m = bsMove(c); return m ? m.label : "off"; },
+        opts: c => { const pc = bsUnit(c) === "%", ats = pc ? STOP_ATS_P : STOP_ATS, tos = pc ? STOP_TOS_P : STOP_TOS, tv = bsTv(c), base = stopRaw(c.sigStop), out = [{ label: "off", patch: { sigStop: Object.assign({}, base, { mode: "off" }) } }];
+          ats.filter(a => a < tv).forEach(a => out.push({ label: stopMove(pc ? "pbe" : "be", a).label, patch: { sigStop: Object.assign({}, base, { mode: "be", [pc ? "beAtP" : "beAt"]: a }) } }));
+          ats.filter(a => a < tv).forEach(a => tos.filter(t => t < a).forEach(t => out.push({ label: stopMove(pc ? "pshift" : "shift", a, t).label, patch: { sigStop: Object.assign({}, base, { mode: "shift", [pc ? "shAtP" : "shAt"]: a, [pc ? "shToP" : "shTo"]: t }) } })));
+          return out; } },
+      { id: "part", label: "Partial", rule: true, key: c => { const p = partRuleOf(partRaw(c.sigPart), bsTg(c), bsMove(c)); return p ? p.k : "off"; }, text: c => { const p = partRuleOf(partRaw(c.sigPart), bsTg(c), bsMove(c)); return p ? p.label : "off"; },
+        opts: c => { const pc = bsUnit(c) === "%", ats = pc ? PART_ATS_P : PART_ATS, tv = bsTv(c), tr = trailRaw(c.sigTrail).on, base = partRaw(c.sigPart), out = [{ label: "off", patch: { sigPart: Object.assign({}, base, { q: 0, beQ: 0 }) } }];
+          PART_QS.forEach(q => ats.filter(a => tr || a < tv).forEach(a => out.push({ label: q + "% off at " + (pc ? pTxt : rTxt)(a), patch: { sigPart: Object.assign({}, base, { q, [pc ? "atP" : "at"]: a, beQ: 0 }) } })));
+          if (bsMove(c)) PART_QS.forEach(b => out.push({ label: b + "% off at the Move SL trigger", patch: { sigPart: Object.assign({}, base, { q: 0, beQ: b }) } }));
+          return out; } },
+      { id: "trail", label: "Trail TP", rule: true, key: c => { const t = trailRuleOf(trailRaw(c.sigTrail), bsTg(c)); return t ? t.k : "off"; }, text: c => { const t = trailRuleOf(trailRaw(c.sigTrail), bsTg(c)); return t ? t.label : "off"; },
+        opts: c => { const out = [{ label: "off", patch: { sigTrail: Object.assign({}, trailRaw(c.sigTrail), { on: false }) } }];
+          TRAIL_STEPS.forEach(s => TRAIL_GAPS.forEach(g => out.push({ label: "+" + s + (bsUnit(c) === "%" ? "%" : "R") + ", SL " + g + (bsUnit(c) === "%" ? "%" : "R") + " behind", patch: { sigTrail: { on: true, step: s, gap: g, stepP: s, gapP: g } } })));
+          return out; } },
+      { id: "hold", label: "Hold", rule: true, key: c => c.sigHold, text: c => c.sigHold === "20" ? "20 candles" : "Till TP / SL", opts: () => SIG_HOLDS.map(h => ({ label: h.label, patch: { sigHold: h.k } })) },
+      { id: "chan", label: "Channel", key: c => c.sigChan, text: c => c.sigChan ? chanLabel(c.sigChan) : "All channels",
+        opts: (c, ctx) => [{ label: "All channels", patch: { sigChan: "" } }].concat(ctx.chans.map(k => ({ label: chanLabel(k), patch: { sigChan: k } }))) },
+      { id: "mkt", label: "Market", key: c => c.sigMarket, text: c => c.sigMarket ? marketOf(c.sigMarket).label : "All",
+        opts: (c, ctx) => SIG_MARKETS.filter(m => !m.k || ctx.mkts[m.k]).map(m => ({ label: m.label, patch: { sigMarket: m.k } })) },
+      { id: "coins", label: "Coins", key: c => c.sigCoins, text: c => (SIG_COIN_MODES.find(m => m.k === c.sigCoins) || SIG_COIN_MODES[0]).label,
+        opts: (c, ctx) => ctx.coins ? SIG_COIN_MODES.map(m => ({ label: m.label, patch: { sigCoins: m.k } })) : [] },
+      { id: "lvls", label: "Levels", fib: true, key: c => c.sigLvlOff.join(","), text: c => { const on = FIB_LEVEL_KEYS.filter(k => c.sigLvlOff.indexOf(k) === -1); return on.length === 4 ? "all four" : on.join(" + "); },
+        opts: () => { const out = []; for (let m = 15; m >= 1; m--) { const on = FIB_LEVEL_KEYS.filter((k, i) => m & (1 << i)); out.push({ label: on.length === 4 ? "all four" : on.join(" + "), patch: { sigLvlOff: FIB_LEVEL_KEYS.filter(k => on.indexOf(k) === -1) } }); } return out; } },
+      { id: "lvl", label: "Level", fib: true, key: c => c.sigLvl, text: c => c.sigLvl || "As entered", opts: () => [""].concat(FIB_LEVEL_KEYS).map(k => ({ label: k || "As entered", patch: { sigLvl: k } })) },
+      { id: "type", label: "Type", tl: true, key: c => c.sigTlType, text: c => c.sigTlType ? (SIG_TL_TYPES.find(x => x.k === c.sigTlType) || {}).label : "All", opts: () => SIG_TL_TYPES.map(x => ({ label: x.label, patch: { sigTlType: x.k } })) },
+      { id: "btc", label: "BTC day", key: c => c.mktFilter, text: c => c.mktFilter ? MKT_LABEL[c.mktFilter] : "All days", opts: () => [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]].map(x => ({ label: x[1], patch: { mktFilter: x[0] } })) }
+    ];
+    const bsDimsFor = kind => BS_DIMS.filter(d => !(d.fib && kind !== "fib") && !(d.tl && kind !== "trendline"));
+    // Options of one setting for settings c, each with its full settings and key; duplicates (same key) dropped.
+    function bsOptions(dim, c, ctx) {
+      const seen = {}, out = [];
+      dim.opts(c, ctx).forEach(o => {
+        const cc = bsPick(c, o.patch), k = dim.key(cc);
+        // Rules other than Exit at only act with a fixed target: they are tried on the one in force (Scanner: 1R).
+        if (seen[k]) return;
+        seen[k] = 1; out.push({ label: o.label, key: k, cfg: cc });
+      });
+      return out;
+    }
+    // ---- the search ----
+    const bsOk = (s, m) => !!s && s.n >= (m || BS_MIN_N);
+    // Fewest trades a setting needs to be picked: a tenth of the alerts (never under 30), so a thin slice with a lucky streak cannot win.
+    const bsMinFor = n => Math.max(BS_MIN_N, Math.round(n * 0.1));
+    // Greedy search: each setting in turn takes the option with the most total R (30+ trades), until a round changes nothing.
+    async function bsGreedy(start, ctx, when, tag, dims, minN) {
+      let cur = JSON.parse(JSON.stringify(start)), best = await bsScore(cur, ctx, when, tag);
+      const fixedOnly = c => c.sigTgt ? c : bsPick(c, { sigTgt: "1R" });
+      if (!cur.sigTgt) { cur = fixedOnly(cur); best = await bsScore(cur, ctx, when, tag); }
+      for (let round = 0; round < 3; round++) {
+        let changed = false;
+        for (const dim of dims) {
+          if (BS.stop) return { cfg: cur, st: best.st };
+          const opts = bsOptions(dim, cur, ctx);
+          for (const o of opts) {
+            if (o.key === dim.key(cur)) continue;
+            const cc = dim.id === "tgt" && !o.cfg.sigTgt ? null : o.cfg;     // Scanner is a baseline, never the search's pick
+            if (!cc) continue;
+            const s = await bsScore(cc, ctx, when, tag);
+            if (bsOk(s.st, minN) && (!bsOk(best.st, minN) || s.st.tot > best.st.tot + 1e-9)) { cur = cc; best = s; changed = true; }
+          }
+        }
+        if (!changed) break;
+      }
+      return { cfg: cur, st: best.st };
+    }
+    function bsRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+    // Settings in words, one line per setting.
+    function bsDescribe(c, dims) { return dims.map(d => ({ id: d.id, label: d.label, text: d.text(c) })); }
+    // The whole job: universe, one-at-a-time table, best combination, out-of-sample check, luck check.
+    async function bsRun() {
+      if (BS.busy) return;
+      BS.busy = true; BS.stop = false; BS.drawn = 0; BS.prog = { evals: 0, reads: 0, step: "Starting" };
+      renderBestCard();
+      try {
+        const kind = sigKind(), range = sigPeriodRange(), raw = matchSignals(kind), dims = bsDimsFor(kind);
+        const cur0 = bsSnap(), ref = cur0.sigTgt ? cur0 : bsPick(cur0, { sigTgt: "1R" });
+        const ctx = { raw, range, memo: {}, chans: [], mkts: {}, coins: false };
+        // What exists to choose from: channels, markets and coins among the alerts (before those filters).
+        const open = bsPick(cur0, { sigChan: "", sigMarket: "", sigCoins: "" });
+        const base = bsWith(open, () => bsPairs(raw, range).pairs);
+        const cc = {}; base.forEach(pr => { cc[chanKey(pr.signal)] = 1; ctx.mkts[isNseSig(pr.signal) ? "nse" : "crypto"] = 1; if (coinOf(pr.signal)) ctx.coins = true; });
+        ctx.chans = FIBTL_CHANNELS.filter(k => cc[k]).concat(Object.keys(cc).filter(k => FIBTL_CHANNELS.indexOf(k) === -1));
+        const all = bsWith(bsPick(cur0, { sigChan: "", sigMarket: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "" }), () => bsPairs(raw, range).pairs);
+        const dates = all.map(pr => pr.signal.date).sort();
+        const res = { at: Date.now(), kind, universe: all.length, range, dims: [], notes: [] };
+        res.sig = bsSig();
+        if (dates.length < 60) { res.tooFew = true; BS.res = res; return; }
+        const cut = dates[Math.floor(dates.length * BS_SPLIT) - 1];
+        const train = g => g.date <= cut, test = g => g.date > cut;
+        res.minN = bsMinFor(all.length);
+        res.split = { cut, from: dates[0], to: dates[dates.length - 1], nTrain: all.filter(pr => train(pr.signal)).length, nTest: all.filter(pr => test(pr.signal)).length };
+        // 1) one setting at a time
+        BS.prog.step = "Trying each setting on its own";
+        res.cur = (await bsScore(cur0, ctx, null, "all")).st;
+        res.ref = ref !== cur0 ? (await bsScore(ref, ctx, null, "all")).st : res.cur;
+        res.refTgt = ref.sigTgt;
+        for (const dim of dims) {
+          if (BS.stop) break;
+          const baseC = dim.rule && dim.id !== "tgt" ? ref : cur0, opts = bsOptions(dim, baseC, ctx), row = { id: dim.id, label: dim.label, rule: !!dim.rule, now: dim.text(baseC), nowKey: dim.key(baseC), opts: [] };
+          for (const o of opts) { const s = await bsScore(o.cfg, ctx, null, "all"); row.opts.push({ label: o.label, key: o.key, cfg: o.cfg, st: s.st, left: s.left, now: o.key === row.nowKey }); }
+          const ok = row.opts.filter(o => bsOk(o.st, res.minN));
+          row.bestTot = ok.reduce((b, o) => !b || o.st.tot > b.st.tot ? o : b, null);
+          row.bestAvg = ok.reduce((b, o) => !b || o.st.avg > b.st.avg ? o : b, null);
+          row.nowSt = (row.opts.find(o => o.now) || {}).st || null;
+          res.dims.push(row);
+        }
+        // 2) best combination, on everything
+        BS.prog.step = "Searching the best combination";
+        const startC = ref;
+        const full = await bsGreedy(startC, ctx, null, "all", dims, res.minN);
+        res.combo = { cfg: full.cfg, st: full.st, lines: bsDescribe(full.cfg, dims) };
+        // 3) the same search on the first 60% only, read on the last 40%
+        BS.prog.step = "Out-of-sample check: searching the first " + Math.round(BS_SPLIT * 100) + "%";
+        const tr = await bsGreedy(startC, ctx, train, "train", dims, bsMinFor(res.split.nTrain));
+        res.minTrain = bsMinFor(res.split.nTrain);
+        const trOnTest = await bsScore(tr.cfg, ctx, test, "test"), comboOnTest = await bsScore(full.cfg, ctx, test, "test");
+        const curTrain = await bsScore(cur0, ctx, train, "train"), curTest = await bsScore(cur0, ctx, test, "test");
+        res.oos = { cfg: tr.cfg, lines: bsDescribe(tr.cfg, dims), train: tr.st, test: trOnTest.st, comboTest: comboOnTest.st, curTrain: curTrain.st, curTest: curTest.st };
+        // 4) luck check: random settings from the same lists (SL and Hold left as they are), on both halves
+        BS.prog.step = "Luck check: " + BS_RANDOM + " random settings";
+        const rnd = bsRng(20261114), rows = [], rdims = dims.filter(d => d.id !== "sl" && d.id !== "hold");
+        for (let i = 0; i < BS_RANDOM * 4 && rows.length < BS_RANDOM && !BS.stop; i++) {
+          let c = JSON.parse(JSON.stringify(startC));
+          for (const d of rdims) { const o = bsOptions(d, c, ctx).filter(x => !(d.id === "tgt" && !x.cfg.sigTgt)); if (o.length) c = o[Math.floor(rnd() * o.length)].cfg; }
+          const a = await bsScore(c, ctx, train, "train"), b = await bsScore(c, ctx, test, "test");
+          if (a.st.n >= 15 && b.st.n >= 15) rows.push({ a: a.st, b: b.st });
+        }
+        const top = rows.slice().sort((x, y) => y.a.tot - x.a.tot).slice(0, 10), mean = v => v.length ? sum(v) / v.length : null, med = v => { const s = v.slice().sort((x, y) => x - y); return s.length ? (s[(s.length - 1) >> 1] + s[s.length >> 1]) / 2 : null; };
+        res.rnd = { k: rows.length, trainPos: rows.filter(x => x.a.tot > 0).length, testPos: rows.filter(x => x.b.tot > 0).length, trainMed: med(rows.map(x => x.a.avg)), testMed: med(rows.map(x => x.b.avg)), topTrain: mean(top.map(x => x.a.avg)), topTest: mean(top.map(x => x.b.avg)), topN: top.length };
+        res.evals = BS.prog.evals;
+        BS.res = res;
+      } catch (e) {
+        BS.res = { err: String(e && e.message || e), at: Date.now(), sig: bsSig() };
+      } finally { BS.busy = false; BS.prog = null; renderBestCard(); }
+    }
+    // What the result was made from: a change in kind, period or the dropped-coin switch makes it stale.
+    function bsSig() { const r = sigPeriodRange(); return [sigKind(), r.from, r.to, sigDroppedMode(), state.ui.sigAsset || "", state.ui.sigSkipTiny === true ? 1 : 0, state.ui.sigNoFee === true ? 1 : 0, (state.signals || []).length].join("|"); }
+    // Use these settings on the tab.
+    function bsUse(path) {
+      const o = path.split(".").reduce((x, k) => x && x[k], BS.res);
+      if (!o) return;
+      BS_KEYS.forEach(k => { if (o[k] === null || o[k] === undefined) delete state.ui[k]; else state.ui[k] = JSON.parse(JSON.stringify(o[k])); });
+      sigVisible = SIG_PAGE; sigFixCoins = true; save(); renderSignalsTable();
+    }
+    function bsUseOpt(i, j) { const r = BS.res && BS.res.dims[i] && BS.res.dims[i].opts[j]; if (!r) return; BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(JSON.stringify(r.cfg[k])); }); sigVisible = SIG_PAGE; sigFixCoins = true; save(); renderSignalsTable(); }
+    function bsCancel() { BS.stop = true; }
+    const bsTone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+    function bsCells(st) {
+      if (!st || !st.n) return '<td class="text-right text-slate-600" colspan="9">no trades</td>';
+      const mr = sigMeanRange(st), pf = st.pf >= 1e9 ? Infinity : st.pf;
+      return '<td class="text-right">' + st.n + '</td><td class="text-right">' + pct(st.win) + '</td><td class="text-right ' + bsTone(st.tot) + '">' + rfmt(st.tot) + '</td><td class="text-right ' + bsTone(st.avg) + '">' + rfmt(st.avg) + '</td><td class="text-right text-slate-400">' + (mr ? rngTxt(mr) : '—') + '</td><td class="text-right">' + pfFmt(pf) + '</td><td class="text-right text-rose-400">-' + st.dd.toFixed(2) + 'R</td><td class="text-right text-rose-400">' + st.ls + '</td><td class="text-right ' + bsTone(st.totPct) + '">' + (st.totPct == null ? '—' : (st.totPct >= 0 ? '+' : '') + st.totPct.toFixed(1) + '%') + '</td>';
+    }
+    const BS_HEAD = '<th class="text-right">Trades</th><th class="text-right">Win %</th><th class="text-right">Total R</th><th class="text-right">Avg R</th><th class="text-right" title="95% range of the average R">Avg R range</th><th class="text-right">PF</th><th class="text-right">Max DD</th><th class="text-right" title="Longest run of losing trades">Loss run</th><th class="text-right">Total %</th>';
+    // Every number the tab can show for one set of settings, as a small grid.
+    function bsFull(st) {
+      if (!st || !st.n) return '';
+      const mr = sigMeanRange(st), pf = st.pf >= 1e9 ? Infinity : st.pf, t = v => '<span class="' + bsTone(v) + '">' + rfmt(v) + '</span>';
+      const items = [['Alerts', st.alerts], ['Filled', st.filled], ['No fill', st.unfilled], ['Trades with a result', st.n], ['Wins / losses', st.wins + ' / ' + st.losses], ['Win rate', pct(st.win)],
+        ['Avg win', st.avgWin == null ? '—' : t(st.avgWin)], ['Avg loss', st.avgLoss == null ? '—' : t(st.avgLoss)], ['Payoff (win / loss)', st.payoff == null ? '—' : st.payoff.toFixed(2)], ['Total R', t(st.tot)],
+        ['Average R', t(st.avg)], ['Avg R 95% range', mr ? rngTxt(mr) : '—'], ['Profit factor', pfFmt(pf)], ['SQN', st.sqn == null ? '—' : st.sqn.toFixed(2)], ['Max drawdown', '-' + st.dd.toFixed(2) + 'R'],
+        ['Longest drawdown', st.longDD + ' trades'], ['Losing run', st.ls + ' in a row'], ['Winning run', st.ws + ' in a row'], ['Best trade', st.best == null ? '—' : t(st.best)], ['Worst trade', st.worst == null ? '—' : t(st.worst)],
+        ['Total price move', st.totPct == null ? '—' : (st.totPct >= 0 ? '+' : '') + st.totPct.toFixed(1) + '%'], ['Avg price move', st.avgPct == null ? '—' : (st.avgPct >= 0 ? '+' : '') + st.avgPct.toFixed(2) + '%']];
+      return '<div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-x-4 gap-y-1 mt-2 text-[11px]">' + items.map(x => '<div><span class="text-slate-500">' + x[0] + '</span> <b class="text-slate-200">' + x[1] + '</b></div>').join('') + '</div>';
+    }
+    function renderBestCard() {
+      const host = document.getElementById('sigBest');
+      if (!host) return;
+      const r = BS.res, stale = r && !r.err && r.sig !== bsSig();
+      let h = '<div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Best settings the journal found</h3><span class="flex items-center gap-2">'
+        + (BS.busy ? '<button type="button" id="sigBestStop" onclick="bsCancel()" class="px-2.5 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500">Stop</button>' : '<button type="button" id="sigBestRun" onclick="bsRun()" class="px-2.5 py-1 rounded border border-amber-500/60 text-amber-200 hover:bg-amber-500/10 font-semibold">' + (r ? 'Search again' : 'Find best settings') + '</button>') + '</span></div>';
+      h += '<div id="sigBestWarn" class="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-[11px] px-3 py-2 mb-3 leading-relaxed"><b>Best of many tries is partly luck.</b> The more settings are tried, the better the best one looks on these same alerts, and it will not trade that well. Trust the <b>out-of-sample</b> lines (settings found on the older 60% of alerts, read on the newest 40% they never saw) and the luck check, not the top row. Few trades: take any of it lightly.</div>';
+      if (BS.busy) h += '<p id="sigBestProg" class="text-slate-300">' + esc(BS.prog.step) + ' · ' + BS.prog.evals + ' settings scored · ' + BS.prog.reads + ' price reads…</p>';
+      if (!r && !BS.busy) h += '<p class="text-slate-500">Tries every option of every setting on the alerts in view (Fib / Trendline / Zone as picked, this Period, dropped coins as set), then searches all of them together. It can take a minute the first time: prices for each stop type are read once.</p>';
+      if (r && r.err) h += '<p class="text-rose-300">Could not finish: ' + esc(r.err) + '</p>';
+      else if (r && r.tooFew) h += '<p class="text-slate-400">Only ' + r.universe + ' alerts in view: too few to search (60 needed). Widen the Period or pick another kind.</p>';
+      else if (r) {
+        if (stale) h += '<p id="sigBestStale" class="text-amber-300 mb-2">The alerts or Period changed since this search. <button type="button" class="underline" onclick="bsRun()">Search again</button></p>';
+        h += '<p class="text-[10px] text-slate-500 mb-3">' + r.universe + ' ' + (SIG_KINDS.find(x => x.k === r.kind) || SIG_KINDS[0]).label.toLowerCase() + ' · ' + r.split.from + ' to ' + r.split.to + ' · older 60% = ' + r.split.nTrain + ' alerts up to ' + r.split.cut + ', newest 40% = ' + r.split.nTest + ' · ' + (r.evals || 0) + ' settings scored · fees ' + (state.ui.sigNoFee === true ? 'off' : 'on') + (r.refTgt && r.refTgt !== bsSnap().sigTgt ? ' · rules tried at Exit ' + r.refTgt + ' (you are on Scanner exits)' : '') + '</p>';
+        // A. every setting on its own
+        h += '<div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Each setting on its own <span class="text-slate-500 normal-case font-normal">· the others as you have them now · best = most Total R with ' + r.minN + '+ trades, a tenth of the alerts (filters also show best Avg R)</span></div>';
+        h += '<div class="overflow-x-auto"><table id="sigBestTable" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Setting</th><th class="pr-2">Now</th><th class="pr-2">Best option</th>' + BS_HEAD + '<th></th></tr></thead><tbody>';
+        r.dims.forEach((d, i) => {
+          const b = d.bestTot, same = b && b.key === d.nowKey, j = b ? d.opts.indexOf(b) : -1, ba = d.bestAvg, ja = ba ? d.opts.indexOf(ba) : -1;
+          h += '<tr data-bs="' + d.id + '" class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold text-slate-200 whitespace-nowrap">' + esc(d.label) + '</td><td class="pr-2 text-slate-400">' + esc(d.now) + '</td>'
+            + (b ? '<td class="pr-2 ' + (b.st.tot < 0 ? 'text-rose-300' : same ? 'text-slate-300' : 'text-emerald-300 font-bold') + '">' + esc(b.label) + (same ? ' <span class="text-slate-500 font-normal">(now)</span>' : '') + (b.st.tot < 0 ? ' <span class="text-[10px] font-normal text-rose-300">still loses</span>' : '') + '</td>' + bsCells(b.st) + '<td class="text-right">' + (same ? '' : '<button type="button" data-use="' + d.id + '" onclick="bsUseOpt(' + i + ',' + j + ')" class="underline text-amber-300">Use</button>') + '</td>'
+              : '<td class="pr-2 text-slate-500" colspan="11">no option has ' + r.minN + '+ trades</td>') + '</tr>';
+          if (!d.rule && ba && ba !== b) h += '<tr class="text-slate-400"><td></td><td class="pr-2 text-[10px]">best Avg R</td><td class="pr-2">' + esc(ba.label) + '</td>' + bsCells(ba.st) + '<td class="text-right"><button type="button" onclick="bsUseOpt(' + i + ',' + ja + ')" class="underline text-amber-300">Use</button></td></tr>';
+        });
+        h += '</tbody></table></div>';
+        // every option, folded
+        h += '<details id="sigBestAll" class="mt-2"><summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">Every option tried</summary>';
+        r.dims.forEach(d => {
+          h += '<div class="mt-2 text-slate-300 font-semibold">' + esc(d.label) + '</div><div class="overflow-x-auto"><table class="w-full text-[11px] mono-num"><tbody>';
+          d.opts.slice().sort((a, b) => (b.st.n ? b.st.tot : -1e9) - (a.st.n ? a.st.tot : -1e9)).forEach(o => { h += '<tr class="border-t border-terminal-border/50' + (o.now ? ' text-amber-300' : '') + '"><td class="py-0.5 pr-2 whitespace-nowrap">' + esc(o.label) + (o.now ? ' (now)' : '') + (o.left ? ' <span class="text-slate-500">· ' + o.left + ' unread</span>' : '') + '</td>' + bsCells(o.st) + '</tr>'; });
+          h += '</tbody></table></div>';
+        });
+        h += '</details>';
+        // B. best combination
+        const cb = r.combo, oos = r.oos;
+        h += '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Best full combination <span class="text-slate-500 normal-case font-normal">· found on all ' + r.universe + ' alerts, so this is the flattering number</span></div>';
+        h += '<div class="overflow-x-auto"><table id="sigBestCombo" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Settings</th>' + BS_HEAD + '<th></th></tr></thead><tbody><tr class="border-t border-terminal-border"><td class="py-1 pr-2 text-emerald-300">' + cb.lines.map(x => '<span class="whitespace-nowrap"><span class="text-slate-500">' + esc(x.label) + '</span> ' + esc(x.text) + '</span>').join(' · ') + '</td>' + bsCells(cb.st) + '<td class="text-right"><button type="button" id="sigBestUse" onclick="bsUse(\'combo.cfg\')" class="underline text-amber-300">Use</button></td></tr>'
+          + '<tr class="border-t border-terminal-border text-slate-400"><td class="py-1 pr-2">Your settings now</td>' + bsCells(r.cur) + '<td></td></tr></tbody></table></div>'
+          + '<details id="sigBestFull" class="mt-1"><summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">Every number for the best combination</summary>' + bsFull(cb.st) + '</details>';
+        // C. out of sample
+        const dTone = (a, b) => b == null || a == null ? '' : b.avg > 0 && b.avg >= a.avg * 0.5 ? 'text-emerald-300' : b.avg > 0 ? 'text-amber-300' : 'text-rose-300';
+        const verdict = !bsOk(oos.train, r.minTrain) ? 'The older 60% gave no setting with ' + r.minTrain + '+ trades.' : !oos.test.n ? 'No trades on the newest 40%.'
+          : oos.test.avg <= 0 ? 'Does not hold up: the settings that looked best on the older alerts lose on the newest ones. Treat the top row as noise.'
+          : oos.test.avg < oos.train.avg * 0.5 ? 'Holds up weakly: it still wins on the newest alerts, but at less than half the older average. Expect much less than the top row.'
+          : 'Holds up: it also wins on the newest alerts at a similar average. Still a short sample, so test it small first.';
+        h += '<div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mt-4 mb-1">Out of sample <span class="text-slate-500 normal-case font-normal">· found on the older 60% only, then read on the newest 40%</span></div>';
+        h += '<div class="overflow-x-auto"><table id="sigBestOos" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Settings</th><th class="pr-2">Alerts</th>' + BS_HEAD + '</tr></thead><tbody>'
+          + '<tr class="border-t border-terminal-border"><td class="py-1 pr-2 text-slate-300" rowspan="2">Best on the older 60%<div class="text-[10px] text-slate-500 font-normal">' + oos.lines.map(x => esc(x.label) + ' ' + esc(x.text)).join(' · ') + '</div></td><td class="pr-2 text-slate-500">older 60%</td>' + bsCells(oos.train) + '</tr>'
+          + '<tr class="border-t border-terminal-border/50 ' + dTone(oos.train, oos.test) + '"><td class="pr-2 font-bold">newest 40%</td>' + bsCells(oos.test) + '</tr>'
+          + '<tr class="border-t border-terminal-border text-slate-400"><td class="py-1 pr-2" rowspan="2">Your settings now</td><td class="pr-2 text-slate-500">older 60%</td>' + bsCells(oos.curTrain) + '</tr>'
+          + '<tr class="border-t border-terminal-border/50 text-slate-400"><td class="pr-2">newest 40%</td>' + bsCells(oos.curTest) + '</tr></tbody></table></div>';
+        h += '<details class="mt-1"><summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">Every number: best on the older 60%, read on the newest 40%</summary>' + bsFull(oos.test) + '</details>';
+        h += '<p id="sigBestVerdict" class="mt-2 ' + dTone(oos.train, oos.test) + '"><b>' + esc(verdict) + '</b></p>';
+        // D. luck check
+        const rk = r.rnd;
+        if (rk && rk.k) h += '<p id="sigBestLuck" class="mt-2 text-slate-400">Luck check: ' + rk.k + ' random settings from the same lists. On the older 60% ' + rk.trainPos + ' of ' + rk.k + ' win (median ' + rfmt(rk.trainMed) + ' a trade); on the newest 40% ' + rk.testPos + ' of ' + rk.k + ' win (median ' + rfmt(rk.testMed) + '). The 10 best of them on the older alerts averaged ' + rfmt(rk.topTrain) + ' there and ' + rfmt(rk.topTest) + ' on the newest: that gap is what picking the best costs.</p>';
+        else h += '<p id="sigBestLuck" class="mt-2 text-slate-400">Luck check: too few alerts to find random settings that keep 15 or more trades on both the older and the newest alerts.</p>';
+        h += '<p class="text-[10px] text-slate-500 mt-2">Every number is what the tab shows once you press Use (same alerts, same walks, fees as set above). Rules other than Exit at only act with a fixed target, so they were tried at Exit ' + esc(r.refTgt || '1R') + '. Total % is the sum of price moves, comparable across stop types where R is not. The Scanner exit is a baseline only: it is never the search\'s pick.</p>';
+      }
+      host.innerHTML = h;
     }
 
 
@@ -15288,6 +15681,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-14.193', pr: 107, title: 'Current coins only, Top 10/20/30, best settings', pts: ['Coins dropped from the scanner on 8 Nov are hidden from every number by default (Shown switch under Coins); Coins gets Top 10 / 20 / 30 by 30-day volume', 'Edge & breakdowns: best option for every setting, the best full combination with all outputs, a 60/40 out-of-sample check and a luck check; Use puts it on the tab', 'Overfit warning on top: the best of many tries is partly luck, read the newest-40% lines'] },
       { v: '2026-11-14.192', pr: 106, title: 'Balance shows its date and time', pts: ['The header balance tag shows when the wallet figure was read (e.g. 14 Nov, 8:30 PM, India time) instead of LAST KNOWN / WALLET', 'Green while it is fresh, amber when nothing newer came in; on All accounts it is the oldest stale figure', 'Trading Books says "Delta wallet from 14 Nov, 2:51 PM" in place of "last known"'] },
       { v: '2026-11-14.191', pr: 105, title: 'Market filter + no more empty dashes', pts: ['New Market row (Signals and Analysis): All / Crypto / Indian, above Channel. The Channel list then shows only that market\'s channels; Indian hides Assets and Coins', 'xStocks + CoinDCX showed 0 and a row of dashes: CoinDCX lists no xStocks. Coins options that keep nothing are now greyed (a tap says why), and picking xStocks with CoinDCX on puts Coins back to All', 'An empty view says which filter left nothing, with a button back'] },
       { v: '2026-11-13.190', pr: 104, title: 'Signals: NSE alerts get results', pts: ['NSE alerts showed only dashes with any SL but Alert (e.g. NSE 1D trendlines, Wick or body): no NSE candles in the app', 'Now a twice-a-day job puts Yahoo\'s NSE candles in your sync repo, and NSE alerts are played like crypto: every SL type, Move SL, Trail TP, Partial, Hold, Demo account', '"20 candles" counts NSE candles (no nights or weekends). Needs GitHub sync on'] },
