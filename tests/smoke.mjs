@@ -898,13 +898,18 @@ async function coindcxRun(seed) {
         return { top: document.getElementById('topBalVal').innerText, chart: document.getElementById('chartBalLabel').innerText, tag: tag.classList.contains('hidden') ? '' : tag.innerText, title: tag.title }; };
       const out = { inr: bookBalance(acct('rep-coindcx-inr')), usd: bookBalance(acct('rep-coindcx-usd')), nse: bookBalance(acct('acc_nse')), nseComputed: bookComputedBalance(acct('acc_nse')),
         want: money(bookBalance(acct('rep-coindcx-inr')), 'INR'), nseWant: money(bookComputedBalance(acct('acc_nse')), 'INR'), cdx: head('rep-coindcx-inr'), other: head('acc_nse') };
+      const w = cdxWallet(acct('rep-coindcx-inr'));
+      out.cdxWhen = w ? balTimeText(w.old ? w.at : Math.max(Date.parse(w.at), Date.parse(w.seen))) : '';
+      out.cdxAt = w ? balTimeText(w.at) : '';
       state.ui.account = 'all'; switchTab('data'); renderAll();
       out.books = [...document.querySelectorAll('#booksList > div')].map(d => d.innerText.replace(/\s+/g, ' ')).filter(t => /CoinDCX/.test(t)).join(' | ');
       return out;
     });
     let bal = await balances();
     check(bal.inr === 8144.78 && bal.usd === 82.02 && bal.nse === bal.nseComputed, 'book balances: ' + JSON.stringify(bal));
-    check(bal.cdx.top === bal.want && bal.cdx.chart === bal.want && bal.cdx.tag === 'WALLET' && /CoinDCX futures wallet/.test(bal.cdx.title), 'header on the CoinDCX book: ' + JSON.stringify(bal.cdx));
+    // The tag is the date and time of the figure in India time, not a word (lakky, 14 Nov).
+    const BAL_TIME = /^\d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2} [AP]M$/;
+    check(bal.cdx.top === bal.want && bal.cdx.chart === bal.want && bal.cdx.tag === bal.cdxWhen && BAL_TIME.test(bal.cdx.tag) && /^Balance read .* \(India time\)\. CoinDCX futures wallet/.test(bal.cdx.title), 'header on the CoinDCX book: ' + JSON.stringify(bal.cdx));
     check(bal.other.top === bal.nseWant && bal.other.tag === '', 'header on another book: ' + JSON.stringify(bal.other));
     // Another broker's report book keeps the balance worked out from its trades (tried, then taken out again).
     const dhanBal = await page.evaluate(() => {
@@ -999,8 +1004,8 @@ async function coindcxRun(seed) {
     // and the card say so (lakky's ₹3,704.85 vs CoinDCX's ₹6,705.82 on 3 Nov, a refused key).
     check(/Last known wallet \(from before the failure/.test(c.status), 'card wallet while failing: ' + c.status);
     bal = await balances();
-    check(bal.inr === 8144.78 && bal.cdx.top === bal.want && bal.cdx.tag === 'LAST KNOWN' && /GitHub's import is failing/.test(bal.cdx.title) && /Why: CoinDCX answered 400: Invalid margin\. Journal-computed balance: /.test(bal.cdx.title)
-      && (bal.books.match(/· CoinDCX wallet, last known \(import failing\)/g) || []).length === 2, 'wallet while the import fails: ' + JSON.stringify(bal));
+    check(bal.inr === 8144.78 && bal.cdx.top === bal.want && bal.cdx.tag === bal.cdxAt && BAL_TIME.test(bal.cdx.tag) && /^Nothing newer since .* \(India time\)\. Last known CoinDCX/.test(bal.cdx.title) && /GitHub's import is failing/.test(bal.cdx.title) && /Why: CoinDCX answered 400: Invalid margin\. Journal-computed balance: /.test(bal.cdx.title)
+      && bal.books.split('· CoinDCX wallet from ' + bal.cdxAt + ' (import failing)').length === 3 && !/last known/i.test(bal.books), 'wallet while the import fails: ' + JSON.stringify(bal));
     check(await page.evaluate(() => document.getElementById('topBalLive').className.includes('amber')), 'last known wallet tag is not amber');
     // Working again clears it.
     mock.mode = 'ok';
@@ -1010,7 +1015,7 @@ async function coindcxRun(seed) {
     c = await card();
     check(c.badge === 'Importing' && !c.bad && / Wallet: ₹8,144\.78 INR futures/.test(c.status), 'card after recovering: ' + JSON.stringify(c));
     bal = await balances();
-    check(bal.cdx.tag === 'WALLET' && !/failing/.test(bal.cdx.title) && !/import failing/.test(bal.books) && (bal.books.match(/· CoinDCX wallet/g) || []).length === 2, 'wallet after recovering: ' + JSON.stringify(bal));
+    check(bal.cdx.tag === bal.cdxWhen && BAL_TIME.test(bal.cdx.tag) && !/failing/.test(bal.cdx.title) && !/import failing/.test(bal.books) && (bal.books.match(/· CoinDCX wallet/g) || []).length === 2, 'wallet after recovering: ' + JSON.stringify(bal));
     check(await page.evaluate(() => { state.ui.account = 'rep-coindcx-inr'; renderAll(); const on = document.getElementById('topBalLive').className.includes('emerald'); state.ui.account = 'all'; renderAll(); return on; }), 'wallet tag is not green again');
 
     // A device saves between the import's read and write: read again, merge, nothing lost.
@@ -1353,7 +1358,7 @@ async function reviewRun(seed) {
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForTimeout(300);
     for (const id of ['all', 'acc_nse', 'acc_cry']) {
-      const h = await page.evaluate(id => { state.ui.account = id; renderAll(); const t = document.getElementById('topBalLive'); t.classList.remove('hidden'); t.innerText = 'LAST KNOWN'; document.getElementById('topBalVal').innerText = '₹88,008.57';
+      const h = await page.evaluate(id => { state.ui.account = id; renderAll(); const t = document.getElementById('topBalLive'); t.classList.remove('hidden'); t.innerText = '30 Sep, 12:30 PM'; document.getElementById('topBalVal').innerText = '₹88,008.57';
         const ab = document.getElementById('accountsBar'); return { h: document.querySelector('header').offsetHeight, cut: ab.scrollWidth - ab.clientWidth }; }, id);
       check(h.h < 80 && h.cut === 0, width + 'px, ' + id + ': header not on one line ' + JSON.stringify(h));
     }
@@ -1622,13 +1627,43 @@ async function deltaShareRun(seed) {
       // An older figure from GitHub never replaces the newer one held here.
       const stale = mergeState(JSON.parse(JSON.stringify(state)), Object.assign({}, p, { deltaBalance: { value: 33.23, field: 'net equity', at: p.deltaBalance.at - 3600e3 } }));
       return { before, after: bookBalance(acct(deltaAccountId())), top: document.getElementById('topBalVal').innerText, tag: tag.classList.contains('hidden') ? '' : tag.innerText,
-        title: tag.title, stale: stale.delta.liveBalance.value, key: !!(state.delta && state.delta.key) };
+        when: balTimeText(p.deltaBalance.at), green: tag.className.includes('emerald'), title: tag.title, stale: stale.delta.liveBalance.value, key: !!(state.delta && state.delta.key) };
     }, p);
-    check(got.after === 0.01 && got.before !== 0.01 && got.top.includes('0.01') && got.tag === 'WALLET' && /by your PC's import/.test(got.title) && got.stale === 0.01 && !got.key,
+    check(got.after === 0.01 && got.before !== 0.01 && got.top.includes('0.01') && got.tag === got.when && /^\d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2} [AP]M$/.test(got.tag) && got.green && /by your PC's import/.test(got.title) && got.stale === 0.01 && !got.key,
       'phone after sync: ' + JSON.stringify(got));
     // Three hours with nothing newer (PC off): still shown, marked last known.
-    const old = await phone.page.evaluate(() => { liveDeltaBalance = Object.assign({}, liveDeltaBalance, { at: Date.now() - 3 * 3600e3 }); applyLiveBalance(); const t = document.getElementById('topBalLive'); return { tag: t.innerText, title: t.title }; });
-    check(old.tag === 'LAST KNOWN' && /is the PC on\?/.test(old.title), 'old figure: ' + JSON.stringify(old));
+    const old = await phone.page.evaluate(() => { liveDeltaBalance = Object.assign({}, liveDeltaBalance, { at: Date.now() - 3 * 3600e3 }); applyLiveBalance(); const t = document.getElementById('topBalLive');
+      switchTab('data'); renderAll(); const books = document.getElementById('booksList').innerText.replace(/\s+/g, ' '); switchTab('dashboard');
+      return { tag: t.innerText, when: balTimeText(liveDeltaBalance.at), amber: t.className.includes('amber'), title: t.title, books,
+        // Fixed instants, worked out by hand: 15:00 UTC is 8:30 PM in India; 18:45 UTC is past midnight there; ISO strings too; nothing for junk.
+        fixed: [balTimeText(Date.UTC(2026, 10, 14, 15, 0)), balTimeText(Date.UTC(2026, 10, 14, 18, 45)), balTimeText('2026-11-11T14:43:45.506Z'), balTimeText(Date.UTC(2026, 0, 1, 6, 30)), balTimeText('junk'), balTimeText(undefined), balTimeText(0)] };
+    });
+    check(old.tag === old.when && old.amber && /^Nothing newer since /.test(old.title) && /is the PC on\?/.test(old.title) && old.books.includes('· Delta wallet from ' + old.when) && !/last known/i.test(old.books), 'old figure: ' + JSON.stringify(old));
+    check(JSON.stringify(old.fixed) === JSON.stringify(['14 Nov, 8:30 PM', '15 Nov, 12:15 AM', '11 Nov, 8:13 PM', '1 Jan, 12:00 PM', '', '', '']), 'balance time text: ' + JSON.stringify(old.fixed));
+    // All books: the total is as old as its oldest stale part (amber); none stale, the newest read (green).
+    const mix = await phone.page.evaluate(() => {
+      const real = cdxWallet, deltaAt = liveDeltaBalance.at, now = Date.now(), H = 3600e3;
+      state.ui.account = 'all'; renderAll();
+      const other = viewBooks().find(a => a.id !== deltaAccountId());
+      const run = (dAgo, w) => {
+        liveDeltaBalance = Object.assign({}, liveDeltaBalance, { at: now - dAgo });
+        cdxWallet = a => other && a.id === other.id ? Object.assign({ value: 100, note: w.old ? 'x' : '' }, w) : null;
+        applyLiveBalance(); const t = document.getElementById('topBalLive');
+        return [t.innerText, t.className.includes('amber') ? 'amber' : 'green'];
+      };
+      const iso = ago => new Date(now - ago).toISOString();
+      const out = {
+        other: !!other,
+        deltaOld: [run(3 * H, { at: iso(48 * H), seen: iso(10 * 60e3), old: false }), [balTimeText(now - 3 * H), 'amber']],
+        cdxOld: [run(20 * 60e3, { at: iso(48 * H), seen: iso(5 * 60e3), old: true }), [balTimeText(now - 48 * H), 'amber']],
+        bothOk: [run(20 * 60e3, { at: iso(48 * H), seen: iso(5 * 60e3), old: false }), [balTimeText(now - 5 * 60e3), 'green']],
+        bothOld: [run(3 * H, { at: iso(48 * H), seen: iso(1 * H), old: true }), [balTimeText(now - 48 * H), 'amber']],
+        noDate: [run(20 * 60e3, { at: undefined, seen: undefined, old: true }), ['LAST KNOWN', 'amber']]
+      };
+      cdxWallet = real; liveDeltaBalance = Object.assign({}, liveDeltaBalance, { at: deltaAt }); state.ui.account = deltaAccountId(); renderAll(); applyLiveBalance();
+      return out;
+    });
+    check(mix.other && ['deltaOld', 'cdxOld', 'bothOk', 'bothOld', 'noDate'].every(k => JSON.stringify(mix[k][0]) === JSON.stringify(mix[k][1])), 'balance time with Delta and CoinDCX: ' + JSON.stringify(mix));
     // The phone keeps it after a reload.
     await phone.page.reload({ waitUntil: 'load' }); await phone.page.waitForTimeout(300);
     const kept = await phone.page.evaluate(() => bookBalance(acct(deltaAccountId())));
