@@ -6692,6 +6692,66 @@ async function droppedCoinsRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
 
+// NSE alerts start on 1 Sep 2026 (lakky, 2026-11-14): older NSE alerts are deleted from the store and never taken
+// from the scanner's files; crypto keeps 1 Jun; an NSE trade keeps the old alert it came from as a trade copy.
+async function nseSinceRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const ts = d => Date.parse(d + 'T10:00:00+05:30') / 1000;
+  const tl = (sym, mkt, d) => JSON.stringify({ id: 'tl|' + sym + '|1d|0|1|2@' + ts(d) + '|rb', key: 'tl|' + sym + '|1d|0|1|2', kind: 'trendline', line: 0, market: mkt, plan: { entry: 100, side: 'long', sl: 98, target_r: 1 }, price: 100.5, sent_ts: ts(d), symbol: sym, tf: '1d', rebuild: true });
+  // The rebuilt history (from 1 Jun): INFY in August (not taken), WIPRO in September (taken), BTC in August (crypto, taken).
+  const files = { 'fibtl_rebuild_records.jsonl': [tl('INFY.NS', 'nse', '2026-08-20'), tl('WIPRO.NS', 'nse', '2026-09-02'), tl('BTCUSD', 'crypto', '2026-08-20')].join('\n') + '\n',
+    'fibtl_rebuild_meta.json': JSON.stringify({ since: '2026-05-31T18:30:00Z', cutoff: '2026-11-10T00:00:00Z', built_at: '2026-11-10T00:00:00Z' }) };
+  await ctx.route(url => !url.href.startsWith(base), r => {
+    const u = r.request().url();
+    if (u.includes('/scanner-runtime-state/')) { const f = u.split('/').pop().split('?')[0]; return r.fulfill({ status: 200, contentType: 'text/plain', body: files[f] || (f.endsWith('.json') ? '{}' : '') }); }
+    return r.abort(); // config.py unreadable: the built-in coin list
+  });
+  const row = (id, sym, date, r) => ({ id, key: id, kind: 'fib', date, time: '10:00', symbol: sym, side: 'long', score: '', market: /USD$/.test(sym) ? 'CRYPTO' : 'NSE',
+    timeframe: '1D', channel: (/USD$/.test(sym) ? 'CRYPTO' : 'NSE') + ' 1D', filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 98, entry: 100, rb: true });
+  const sigs = [row('ns1', 'RELIANCE', '2026-08-10', 2), row('ns2', 'TCS', '2026-08-31', -1), row('ns3', 'HDFCBANK', '2026-09-01', 2), row('ns4', 'INFY', '2026-10-05', -1),
+    row('ns5', 'ITC', '2026-08-12', 2), row('ns6', 'BTCUSD', '2026-08-10', 2)];
+  const t0 = seed.trades.find(t => t.accountId === 'acc_nse') || seed.trades[0];
+  const itc = Object.assign({}, t0, { id: 'tritc', accountId: 'acc_nse', date: '2026-08-12', exitDate: '2026-08-12', time: '10:30', exitTime: '12:00', symbol: 'ITC', direction: 'long', entry: 100, stop: 98, exit: 102, setup: '', playRules: undefined });
+  const st = Object.assign({}, seed, { trades: seed.trades.concat([itc]), ui: { sigMkt: 'all', sigKind: 'fib' } });
+  await ctx.addInitScript(([s, g]) => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); localStorage.setItem('tapeAndTarget.signals', g); sessionStorage.setItem('seeded', '1'); } }, [JSON.stringify(st), JSON.stringify(sigs)]);
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  page.on('dialog', d => d.dismiss());
+  const stored = () => page.evaluate(async () => { const v = JSON.parse(await idbGet(SIG_KEY) || '[]'); return v.map(g => g.symbol).sort().join(','); });
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded && state.ui.sigAutoAt && !sigAutoBusy, null, { timeout: 10000 });
+    await page.waitForTimeout(400);
+    const v = await page.evaluate(() => (switchTab('signals'), {
+      fib: state.signals.filter(g => g.kind === 'fib').map(g => g.symbol).sort().join(','),
+      tl: state.signals.filter(g => g.kind === 'trendline').map(g => g.symbol + '@' + g.date).sort().join(','),
+      copies: sentSigs.filter(isTradeCopy).map(g => g.symbol + '@' + g.date).sort().join(','),
+      itc: ((tradeAlertMap().tritc || {}).sig || {}).symbol || '',
+      edge: ['2026-08-31', '2026-09-01'].map(d => sigOld({ market: 'NSE', date: d }) ? 'x' : '-').join('') + (sigOld({ market: 'CRYPTO', date: '2026-06-01', symbol: 'BTCUSD' }) ? 'x' : '-') + (sigOld({ market: 'NSE' }) ? 'x' : '-'),
+      tip: (document.querySelector('#sigMarketBar [title]') || {}).title || ''
+    }));
+    check(v.fib === 'BTCUSD,HDFCBANK,INFY', 'NSE fib alerts before 1 Sep deleted, crypto August kept: ' + v.fib);
+    check(v.tl === 'BTCUSD@2026-08-20,WIPRO@2026-09-02', 'scanner read skips NSE before 1 Sep, takes crypto August: ' + v.tl);
+    check(v.copies === 'ITC@2026-08-12' && v.itc === 'ITC', 'your August ITC trade keeps its alert as a trade copy: ' + JSON.stringify([v.copies, v.itc]));
+    check(v.edge === 'x---', '31 Aug goes, 1 Sep stays, crypto and undated NSE never cut: ' + v.edge);
+    check(/200 NSE stocks \(alerts from 1 Sep\)/.test(v.tip), 'Market row says when NSE starts: ' + v.tip);
+    for (let i = 0; i < 50 && (await stored()).indexOf('RELIANCE') !== -1; i++) await page.waitForTimeout(100);
+    const s1 = await stored();
+    check(!/RELIANCE|TCS|ITC/.test(s1) && /HDFCBANK/.test(s1) && /WIPRO/.test(s1), 'IndexedDB holds no NSE before 1 Sep: ' + s1);
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForFunction(() => signalsLoaded, null, { timeout: 10000 });
+    await page.waitForTimeout(600);
+    const r = await page.evaluate(() => ({ old: state.signals.filter(g => sigOld(g)).length, n: state.signals.length, itc: ((tradeAlertMap().tritc || {}).sig || {}).symbol || '' }));
+    check(r.old === 0 && r.n === 5 && r.itc === 'ITC', 'after reopening: ' + JSON.stringify(r));
+  } catch (e) { errs.push('threw: ' + String(e.message).split('\n').slice(0, 2).join(' | ')); }
+  await ctx.close();
+  const label = 'Signals: NSE alerts from 1 Sep (store, scanner reads), crypto from 1 Jun, an old NSE trade keeps its alert';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 // Best settings (Edge & breakdowns): every number is what the tab shows once "Use" is pressed. Real fixture alerts
 // and Delta candles, the same as parityRun, through the whole search.
 async function bestSettingsRun() {
@@ -6881,6 +6941,7 @@ await badInputRun(data);
 await tgtStoreRun(data);
 await parityRun();
 await droppedCoinsRun(data);
+await nseSinceRun(data);
 await bestSettingsRun();
 
 await browser.close();
