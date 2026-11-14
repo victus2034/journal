@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-14.194">
+  <meta name="app-version" content="2026-11-14.195">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -10956,6 +10956,12 @@
       if (v === undefined) { const b = liveBaseOf(sig); v = !!b && !set[b]; liveMemo.drop.set(raw, v); }
       return v;
     }
+    // NSE alerts start on NSE_SINCE (lakky, 2026-11-14: the 200 stocks stay, the older months go so the journal
+    // stays light). Crypto keeps everything from 1 Jun. The smoke test's "*" list keeps every date.
+    const NSE_SINCE = "2026-09-01";
+    function sigOld(sig) { return !!sig && isNseSig(sig) && !!sig.date && String(sig.date) < NSE_SINCE && !liveSet()["*"]; }
+    // Deleted from this device: a dropped coin, or NSE before NSE_SINCE.
+    function sigGone(sig) { return sigDropped(sig) || sigOld(sig); }
     // Takes the watchlist read from config.py. Returns how many symbols it adds to what this device keeps
     // (their history is then read again in whole), or 0.
     function setScannerWatchlist(list) {
@@ -10987,24 +10993,24 @@
       return o;
     }
     function isTradeCopy(g) { return /^trade:/.test(String(g && g.id || "")); }
-    // Deletes the alerts this device holds on symbols the scanner no longer watches (and their sent copies),
-    // keeping only trade copies. Returns how many alerts went.
+    // Deletes the alerts this device holds on symbols the scanner no longer watches and NSE alerts before
+    // NSE_SINCE (and their sent copies), keeping only trade copies. Returns how many alerts went.
     function purgeDropped() {
       const sigs = state.signals || [];
       let n = 0;
-      for (let i = 0; i < sigs.length; i++) if (sigDropped(sigs[i])) n++;
-      const sentGone = sentSigs.some(g => !isTradeCopy(g) && sigDropped(g));
+      for (let i = 0; i < sigs.length; i++) if (sigGone(sigs[i])) n++;
+      const sentGone = sentSigs.some(g => !isTradeCopy(g) && sigGone(g));
       if (!n && !sentGone) return 0;
       // Your trades take what they need from the whole list once more before it goes (stop, setup, level).
       if (n) { alertFillKey = ""; fillFromAlerts(); }
       const near = tradeNearTest(), keep = [], copies = new Map(), rbGone = { crypto: 0, nse: 0 };
       sigs.forEach(g => {
-        if (!sigDropped(g)) { keep.push(g); return; }
+        if (!sigGone(g)) { keep.push(g); return; }
         if (g.rb) rbGone[rbMkt(g)]++;
         if (near(g)) copies.set(g.key, tradeCopy(g));
       });
       const sent = sentSigs.filter(g => {
-        if (!sigDropped(g)) return true;
+        if (!sigGone(g)) return true;
         if (isTradeCopy(g) || near(g)) { if (!copies.has(g.key)) copies.set(g.key, isTradeCopy(g) ? g : tradeCopy(g)); }
         return false;
       });
@@ -11060,7 +11066,7 @@
       if (!wrap || !bar) return;
       wrap.classList.toggle('hidden', !n.all && !has.crypto && !has.nse && !cur);
       const none = { crypto: 'No crypto ' + what + ' here yet', nse: 'No Indian (NSE) ' + what + ' here yet' + (what === 'alerts' ? ': Load scanner alerts with market NSE or All' : '') };
-      bar.innerHTML = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="Crypto: coins, xStocks, gold and silver. Indian: NSE stocks. The Channel list below then shows only that market\'s channels.">'
+      bar.innerHTML = '<div class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono" title="Crypto: coins, xStocks, gold and silver (alerts from 1 Jun). Indian: the scanner\'s 200 NSE stocks (alerts from 1 Sep). The Channel list below then shows only that market\'s channels.">'
         + SIG_MARKETS.map(x => {
           const off = x.k && x.k !== cur && !has[x.k];
           return '<button type="button" data-market="' + x.k + '" onclick="' + (off ? 'toast(this.title)' : fn + '(\'' + x.k + '\')') + '"' + (off ? ' aria-disabled="true" title="' + esc(none[x.k]) + '"' : '') + ' class="px-2 py-1 rounded-md font-semibold ' + (x.k === cur ? SEG_ON : off ? SEG_DIS : SEG_OFF) + '">' + x.label + ' <span class="text-[10px] opacity-60">' + (x.k ? n[x.k] || 0 : n.all || 0) + '</span></button>';
@@ -14095,13 +14101,14 @@
       // alert one of your trades could have come from is kept as a trade copy. Copies kept earlier carry over
       // (a refresh that skips the rebuilt history does not read them again).
       const near = tradeNearTest();
-      sentSigs.forEach(g => { if (isTradeCopy(g) && sigDropped(g)) sent.set(g.key, g); });
+      sentSigs.forEach(g => { if (isTradeCopy(g) && sigGone(g)) sent.set(g.key, g); });
       all.forEach(r => {
         const dropped = sigDropped(r);
         if (oldZone(r)) {
           // A fib or trendline alert Discord sent before the rebuild's cutoff: kept aside
           // (whatever the date window) only to match your trades.
-          if (r.kind && (!r.market || marketOk(r)) && (!dropped || near(r))) sent.set(r.key, dropped ? tradeCopy(r) : sentCopy(r));
+          const gone = dropped || sigOld(r);
+          if (r.kind && (!r.market || marketOk(r)) && (!gone || near(r))) sent.set(r.key, gone ? tradeCopy(r) : sentCopy(r));
           return;
         }
         if (dropped) { if ((!r.market || marketOk(r)) && near(r)) sent.set(r.key, tradeCopy(r)); return; }
@@ -14114,7 +14121,7 @@
         const cur = best.get(r.key);
         best.set(r.key, cur ? combineAlert(cur, r) : r);
       });
-      const incoming = [...best.values()];
+      let incoming = [...best.values()];
 
       // The scanner grades one alert per zone. A later alert on the same zone
       // is a repeat it does not grade, so it borrows the result of the most
@@ -14129,6 +14136,9 @@
         const prior = byZone[k].filter(x => when(x) < when(r) && when(r) - when(x) <= 36 * 3600e3).sort((a, b) => when(b) - when(a))[0];
         if (prior) r.zoneResult = { from: prior.time, filled: true, outcome: prior.outcome || "", resultR: typeof prior.resultR === "number" ? prior.resultR : null };
       });
+      // NSE before NSE_SINCE was read only to lend a zone result to a later repeat: it is not taken
+      // (a trade copy when one of your trades could have come from it).
+      incoming = incoming.filter(r => { if (!sigOld(r)) return true; if (near(r)) sent.set(r.key, tradeCopy(r)); return false; });
 
       // Copies saved with the older, shorter key are replaced by the fresh ones
       // rather than shown twice (their old key is the first two parts of the new one).
@@ -14426,7 +14436,7 @@
           lists.forEach(k => { state[k] = p[k] || []; });
           // Backups carry no alerts (they reload from the scanner), so an empty list
           // in the file must not wipe the ones on this device.
-          if (Array.isArray(p.signals) && p.signals.length) state.signals = p.signals.filter(g => !sigDropped(g));
+          if (Array.isArray(p.signals) && p.signals.length) state.signals = p.signals.filter(g => !sigGone(g));
           if (p.reviewsAt && typeof p.reviewsAt === "object") state.reviewsAt = p.reviewsAt;
           state.aliases = (p.aliases && typeof p.aliases === "object") ? p.aliases : {};
           state.tombstones = (p.tombstones && typeof p.tombstones === "object") ? p.tombstones : {};
@@ -15800,6 +15810,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-14.195', pr: 109, title: 'NSE alerts from 1 Sep', pts: ['NSE alerts before 1 Sep are deleted and never read again: about 37% fewer alerts kept (23,539 to 14,839 on your data, 11.7 to 7.3 MB)', 'All 200 NSE stocks stay; crypto keeps history from 1 Jun', 'An NSE trade from before 1 Sep keeps the alert it came from, so its setup does not change'] },
       { v: '2026-11-14.194', pr: 108, title: 'Dropped coins deleted, Top 30 on both brokers', pts: ['Alerts for coins the scanner no longer watches are deleted, not hidden: about 2,000 fewer alerts kept (25,565 to 23,539 on your data) and every scanner read skips them. The Hidden / Shown row is gone', 'A dropped coin keeps only the alerts one of your trades matches, so the trade keeps its setup', 'Top 10 / 20 / 30 count only coins on both CoinDCX and Delta (14 Nov volume). The scanner added AVAX, INJ, FIL, AAVE, TAO and ARB, and the list now comes from the scanner itself'] },
       { v: '2026-11-14.193', pr: 107, title: 'Current coins only, Top 10/20/30, best settings', pts: ['Coins dropped from the scanner on 8 Nov are hidden from every number by default (Shown switch under Coins); Coins gets Top 10 / 20 / 30 by 30-day volume', 'Edge & breakdowns: best option for every setting, the best full combination with all outputs, a 60/40 out-of-sample check and a luck check; Use puts it on the tab', 'Overfit warning on top: the best of many tries is partly luck, read the newest-40% lines'] },
       { v: '2026-11-14.192', pr: 106, title: 'Balance shows its date and time', pts: ['The header balance tag shows when the wallet figure was read (e.g. 14 Nov, 8:30 PM, India time) instead of LAST KNOWN / WALLET', 'Green while it is fresh, amber when nothing newer came in; on All accounts it is the oldest stale figure', 'Trading Books says "Delta wallet from 14 Nov, 2:51 PM" in place of "last known"'] },
