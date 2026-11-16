@@ -5367,6 +5367,113 @@ async function partialRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals Partial (a share at a level / at the Move SL trigger): re-scored by hand');
   errs.forEach(e => { console.log('     ' + e); failures.push('partial: ' + e); });
 }
+// "Early entry" (lakky, 2026-11-15: "sometimes price just go our side just below or above our
+// entry ... give little space for early entry like 0.01% to 0.2%"). Only the fill moves: the stop
+// and the 2R target stay at the alert's prices. Five 4H trendline alerts at 10:00 IST on 1 Oct,
+// Exit at 2R, 20 candles, fees on, re-scored by hand:
+//   A long 100 / 99 (2R = 102): low 100.015 (0.015% short), then high 102.3. Fills from 0.02% (100.02).
+//   B short 200 / 202 (2R = 196): high 199.95 (0.025% short), then low 195.5. Fills from 0.05% (199.9).
+//   C a TL BROKEN long 50 / 49 (market entry): low 50.01, never 50. Never moved, never fills.
+//   D a rebuilt long 100 / 99: low 100.9, then 100.15, then 100.6+. Its band (0.75%) is from the
+//     alert's own 100 (100.75): the band candle is the 100.15 one, fills only after it: never, even
+//     at 0.2% (100.2). From the early entry (100.95) it would fill on the 100.15 candle.
+//   E long 100 / 99: fills (low 99.95), then 98.8: SL, a little more R with an early entry.
+// Counted from the fill (adv % nearer the stop): (R x 1 - adv) / (1 + adv) - 0.0826 / the fill's stop %,
+// R = 2 (Target) or -1 - 0.99 x 0.05 (SL, 0.05% slippage). A at 0.02%: 1.98 / 1.02 - 0.0826 / 1.0198 = 1.8602.
+async function earlyEntryRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const t0 = Date.parse('2026-10-01T10:00:00+05:30') / 1000, Q = 900, N = 330;
+  const series = (first, rest) => Array.from({ length: N }, (_, i) => [t0 + i * Q].concat(i < first.length ? first[i] : rest));
+  const bars = {
+    AUSD: series([[100.3, 100.015, 100.2], [101.2, 100.1, 101.1], [102.3, 101, 102.2]], [102.3, 101.9, 102.1]),
+    BUSD: series([[199.95, 199, 199.2], [199.5, 197.5, 197.6], [197.8, 195.5, 195.6]], [196, 195.4, 195.6]),
+    CUSD: series([], [50.5, 50.01, 50.2]),
+    DUSD: series([[101.2, 100.9, 101], [100.8, 100.15, 100.5]], [101, 100.6, 100.8]),
+    EUSD: series([[100.5, 99.95, 100.3], [100.4, 98.8, 98.9]], [99, 98.5, 98.8])
+  };
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const q = new URL(route.request().url()).searchParams, b = bars[q.get('symbol')];
+    if (!b) return route.abort();
+    const a = +q.get('start'), z = +q.get('end');
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: b.filter(x => x[0] >= a && x[0] <= z).map(([time, high, low, close]) => ({ time, open: close, high, low, close })) }) });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const strip = () => page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+  const tot = async () => ((await strip()).match(/Total R\s*([+-]?[\d.]+R)/) || [])[1];
+  // Until the walks for this setting are read and drawn.
+  const settle = async () => {
+    for (let i = 0; i < 80; i++) {
+      await page.waitForTimeout(100);
+      if (!(await page.evaluate(() => tgtBusy || tgtQ.length > 0 || !!document.getElementById('sigNotFinal')))) { await page.evaluate(() => renderSignalsTable()); await page.waitForTimeout(150); if (!(await page.evaluate(() => tgtBusy || tgtQ.length > 0))) return; }
+    }
+  };
+  const rows = () => page.evaluate(() => withOutcomeCache(() => inSigScope(() => Object.fromEntries(sigView.pairs.map(pr => { const o = outcomeOf(pr); return [pr.signal.symbol, [tgtFilled(pr), o ? +o.r.toFixed(4) : null, signalEntry(pr.signal)]]; })))));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => {
+      const sg = (id, side, entry, stop, more) => Object.assign({ id, key: 'k' + id, kind: 'trendline', date: '2026-10-01', time: '10:00', symbol: id, side, score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H',
+        filled: false, outcome: '', hasReportR: true, price: entry, stop, entry }, more || {});
+      state.signals = [sg('A', 'long', 100, 99), sg('B', 'short', 200, 202), sg('C', 'long', 50, 49, { key: 'tl|CUSD|4h|0|1|2|br' }), sg('D', 'long', 100, 99, { rb: true }),
+        sg('E', 'long', 100, 99, { filled: true, outcome: 'SL', resultR: -1 })];
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'edge', mktFilter: '', sigTgt: '', sigNoFee: false, sigStop: { mode: 'off' }, sigTrail: { on: false }, sigPart: {}, sigSl: {}, sigHold: '20', sigEarly: 0 });
+      switchTab('signals'); renderAll();
+    });
+    // Picked on Scanner exits: an early entry needs a fixed target, so it sets 1R (like SL).
+    await page.click('#sigEarlyBar button[data-early="0.05"]');
+    check(await page.evaluate(() => state.ui.sigTgt === '1R' && earlyRaw() === 0.05), 'early entry on Scanner sets Exit at 1R');
+    await page.evaluate(() => { setSigTgt('2R'); setSigEarly(0); });
+    await settle();
+    let r = await rows();
+    check(await tot() === '-1.13R' && r.A[0] === false && r.B[0] === false && r.E[1] === -1.1321, 'off: only E fills, -1.1321: ' + await tot() + ' ' + JSON.stringify(r));
+    await page.evaluate(() => setSigEarly(0.01));
+    await settle();
+    r = await rows();
+    check(r.A[0] === false && r.B[0] === false && r.E[1] === -1.1308 && Math.abs(r.E[2] - 100.01) < 1e-9, '0.01%: A and B still short, E -1.1308 from 100.01: ' + JSON.stringify(r));
+    await page.click('#sigEarlyBar button[data-early="0.02"]');
+    await settle();
+    r = await rows();
+    check(await tot() === '+0.73R' && r.A[1] === 1.8602 && r.B[0] === false && r.E[1] === -1.1295, '0.02%: A fills at 100.02 (+1.8602), B still short: ' + await tot() + ' ' + JSON.stringify(r));
+    await page.click('#sigEarlyBar button[data-early="0.05"]');
+    await settle();
+    r = await rows();
+    check(await tot() === '+2.43R' && r.A[1] === 1.7784 && r.B[1] === 1.7785 && Math.abs(r.B[2] - 199.9) < 1e-9 && r.E[1] === -1.1258, '0.05%: A, B targets, E -1.1258: ' + await tot() + ' ' + JSON.stringify(r));
+    // C (market entry) and D (band from its own entry) never fill, even at 0.2%; C keeps its entry.
+    check(r.C[0] === false && r.C[2] === 50 && r.D[0] === false, 'break and rebuilt alerts at 0.05%: ' + JSON.stringify([r.C, r.D]));
+    const st = await strip();
+    check(/entry 0\.05% early/.test(st), 'strip names the early entry: ' + st);
+    check(/entry 0\.05% early/.test(await page.evaluate(() => document.getElementById('sigRulesSum').innerText)), 'folded panel line');
+    await page.evaluate(() => setSigSec('alerts'));
+    const tb = await page.evaluate(() => document.getElementById('signalsTableBody').innerText.replace(/\s+/g, ' '));
+    check((tb.match(/early 0\.05%/g) || []).length === 4, 'table rows tag the 4 early entries (not the break): ' + tb.slice(0, 400));
+    await page.evaluate(() => setSigSec('edge'));
+    await page.evaluate(() => setSigEarly(0.2));
+    await settle();
+    r = await rows();
+    check(r.A[1] === 1.431 && r.B[1] === 1.4313 && r.E[1] === -1.1102 && r.C[0] === false && r.D[0] === false && Math.abs(r.D[2] - 100.2) < 1e-9, '0.2%: A, B still at the 2R prices (1.8 / 1.2); C, D never: ' + JSON.stringify(r));
+    // The pure score: the plan walked at the alert's entry, counted on the fill. No fees: 2R at 0.05% on a 1% stop = 1.95 / 1.05.
+    const pure = await page.evaluate(() => { const w = { m: 0.021, sl: 0, e: 0.021, done: 1, p: [[2.1, 0.1]], ta: 1 };
+      return [tgtScore({ side: 'long', entry: 100.05, eeBase: 100, eePct: 0.05, stop: 99 }, w, { r: 2 }, true), tgtScore({ side: 'long', entry: 100, stop: 99 }, w, { r: 2 }, true)]; });
+    check(pure[0] && Math.abs(pure[0].r - 1.95 / 1.05) < 1e-12 && pure[0].label === 'Target' && pure[1].r === 2, 'pure score: ' + JSON.stringify(pure));
+    // CSV names the rule; Reset turns it off.
+    await page.evaluate(() => setSigSec('report'));
+    await page.waitForFunction(() => btLast.length > 0, null, { timeout: 10000 });
+    const csv = await page.evaluate(() => { let out = null; const real = URL.createObjectURL; URL.createObjectURL = b => { out = b; return 'blob:x'; }; try { exportSigBacktestCsv(); } finally { URL.createObjectURL = real; } return out ? out.text() : ''; });
+    check(/entry 0\.2% early/.test(csv), 'CSV has the rule: ' + csv.split('\r\n').slice(0, 2).join(' / ').slice(0, 300));
+    check(await page.evaluate(() => bsSnap().sigEarly === 0.2 && BS_DIMS.some(d => d.id === 'early' && d.opts().length === 7)), 'Best settings tries every early entry');
+    await page.evaluate(() => resetSigRules());
+    check(await page.evaluate(() => earlyRaw() === 0 && sigRulesDefault()), 'Reset turns Early entry off');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals Early entry (0.01-0.2% before the level): re-scored by hand');
+  errs.forEach(e => { console.log('     ' + e); failures.push('early entry: ' + e); });
+}
 // "SL" (lakky, 2026-11-10: "so many ways to see sl ... below or above candle, wick"):
 // each alert played with another stop, re-scored by hand. Two 4H trendline alerts at
 // 10:00 IST (04:30 UTC) on 1 Oct. 4H candles before it (newest first; the 04:00 UTC one
@@ -6473,6 +6580,10 @@ const PARITY_COMBOS = [
   { name: 'NSE 1D TL 1.5R, wick or body SL, shift 0.5R to 0.25R, trail', kind: 'trendline', chan: 'NSE 1D', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', sl: { mode: 'near', gap: 0.75 }, stop: { mode: 'shift', shAt: 0.5, shTo: 0.25 }, trail: { on: true, step: 0.5, gap: 0.5 } },
   { name: 'NSE 4H fib 2R, 20 candles', kind: 'fib', chan: 'NSE 4H', from: '2026-10-10', to: '2026-10-25', tgt: '2R', hold: '20' },
   { name: 'NSE 4H TL 1%, body SL 1%, BE at 0.5%, 20 candles', kind: 'trendline', chan: 'NSE 4H', from: '2026-10-10', to: '2026-10-25', tgt: '1%', sl: { mode: 'body', gap: 1 }, stop: { mode: 'be', beAtP: 0.5 }, hold: '20' },
+  // Early entry (lakky, 2026-11-15): the limit a little before the level; breaks keep their entry.
+  { name: 'fib 1.5R, entry 0.1% early', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', early: 0.1 },
+  { name: 'TL 2R, wick SL, BE at 1R, entry 0.05% early', kind: 'trendline', from: '2026-10-10', to: '2026-10-25', tgt: '2R', sl: { mode: 'wick', gap: 0.75 }, stop: { mode: 'be', beAt: 1 }, early: 0.05 },
+  { name: 'fib 2%, 1% SL, trail, entry 0.2% early, 20 candles', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '2%', sl: { mode: 'pct', pct: 1 }, trail: { on: true, stepP: 0.25, gapP: 0.25 }, early: 0.2, hold: '20' },
 ];
 async function parityRun() {
   const errs = [];
@@ -6530,7 +6641,7 @@ async function parityRun() {
       await page.evaluate(c => {
         const u = state.ui;
         Object.assign(u, { sigKind: c.kind, sigChan: c.chan || '', sigMkt: 'all', sigPeriod: { mode: 'custom', from: c.from, to: c.to }, sigDay: '', sigCoins: '', mktFilter: '', sigSkipTiny: false,
-          sigTgt: c.tgt, sigHold: c.hold || 'tp', sigNoFee: !!c.nofee, sigLvl: c.lvl || '', sigLvlOff: [], sigTlType: c.tl || '', sigSec: 'edge' });
+          sigTgt: c.tgt, sigHold: c.hold || 'tp', sigNoFee: !!c.nofee, sigLvl: c.lvl || '', sigLvlOff: [], sigTlType: c.tl || '', sigSec: 'edge', sigEarly: c.early || 0 });
         u.sigSl = Object.assign({ mode: '', gap: 0.75, pct: 1 }, c.sl || {});
         u.sigStop = Object.assign({ mode: 'off', beAt: 1, shAt: 1, shTo: 0.75, beAtP: 1, shAtP: 1, shToP: 0.5 }, c.stop || {});
         u.sigTrail = Object.assign({ on: false, step: 0.25, gap: 0.25, stepP: 0.25, gapP: 0.25 }, c.trail || {});
@@ -6928,8 +7039,8 @@ async function bestSettingsRun() {
     check(!out.err, 'search failed: ' + out.err);
     if (!out.err) {
       check(out.universe >= 60 && out.split.nTrain + out.split.nTest === out.universe && out.split.nTrain >= out.universe * 0.5 && out.split.nTrain <= out.universe * 0.7, 'universe and the 60 / 40 split: ' + JSON.stringify([out.universe, out.split]));
-      check(out.ids === 'tgt,sl,stop,part,trail,hold,chan,mkt,coins,lvls,lvl,btc', 'a row for every setting a fib tab has: ' + out.ids);
-      check(out.rows === 12 && out.hasCombo && out.hasOos && out.full >= 20, 'the card draws: ' + JSON.stringify([out.rows, out.hasCombo, out.hasOos, out.full]));
+      check(out.ids === 'tgt,sl,early,stop,part,trail,hold,chan,mkt,coins,lvls,lvl,btc', 'a row for every setting a fib tab has: ' + out.ids);
+      check(out.rows === 13 && out.hasCombo && out.hasOos && out.full >= 20, 'the card draws: ' + JSON.stringify([out.rows, out.hasCombo, out.hasOos, out.full]));
       check(out.nowOk && out.bestIn && out.ptoo && out.minN >= 30, 'now / best rows: ' + JSON.stringify([out.nowOk, out.bestIn, out.ptoo, out.minN]));
       check(/partly luck/.test(out.warn) && /out-of-sample/.test(out.warn) && out.verdict.length > 20 && /Luck check: /.test(out.luck), 'warning, verdict and luck check: ' + JSON.stringify([out.warn.slice(0, 40), out.verdict, out.luck.slice(0, 60)]));
       check(out.rnd && out.rnd.k >= 0, 'random settings tried: ' + JSON.stringify(out.rnd));
@@ -6963,7 +7074,7 @@ async function bestSettingsRun() {
         }
         return { n, bad };
       });
-      check(chain.n > 100 && chain.bad.length === 0, 'search filter chain = the tab (' + chain.n + ' options): ' + JSON.stringify(chain.bad.slice(0, 5)));
+      check(chain.n > 80 && chain.bad.length === 0, 'search filter chain = the tab (' + chain.n + ' options): ' + JSON.stringify(chain.bad.slice(0, 5)));
       // 3) The tab is left exactly as it was before the search (nothing leaks out of bsEval).
       const left = await page.evaluate(() => {
         const was = JSON.stringify(bsSnap());
@@ -6983,6 +7094,132 @@ async function bestSettingsRun() {
       // 5) A search is stale once the Period moves.
       const stale = await page.evaluate(() => { state.ui.sigPeriod = { mode: 'all', from: '', to: '' }; renderSignalsTable(); return !!document.getElementById('sigBestStale'); });
       check(stale, 'the card says so when the Period changed since the search');
+      // 6) Only possible settings (lakky, 2026-11-14: "it still shows things which is not possible"): from many views,
+      // every option of every filter is put on the tab the way Use does. The tab must keep every setting (nothing
+      // reset or greyed), show exactly the alerts the search counted, and never an empty view; no two options of a
+      // setting may show the same alerts, and exactly one is "now".
+      const audit = await page.evaluate(async () => {
+        const bad = [], n = { bases: 0, opts: 0, only: {} }, J = JSON.stringify, snapOf = cfg => J(BS_KEYS.map(k => cfg[k]));
+        const put = cfg => { BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(J(cfg[k])); }); sigFixCoins = true; renderSignalsTable(); };
+        const fpTab = () => { const ids = sigView.pairs.map(pr => pr.signal.id + (pr.signal.lvlWhatIf ? '@' + pr.signal.lvlWhatIf : '')).sort(); return ids.length + ':' + bsHash(ids.join('|')); };
+        state.ui.sigPeriod = { mode: 'custom', from: '2026-10-10', to: '2026-10-25' }; state.ui.sigDay = '';
+        const done = {}, shape = {};
+        for (const kind of ['fib', 'trendline']) for (const asset of kind === 'fib' ? ['', 'crypto'] : ['']) for (const mkt of ['', 'crypto', 'nse']) for (const chan of ['', 'CRYPTO 4H', 'NSE 4H'])
+          for (const coins of ['', 'top3', 'dcx']) for (const lv of kind === 'fib' ? [[[], ''], [['L1'], 'L3']] : [[[], '']]) {
+            if (asset && (lv[0].length || chan === 'NSE 4H')) continue;
+            Object.assign(state.ui, { sigKind: kind, sigAsset: asset, sigMarket: mkt, sigChan: chan, sigCoins: coins, sigLvlOff: lv[0], sigLvl: lv[1], sigTlType: '', mktFilter: '', sigTgt: '1R', sigSl: { mode: '' }, sigStop: { mode: 'off' }, sigPart: { q: 0, beQ: 0 }, sigTrail: { on: false }, sigHold: 'tp' });
+            sigFixCoins = true; renderSignalsTable();
+            const base = bsSnap(), tag = kind + '|' + asset + '|' + snapOf(base);
+            if (done[tag]) continue;
+            done[tag] = 1; n.bases++;
+            const ctx = bsCtx(base), name = [kind, asset || 'both', base.sigMarket || 'all', base.sigChan || 'all ch', base.sigCoins || 'all coins', base.sigLvlOff.join('+'), base.sigLvl].join(' / ');
+            for (const dim of ctx.dims.filter(d => !d.rule)) {
+              const opts = bsOptions(dim, base, ctx), fps = {};
+              if (opts.filter(o => o.now).length !== 1) bad.push(name + ' ' + dim.id + ': now x' + opts.filter(o => o.now).length);
+              if (opts.length < 2) n.only[dim.id] = (n.only[dim.id] || 0) + 1;
+              if (kind === 'fib' && !asset && !lv[0].length) shape[[base.sigMarket, base.sigChan, base.sigCoins, dim.id].join('|')] = opts.map(o => (o.now ? '*' : '') + o.label).join(', ');
+              for (const o of opts) {
+                n.opts++;
+                const v = bsView(o.cfg, ctx), c = o.cfg, where = name + ' -> ' + dim.id + ' ' + o.label;
+                if (J(bsFix(c, ctx)) !== J(c)) bad.push(where + ': not as the tab keeps it');
+                if (!o.now && !v.n) bad.push(where + ': no alerts');
+                if (fps[v.fp]) bad.push(where + ': same alerts as ' + fps[v.fp]); fps[v.fp] = o.label;
+                if (c.sigChan && c.sigMarket && ctx.chanMkt[c.sigChan] !== c.sigMarket) bad.push(where + ': channel of another market');
+                if (dim.id === 'coins' && !v.cryptoHere && opts.length > 1) bad.push(where + ': Coins offered with no crypto in view');
+                put(c);
+                if (snapOf(bsSnap()) !== snapOf(c)) bad.push(where + ': the tab changed it to ' + snapOf(bsSnap()));
+                if (fpTab() !== v.fp) bad.push(where + ': tab shows ' + fpTab() + ', search ' + v.fp);
+              }
+            }
+          }
+        return { bad: bad.slice(0, 8), nBad: bad.length, n, shape };
+      });
+      check(audit.n.bases >= 40 && audit.n.opts >= 600 && audit.nBad === 0, 'every filter option is possible on the tab (' + audit.n.bases + ' views, ' + audit.n.opts + ' options): ' + audit.nBad + ' bad ' + JSON.stringify(audit.bad));
+      const sh = audit.shape;
+      // The screenshot's view: Indian market on an NSE channel, Coins left on CoinDCX.
+      check(sh['nse|NSE 4H|dcx|mkt'] === '*Indian' && sh['nse|NSE 4H|dcx|coins'] === '*CoinDCX', 'NSE channel: no other Market, no Coins to try: ' + JSON.stringify([sh['nse|NSE 4H|dcx|mkt'], sh['nse|NSE 4H|dcx|coins']]));
+      check(/^All Indian channels, \*NSE 4h/.test(sh['nse|NSE 4H|dcx|chan']) && !/CRYPTO/.test(sh['nse|NSE 4H|dcx|chan']), 'Indian market: Indian channels only: ' + sh['nse|NSE 4H|dcx|chan']);
+      check(sh['nse|NSE 4H|dcx|lvls'] && !/L1/.test(sh['nse|NSE 4H|dcx|lvls']), 'no level set with a level that has no alerts (NSE 4H has no L1): ' + sh['nse|NSE 4H|dcx|lvls']);
+      check(/^Crypto \(Coins CoinDCX\), \*Indian$/.test(sh['nse||dcx|mkt']), 'Indian, all channels: Crypto says the Coins pick comes back on, All folds into it: ' + sh['nse||dcx|mkt']);
+      check(sh['crypto|CRYPTO 4H||mkt'] === '*Crypto' && !/NSE/.test(sh['crypto|CRYPTO 4H||chan']) && /Top 3/.test(sh['crypto|CRYPTO 4H||coins']), 'crypto channel: its own market, its own channels, Coins to try: ' + JSON.stringify([sh['crypto|CRYPTO 4H||mkt'], sh['crypto|CRYPTO 4H||chan'], sh['crypto|CRYPTO 4H||coins']]));
+      // 7) Rules: no option the tab greys or warns about (Move SL at or past the target, a Partial that never books).
+      const rules = await page.evaluate(() => {
+        const bad = [], J = JSON.stringify; let n = 0;
+        Object.assign(state.ui, { sigKind: 'fib', sigAsset: '', sigMarket: '', sigChan: '', sigCoins: '', sigLvlOff: [], sigLvl: '', mktFilter: '' }); renderSignalsTable();
+        const ctx = bsCtx(bsSnap());
+        for (const tgt of ['1R', '1.5R', '3R', '1%', '3%']) for (const trail of [false, true]) for (const stop of [{ mode: 'off' }, { mode: 'be', beAt: 1, beAtP: 1 }, { mode: 'shift', shAt: 2, shTo: 1, shAtP: 2, shToP: 1 }])
+          for (const part of [{ q: 0, beQ: 0 }, { q: 50, at: 2, atP: 2, beQ: 0 }, { q: 0, beQ: 50 }]) {
+            Object.assign(state.ui, { sigTgt: tgt, sigTrail: { on: trail, step: 0.5, gap: 0.5, stepP: 0.5, gapP: 0.5 }, sigStop: stop, sigPart: part });
+            const base = bsSnap();
+            for (const dim of ctx.dims.filter(d => d.rule)) {
+              const opts = bsOptions(dim, base, ctx), keys = {};
+              if (opts.filter(o => o.now).length !== 1) bad.push([tgt, trail, stop.mode, J(part), dim.id, 'now x' + opts.filter(o => o.now).length].join(' '));
+              for (const o of opts) {
+                n++;
+                const c = o.cfg, where = [tgt, trail, stop.mode, J(part), '->', dim.id, o.label].join(' ');
+                if (keys[o.key]) bad.push(where + ': twice'); keys[o.key] = 1;
+                if (J(bsFix(c, ctx)) !== J(c)) bad.push(where + ': not as the tab keeps it');
+                BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(J(c[k])); });
+                renderSigStopBar(); renderSigPartBar();
+                if (document.getElementById('sigStopWarn') || document.getElementById('sigPartWarn')) bad.push(where + ': the tab warns it never fires');
+                if (document.querySelector('#sigStopAt option:checked:disabled, #sigStopTo option:checked:disabled, #sigPartAt option:checked:disabled')) bad.push(where + ': a greyed pick');
+                if (c.sigTgt && partRaw(c.sigPart).beQ && stopRaw(c.sigStop).mode === 'off') bad.push(where + ': books at a Move SL that is off');
+              }
+              BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(J(base[k])); });
+            }
+          }
+        // Picked on the tab but never fires: Now says off and why; the Trail TP option reads like the Now column.
+        Object.assign(state.ui, { sigTgt: '1%', sigStop: { mode: 'be', beAtP: 1 }, sigPart: { q: 0, beQ: 0 }, sigTrail: { on: true, step: 0.25, gap: 0, stepP: 0.25, gapP: 0 } });
+        const c = bsSnap(), stop = BS_DIMS.find(d => d.id === 'stop'), trail = BS_DIMS.find(d => d.id === 'trail');
+        const out = { bad: bad.slice(0, 8), nBad: bad.length, n, stopKey: stop.key(c), stopNow: stop.nowText(c), trailNow: trail.text(c), trailOpt: (bsOptions(trail, c, ctx).find(o => o.now) || {}).label };
+        Object.assign(state.ui, { sigStop: { mode: 'off' }, sigTrail: { on: false } }); renderSignalsTable();
+        return out;
+      });
+      check(rules.n > 3000 && rules.nBad === 0, 'every rule option can act on the tab (' + rules.n + ' options): ' + rules.nBad + ' bad ' + JSON.stringify(rules.bad));
+      check(rules.stopKey === 'off' && /^off \(BE at 1% never fires/.test(rules.stopNow) && rules.trailNow === rules.trailOpt && /SL at the TP reached/.test(rules.trailNow), 'a Move SL that cannot fire reads off, Trail TP reads the same in Now and Best: ' + JSON.stringify(rules));
+      // 8) A whole search from the screenshot's kind of view: Indian market, Coins left on CoinDCX, a Move SL that cannot fire.
+      await page.evaluate(() => { Object.assign(state.ui, { sigKind: 'trendline', sigAsset: 'crypto', sigMarket: 'nse', sigChan: '', sigCoins: 'dcx', sigTgt: '1%', sigSl: { mode: '' }, sigStop: { mode: 'be', beAtP: 1 }, sigPart: { q: 0, beQ: 0 }, sigTrail: { on: true, step: 0.25, gap: 0, stepP: 0.25, gapP: 0 }, sigHold: 'tp', sigTlType: '', mktFilter: '' }); sigFixCoins = true; save(); renderSignalsTable(); });
+      await settle();
+      const ind = await page.evaluate(async () => {
+        const J = JSON.stringify, snapOf = cfg => J(BS_KEYS.map(k => cfg[k])), inView = sigView.pairs.length;
+        await bsRun();
+        const r = BS.res;
+        if (!r || r.err || r.tooFew) return { err: r ? r.err || 'too few: ' + r.universe : 'no result' };
+        const row = id => document.querySelector('#sigBestTable tr[data-bs="' + id + '"]'), txt = id => row(id).innerText.replace(/\s+/g, ' ');
+        const out = { inView, universe: r.universe, head: document.getElementById('sigBestView').innerText, coins: txt('coins'), coinsUse: !!row('coins').querySelector('button'), coinsOnly: row('coins').dataset.only === '1',
+          mkt: r.dims.find(d => d.id === 'mkt').opts.map(o => o.label).join(', '), chan: r.dims.find(d => d.id === 'chan').opts.map(o => o.label).join(', '), stop: txt('stop'), comboCoins: r.combo.lines.some(x => x.id === 'coins'),
+          avgNowUse: [...document.querySelectorAll('#sigBestTable tr[data-bsavg]')].filter(tr => /\(now\)/.test(tr.innerText) && tr.querySelector('button')).length, stale0: !!document.getElementById('sigBestStale'), bad: [] };
+        // Every Use on the card (each row's best, best Avg R, the combination) and the out-of-sample settings.
+        const cfgs = [['combination', r.combo.cfg, r.combo.st.n], ['out of sample', r.oos.cfg, null]];
+        r.dims.forEach(d => { [d.bestTot, d.bestAvg].forEach(b => { if (b && !b.now && !d.only) cfgs.push([d.label + ': ' + b.label, b.cfg, b.st.n]); }); });
+        const ctx = bsCtx(bsSnap());
+        for (const [name, cfg, trades] of cfgs) {
+          if (J(bsFix(cfg, ctx)) !== J(cfg)) out.bad.push(name + ': not as the tab keeps it');
+          if (cfg.sigChan && cfg.sigMarket && ctx.chanMkt[cfg.sigChan] !== cfg.sigMarket) out.bad.push(name + ': channel of another market');
+          BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(J(cfg[k])); }); sigFixCoins = true; renderSignalsTable();
+          if (snapOf(bsSnap()) !== snapOf(cfg)) out.bad.push(name + ': the tab changed it');
+          if (!sigView.pairs.length || sigView.empty) out.bad.push(name + ': empty view');
+          if (document.getElementById('sigStopWarn') || document.getElementById('sigPartWarn')) out.bad.push(name + ': the tab warns a rule never fires');
+        }
+        out.uses = cfgs.length; out.stale1 = !!document.getElementById('sigBestStale');
+        return out;
+      });
+      check(!ind.err, 'Indian trendline search: ' + ind.err);
+      if (!ind.err) {
+        check(ind.universe === ind.inView && ind.universe >= 60 && new RegExp('^' + ind.universe + ' trendline alerts in view \\(Channel All Indian channels · Market Indian').test(ind.head) && !/Coins/.test(ind.head), 'the search starts from the alerts in view and says which: ' + JSON.stringify([ind.inView, ind.universe, ind.head.slice(0, 110)]));
+        check(ind.coinsOnly && !ind.coinsUse && /not used: no crypto alerts in this view/.test(ind.coins) && !ind.comboCoins, 'Indian market: Coins has nothing to try, no Use, and is left out of the combination: ' + JSON.stringify([ind.coins.slice(0, 70), ind.coinsUse, ind.comboCoins]));
+        check(/Crypto \(Crypto only, Coins CoinDCX\)/.test(ind.mkt) && !/CRYPTO/.test(ind.chan) && /^All Indian channels/.test(ind.chan), 'Market and Channel options: ' + JSON.stringify([ind.mkt, ind.chan]));
+        check(/off \(BE at 1% never fires/.test(ind.stop) && ind.avgNowUse === 0, 'Now says the Move SL cannot fire; no Use on the settings you already have: ' + JSON.stringify([ind.stop.slice(0, 80), ind.avgNowUse]));
+        check(ind.uses >= 4 && ind.bad.length === 0, 'every Use lands on settings the tab keeps, with alerts (' + ind.uses + '): ' + JSON.stringify(ind.bad.slice(0, 5)));
+        check(!ind.stale0 && ind.stale1, 'the card says so once the settings moved (after Use): ' + JSON.stringify([ind.stale0, ind.stale1]));
+      }
+      // 9) A view too thin to search says so, with what it is.
+      const few = await page.evaluate(async () => {
+        Object.assign(state.ui, { sigKind: 'fib', sigAsset: '', sigMarket: 'nse', sigChan: 'NSE 4H', sigCoins: 'dcx', sigTgt: '1R', sigStop: { mode: 'off' }, sigTrail: { on: false }, sigLvlOff: [], sigLvl: '' }); sigFixCoins = true; renderSignalsTable();
+        await bsRun();
+        return { few: !!(BS.res && BS.res.tooFew), n: BS.res && BS.res.universe, view: sigView.pairs.length, txt: (document.getElementById('sigBestFew') || {}).innerText || '' };
+      });
+      check(few.few && few.n === few.view && /NSE 4h/.test(few.txt) && /too few to search/.test(few.txt), 'a thin view is not searched: ' + JSON.stringify(few));
     }
   } catch (e) { errs.push('threw: ' + String(e.message).split('\n').slice(0, 2).join(' | ')); }
   await ctx.close();
@@ -7040,6 +7277,7 @@ await keysLockRun(data);
 await exitTargetRun(data);
 await stopMoveRun(data);
 await partialRun(data);
+await earlyEntryRun(data);
 await slTypeRun(data);
 await holdPctRun(data);
 await trailRun(data);

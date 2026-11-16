@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-16.198">
+  <meta name="app-version" content="2026-11-16.200">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -410,7 +410,7 @@
       #sigKindBar .kb-w{display:none}
     }
     #sigDemoRealForm button{white-space:nowrap}#sigDemoRealForm .flex{flex-wrap:wrap}
-    @media (max-width:639px){.sig-row{grid-template-columns:3.3rem minmax(0,1fr);gap:.3rem .5rem}.sig-ctl .flex{gap:2px}.sig-ctl button{padding-left:.4rem;padding-right:.4rem}}
+    @media (max-width:639px){.sig-row{grid-template-columns:3.3rem minmax(0,1fr);gap:.3rem .5rem}.sig-lab2{white-space:normal;line-height:1.15;padding-top:.35rem}.sig-ctl .flex{gap:2px}.sig-ctl button{padding-left:.4rem;padding-right:.4rem}}
     @media (max-width:639px){.coin-picks{flex-wrap:nowrap!important;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}.coin-picks::-webkit-scrollbar{display:none}.coin-picks .sig-coin{flex:0 0 auto}}
     .sig-panel:not([open]) #anFilterHint{display:none}
     #anReset{color:var(--acc);font-weight:500;margin-left:.4rem}
@@ -799,6 +799,7 @@
           <summary><span class="sig-chev">&#9662;</span><h3>How each trade is played</h3><span id="sigRulesSum" class="sig-sum"></span><span id="sigRulesReset" class="sig-ph-r sig-rst"></span></summary>
           <div class="sig-row" data-k="tgt"><span class="sig-lab">Exit at</span><div class="sig-ctl"><div id="sigTgtBar"></div></div></div>
           <div class="sig-row" data-k="sl"><span class="sig-lab">SL</span><div class="sig-ctl"><div id="sigSlBar"></div></div></div>
+          <div class="sig-row" data-k="early"><span class="sig-lab sig-lab2">Early entry</span><div class="sig-ctl"><div id="sigEarlyBar"></div></div></div>
           <div class="sig-row" data-k="stop"><span class="sig-lab">Move SL</span><div class="sig-ctl"><div id="sigStopBar"></div></div></div>
           <div class="sig-row" data-k="part"><span class="sig-lab">Partial</span><div class="sig-ctl"><div id="sigPartBar"></div></div></div>
           <div class="sig-row" data-k="trail"><span class="sig-lab">Trail TP</span><div class="sig-ctl"><div id="sigTrailBar"></div></div></div>
@@ -4097,7 +4098,7 @@
       }
       const hint = document.getElementById('sigPeriodHint');
       if (hint) hint.innerText = state.ui.sigDay ? `Showing ${state.ui.sigDay} only. Click the day again to go back.` : ((range.from || range.to) ? `${range.from || "start"} → ${range.to || "now"}` : "All available history");
-      const rawPairs = matchSignals(kind), allPairs = sigSlPairs(sigLvlPairs(rawPairs));
+      const rawPairs = matchSignals(kind), allPairs = sigEarlyPairs(sigSlPairs(sigLvlPairs(rawPairs)));
       const inPer = pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to);
       // Market (All / Crypto / Indian) first: the Channel list below holds only its channels.
       const mkt = sigMarketMode(), mktKeep = marketTestOf(mkt);
@@ -4177,6 +4178,7 @@
       renderMktFilterBar('sigMktBar', 'mktCalSignals');
       renderSigTgtBar();
       renderSigSlBar();
+      renderSigEarlyBar();
       renderSigStopBar();
       renderSigPartBar();
       renderSigTrailBar();
@@ -4353,9 +4355,10 @@
           : { label: "entered · unclear", why: "The scanner saw this entry, but stop and target traded inside the same candle and it could not tell which came first, so it gives no result." };
         const zoneNote = zr ? `<div class="text-[10px] font-normal text-slate-500" title="The scanner graded the ${esc(zr.from)} alert on this same zone and counts this one as a repeat of it">zone result · ${esc(zr.from)} alert${zr.outcome && zr.resultR != null ? " · " + esc(outcomeTxt[zr.outcome] || zr.outcome) : ""}</div>` : "";
         const lvlTag = (sig.lvlWhatIf ? `<div class="text-[10px] font-normal text-sky-300" title="This alert entered at another level; this is the scanner's what-if as if entered at ${sig.lvlWhatIf}, same stop">what-if ${sig.lvlWhatIf}</div>` : "")
-          + (sig.slWhatIf ? `<div class="text-[10px] font-normal text-sky-300" title="Played with this SL (${esc(sig.slShort || "")}) in the numbers above; the result here is the scanner's, on the alert's own SL ${sig.slFrom && sig.slFrom.stop != null ? (+sig.slFrom.stop).toFixed(4) : ""}">SL ${esc(sig.slShort || "")}${sig.slWait ? " · reading" : sig.slNone ? " · none" : ""}</div>` : "");
+          + (sig.slWhatIf ? `<div class="text-[10px] font-normal text-sky-300" title="Played with this SL (${esc(sig.slShort || "")}) in the numbers above; the result here is the scanner's, on the alert's own SL ${sig.slFrom && sig.slFrom.stop != null ? (+sig.slFrom.stop).toFixed(4) : ""}">SL ${esc(sig.slShort || "")}${sig.slWait ? " · reading" : sig.slNone ? " · none" : ""}</div>` : "")
+          + (sig.eePct ? `<div class="text-[10px] font-normal text-sky-300" title="Played from an entry ${sig.eePct}% early (${(+entry).toFixed(4)} instead of the alert's ${(+sig.eeBase).toFixed(4)}) in the numbers above; the result here is the scanner's, at the alert's own entry">early ${sig.eePct}%</div>` : "");
         const sigHtml = lvlTag + (sig.filled === false ? '<span class="text-slate-600 font-normal" title="Price never reached the entry zone">—</span>'
-          : (ownR != null) ? `<span class="${rCls(ownR)}">${rfmt(ownR)}</span>${pTag(pctOfR(ownR, sig.slFrom ? slPct(sig.slFrom) : sp))}${sig.outcome ? `<div class="text-[10px] font-normal text-slate-500">${esc(outcomeTxt[sig.outcome] || sig.outcome)}</div>` : ""}`
+          : (ownR != null) ? `<span class="${rCls(ownR)}">${rfmt(ownR)}</span>${pTag(pctOfR(ownR, slPct(sigOrig(sig))))}${sig.outcome ? `<div class="text-[10px] font-normal text-slate-500">${esc(outcomeTxt[sig.outcome] || sig.outcome)}</div>` : ""}`
           : (zr && sigRv != null) ? `<span class="${rCls(sigRv)}">${rfmt(sigRv)}</span>${pTag(pctOfR(sigRv, sp))}${zoneNote}`
           : zr ? `<span class="text-slate-500 font-normal" title="The ${esc(zr.from)} alert on this same zone was entered; its result comes in the next scanner report">zone entered · open</span>${zoneNote}`
           : `<span class="text-slate-500 font-normal" title="${esc((entered ? enteredLabel : gs).why)}">${esc((entered ? enteredLabel : gs).label)}</span>`);
@@ -9482,7 +9485,8 @@
     function outcomeBase(pair) {
       const sig = pair.signal;
       // Played with another SL: the scanner's result is for its own stop, so the walk decides.
-      if (sig.filled === false || sig.slWhatIf) return null;
+      // Played from an early entry: the scanner's result is for its own entry, so the walk decides.
+      if (sig.filled === false || sig.slWhatIf || sig.eePct) return null;
       if (typeof sig.resultR === "number" && isFinite(sig.resultR)) return { r: sig.resultR, source: "scanner" };
       if (sig.hasReportR) return null;
       const r = sigR(sig);
@@ -9643,6 +9647,61 @@
       state.ui.sigPart = partRaw(d);
       save(); renderSignalsTable();
     }
+    // ---- "Early entry" (lakky, 2026-11-15: "sometimes price just go our side just below or
+    // above our entry ... give little space for early entry like 0.01% to 0.2%") ----
+    // The limit order sits that % before the alert's entry: above it for a buy, below it
+    // for a sell, so a trade whose price turned just short of the level fills too. Only the
+    // fill moves: the stop (the SL row's, set from the alert's entry), the Exit at target and
+    // the Move SL / Partial / Trail TP levels stay at the alert's own prices, so the same
+    // plan is tested with an easier fill. R is then counted on the real trade, from the fill
+    // to the stop: a trade that fills anyway wins a little less and loses a little more
+    // (2R at 0.05% on a 1% stop = (2 - 0.05) / 1.05 = +1.857R). A rebuilt alert still waits
+    // for the candle that reached its own band. Break alerts (TL BROKEN) enter at market:
+    // unchanged. With a fixed Exit at only (like SL): each alert is walked again.
+    const EARLY_PCTS = [0.01, 0.02, 0.05, 0.1, 0.15, 0.2];
+    function earlyRaw(src) { const v = Number(src !== undefined ? src : state.ui.sigEarly); return EARLY_PCTS.indexOf(v) !== -1 ? v : 0; }
+    function earlyLabel(p) { return "entry " + p + "% early"; }
+    // In force: only with a fixed Exit at. Scanner keeps the alert's own entry.
+    function sigEarlyOn() { return sigTgt() ? earlyRaw() : 0; }
+    function setSigEarly(v) {
+      state.ui.sigEarly = earlyRaw(Number(v));
+      // An early entry needs a fixed target: 1R, the target fib and trendline alerts print.
+      if (state.ui.sigEarly && !sigTgt()) state.ui.sigTgt = "1R";
+      save(); renderSignalsTable();
+    }
+    // TL BROKEN alerts: entered at market when sent, not at a level.
+    function sigIsBreak(sig) { return /^tlbreak\||\|br(@|$)/.test(String(sig && sig.key || "")); }
+    // The alert with its fill p % early: a copy kept per alert and %, so caches keyed by
+    // the alert keep working. entry = the fill, eeBase = the alert's own entry (its levels
+    // and band), eeFrom = the alert (or its SL copy). An SL copy still waiting for candles,
+    // or with no stop, is left as it is.
+    const sigEeMemo = new WeakMap();
+    function sigWithEarly(sig, p) {
+      if (!p || sigIsBreak(sig) || sig.slWait || sig.slNone) return sig;
+      const e = signalEntry(sig), s = sig.side === "short" ? -1 : 1;
+      if (!(e > 0) || !isFinite(e)) return sig;
+      let m = sigEeMemo.get(sig);
+      if (!m) { m = {}; sigEeMemo.set(sig, m); }
+      if (!m[p]) m[p] = Object.assign({}, sig, { entry: e * (1 + s * p / 100), eePct: p, eeBase: e, eeFrom: sig, fillTs: undefined, endTs: undefined });
+      return m[p];
+    }
+    function sigEarlyPairs(pairs) {
+      const p = sigEarlyOn();
+      return p ? pairs.map(pr => { const g = sigWithEarly(pr.signal, p); return g === pr.signal ? pr : Object.assign({}, pr, { signal: g }); }) : pairs;
+    }
+    // The alert as the scanner sent it, under any SL / early-entry copy.
+    function sigOrig(sig) { while (sig && (sig.slFrom || sig.eeFrom)) sig = sig.slFrom || sig.eeFrom; return sig; }
+    function renderSigEarlyBar() {
+      const bar = document.getElementById('sigEarlyBar');
+      if (!bar) return;
+      const cur = earlyRaw(), tg = sigTgt();
+      bar.className = 'flex flex-wrap items-center gap-1.5 text-[11px] font-mono';
+      bar.title = "Fill a little before the alert's entry: the limit order sits that % above the entry for a buy, below it for a sell, so a trade whose price turned just short of the level is taken too. Only the fill moves: the SL, the Exit at target and the Move SL / Partial / Trail TP levels stay at the alert's prices. R is counted from your fill to the stop, so a trade that fills anyway wins a little less and loses a little more. TL BROKEN alerts enter at market: unchanged. Works with a fixed Exit at.";
+      let h = '<div class="flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border' + (tg ? '' : ' opacity-60') + '">'
+        + [0].concat(EARLY_PCTS).map(p => '<button type="button" data-early="' + p + '" onclick="setSigEarly(' + p + ')" class="px-2 py-1 rounded-md font-semibold ' + (p === cur ? PLAY_ON : PLAY_OFF) + '">' + (p ? p + '%' : 'Off') + '</button>').join('') + '</div>';
+      if (cur) h += '<span class="text-slate-500">' + (tg ? 'buy ' + cur + '% above, sell ' + cur + '% below the entry' : 'needs a fixed Exit at') + '</span>';
+      bar.innerHTML = h;
+    }
     // ---- "SL": which stop each alert is played with (lakky, 2026-11-10: "so many ways to
     // see sl ... below or above candle, wick"). Alert = the alert's own stop. Wick / Body:
     // the most recent closed candle of the alert's own timeframe before the alert whose
@@ -9750,7 +9809,7 @@
     function slFibStop(sig, mode) {
       const g = fibGeom(sig);
       if (!g) return null;
-      const k = sig.lvlWhatIf || g.entryLevel, rk = FIB_RATIOS[k], e = signalEntry(sig);
+      const k = sig.lvlWhatIf || g.entryLevel, rk = FIB_RATIOS[k], e = sig.eeBase || signalEntry(sig);
       if (!rk) return null;
       const span = (e - g.top) / rk, box = FIB_RATIOS.L4 - FIB_RATIOS.L3, pad = box * 0.25;
       const next = { L1: FIB_RATIOS.L2, L2: FIB_RATIOS.L3, L3: FIB_RATIOS.L4, L4: FIB_RATIOS.L4 + box };
@@ -9824,18 +9883,19 @@
     function slcWant(pairs) {
       const out = [];
       pairs.forEach(pr => { const g = pr.signal; if (g.slWait) out.push(g.slFrom); });
-      if (slCmpOn && sigTgt()) pairs.forEach(pr => out.push(pr.signal.slFrom || pr.signal));
+      if (slCmpOn && sigTgt()) pairs.forEach(pr => out.push(sigOrig(pr.signal)));
       return out;
     }
     // With the SL grid reading: each alert and every SL type's copy of it, for the price walks.
     function slCmpPairs(pairs) {
       if (!slCmpOn || !sigTgt()) return [];
       const rules = slCmpRules().filter(Boolean), out = [];
+      const ee = sigEarlyOn();
       pairs.forEach(pr => {
-        const g = pr.signal.slFrom || pr.signal;
-        // The Alert row: the alert itself, with its own stop.
-        if (g !== pr.signal) out.push({ signal: g });
-        rules.forEach(r => { const s = sigWithSl(g, r); if (s !== pr.signal && !s.slWait && !s.slNone) out.push({ signal: s }); });
+        const g = sigOrig(pr.signal), g0 = sigWithEarly(g, ee);
+        // The Alert row: the alert itself, with its own stop (and the early fill, if on).
+        if (g0 !== pr.signal) out.push({ signal: g0 });
+        rules.forEach(r => { const s = sigWithEarly(sigWithSl(g, r), ee); if (s !== pr.signal && !s.slWait && !s.slNone) out.push({ signal: s }); });
       });
       return out;
     }
@@ -9873,11 +9933,12 @@
       const mvOf = tg => stopRuleOf(cfg, tg), trOf = tg => trailRuleOf(td, tg), pxOf = tg => partRuleOf(pd, tg, mvOf(tg));
       const head = '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">SL compared</h3><span class="text-[11px] text-slate-500">Total R with each stop at each exit · ' + holdTxt() + '</span></div>';
       const seen = new Set(), origs = [];
-      pairs.forEach(pr => { const g = pr.signal.slFrom || pr.signal; if (!seen.has(g) && tgtBase({ signal: g })) { seen.add(g); origs.push(g); } });
+      const ee = sigEarlyOn();
+      pairs.forEach(pr => { const g = sigOrig(pr.signal); if (!seen.has(g) && tgtBase({ signal: sigWithEarly(g, ee) })) { seen.add(g); origs.push(g); } });
       const sets = [];
       let need = 0, noStop = 0;
       origs.forEach(g => {
-        const sigs = rules.map(r => r ? sigWithSl(g, r) : g);
+        const sigs = rules.map(r => sigWithEarly(r ? sigWithSl(g, r) : g, ee));
         if (sigs.some(s => s.slNone)) { noStop++; return; }
         const ws = sigs.map(s => s.slWait ? null : tgtPath(s));
         if (ws.some(w => !w)) { need++; return; }
@@ -9912,7 +9973,7 @@
       });
       const mv = sigStopRule(), tr = sigTrailRule(), px = sigPartRule();
       return h + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same ' + sets.length + ' alert' + (sets.length === 1 ? '' : 's') + ' in every cell; best underlined. R is measured on each row\'s own stop, so a tighter stop makes each R smaller (fees and the 0.05% stop slippage weigh more in R). Avg SL = the average stop distance from entry. '
-        + (mv || tr || px ? 'Move SL / Trail TP / Partial as picked (R targets in R, % targets in %). ' : '') + (noStop ? noStop + ' alert' + (noStop === 1 ? ' has' : 's have') + ' no stop for some type (no candle that far back in ' + SLC_BARS + ' candles) and ' + (noStop === 1 ? 'is' : 'are') + ' left out. ' : '') + 'Click a cell to use it on the whole tab.</p></div>';
+        + (mv || tr || px ? 'Move SL / Trail TP / Partial as picked (R targets in R, % targets in %). ' : '') + (ee ? 'Every row filled ' + ee + '% early. ' : '') + (noStop ? noStop + ' alert' + (noStop === 1 ? ' has' : 's have') + ' no stop for some type (no candle that far back in ' + SLC_BARS + ' candles) and ' + (noStop === 1 ? 'is' : 'are') + ' left out. ' : '') + 'Click a cell to use it on the whole tab.</p></div>';
     }
     // Runs fn with the picked target applied to every alert result it reads.
     function inSigScope(fn) { const was = tgtScope; tgtScope = true; try { return fn(); } finally { tgtScope = was; } }
@@ -9941,7 +10002,7 @@
     // +11.8R). For these rows the walk waits for the first candle that reaches the band
     // (0.75% from entry, 3% on 1W / 1M, the scanner's) and fills only from the next one.
     // Live alerts carry their real minute; break alerts enter at market: both unchanged.
-    function tgtLate(sig) { return !!sig && sig.rb === true && (sig.kind === "fib" || sig.kind === "trendline") && !/^tlbreak\||\|br(@|$)/.test(String(sig.key || "")); }
+    function tgtLate(sig) { return !!sig && sig.rb === true && (sig.kind === "fib" || sig.kind === "trendline") && !sigIsBreak(sig); }
     function tgtBandFrac(sig) { return (tfMinutes(sig.timeframe) >= 10080 ? 3 : 0.75) / 100; }
     function tgtAlertMs(sig) { return new Date(sig.date + "T" + String(sig.time || "00:00").slice(0, 5).padStart(5, "0") + ":00+05:30").getTime(); }
     // Why an alert can't be re-scored, or "" when it can.
@@ -9958,8 +10019,10 @@
     // (3R / 3%) until price falls back TRAIL_MAX (R or %) from its best on a later
     // candle, so every Trail TP stop is settled too (then done, tr = walked that way);
     // or the candles run out (still open).
+    // Early entry (sig.eeBase): fills at signalEntry (the early price); every level, the
+    // band and the path are from the alert's own entry, as tgtScore reads them.
     function tgtWalk(sig, candles, resMin, hold) {
-      const entry = signalEntry(sig), stop = sig.stop, s = sig.side === "short" ? -1 : 1;
+      const entry = sig.eeBase || signalEntry(sig), fill = signalEntry(sig), stop = sig.stop, s = sig.side === "short" ? -1 : 1;
       const tfMs = tfMinutes(sig.timeframe) * 60000, resMs = resMin * 60000, t0 = tgtAlertMs(sig);
       // k.res: the candle's own size in minutes, where one read mixed sizes (tgtOne's 15m head).
       const bars = candles.map(k => Object.assign({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close }, k.res ? { r: k.res * 60000 } : {})).filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + (k.r || resMs) > t0).sort((a, b) => a.t - b.t);
@@ -9968,7 +10031,7 @@
         const edge = entry * (1 + s * tgtBandFrac(sig)), bi = bars.findIndex(k => s > 0 ? k.l <= edge : k.h >= edge);
         from = bi < 0 ? bars.length : bi + 1;
       }
-      const fi = bars.findIndex((k, i) => i >= from && k.t < t0 + TGT_BARS * tfMs && (s > 0 ? k.l <= entry : k.h >= entry));
+      const fi = bars.findIndex((k, i) => i >= from && k.t < t0 + TGT_BARS * tfMs && (s > 0 ? k.l <= fill : k.h >= fill));
       // Not reached yet while the fill window is still open: "wait", read again later.
       const seenTo = bars.length ? bars[bars.length - 1].t + (bars[bars.length - 1].r || resMs) : 0;
       if (fi < 0) return seenTo < t0 + TGT_BARS * tfMs ? { none: "entry not reached", wait: 1 } : { none: "entry not reached" };
@@ -9979,7 +10042,7 @@
     // of the alert's timeframe, its own first) and the 20-candle hold count NSE candles
     // (nseBucket), so nights, weekends and holidays don't count; the rest is tgtWalk's.
     function tgtWalkNse(sig, candles, hold) {
-      const entry = signalEntry(sig), stop = sig.stop, s = sig.side === "short" ? -1 : 1, tf = tfMinutes(sig.timeframe), resMs = NSE_RES * 60000, t0 = tgtAlertMs(sig);
+      const entry = sig.eeBase || signalEntry(sig), fill = signalEntry(sig), stop = sig.stop, s = sig.side === "short" ? -1 : 1, tf = tfMinutes(sig.timeframe), resMs = NSE_RES * 60000, t0 = tgtAlertMs(sig);
       const bars = candles.map(k => ({ t: k.time * 1000, h: +k.high, l: +k.low, c: +k.close })).filter(k => k.h > 0 && k.l > 0 && k.c > 0 && k.t + resMs > t0).sort((a, b) => a.t - b.t);
       let i = -1, last = null, from = 0;
       bars.forEach(k => { const b = nseBucket(k.t, tf); if (b !== last) { i++; last = b; } k.i = i; });
@@ -9987,7 +10050,7 @@
         const edge = entry * (1 + s * tgtBandFrac(sig)), bi = bars.findIndex(k => s > 0 ? k.l <= edge : k.h >= edge);
         from = bi < 0 ? bars.length : bi + 1;
       }
-      const fi = bars.findIndex((k, j) => j >= from && k.i < TGT_BARS && (s > 0 ? k.l <= entry : k.h >= entry));
+      const fi = bars.findIndex((k, j) => j >= from && k.i < TGT_BARS && (s > 0 ? k.l <= fill : k.h >= fill));
       if (fi < 0) return bars.some(k => k.i >= TGT_BARS) ? { none: "entry not reached" } : { none: "entry not reached", wait: 1 };
       if (hold === "tp") return walkFrom(entry, stop, s, bars, fi, Infinity, resMs);
       // The hold ends where the 20th NSE candle after the fill's starts (not there yet: still open).
@@ -10070,6 +10133,15 @@
     // point that reaches them after the stop check; every exit after that is for the
     // rest only. Fees stay one round trip on the whole position.
     function tgtScore(sig, w, tg, noFee, mv, tr, px) {
+      // Early entry: the plan is scored at the alert's own entry (before fees), then counted
+      // on the real trade, from the fill (adv % of entry nearer the stop) to the stop:
+      // R' = (R x risk - adv) / (risk + adv), with the fee on the fill's own stop %.
+      if (sig.eePct && sig.eeBase > 0) {
+        const e = sig.eeBase, s = sig.side === "short" ? -1 : 1, rp = Math.abs(e - sig.stop) / e * 100, adv = s * (signalEntry(sig) - e) / e * 100, fp = slPct(sig);
+        if (!(rp > 0) || !(fp > 0)) return null;
+        const o = tgtScore({ entry: e, stop: sig.stop, side: sig.side, market: sig.market }, w, tg, true, mv, tr, px);
+        return o ? Object.assign({}, o, { r: (o.r * rp - adv) / (rp + adv) - (noFee ? 0 : sigFeePct(sig) / fp) }) : null;
+      }
       const entry = signalEntry(sig), riskPct = slPct(sig);
       if (!w || w.none || !(riskPct > 0)) return null;
       const costR = noFee ? 0 : sigFeePct(sig) / riskPct;
@@ -11264,10 +11336,11 @@
       bar.innerHTML = h;
     }
     // Back to the scanner's own results: no fixed target, stop moves, trail or fee change.
-    function sigRulesDefault() { const d = stopRaw(), p = partRaw(); return !sigTgt() && d.mode === "off" && !slRaw().mode && !trailRaw().on && !p.q && !p.beQ && sigHold() === "tp" && state.ui.sigNoFee !== true; }
+    function sigRulesDefault() { const d = stopRaw(), p = partRaw(); return !sigTgt() && d.mode === "off" && !slRaw().mode && !earlyRaw() && !trailRaw().on && !p.q && !p.beQ && sigHold() === "tp" && state.ui.sigNoFee !== true; }
     function resetSigRules() {
       const d = stopRaw(); d.mode = "off"; state.ui.sigStop = d;
       const l = slRaw(); l.mode = ""; state.ui.sigSl = l;
+      state.ui.sigEarly = 0;
       const t = trailRaw(); t.on = false; state.ui.sigTrail = t;
       const p = partRaw(); p.q = 0; p.beQ = 0; state.ui.sigPart = p;
       state.ui.sigTgt = ""; state.ui.sigHold = "tp"; state.ui.sigNoFee = false;
@@ -11300,7 +11373,7 @@
     function sigRowsChanged(coinSet, assetMode) {
       const p = partRaw();
       return { market: !!sigMarketMode(), chan: !!state.ui.sigChan, asset: !!assetMode, coins: !!coinSet, lvlon: sigLvlOff().length > 0, lvl: !!sigLvl(), tl: !!sigTlType(), btc: !!mktFilter(),
-        tgt: !!sigTgt(), sl: !!slRaw().mode, stop: stopRaw().mode !== "off", part: !!(p.q || p.beQ), trail: !!trailRaw().on, hold: sigHold() !== "tp", fee: state.ui.sigNoFee === true };
+        tgt: !!sigTgt(), sl: !!slRaw().mode, early: !!earlyRaw(), stop: stopRaw().mode !== "off", part: !!(p.q || p.beQ), trail: !!trailRaw().on, hold: sigHold() !== "tp", fee: state.ui.sigNoFee === true };
     }
     const SIG_WHICH_KEYS = ["market", "chan", "asset", "coins", "lvlon", "lvl", "tl", "btc"];
     // One line per panel, shown when it is folded (and each panel's Reset button).
@@ -11331,6 +11404,7 @@
         if (tg) {
           bits.push('exit at ' + tg.k);
           if (sigSlOn()) bits.push(sigSlOn().label);
+          if (sigEarlyOn()) bits.push(earlyLabel(sigEarlyOn()));
           bits.push(mv ? mv.label : 'stop stays');
           if (tr) bits.push(tr.label);
           const px = sigPartRule();
@@ -11341,7 +11415,7 @@
         rules.innerText = bits.join(' · ');
       }
       const reset = document.getElementById('sigRulesReset');
-      if (reset) reset.innerHTML = sigRulesDefault() ? '' : '<button type="button" id="sigRulesResetBtn" onclick="event.preventDefault();event.stopPropagation();resetSigRules()" title="Back to the scanner\'s own results: Exit at Scanner, the alert\'s own SL, Move SL, Partial and Trail TP off, Till TP / SL, with fees">Reset</button>';
+      if (reset) reset.innerHTML = sigRulesDefault() ? '' : '<button type="button" id="sigRulesResetBtn" onclick="event.preventDefault();event.stopPropagation();resetSigRules()" title="Back to the scanner\'s own results: Exit at Scanner, the alert\'s own SL and entry, Move SL, Partial and Trail TP off, Till TP / SL, with fees">Reset</button>';
     }
     // "Exit targets compared": the same alerts at every target, side by side.
     function renderTgtCompare(pairs) {
@@ -11354,7 +11428,7 @@
       // Alerts every target can score, so each row is measured on the same alerts.
       const set = pairs.filter(pr => tgtBase(pr) && tgs.every(tg => tgtScore(pr.signal, tgtPath(pr.signal), tg, false, mvR, trOf(tg), pxR)));
       const cv = tgtCoverNote(pairs), nf = sigNoFee();
-      let h = '<div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Exit targets compared' + (mvR ? ' <span class="text-amber-300 font-normal">· ' + esc(mvR.label) + '</span>' : '') + (trR ? ' <span class="text-amber-300 font-normal">· ' + esc(trR.label) + '</span>' : '') + (pxR ? ' <span class="text-amber-300 font-normal">· ' + esc(pxR.label) + '</span>' : '') + '</h3><span class="text-[11px] text-slate-500">' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + '</span></div>';
+      let h = '<div class="flex flex-wrap items-baseline justify-between gap-2 mb-2"><h3 class="text-xs font-bold text-white">Exit targets compared' + (sigEarlyOn() ? ' <span class="text-amber-300 font-normal">· ' + esc(earlyLabel(sigEarlyOn())) + '</span>' : '') + (mvR ? ' <span class="text-amber-300 font-normal">· ' + esc(mvR.label) + '</span>' : '') + (trR ? ' <span class="text-amber-300 font-normal">· ' + esc(trR.label) + '</span>' : '') + (pxR ? ' <span class="text-amber-300 font-normal">· ' + esc(pxR.label) + '</span>' : '') + '</h3><span class="text-[11px] text-slate-500">' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + '</span></div>';
       if (!set.length) {
         host.innerHTML = h + '<p class="text-slate-500">' + (tgtProg ? 'Reading prices…' : sigTgt() ? 'No graded crypto alert with price data in this view yet.' : 'No graded crypto alert with price data in this view yet. Pick an Exit at target to read prices.') + '</p>';
         return;
@@ -12028,7 +12102,7 @@
       // be checked trade by trade (tools/signals-retest.py): the rules, Delta's symbol, the
       // fill candle (IST), the exit and minutes held.
       const cols = ["date", "time", "kind", "channel", "symbol", "side", "entry", "stop", "stop_pct", "score", "filled", "outcome", "signal_r", "signal_pct", "taken", "my_r", "scanner_r", "what_if", "delta_symbol", "walk_filled", "fill_time", "exit", "exit_after_min"];
-      const tg = sigTgt(), rules = tg ? inSigScope(() => [tg.k, sigSlOn() ? sigSlOn().label : "", sigStopMove() ? sigStopMove().label : "", sigTrail() ? sigTrail().label : "", sigPart() ? sigPart().label : "", holdTxt(), sigNoFee() ? "no fees" : ""].filter(Boolean).join("; ")) : "";
+      const tg = sigTgt(), rules = tg ? inSigScope(() => [tg.k, sigSlOn() ? sigSlOn().label : "", sigEarlyOn() ? earlyLabel(sigEarlyOn()) : "", sigStopMove() ? sigStopMove().label : "", sigTrail() ? sigTrail().label : "", sigPart() ? sigPart().label : "", holdTxt(), sigNoFee() ? "no fees" : ""].filter(Boolean).join("; ")) : "";
       const istTime = ms => { const d = new Date(ms + 330 * 60000); return d.toISOString().slice(0, 16).replace("T", " "); };
       const rows = withOutcomeCache(() => inSigScope(() => btLast.slice().sort((a, b) => sbtWhen(a.signal) < sbtWhen(b.signal) ? -1 : 1).map(pr => {
         const g = pr.signal, o = outcomeOf(pr), sp = slPct(g), mo = myOutcome(pr), b = outcomeBase(pr), w = tg ? tgtPath(g) : null, wf = tg ? tgtFilled(pr) : null;
@@ -12791,7 +12865,7 @@
       if (!sig || sig.kind !== "fib") return null;
       const parts = String(sig.key || "").split("|");
       if (parts[0] !== "fib" || parts.length < 7) return null;
-      const top = parseFloat(parts[5]), zone = parseInt(parts[6], 10), entry = signalEntry(sig);
+      const top = parseFloat(parts[5]), zone = parseInt(parts[6], 10), entry = sig.eeBase || signalEntry(sig);
       // Since 2026-10-20 every level alerts on its own entry, and its key ends with
       // that level ("...|1|L2"). Older keys: zone 1 entered at L1, zone 2 at L3.
       const tag = String(parts[7] || "").split("@")[0];
@@ -12947,6 +13021,13 @@
           line.innerHTML = 'Partial (' + esc(sigPartRule().label) + ') works with a fixed Exit at; the scanner\'s own results keep its own exits · <button type="button" class="underline" onclick="setSigTgt(\'2R\')">exit at 2R</button>';
           strip.appendChild(line);
         }
+        if (!tg && earlyRaw()) {
+          const line = document.createElement('div');
+          line.id = 'sigEarlyNote';
+          line.className = 'col-span-full text-[11px] font-mono text-amber-300';
+          line.innerHTML = 'Early entry (' + esc(earlyLabel(earlyRaw())) + ') works with a fixed Exit at; the scanner\'s own results keep the alert\'s entry · <button type="button" class="underline" onclick="setSigTgt(\'1R\')">exit at 1R</button>';
+          strip.appendChild(line);
+        }
         if (!tg && sigSlPicked()) {
           const line = document.createElement('div');
           line.id = 'sigSlNote';
@@ -12959,8 +13040,8 @@
           const line = document.createElement('div');
           line.id = 'sigTgtNote';
           line.className = 'col-span-full text-[11px] font-mono text-amber-300';
-          const mv = sigStopMove(), tr = sigTrail(), sl = sigSlOn(), px = sigPart();
-          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (' + (sl ? esc(sl.label) + ', ' : '') + (mv ? esc(mv.label) : tr ? 'no Move SL' : sl ? 'no breakeven' : 'same stop, no breakeven') + (tr ? ', ' + esc(tr.label) : '') + (px ? ', ' + esc(px.label) : '') + ', ' + holdTxt() + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
+          const mv = sigStopMove(), tr = sigTrail(), sl = sigSlOn(), px = sigPart(), ee = sigEarlyOn();
+          line.innerHTML = 'What if every alert exited at ' + esc(tg.k) + ' (' + (ee ? esc(earlyLabel(ee)) + ', ' : '') + (sl ? esc(sl.label) + ', ' : '') + (mv ? esc(mv.label) : tr ? 'no Move SL' : sl ? 'no breakeven' : 'same stop, no breakeven') + (tr ? ', ' + esc(tr.label) : '') + (px ? ', ' + esc(px.label) : '') + ', ' + holdTxt() + (nf ? ', no fees' : '') + ') · ' + esc(cv.text) + (cv.fail ? ' · ' + cv.fail + ' could not be read <button type="button" class="underline" onclick="tgtRetry()">Retry</button>' : '') + ' · <button type="button" class="underline" onclick="setSigTgt(\'\')">back to scanner</button>';
           strip.appendChild(line);
         }
         // Say why numbers are missing instead of leaving dashes unexplained.
@@ -13032,18 +13113,18 @@
     const BS_MIN_N = 30;            // fewest trades a setting needs before it can be called best
     const BS_SPLIT = 0.6;           // share of the alerts (oldest first) the search may look at
     const BS_RANDOM = 100;          // random settings (15+ trades on both halves) for the luck check
-    const BS_KEYS = ["sigTgt", "sigSl", "sigStop", "sigPart", "sigTrail", "sigHold", "sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter"];
+    const BS_KEYS = ["sigTgt", "sigSl", "sigEarly", "sigStop", "sigPart", "sigTrail", "sigHold", "sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter"];
     const BS = { res: null, busy: false, prog: null, stop: false };
     // The settings now, normalised the way the tab reads them.
     function bsSnap() {
       const tg = sigTgt();
-      return JSON.parse(JSON.stringify({ sigTgt: tg ? tg.k : "", sigSl: slRaw(), sigStop: stopRaw(), sigPart: partRaw(), sigTrail: trailRaw(), sigHold: sigHold(), sigChan: state.ui.sigChan || "",
+      return JSON.parse(JSON.stringify({ sigTgt: tg ? tg.k : "", sigSl: slRaw(), sigEarly: earlyRaw(), sigStop: stopRaw(), sigPart: partRaw(), sigTrail: trailRaw(), sigHold: sigHold(), sigChan: state.ui.sigChan || "",
         sigMarket: sigMarketMode(), sigCoins: sigCoinMode(), sigLvlOff: sigLvlOff().slice().sort(), sigLvl: sigLvl(), sigTlType: sigTlType() ? sigTlType().k : "", mktFilter: mktFilter() }));
     }
     // Puts settings on the tab's state (not saved), returns what was there. Always undone in a finally.
     function bsPut(c) {
       const was = {};
-      BS_KEYS.forEach(k => { was[k] = state.ui[k] === undefined ? { none: 1 } : { v: state.ui[k] }; state.ui[k] = JSON.parse(JSON.stringify(c[k])); });
+      BS_KEYS.forEach(k => { was[k] = state.ui[k] === undefined ? { none: 1 } : { v: state.ui[k] }; if (c[k] === undefined) delete state.ui[k]; else state.ui[k] = JSON.parse(JSON.stringify(c[k])); });
       return was;
     }
     function bsUndo(was) { BS_KEYS.forEach(k => { if (was[k].none) delete state.ui[k]; else state.ui[k] = was[k].v; }); }
@@ -13051,7 +13132,7 @@
     // renderSignalsNow's filter chain, without the drawing: market, channel, period, assets, coins, BTC day,
     // tiny stops (and, for the out-of-sample check, a date cut). The settings must already be on state.ui.
     function bsPairs(raw, range, when) {
-      const all = sigSlPairs(sigLvlPairs(raw));
+      const all = sigEarlyPairs(sigSlPairs(sigLvlPairs(raw)));
       const inPer = pr => (!range.from || pr.signal.date >= range.from) && (!range.to || pr.signal.date <= range.to);
       const mkt = sigMarketMode(), mktKeep = marketTestOf(mkt);
       const has = { crypto: all.some(pr => !isNseSig(pr.signal)) };
@@ -13071,7 +13152,53 @@
       if (mf) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mf);
       if (state.ui.sigSkipTiny === true) pairs = pairs.filter(pr => { const p = slPct(pr.signal); return !(p != null && p < TINY_STOP_PCT); });
       if (when) pairs = pairs.filter(pr => when(pr.signal));
-      return { pairs, mkt, chan, cryptoHere, coinKeepN: coinKeep ? pairs.length : null };
+      // blocked: the Coins options the tab greys here (they keep nothing); a pick among them goes back to All on Use.
+      return { pairs, mkt, chan, cryptoHere, assetMode, blocked: cryptoHere ? coinBlocks(coinPool, pr => pr.signal, assetMode, 'alerts') : {}, coinKeepN: coinKeep ? pairs.length : null };
+    }
+    // ---- only settings the tab can really show (lakky, 2026-11-14: "it still shows things which is not possible") ----
+    // The card used to offer Market Crypto on an NSE channel, a Coins pick with the Indian market (Coins does nothing
+    // there), a crypto channel inside the Indian market, level sets holding a level with no alerts, and a Move SL or
+    // Partial that can never fire. Now every option is first put the way the tab keeps it (bsFix), one that shows no
+    // alerts is dropped, and two that show the very same alerts count as one (bsView's fingerprint).
+    function bsHash(s) {
+      let a = 0xdeadbeef, b = 0x41c6ce57;
+      for (let i = 0; i < s.length; i++) { const ch = s.charCodeAt(i); a = Math.imul(a ^ ch, 2654435761); b = Math.imul(b ^ ch, 1597334677); }
+      a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909); b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
+      return 4294967296 * (2097151 & b) + (a >>> 0);
+    }
+    const BS_VIEW_KEYS = ["sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter"];
+    // What the tab shows with settings c: how many alerts, a fingerprint of exactly which ones (and at which fib
+    // level they are entered), whether the crypto filters (Assets, Coins) act, the Coins options that keep nothing
+    // and the fib levels the alerts entered at. Rules only matter when tiny stops are left out (the SL sets the stop).
+    function bsView(c, ctx) {
+      const key = JSON.stringify(BS_VIEW_KEYS.map(k => c[k])) + (state.ui.sigSkipTiny === true ? JSON.stringify([c.sigTgt, c.sigSl, c.sigEarly]) : "");
+      if (ctx.views[key]) return ctx.views[key];
+      return (ctx.views[key] = bsWith(c, () => inSigScope(() => {
+        const v = bsPairs(ctx.raw, ctx.range), lv = {};
+        v.pairs.forEach(pr => { const g = fibGeom(pr.signal); if (g && g.entryLevel) lv[g.entryLevel] = 1; });
+        const ids = v.pairs.map(pr => pr.signal.id + (pr.signal.lvlWhatIf ? "@" + pr.signal.lvlWhatIf : "")).sort();
+        return { n: ids.length, fp: ids.length + ":" + bsHash(ids.join("|")), cryptoHere: v.cryptoHere, assetMode: v.assetMode, blocked: v.blocked, levels: FIB_LEVEL_KEYS.filter(k => lv[k]) };
+      })));
+    }
+    // Settings the way the tab keeps them, so Use never lands on something the tab would change or grey:
+    // a Market with no alerts and a Channel of another market go back to all, a Coins pick that keeps nothing goes
+    // back to All (the tab does these itself), and a rule that can never fire is off: a Move SL trigger at or past
+    // the target, a Partial level at or past it without Trail TP, a booking at a Move SL that is off.
+    function bsFix(c, ctx) {
+      c = JSON.parse(JSON.stringify(c));
+      if (c.sigMarket && !ctx.mkts[c.sigMarket]) c.sigMarket = "";
+      if (c.sigChan && (!ctx.chanMkt[c.sigChan] || (c.sigMarket && ctx.chanMkt[c.sigChan] !== c.sigMarket))) c.sigChan = "";
+      if (c.sigCoins) { const v = bsView(c, ctx); if (v.cryptoHere && v.blocked[c.sigCoins]) c.sigCoins = ""; }
+      const tg = bsTg(c);
+      if (tg) {
+        const pc = tg.p != null, tv = pc ? tg.p : tg.r, st = stopRaw(c.sigStop), mv = stopRuleOf(st, tg), fires = !!mv && mv.at < tv - 1e-9;
+        if (mv && !fires) c.sigStop = Object.assign(st, { mode: "off" });
+        const pt = partRaw(c.sigPart);
+        if (pt.q && !trailRaw(c.sigTrail).on && (pc ? pt.atP : pt.at) >= tv - 1e-9) pt.q = 0;
+        if (pt.beQ && !fires) pt.beQ = 0;
+        c.sigPart = pt;
+      }
+      return c;
     }
     // The tab's numbers for these settings (sync). need: what is still unread (walks, candles for the SL).
     function bsEval(c, ctx, when) {
@@ -13124,7 +13251,13 @@
     const bsTg = c => SIG_TGTS.find(x => x.k && x.k === c.sigTgt) || null;
     const bsUnit = c => { const t = bsTg(c); return t && t.p != null ? "%" : "R"; };
     const bsTv = c => { const t = bsTg(c); return t ? (t.p != null ? t.p : t.r) : 0; };
-    const bsMove = c => stopRuleOf(stopRaw(c.sigStop), bsTg(c));
+    // The Move SL and the Partial that can act: a trigger at or past the target never fires, and without Trail TP
+    // neither does a level at or past it (the tab greys both and warns), so those read as off.
+    const bsMove = c => { const tg = bsTg(c), m = stopRuleOf(stopRaw(c.sigStop), tg); return m && tg && m.at >= bsTv(c) - 1e-9 ? null : m; };
+    const bsPart = c => { const tg = bsTg(c), d = partRaw(c.sigPart); if (tg && d.q && !trailRaw(c.sigTrail).on && (tg.p != null ? d.atP : d.at) >= bsTv(c) - 1e-9) d.q = 0; return partRuleOf(d, tg, bsMove(c)); };
+    const bsTrailTxt = t => t ? t.label.replace(/^Trail TP /, "") : "off";
+    const bsMktWord = k => k === "nse" ? "Indian" : "crypto";
+    const bsEarly = c => EARLY_PCTS.indexOf(Number(c.sigEarly)) !== -1 ? Number(c.sigEarly) : 0;
     // Each setting: how its current value reads (key, a short label) and the options it can take.
     const BS_DIMS = [
       { id: "tgt", label: "Exit at", rule: true, key: c => c.sigTgt, text: c => c.sigTgt || "Scanner",
@@ -13138,44 +13271,73 @@
             else out.push({ label: x.k ? slRuleOf(x.k, d).short : "Alert's own", patch: { sigSl: { mode: x.k, gap: d.gap, pct: d.pct } } });
           });
           return out; } },
+      { id: "early", label: "Early entry", rule: true, key: c => String(bsEarly(c)), text: c => bsEarly(c) ? earlyLabel(bsEarly(c)) : "off",
+        opts: () => [0].concat(EARLY_PCTS).map(p => ({ label: p ? earlyLabel(p) : "off", patch: { sigEarly: p } })) },
       { id: "stop", label: "Move SL", rule: true, key: c => { const m = bsMove(c); return m ? m.k : "off"; }, text: c => { const m = bsMove(c); return m ? m.label : "off"; },
+        // Picked on the tab but it can never fire (the tab warns there too): it counts as off, and Now says why.
+        nowText: c => { const m = bsMove(c), raw = stopRuleOf(stopRaw(c.sigStop), bsTg(c)); return m ? m.label : raw ? "off (" + raw.label + " never fires: at or past the target)" : "off"; },
         opts: c => { const pc = bsUnit(c) === "%", ats = pc ? STOP_ATS_P : STOP_ATS, tos = pc ? STOP_TOS_P : STOP_TOS, tv = bsTv(c), base = stopRaw(c.sigStop), out = [{ label: "off", patch: { sigStop: Object.assign({}, base, { mode: "off" }) } }];
           ats.filter(a => a < tv).forEach(a => out.push({ label: stopMove(pc ? "pbe" : "be", a).label, patch: { sigStop: Object.assign({}, base, { mode: "be", [pc ? "beAtP" : "beAt"]: a }) } }));
           ats.filter(a => a < tv).forEach(a => tos.filter(t => t < a).forEach(t => out.push({ label: stopMove(pc ? "pshift" : "shift", a, t).label, patch: { sigStop: Object.assign({}, base, { mode: "shift", [pc ? "shAtP" : "shAt"]: a, [pc ? "shToP" : "shTo"]: t }) } })));
           return out; } },
-      { id: "part", label: "Partial", rule: true, key: c => { const p = partRuleOf(partRaw(c.sigPart), bsTg(c), bsMove(c)); return p ? p.k : "off"; }, text: c => { const p = partRuleOf(partRaw(c.sigPart), bsTg(c), bsMove(c)); return p ? p.label : "off"; },
+      { id: "part", label: "Partial", rule: true, key: c => { const p = bsPart(c); return p ? p.k : "off"; }, text: c => { const p = bsPart(c); return p ? p.label : "off"; },
+        nowText: c => { const p = bsPart(c), raw = partRuleOf(partRaw(c.sigPart), bsTg(c), stopRuleOf(stopRaw(c.sigStop), bsTg(c))); return p ? p.label : raw ? "off (" + raw.label + " never books: at or past the target)" : "off"; },
         opts: c => { const pc = bsUnit(c) === "%", ats = pc ? PART_ATS_P : PART_ATS, tv = bsTv(c), tr = trailRaw(c.sigTrail).on, base = partRaw(c.sigPart), out = [{ label: "off", patch: { sigPart: Object.assign({}, base, { q: 0, beQ: 0 }) } }];
           PART_QS.forEach(q => ats.filter(a => tr || a < tv).forEach(a => out.push({ label: q + "% off at " + (pc ? pTxt : rTxt)(a), patch: { sigPart: Object.assign({}, base, { q, [pc ? "atP" : "at"]: a, beQ: 0 }) } })));
           if (bsMove(c)) PART_QS.forEach(b => out.push({ label: b + "% off at the Move SL trigger", patch: { sigPart: Object.assign({}, base, { q: 0, beQ: b }) } }));
           return out; } },
-      { id: "trail", label: "Trail TP", rule: true, key: c => { const t = trailRuleOf(trailRaw(c.sigTrail), bsTg(c)); return t ? t.k : "off"; }, text: c => { const t = trailRuleOf(trailRaw(c.sigTrail), bsTg(c)); return t ? t.label : "off"; },
+      { id: "trail", label: "Trail TP", rule: true, key: c => { const t = trailRuleOf(trailRaw(c.sigTrail), bsTg(c)); return t ? t.k : "off"; }, text: c => bsTrailTxt(trailRuleOf(trailRaw(c.sigTrail), bsTg(c))),
         opts: c => { const out = [{ label: "off", patch: { sigTrail: Object.assign({}, trailRaw(c.sigTrail), { on: false }) } }];
-          TRAIL_STEPS.forEach(s => TRAIL_GAPS.forEach(g => out.push({ label: "+" + s + (bsUnit(c) === "%" ? "%" : "R") + ", SL " + g + (bsUnit(c) === "%" ? "%" : "R") + " behind", patch: { sigTrail: { on: true, step: s, gap: g, stepP: s, gapP: g } } })));
+          TRAIL_STEPS.forEach(s => TRAIL_GAPS.forEach(g => out.push({ label: bsTrailTxt(trailMove(bsUnit(c), s, g)), patch: { sigTrail: { on: true, step: s, gap: g, stepP: s, gapP: g } } })));
           return out; } },
       { id: "hold", label: "Hold", rule: true, key: c => c.sigHold, text: c => c.sigHold === "20" ? "20 candles" : "Till TP / SL", opts: () => SIG_HOLDS.map(h => ({ label: h.label, patch: { sigHold: h.k } })) },
-      { id: "chan", label: "Channel", key: c => c.sigChan, text: c => c.sigChan ? chanLabel(c.sigChan) : "All channels",
-        opts: (c, ctx) => [{ label: "All channels", patch: { sigChan: "" } }].concat(ctx.chans.map(k => ({ label: chanLabel(k), patch: { sigChan: k } }))) },
+      // Channel: the Market's own channels only, as in the tab's list.
+      { id: "chan", label: "Channel", key: c => c.sigChan, text: c => c.sigChan ? chanLabel(c.sigChan) : c.sigMarket ? "All " + bsMktWord(c.sigMarket) + " channels" : "All channels",
+        why: () => "the only channel with alerts here",
+        opts: (c, ctx) => [{ label: c.sigMarket ? "All " + bsMktWord(c.sigMarket) + " channels" : "All channels", patch: { sigChan: "" } }].concat(ctx.chans.filter(k => !c.sigMarket || ctx.chanMkt[k] === c.sigMarket).map(k => ({ label: chanLabel(k), patch: { sigChan: k } }))) },
+      // Market: with a Channel picked, only that channel's market fits (the tab would drop the channel otherwise).
+      // The two markets first, so "All" folds into one of them when it shows the same alerts.
       { id: "mkt", label: "Market", key: c => c.sigMarket, text: c => c.sigMarket ? marketOf(c.sigMarket).label : "All",
-        opts: (c, ctx) => SIG_MARKETS.filter(m => !m.k || ctx.mkts[m.k]).map(m => ({ label: m.label, patch: { sigMarket: m.k } })) },
-      { id: "coins", label: "Coins", key: c => c.sigCoins, text: c => (SIG_COIN_MODES.find(m => m.k === c.sigCoins) || SIG_COIN_MODES[0]).label,
-        opts: (c, ctx) => ctx.coins ? SIG_COIN_MODES.map(m => ({ label: m.label, patch: { sigCoins: m.k } })) : [] },
+        why: c => c.sigChan ? "fixed by Channel " + chanLabel(c.sigChan) : "the only market with alerts here",
+        opts: (c, ctx) => SIG_MARKETS.slice(1).concat(SIG_MARKETS[0]).filter(m => (!m.k || ctx.mkts[m.k]) && (!c.sigChan || !m.k || ctx.chanMkt[c.sigChan] === m.k)).map(m => ({ label: m.label, patch: { sigMarket: m.k } })) },
+      // Coins: a crypto filter. With the Indian market or an NSE channel it does nothing, so there is nothing to try.
+      { id: "coins", label: "Coins", crypto: true, key: c => c.sigCoins, text: c => (SIG_COIN_MODES.find(m => m.k === c.sigCoins) || SIG_COIN_MODES[0]).label,
+        why: (c, ctx) => bsView(c, ctx).cryptoHere ? "no other Coins option keeps other alerts here" : "not used: no crypto alerts in this view",
+        opts: (c, ctx) => bsView(c, ctx).cryptoHere ? SIG_COIN_MODES.map(m => ({ label: m.label, patch: { sigCoins: m.k } })) : [] },
       { id: "lvls", label: "Levels", fib: true, key: c => c.sigLvlOff.join(","), text: c => { const on = FIB_LEVEL_KEYS.filter(k => c.sigLvlOff.indexOf(k) === -1); return on.length === 4 ? "all four" : on.join(" + "); },
-        opts: () => { const out = []; for (let m = 15; m >= 1; m--) { const on = FIB_LEVEL_KEYS.filter((k, i) => m & (1 << i)); out.push({ label: on.length === 4 ? "all four" : on.join(" + "), patch: { sigLvlOff: FIB_LEVEL_KEYS.filter(k => on.indexOf(k) === -1) } }); } return out; } },
-      { id: "lvl", label: "Level", fib: true, key: c => c.sigLvl, text: c => c.sigLvl || "As entered", opts: () => [""].concat(FIB_LEVEL_KEYS).map(k => ({ label: k || "As entered", patch: { sigLvl: k } })) },
+        why: () => "only one level has alerts here",
+        // Sets of the levels that have alerts here (L1 has none since the scanner dropped it: "L1 + L3" was just L3).
+        opts: (c, ctx) => { const has = bsView(bsPick(c, { sigLvlOff: [], sigLvl: "" }), ctx).levels, out = [];
+          for (let m = (1 << has.length) - 1; m >= 1; m--) { const on = has.filter((k, i) => m & (1 << i)), all = on.length === has.length; out.push({ label: all ? "all four" : on.join(" + "), patch: { sigLvlOff: all ? [] : FIB_LEVEL_KEYS.filter(k => on.indexOf(k) === -1) } }); }
+          return out; } },
+      { id: "lvl", label: "Level", fib: true, key: c => c.sigLvl, text: c => c.sigLvl || "As entered", why: () => "no level has a what-if here", opts: () => [""].concat(FIB_LEVEL_KEYS).map(k => ({ label: k || "As entered", patch: { sigLvl: k } })) },
       { id: "type", label: "Type", tl: true, key: c => c.sigTlType, text: c => c.sigTlType ? (SIG_TL_TYPES.find(x => x.k === c.sigTlType) || {}).label : "All", opts: () => SIG_TL_TYPES.map(x => ({ label: x.label, patch: { sigTlType: x.k } })) },
       { id: "btc", label: "BTC day", key: c => c.mktFilter, text: c => c.mktFilter ? MKT_LABEL[c.mktFilter] : "All days", opts: () => [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]].map(x => ({ label: x[1], patch: { mktFilter: x[0] } })) }
     ];
     const bsDimsFor = kind => BS_DIMS.filter(d => !(d.fib && kind !== "fib") && !(d.tl && kind !== "trendline"));
-    // Options of one setting for settings c, each with its full settings and key; duplicates (same key) dropped.
+    // Options of one setting for settings c, each with its full settings (bsFix: as the tab keeps them) and key.
+    // Only what is possible: an option that shows no alerts is dropped, and options that come to the same thing are
+    // one (rules: the same rule in force; filters: the very same alerts in view). now: the settings as they are -
+    // it is looked at first, so an option that changes nothing folds into it and gets no Use button.
     function bsOptions(dim, c, ctx) {
-      const seen = {}, out = [];
-      dim.opts(c, ctx).forEach(o => {
-        const cc = bsPick(c, o.patch), k = dim.key(cc);
-        // Rules other than Exit at only act with a fixed target: they are tried on the one in force (Scanner: 1R).
+      const list = dim.opts(c, ctx).map((o, i) => ({ i, label: o.label, cfg: bsFix(bsPick(c, o.patch), ctx) })), nowKey = dim.key(c);
+      let at = list.findIndex(o => dim.key(o.cfg) === nowKey);
+      if (at === -1) { list.unshift({ i: -1, label: dim.text(c), cfg: bsFix(c, ctx) }); at = 0; }
+      list.unshift(list.splice(at, 1)[0]);
+      const seen = {}, out = [], base = dim.rule ? null : bsView(c, ctx);
+      list.forEach((o, j) => {
+        let k = dim.key(o.cfg), label = o.label;
+        if (!dim.rule) {
+          const v = bsView(o.cfg, ctx);
+          if (j && !v.n) return;
+          k = v.fp;
+          // A Market or Channel that brings crypto into view also switches your Assets and Coins picks back on: say so.
+          if (!dim.crypto && v.cryptoHere && !base.cryptoHere) { const on = [v.assetMode ? assetOf(v.assetMode).label + " only" : "", o.cfg.sigCoins ? "Coins " + (SIG_COIN_MODES.find(m => m.k === o.cfg.sigCoins) || SIG_COIN_MODES[0]).label : ""].filter(Boolean); if (on.length) label += " (" + on.join(", ") + ")"; }
+        }
         if (seen[k]) return;
-        seen[k] = 1; out.push({ label: o.label, key: k, cfg: cc });
+        seen[k] = 1; out.push({ i: o.i, label, key: dim.key(o.cfg), cfg: o.cfg, now: j === 0 });
       });
-      return out;
+      return out.sort((a, b) => a.i - b.i);
     }
     // ---- the search ----
     const bsOk = (s, m) => !!s && s.n >= (m || BS_MIN_N);
@@ -13183,8 +13345,8 @@
     const bsMinFor = n => Math.max(BS_MIN_N, Math.round(n * 0.1));
     // Greedy search: each setting in turn takes the option with the most total R (30+ trades), until a round changes nothing.
     async function bsGreedy(start, ctx, when, tag, dims, minN) {
-      let cur = JSON.parse(JSON.stringify(start)), best = await bsScore(cur, ctx, when, tag);
-      const fixedOnly = c => c.sigTgt ? c : bsPick(c, { sigTgt: "1R" });
+      let cur = bsFix(start, ctx), best = await bsScore(cur, ctx, when, tag);
+      const fixedOnly = c => c.sigTgt ? c : bsFix(bsPick(c, { sigTgt: "1R" }), ctx);
       if (!cur.sigTgt) { cur = fixedOnly(cur); best = await bsScore(cur, ctx, when, tag); }
       for (let round = 0; round < 3; round++) {
         let changed = false;
@@ -13192,7 +13354,7 @@
           if (BS.stop) return { cfg: cur, st: best.st };
           const opts = bsOptions(dim, cur, ctx);
           for (const o of opts) {
-            if (o.key === dim.key(cur)) continue;
+            if (o.now) continue;
             const cc = dim.id === "tgt" && !o.cfg.sigTgt ? null : o.cfg;     // Scanner is a baseline, never the search's pick
             if (!cc) continue;
             const s = await bsScore(cc, ctx, when, tag);
@@ -13205,25 +13367,33 @@
     }
     function bsRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
     // Settings in words, one line per setting.
-    function bsDescribe(c, dims) { return dims.map(d => ({ id: d.id, label: d.label, text: d.text(c) })); }
-    // The whole job: universe, one-at-a-time table, best combination, out-of-sample check, luck check.
+    // Coins is left out where no crypto is in view (Indian market, NSE channel): it does nothing there.
+    function bsDescribe(c, dims, ctx) { const v = bsView(c, ctx); return dims.filter(d => !(d.crypto && !v.cryptoHere)).map(d => ({ id: d.id, label: d.label, text: d.text(c) })); }
+    // What a search works with: the alerts of this kind and Period, the settings it has, and what exists to choose
+    // from - each market's channels among those alerts. Market by market, because Assets (a crypto filter, not
+    // searched) would hide NSE under Market All.
+    function bsCtx(cur0) {
+      const kind = sigKind(), ctx = { kind, range: sigPeriodRange(), raw: matchSignals(kind), dims: bsDimsFor(kind), memo: {}, views: {}, chans: [], chanMkt: {}, mkts: {} }, cc = {};
+      ["crypto", "nse"].forEach(m => bsWith(bsPick(cur0, { sigMarket: m, sigChan: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "" }), () => inSigScope(() => bsPairs(ctx.raw, ctx.range).pairs))
+        .forEach(pr => { const k = chanKey(pr.signal); cc[k] = 1; ctx.chanMkt[k] = m; ctx.mkts[m] = 1; }));
+      ctx.chans = FIBTL_CHANNELS.filter(k => cc[k]).concat(Object.keys(cc).filter(k => FIBTL_CHANNELS.indexOf(k) === -1));
+      return ctx;
+    }
+    // The whole job: the alerts in view, one-at-a-time table, best combination, out-of-sample check, luck check.
     async function bsRun() {
       if (BS.busy) return;
       BS.busy = true; BS.stop = false; BS.drawn = 0; BS.prog = { evals: 0, reads: 0, step: "Starting" };
       renderBestCard();
       try {
-        const kind = sigKind(), range = sigPeriodRange(), raw = matchSignals(kind), dims = bsDimsFor(kind);
-        const cur0 = bsSnap(), ref = cur0.sigTgt ? cur0 : bsPick(cur0, { sigTgt: "1R" });
-        const ctx = { raw, range, memo: {}, chans: [], mkts: {}, coins: false };
-        // What exists to choose from: channels, markets and coins among the alerts (before those filters).
-        const open = bsPick(cur0, { sigChan: "", sigMarket: "", sigCoins: "" });
-        const base = bsWith(open, () => bsPairs(raw, range).pairs);
-        const cc = {}; base.forEach(pr => { cc[chanKey(pr.signal)] = 1; ctx.mkts[isNseSig(pr.signal) ? "nse" : "crypto"] = 1; if (coinOf(pr.signal)) ctx.coins = true; });
-        ctx.chans = FIBTL_CHANNELS.filter(k => cc[k]).concat(Object.keys(cc).filter(k => FIBTL_CHANNELS.indexOf(k) === -1));
-        const all = bsWith(bsPick(cur0, { sigChan: "", sigMarket: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "" }), () => bsPairs(raw, range).pairs);
+        const cur0 = bsSnap(), ctx = bsCtx(cur0), kind = ctx.kind, range = ctx.range, raw = ctx.raw, dims = ctx.dims;
+        const ref = cur0.sigTgt ? cur0 : bsFix(bsPick(cur0, { sigTgt: "1R" }), ctx);
+        // The alerts in view now: they set the older 60% / newest 40% date cut and the fewest trades an option needs
+        // (it was every alert of the kind: on NSE 1D the "older 60%" was mostly crypto dates before NSE alerts began).
+        const all = bsWith(cur0, () => inSigScope(() => bsPairs(raw, range).pairs));
         const dates = all.map(pr => pr.signal.date).sort();
         const res = { at: Date.now(), kind, universe: all.length, range, dims: [], notes: [] };
         res.sig = bsSig();
+        res.view = dims.filter(d => !d.rule && !(d.crypto && !bsView(cur0, ctx).cryptoHere)).map(d => d.label + " " + d.text(cur0)).join(" · ");
         if (dates.length < 60) { res.tooFew = true; BS.res = res; return; }
         const cut = dates[Math.floor(dates.length * BS_SPLIT) - 1];
         const train = g => g.date <= cut, test = g => g.date > cut;
@@ -13236,8 +13406,10 @@
         res.refTgt = ref.sigTgt;
         for (const dim of dims) {
           if (BS.stop) break;
-          const baseC = dim.rule && dim.id !== "tgt" ? ref : cur0, opts = bsOptions(dim, baseC, ctx), row = { id: dim.id, label: dim.label, rule: !!dim.rule, now: dim.text(baseC), nowKey: dim.key(baseC), opts: [] };
-          for (const o of opts) { const s = await bsScore(o.cfg, ctx, null, "all"); row.opts.push({ label: o.label, key: o.key, cfg: o.cfg, st: s.st, left: s.left, now: o.key === row.nowKey }); }
+          const baseC = dim.rule && dim.id !== "tgt" ? ref : cur0, opts = bsOptions(dim, baseC, ctx), row = { id: dim.id, label: dim.label, rule: !!dim.rule, now: (dim.nowText || dim.text)(baseC), nowKey: dim.key(baseC), opts: [] };
+          for (const o of opts) { const s = await bsScore(o.cfg, ctx, null, "all"); row.opts.push({ label: o.label, key: o.key, cfg: o.cfg, st: s.st, left: s.left, now: o.now }); }
+          // One option only: nothing else is possible with the other settings as they are (the row says why).
+          if (row.opts.length < 2) row.only = dim.why ? dim.why(baseC, ctx) : "no other option has alerts here";
           const ok = row.opts.filter(o => bsOk(o.st, res.minN));
           row.bestTot = ok.reduce((b, o) => !b || o.st.tot > b.st.tot ? o : b, null);
           row.bestAvg = ok.reduce((b, o) => !b || o.st.avg > b.st.avg ? o : b, null);
@@ -13248,14 +13420,14 @@
         BS.prog.step = "Searching the best combination";
         const startC = ref;
         const full = await bsGreedy(startC, ctx, null, "all", dims, res.minN);
-        res.combo = { cfg: full.cfg, st: full.st, lines: bsDescribe(full.cfg, dims) };
+        res.combo = { cfg: full.cfg, st: full.st, lines: bsDescribe(full.cfg, dims, ctx) };
         // 3) the same search on the first 60% only, read on the last 40%
         BS.prog.step = "Out-of-sample check: searching the first " + Math.round(BS_SPLIT * 100) + "%";
         const tr = await bsGreedy(startC, ctx, train, "train", dims, bsMinFor(res.split.nTrain));
         res.minTrain = bsMinFor(res.split.nTrain);
         const trOnTest = await bsScore(tr.cfg, ctx, test, "test"), comboOnTest = await bsScore(full.cfg, ctx, test, "test");
         const curTrain = await bsScore(cur0, ctx, train, "train"), curTest = await bsScore(cur0, ctx, test, "test");
-        res.oos = { cfg: tr.cfg, lines: bsDescribe(tr.cfg, dims), train: tr.st, test: trOnTest.st, comboTest: comboOnTest.st, curTrain: curTrain.st, curTest: curTest.st };
+        res.oos = { cfg: tr.cfg, lines: bsDescribe(tr.cfg, dims, ctx), train: tr.st, test: trOnTest.st, comboTest: comboOnTest.st, curTrain: curTrain.st, curTest: curTest.st };
         // 4) luck check: random settings from the same lists (SL and Hold left as they are), on both halves
         BS.prog.step = "Luck check: " + BS_RANDOM + " random settings";
         const rnd = bsRng(20261114), rows = [], rdims = dims.filter(d => d.id !== "sl" && d.id !== "hold");
@@ -13273,8 +13445,9 @@
         BS.res = { err: String(e && e.message || e), at: Date.now(), sig: bsSig() };
       } finally { BS.busy = false; BS.prog = null; renderBestCard(); }
     }
-    // What the result was made from: a change in kind, period or the dropped-coin switch makes it stale.
-    function bsSig() { const r = sigPeriodRange(); return [sigKind(), r.from, r.to, state.ui.sigAsset || "", state.ui.sigSkipTiny === true ? 1 : 0, state.ui.sigNoFee === true ? 1 : 0, (state.signals || []).length].join("|"); }
+    // What the result was made from: a change in kind, Period, alerts or any setting on the tab makes it stale
+    // (the Now column and "the others as you have them now" are the settings the search started from).
+    function bsSig() { const r = sigPeriodRange(); return [sigKind(), r.from, r.to, state.ui.sigAsset || "", state.ui.sigSkipTiny === true ? 1 : 0, state.ui.sigNoFee === true ? 1 : 0, (state.signals || []).length, JSON.stringify(bsSnap())].join("|"); }
     // Use these settings on the tab.
     function bsUse(path) {
       const o = path.split(".").reduce((x, k) => x && x[k], BS.res);
@@ -13310,21 +13483,23 @@
         + (BS.busy ? '<button type="button" id="sigBestStop" onclick="bsCancel()" class="px-2.5 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500">Stop</button>' : '<button type="button" id="sigBestRun" onclick="bsRun()" class="px-2.5 py-1 rounded border border-amber-500/60 text-amber-200 hover:bg-amber-500/10 font-semibold">' + (r ? 'Search again' : 'Find best settings') + '</button>') + '</span></div>';
       h += '<div id="sigBestWarn" class="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-[11px] px-3 py-2 mb-3 leading-relaxed"><b>Best of many tries is partly luck.</b> The more settings are tried, the better the best one looks on these same alerts, and it will not trade that well. Trust the <b>out-of-sample</b> lines (settings found on the older 60% of alerts, read on the newest 40% they never saw) and the luck check, not the top row. Few trades: take any of it lightly.</div>';
       if (BS.busy) h += '<p id="sigBestProg" class="text-slate-300">' + esc(BS.prog.step) + ' · ' + BS.prog.evals + ' settings scored · ' + BS.prog.reads + ' price reads…</p>';
-      if (!r && !BS.busy) h += '<p class="text-slate-500">Tries every option of every setting on the alerts in view (Fib / Trendline / Zone as picked, this Period, dropped coins as set), then searches all of them together. It can take a minute the first time: prices for each stop type are read once.</p>';
+      if (!r && !BS.busy) h += '<p class="text-slate-500">Tries every option of every setting on the alerts in view (Fib / Trendline / Zone as picked, this Period, your Market, Channel and Coins), then searches all of them together. Only settings the tab can really show are tried: no crypto market on an NSE channel, no Coins pick where there are no coins, no level without alerts. It can take a minute the first time: prices for each stop type are read once.</p>';
       if (r && r.err) h += '<p class="text-rose-300">Could not finish: ' + esc(r.err) + '</p>';
-      else if (r && r.tooFew) h += '<p class="text-slate-400">Only ' + r.universe + ' alerts in view: too few to search (60 needed). Widen the Period or pick another kind.</p>';
+      else if (r && r.tooFew) h += '<p id="sigBestFew" class="text-slate-400">Only ' + r.universe + ' alerts in view' + (r.view ? ' (' + esc(r.view) + ')' : '') + ': too few to search (60 needed). Widen the Period, or pick a wider Channel, Market, Coins or Level.</p>';
       else if (r) {
-        if (stale) h += '<p id="sigBestStale" class="text-amber-300 mb-2">The alerts or Period changed since this search. <button type="button" class="underline" onclick="bsRun()">Search again</button></p>';
-        h += '<p class="text-[10px] text-slate-500 mb-3">' + r.universe + ' ' + (SIG_KINDS.find(x => x.k === r.kind) || SIG_KINDS[0]).label.toLowerCase() + ' · ' + r.split.from + ' to ' + r.split.to + ' · older 60% = ' + r.split.nTrain + ' alerts up to ' + r.split.cut + ', newest 40% = ' + r.split.nTest + ' · ' + (r.evals || 0) + ' settings scored · fees ' + (state.ui.sigNoFee === true ? 'off' : 'on') + (r.refTgt && r.refTgt !== bsSnap().sigTgt ? ' · rules tried at Exit ' + r.refTgt + ' (you are on Scanner exits)' : '') + '</p>';
+        if (stale) h += '<p id="sigBestStale" class="text-amber-300 mb-2">Your settings, the alerts or the Period changed since this search: Now and the numbers below are for the settings it started from. <button type="button" class="underline" onclick="bsRun()">Search again</button></p>';
+        h += '<p id="sigBestView" class="text-[10px] text-slate-500 mb-3">' + r.universe + ' ' + (SIG_KINDS.find(x => x.k === r.kind) || SIG_KINDS[0]).label.toLowerCase() + ' in view' + (r.view ? ' (' + esc(r.view) + ')' : '') + ' · ' + r.split.from + ' to ' + r.split.to + ' · older 60% = ' + r.split.nTrain + ' alerts up to ' + r.split.cut + ', newest 40% = ' + r.split.nTest + ' · ' + (r.evals || 0) + ' settings scored · fees ' + (state.ui.sigNoFee === true ? 'off' : 'on') + (r.refTgt && r.refTgt !== bsSnap().sigTgt ? ' · rules tried at Exit ' + r.refTgt + ' (you are on Scanner exits)' : '') + '</p>';
         // A. every setting on its own
-        h += '<div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Each setting on its own <span class="text-slate-500 normal-case font-normal">· the others as you have them now · best = most Total R with ' + r.minN + '+ trades, a tenth of the alerts (filters also show best Avg R)</span></div>';
+        h += '<div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Each setting on its own <span class="text-slate-500 normal-case font-normal">· the others as you have them now · only options the tab can show · best = most Total R with ' + r.minN + '+ trades, a tenth of the alerts in view (filters also show best Avg R)</span></div>';
         h += '<div class="overflow-x-auto"><table id="sigBestTable" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Setting</th><th class="pr-2">Now</th><th class="pr-2">Best option</th>' + BS_HEAD + '<th></th></tr></thead><tbody>';
         r.dims.forEach((d, i) => {
-          const b = d.bestTot, same = b && b.key === d.nowKey, j = b ? d.opts.indexOf(b) : -1, ba = d.bestAvg, ja = ba ? d.opts.indexOf(ba) : -1;
-          h += '<tr data-bs="' + d.id + '" class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold text-slate-200 whitespace-nowrap">' + esc(d.label) + '</td><td class="pr-2 text-slate-400">' + esc(d.now) + '</td>'
-            + (b ? '<td class="pr-2 ' + (b.st.tot < 0 ? 'text-rose-300' : same ? 'text-slate-300' : 'text-emerald-300 font-bold') + '">' + esc(b.label) + (same ? ' <span class="text-slate-500 font-normal">(now)</span>' : '') + (b.st.tot < 0 ? ' <span class="text-[10px] font-normal text-rose-300">still loses</span>' : '') + '</td>' + bsCells(b.st) + '<td class="text-right">' + (same ? '' : '<button type="button" data-use="' + d.id + '" onclick="bsUseOpt(' + i + ',' + j + ')" class="underline text-amber-300">Use</button>') + '</td>'
+          const b = d.bestTot, same = b && b.now, j = b ? d.opts.indexOf(b) : -1, ba = d.bestAvg, ja = ba ? d.opts.indexOf(ba) : -1;
+          h += '<tr data-bs="' + d.id + '"' + (d.only ? ' data-only="1"' : '') + ' class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold text-slate-200 whitespace-nowrap">' + esc(d.label) + '</td><td class="pr-2 text-slate-400">' + esc(d.now) + '</td>'
+            // Nothing else is possible here: say why, show the numbers as they are, no Use.
+            + (d.only ? '<td class="pr-2 text-slate-500">' + esc(d.only) + '</td>' + (d.nowSt && d.nowSt.n ? bsCells(d.nowSt).replace(/text-(emerald|rose)-400/g, 'text-slate-500') : '<td colspan="9"></td>') + '<td></td>'
+              : b ? '<td class="pr-2 ' + (b.st.tot < 0 ? 'text-rose-300' : same ? 'text-slate-300' : 'text-emerald-300 font-bold') + '">' + esc(b.label) + (same ? ' <span class="text-slate-500 font-normal">(now)</span>' : '') + (b.st.tot < 0 ? ' <span class="text-[10px] font-normal text-rose-300">still loses</span>' : '') + '</td>' + bsCells(b.st) + '<td class="text-right">' + (same ? '' : '<button type="button" data-use="' + d.id + '" onclick="bsUseOpt(' + i + ',' + j + ')" class="underline text-amber-300">Use</button>') + '</td>'
               : '<td class="pr-2 text-slate-500" colspan="11">no option has ' + r.minN + '+ trades</td>') + '</tr>';
-          if (!d.rule && ba && ba !== b) h += '<tr class="text-slate-400"><td></td><td class="pr-2 text-[10px]">best Avg R</td><td class="pr-2">' + esc(ba.label) + '</td>' + bsCells(ba.st) + '<td class="text-right"><button type="button" onclick="bsUseOpt(' + i + ',' + ja + ')" class="underline text-amber-300">Use</button></td></tr>';
+          if (!d.rule && !d.only && ba && ba !== b) h += '<tr data-bsavg="' + d.id + '" class="text-slate-400"><td></td><td class="pr-2 text-[10px]">best Avg R</td><td class="pr-2">' + esc(ba.label) + (ba.now ? ' <span class="text-slate-500">(now)</span>' : '') + '</td>' + bsCells(ba.st) + '<td class="text-right">' + (ba.now ? '' : '<button type="button" onclick="bsUseOpt(' + i + ',' + ja + ')" class="underline text-amber-300">Use</button>') + '</td></tr>';
         });
         h += '</tbody></table></div>';
         // every option, folded
@@ -13337,7 +13512,7 @@
         h += '</details>';
         // B. best combination
         const cb = r.combo, oos = r.oos;
-        h += '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Best full combination <span class="text-slate-500 normal-case font-normal">· found on all ' + r.universe + ' alerts, so this is the flattering number</span></div>';
+        h += '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Best full combination <span class="text-slate-500 normal-case font-normal">· every setting searched together, one possible change at a time, and found on the same alerts it is scored on, so this is the flattering number</span></div>';
         h += '<div class="overflow-x-auto"><table id="sigBestCombo" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Settings</th>' + BS_HEAD + '<th></th></tr></thead><tbody><tr class="border-t border-terminal-border"><td class="py-1 pr-2 text-emerald-300">' + cb.lines.map(x => '<span class="whitespace-nowrap"><span class="text-slate-500">' + esc(x.label) + '</span> ' + esc(x.text) + '</span>').join(' · ') + '</td>' + bsCells(cb.st) + '<td class="text-right"><button type="button" id="sigBestUse" onclick="bsUse(\'combo.cfg\')" class="underline text-amber-300">Use</button></td></tr>'
           + '<tr class="border-t border-terminal-border text-slate-400"><td class="py-1 pr-2">Your settings now</td>' + bsCells(r.cur) + '<td></td></tr></tbody></table></div>'
           + '<details id="sigBestFull" class="mt-1"><summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">Every number for the best combination</summary>' + bsFull(cb.st) + '</details>';
@@ -13400,7 +13575,8 @@
             c.byDate[d] = { o: k.open, c: k.close, h: k.high, l: k.low, pct: +pct.toFixed(2) };
           });
           c.fetchedAt = Date.now();
-          mktFailedAt = 0;
+          // An empty answer waits a minute too: with no day kept, every redraw asked again (~70 a second).
+          mktFailedAt = j.result.length ? 0 : Date.now();
           save();
         })
         .catch(e => { mktFailedAt = Date.now(); mktLoadErr = "Could not load BTC candles (" + (e.message || e) + "). Check your connection and try again."; })
@@ -15884,7 +16060,9 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
-      { v: '2026-11-16.198', pr: 112, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
+      { v: '2026-11-16.200', pr: 112, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
+      { v: '2026-11-16.199', pr: 110, title: 'Best settings: only what is possible', pts: ['The card no longer offers things the tab cannot show: Crypto market on an NSE channel, a Coins pick with the Indian market, a crypto channel inside Indian, a level with no alerts (L1 + L3 was just L3), or a Move SL / Partial that never fires', 'It now searches the alerts you have in view (it said 1,554 fib alerts while you were on NSE 1D); a setting with nothing else to try says why, and two options that show the same alerts count as one', 'Use always lands on settings the tab keeps, with alerts in view; after Use or any change the card asks for a new search'] },
+      { v: '2026-11-16.198', pr: 113, title: 'Early entry option', pts: ['Signals → How each trade is played: new Early entry row (Off, 0.01% to 0.2%). The order fills that much before the entry, above it for a buy and below it for a sell, so a trade that turned just short of the level is counted', 'Only the fill moves: SL, target, Move SL, Partial and Trail TP stay at the alert\'s prices; R is counted from your fill to the stop', 'In Best settings, compare tables, Demo account and CSV too; TL BROKEN alerts keep their market entry'] },
       { v: '2026-11-16.197', pr: 111, title: 'Signals lighter and clearer', pts: ['Filters take less room: tighter rows, a dot on every row you changed, and a Reset for Which alerts. On a phone both panels start folded, so the numbers come first', 'Calendar numbers fit their day; fib and trendline tables drop the empty Score column; prices without trailing zeros', 'Faster redraws on Edge & breakdowns, and fewer redraws while prices load on a slow device. No number changes'] },
       { v: '2026-11-14.195', pr: 109, title: 'NSE alerts from 1 Sep', pts: ['NSE alerts before 1 Sep are deleted and never read again: about 37% fewer alerts kept (23,539 to 14,839 on your data, 11.7 to 7.3 MB)', 'All 200 NSE stocks stay; crypto keeps history from 1 Jun', 'An NSE trade from before 1 Sep keeps the alert it came from, so its setup does not change'] },
       { v: '2026-11-14.194', pr: 108, title: 'Dropped coins deleted, Top 30 on both brokers', pts: ['Alerts for coins the scanner no longer watches are deleted, not hidden: about 2,000 fewer alerts kept (25,565 to 23,539 on your data) and every scanner read skips them. The Hidden / Shown row is gone', 'A dropped coin keeps only the alerts one of your trades matches, so the trade keeps its setup', 'Top 10 / 20 / 30 count only coins on both CoinDCX and Delta (14 Nov volume). The scanner added AVAX, INJ, FIL, AAVE, TAO and ARB, and the list now comes from the scanner itself'] },

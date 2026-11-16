@@ -37,6 +37,13 @@ The rules (each one lakky's):
   share at the Move SL trigger when "book" is set. Shares of the whole position, lowest
   level first, never more than what is left. Without Trail TP a level at or past the target
   books nothing. Every later exit is for the rest; fees stay one round trip on the whole.
+- Early entry (2026-11-15): the order fills early% before the alert's entry (above it for a
+  buy, below for a sell); break rows (market entries) keep theirs. Only the fill moves: the
+  stop (any SL type, from the alert's entry), the target, Move SL, Partial and Trail TP stay
+  at the alert's prices, and a history touch row still waits for the band from the alert's
+  entry. The trade is played in the alert's R, then counted from the fill to the stop:
+  (R x risk - adv) / (risk + adv), adv = how much nearer the stop the fill is; the fee in R
+  is on the fill's own stop %.
 
 python3 tools/signals-retest.py FIXTURE.json.gz COMBOS.json OUT.json [--app APP.json]
 FIXTURE: {now, records, results, candles: {"SYM_15m": [[time s, open, high, low, close], ...]},
@@ -183,10 +190,13 @@ def main(argv):
             return b
         return b if w is None else w if b is None else (max(w, b) if s > 0 else min(w, b))
 
-    def play(sym, tf, t0, late, s, c, entry, stop, mkt):
+    def play(sym, tf, t0, late, s, c, entry, stop, mkt, fill):
         tfms, rk = TFM[tf] * 60000, abs(entry - stop) / entry
         risk = rk * 100
-        cost = 0 if c.get("nofee") else COST[mkt] / risk
+        # Played in the alert's R before fees; counted on the fill (adv: % of entry nearer the stop).
+        adv = s * (fill - entry) / entry * 100
+        cost = 0 if c.get("nofee") else COST[mkt] / (abs(fill - stop) / fill * 100)
+        real = lambda g: (g * risk - adv) / (risk + adv) - cost
         tg = c["tgt"]
         pc = tg.endswith("%")
         tR = float(tg[:-1]) / risk if pc else float(tg[:-1])
@@ -223,8 +233,8 @@ def main(argv):
 
         def done(r, label):
             if label == "Partial":
-                return {"filled": True, "r": bk["got"] - cost, "label": label}
-            return {"filled": True, "r": bk["got"] + bk["left"] * r - cost, "label": ("Part + " if bk["n"] else "") + label}
+                return {"filled": True, "r": real(bk["got"]), "label": label}
+            return {"filled": True, "r": real(bk["got"] + bk["left"] * r), "label": ("Part + " if bk["n"] else "") + label}
         if mkt == "nse":
             # NSE: Yahoo's 60m candles; "20 candles" are NSE candles of the alert's timeframe.
             resms = 60 * 60000
@@ -247,7 +257,7 @@ def main(argv):
             edge = entry * (1 + s * (3 if TFM[tf] >= 10080 else 0.75) / 100)
             bi = next((i for i, b in enumerate(bars) if (b[3] <= edge if s > 0 else b[2] >= edge)), None)
             i0 = len(bars) if bi is None else bi + 1
-        fi = next((i for i in range(i0, len(bars)) if in_window(i) and (bars[i][3] <= entry if s > 0 else bars[i][2] >= entry)), None)
+        fi = next((i for i in range(i0, len(bars)) if in_window(i) and (bars[i][3] <= fill if s > 0 else bars[i][2] >= fill)), None)
         if fi is None:
             return {"filled": False, "r": None, "label": "no fill"}
         R = lambda p: s * (p - entry) / entry / rk
@@ -313,6 +323,9 @@ def main(argv):
                 sym = sym[:-3]
             late = bool(r.get("rebuild")) and r["kind"] in ("fib", "trendline") and not r["key"].endswith("|br")
             entry, stop = float(r["plan"]["entry"]), float(r["plan"]["sl"])
+            fill = entry
+            if c.get("early") and not (r["key"].startswith("tlbreak|") or r["key"].endswith("|br")):
+                fill = entry * (1 + s * c["early"] / 100)
             sl = c.get("sl") or {}
             if sl.get("mode") in ("wick", "body", "near"):
                 stop = candle_stop(sym, r["tf"], t0, entry, s, sl["mode"], sl.get("gap", 0.75), mkt)
@@ -321,7 +334,7 @@ def main(argv):
             if stop is None or not (stop < entry if s > 0 else stop > entry):
                 res[r["id"]] = {"filled": None, "r": None, "label": "no stop"}
                 continue
-            res[r["id"]] = play(sym, r["tf"], t0, late, s, c, entry, stop, mkt)
+            res[r["id"]] = play(sym, r["tf"], t0, late, s, c, entry, stop, mkt, fill)
         report[c["name"]] = res
         graded = [v["r"] for v in res.values() if v["r"] is not None]
         line = f"{c['name']}: {len(res)} alerts, {len(graded)} with a result, {sum(graded):+.2f}R"
