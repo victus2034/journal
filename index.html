@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-16.198">
+  <meta name="app-version" content="2026-11-16.199">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -13151,7 +13151,53 @@
       if (mf) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mf);
       if (state.ui.sigSkipTiny === true) pairs = pairs.filter(pr => { const p = slPct(pr.signal); return !(p != null && p < TINY_STOP_PCT); });
       if (when) pairs = pairs.filter(pr => when(pr.signal));
-      return { pairs, mkt, chan, cryptoHere, coinKeepN: coinKeep ? pairs.length : null };
+      // blocked: the Coins options the tab greys here (they keep nothing); a pick among them goes back to All on Use.
+      return { pairs, mkt, chan, cryptoHere, assetMode, blocked: cryptoHere ? coinBlocks(coinPool, pr => pr.signal, assetMode, 'alerts') : {}, coinKeepN: coinKeep ? pairs.length : null };
+    }
+    // ---- only settings the tab can really show (lakky, 2026-11-14: "it still shows things which is not possible") ----
+    // The card used to offer Market Crypto on an NSE channel, a Coins pick with the Indian market (Coins does nothing
+    // there), a crypto channel inside the Indian market, level sets holding a level with no alerts, and a Move SL or
+    // Partial that can never fire. Now every option is first put the way the tab keeps it (bsFix), one that shows no
+    // alerts is dropped, and two that show the very same alerts count as one (bsView's fingerprint).
+    function bsHash(s) {
+      let a = 0xdeadbeef, b = 0x41c6ce57;
+      for (let i = 0; i < s.length; i++) { const ch = s.charCodeAt(i); a = Math.imul(a ^ ch, 2654435761); b = Math.imul(b ^ ch, 1597334677); }
+      a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909); b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
+      return 4294967296 * (2097151 & b) + (a >>> 0);
+    }
+    const BS_VIEW_KEYS = ["sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter"];
+    // What the tab shows with settings c: how many alerts, a fingerprint of exactly which ones (and at which fib
+    // level they are entered), whether the crypto filters (Assets, Coins) act, the Coins options that keep nothing
+    // and the fib levels the alerts entered at. Rules only matter when tiny stops are left out (the SL sets the stop).
+    function bsView(c, ctx) {
+      const key = JSON.stringify(BS_VIEW_KEYS.map(k => c[k])) + (state.ui.sigSkipTiny === true ? JSON.stringify([c.sigTgt, c.sigSl, c.sigEarly]) : "");
+      if (ctx.views[key]) return ctx.views[key];
+      return (ctx.views[key] = bsWith(c, () => inSigScope(() => {
+        const v = bsPairs(ctx.raw, ctx.range), lv = {};
+        v.pairs.forEach(pr => { const g = fibGeom(pr.signal); if (g && g.entryLevel) lv[g.entryLevel] = 1; });
+        const ids = v.pairs.map(pr => pr.signal.id + (pr.signal.lvlWhatIf ? "@" + pr.signal.lvlWhatIf : "")).sort();
+        return { n: ids.length, fp: ids.length + ":" + bsHash(ids.join("|")), cryptoHere: v.cryptoHere, assetMode: v.assetMode, blocked: v.blocked, levels: FIB_LEVEL_KEYS.filter(k => lv[k]) };
+      })));
+    }
+    // Settings the way the tab keeps them, so Use never lands on something the tab would change or grey:
+    // a Market with no alerts and a Channel of another market go back to all, a Coins pick that keeps nothing goes
+    // back to All (the tab does these itself), and a rule that can never fire is off: a Move SL trigger at or past
+    // the target, a Partial level at or past it without Trail TP, a booking at a Move SL that is off.
+    function bsFix(c, ctx) {
+      c = JSON.parse(JSON.stringify(c));
+      if (c.sigMarket && !ctx.mkts[c.sigMarket]) c.sigMarket = "";
+      if (c.sigChan && (!ctx.chanMkt[c.sigChan] || (c.sigMarket && ctx.chanMkt[c.sigChan] !== c.sigMarket))) c.sigChan = "";
+      if (c.sigCoins) { const v = bsView(c, ctx); if (v.cryptoHere && v.blocked[c.sigCoins]) c.sigCoins = ""; }
+      const tg = bsTg(c);
+      if (tg) {
+        const pc = tg.p != null, tv = pc ? tg.p : tg.r, st = stopRaw(c.sigStop), mv = stopRuleOf(st, tg), fires = !!mv && mv.at < tv - 1e-9;
+        if (mv && !fires) c.sigStop = Object.assign(st, { mode: "off" });
+        const pt = partRaw(c.sigPart);
+        if (pt.q && !trailRaw(c.sigTrail).on && (pc ? pt.atP : pt.at) >= tv - 1e-9) pt.q = 0;
+        if (pt.beQ && !fires) pt.beQ = 0;
+        c.sigPart = pt;
+      }
+      return c;
     }
     // The tab's numbers for these settings (sync). need: what is still unread (walks, candles for the SL).
     function bsEval(c, ctx, when) {
@@ -13204,7 +13250,12 @@
     const bsTg = c => SIG_TGTS.find(x => x.k && x.k === c.sigTgt) || null;
     const bsUnit = c => { const t = bsTg(c); return t && t.p != null ? "%" : "R"; };
     const bsTv = c => { const t = bsTg(c); return t ? (t.p != null ? t.p : t.r) : 0; };
-    const bsMove = c => stopRuleOf(stopRaw(c.sigStop), bsTg(c));
+    // The Move SL and the Partial that can act: a trigger at or past the target never fires, and without Trail TP
+    // neither does a level at or past it (the tab greys both and warns), so those read as off.
+    const bsMove = c => { const tg = bsTg(c), m = stopRuleOf(stopRaw(c.sigStop), tg); return m && tg && m.at >= bsTv(c) - 1e-9 ? null : m; };
+    const bsPart = c => { const tg = bsTg(c), d = partRaw(c.sigPart); if (tg && d.q && !trailRaw(c.sigTrail).on && (tg.p != null ? d.atP : d.at) >= bsTv(c) - 1e-9) d.q = 0; return partRuleOf(d, tg, bsMove(c)); };
+    const bsTrailTxt = t => t ? t.label.replace(/^Trail TP /, "") : "off";
+    const bsMktWord = k => k === "nse" ? "Indian" : "crypto";
     const bsEarly = c => EARLY_PCTS.indexOf(Number(c.sigEarly)) !== -1 ? Number(c.sigEarly) : 0;
     // Each setting: how its current value reads (key, a short label) and the options it can take.
     const BS_DIMS = [
@@ -13222,43 +13273,70 @@
       { id: "early", label: "Early entry", rule: true, key: c => String(bsEarly(c)), text: c => bsEarly(c) ? earlyLabel(bsEarly(c)) : "off",
         opts: () => [0].concat(EARLY_PCTS).map(p => ({ label: p ? earlyLabel(p) : "off", patch: { sigEarly: p } })) },
       { id: "stop", label: "Move SL", rule: true, key: c => { const m = bsMove(c); return m ? m.k : "off"; }, text: c => { const m = bsMove(c); return m ? m.label : "off"; },
+        // Picked on the tab but it can never fire (the tab warns there too): it counts as off, and Now says why.
+        nowText: c => { const m = bsMove(c), raw = stopRuleOf(stopRaw(c.sigStop), bsTg(c)); return m ? m.label : raw ? "off (" + raw.label + " never fires: at or past the target)" : "off"; },
         opts: c => { const pc = bsUnit(c) === "%", ats = pc ? STOP_ATS_P : STOP_ATS, tos = pc ? STOP_TOS_P : STOP_TOS, tv = bsTv(c), base = stopRaw(c.sigStop), out = [{ label: "off", patch: { sigStop: Object.assign({}, base, { mode: "off" }) } }];
           ats.filter(a => a < tv).forEach(a => out.push({ label: stopMove(pc ? "pbe" : "be", a).label, patch: { sigStop: Object.assign({}, base, { mode: "be", [pc ? "beAtP" : "beAt"]: a }) } }));
           ats.filter(a => a < tv).forEach(a => tos.filter(t => t < a).forEach(t => out.push({ label: stopMove(pc ? "pshift" : "shift", a, t).label, patch: { sigStop: Object.assign({}, base, { mode: "shift", [pc ? "shAtP" : "shAt"]: a, [pc ? "shToP" : "shTo"]: t }) } })));
           return out; } },
-      { id: "part", label: "Partial", rule: true, key: c => { const p = partRuleOf(partRaw(c.sigPart), bsTg(c), bsMove(c)); return p ? p.k : "off"; }, text: c => { const p = partRuleOf(partRaw(c.sigPart), bsTg(c), bsMove(c)); return p ? p.label : "off"; },
+      { id: "part", label: "Partial", rule: true, key: c => { const p = bsPart(c); return p ? p.k : "off"; }, text: c => { const p = bsPart(c); return p ? p.label : "off"; },
+        nowText: c => { const p = bsPart(c), raw = partRuleOf(partRaw(c.sigPart), bsTg(c), stopRuleOf(stopRaw(c.sigStop), bsTg(c))); return p ? p.label : raw ? "off (" + raw.label + " never books: at or past the target)" : "off"; },
         opts: c => { const pc = bsUnit(c) === "%", ats = pc ? PART_ATS_P : PART_ATS, tv = bsTv(c), tr = trailRaw(c.sigTrail).on, base = partRaw(c.sigPart), out = [{ label: "off", patch: { sigPart: Object.assign({}, base, { q: 0, beQ: 0 }) } }];
           PART_QS.forEach(q => ats.filter(a => tr || a < tv).forEach(a => out.push({ label: q + "% off at " + (pc ? pTxt : rTxt)(a), patch: { sigPart: Object.assign({}, base, { q, [pc ? "atP" : "at"]: a, beQ: 0 }) } })));
           if (bsMove(c)) PART_QS.forEach(b => out.push({ label: b + "% off at the Move SL trigger", patch: { sigPart: Object.assign({}, base, { q: 0, beQ: b }) } }));
           return out; } },
-      { id: "trail", label: "Trail TP", rule: true, key: c => { const t = trailRuleOf(trailRaw(c.sigTrail), bsTg(c)); return t ? t.k : "off"; }, text: c => { const t = trailRuleOf(trailRaw(c.sigTrail), bsTg(c)); return t ? t.label : "off"; },
+      { id: "trail", label: "Trail TP", rule: true, key: c => { const t = trailRuleOf(trailRaw(c.sigTrail), bsTg(c)); return t ? t.k : "off"; }, text: c => bsTrailTxt(trailRuleOf(trailRaw(c.sigTrail), bsTg(c))),
         opts: c => { const out = [{ label: "off", patch: { sigTrail: Object.assign({}, trailRaw(c.sigTrail), { on: false }) } }];
-          TRAIL_STEPS.forEach(s => TRAIL_GAPS.forEach(g => out.push({ label: "+" + s + (bsUnit(c) === "%" ? "%" : "R") + ", SL " + g + (bsUnit(c) === "%" ? "%" : "R") + " behind", patch: { sigTrail: { on: true, step: s, gap: g, stepP: s, gapP: g } } })));
+          TRAIL_STEPS.forEach(s => TRAIL_GAPS.forEach(g => out.push({ label: bsTrailTxt(trailMove(bsUnit(c), s, g)), patch: { sigTrail: { on: true, step: s, gap: g, stepP: s, gapP: g } } })));
           return out; } },
       { id: "hold", label: "Hold", rule: true, key: c => c.sigHold, text: c => c.sigHold === "20" ? "20 candles" : "Till TP / SL", opts: () => SIG_HOLDS.map(h => ({ label: h.label, patch: { sigHold: h.k } })) },
-      { id: "chan", label: "Channel", key: c => c.sigChan, text: c => c.sigChan ? chanLabel(c.sigChan) : "All channels",
-        opts: (c, ctx) => [{ label: "All channels", patch: { sigChan: "" } }].concat(ctx.chans.map(k => ({ label: chanLabel(k), patch: { sigChan: k } }))) },
+      // Channel: the Market's own channels only, as in the tab's list.
+      { id: "chan", label: "Channel", key: c => c.sigChan, text: c => c.sigChan ? chanLabel(c.sigChan) : c.sigMarket ? "All " + bsMktWord(c.sigMarket) + " channels" : "All channels",
+        why: () => "the only channel with alerts here",
+        opts: (c, ctx) => [{ label: c.sigMarket ? "All " + bsMktWord(c.sigMarket) + " channels" : "All channels", patch: { sigChan: "" } }].concat(ctx.chans.filter(k => !c.sigMarket || ctx.chanMkt[k] === c.sigMarket).map(k => ({ label: chanLabel(k), patch: { sigChan: k } }))) },
+      // Market: with a Channel picked, only that channel's market fits (the tab would drop the channel otherwise).
+      // The two markets first, so "All" folds into one of them when it shows the same alerts.
       { id: "mkt", label: "Market", key: c => c.sigMarket, text: c => c.sigMarket ? marketOf(c.sigMarket).label : "All",
-        opts: (c, ctx) => SIG_MARKETS.filter(m => !m.k || ctx.mkts[m.k]).map(m => ({ label: m.label, patch: { sigMarket: m.k } })) },
-      { id: "coins", label: "Coins", key: c => c.sigCoins, text: c => (SIG_COIN_MODES.find(m => m.k === c.sigCoins) || SIG_COIN_MODES[0]).label,
-        opts: (c, ctx) => ctx.coins ? SIG_COIN_MODES.map(m => ({ label: m.label, patch: { sigCoins: m.k } })) : [] },
+        why: c => c.sigChan ? "fixed by Channel " + chanLabel(c.sigChan) : "the only market with alerts here",
+        opts: (c, ctx) => SIG_MARKETS.slice(1).concat(SIG_MARKETS[0]).filter(m => (!m.k || ctx.mkts[m.k]) && (!c.sigChan || !m.k || ctx.chanMkt[c.sigChan] === m.k)).map(m => ({ label: m.label, patch: { sigMarket: m.k } })) },
+      // Coins: a crypto filter. With the Indian market or an NSE channel it does nothing, so there is nothing to try.
+      { id: "coins", label: "Coins", crypto: true, key: c => c.sigCoins, text: c => (SIG_COIN_MODES.find(m => m.k === c.sigCoins) || SIG_COIN_MODES[0]).label,
+        why: (c, ctx) => bsView(c, ctx).cryptoHere ? "no other Coins option keeps other alerts here" : "not used: no crypto alerts in this view",
+        opts: (c, ctx) => bsView(c, ctx).cryptoHere ? SIG_COIN_MODES.map(m => ({ label: m.label, patch: { sigCoins: m.k } })) : [] },
       { id: "lvls", label: "Levels", fib: true, key: c => c.sigLvlOff.join(","), text: c => { const on = FIB_LEVEL_KEYS.filter(k => c.sigLvlOff.indexOf(k) === -1); return on.length === 4 ? "all four" : on.join(" + "); },
-        opts: () => { const out = []; for (let m = 15; m >= 1; m--) { const on = FIB_LEVEL_KEYS.filter((k, i) => m & (1 << i)); out.push({ label: on.length === 4 ? "all four" : on.join(" + "), patch: { sigLvlOff: FIB_LEVEL_KEYS.filter(k => on.indexOf(k) === -1) } }); } return out; } },
-      { id: "lvl", label: "Level", fib: true, key: c => c.sigLvl, text: c => c.sigLvl || "As entered", opts: () => [""].concat(FIB_LEVEL_KEYS).map(k => ({ label: k || "As entered", patch: { sigLvl: k } })) },
+        why: () => "only one level has alerts here",
+        // Sets of the levels that have alerts here (L1 has none since the scanner dropped it: "L1 + L3" was just L3).
+        opts: (c, ctx) => { const has = bsView(bsPick(c, { sigLvlOff: [], sigLvl: "" }), ctx).levels, out = [];
+          for (let m = (1 << has.length) - 1; m >= 1; m--) { const on = has.filter((k, i) => m & (1 << i)), all = on.length === has.length; out.push({ label: all ? "all four" : on.join(" + "), patch: { sigLvlOff: all ? [] : FIB_LEVEL_KEYS.filter(k => on.indexOf(k) === -1) } }); }
+          return out; } },
+      { id: "lvl", label: "Level", fib: true, key: c => c.sigLvl, text: c => c.sigLvl || "As entered", why: () => "no level has a what-if here", opts: () => [""].concat(FIB_LEVEL_KEYS).map(k => ({ label: k || "As entered", patch: { sigLvl: k } })) },
       { id: "type", label: "Type", tl: true, key: c => c.sigTlType, text: c => c.sigTlType ? (SIG_TL_TYPES.find(x => x.k === c.sigTlType) || {}).label : "All", opts: () => SIG_TL_TYPES.map(x => ({ label: x.label, patch: { sigTlType: x.k } })) },
       { id: "btc", label: "BTC day", key: c => c.mktFilter, text: c => c.mktFilter ? MKT_LABEL[c.mktFilter] : "All days", opts: () => [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]].map(x => ({ label: x[1], patch: { mktFilter: x[0] } })) }
     ];
     const bsDimsFor = kind => BS_DIMS.filter(d => !(d.fib && kind !== "fib") && !(d.tl && kind !== "trendline"));
-    // Options of one setting for settings c, each with its full settings and key; duplicates (same key) dropped.
+    // Options of one setting for settings c, each with its full settings (bsFix: as the tab keeps them) and key.
+    // Only what is possible: an option that shows no alerts is dropped, and options that come to the same thing are
+    // one (rules: the same rule in force; filters: the very same alerts in view). now: the settings as they are -
+    // it is looked at first, so an option that changes nothing folds into it and gets no Use button.
     function bsOptions(dim, c, ctx) {
-      const seen = {}, out = [];
-      dim.opts(c, ctx).forEach(o => {
-        const cc = bsPick(c, o.patch), k = dim.key(cc);
-        // Rules other than Exit at only act with a fixed target: they are tried on the one in force (Scanner: 1R).
+      const list = dim.opts(c, ctx).map((o, i) => ({ i, label: o.label, cfg: bsFix(bsPick(c, o.patch), ctx) })), nowKey = dim.key(c);
+      let at = list.findIndex(o => dim.key(o.cfg) === nowKey);
+      if (at === -1) { list.unshift({ i: -1, label: dim.text(c), cfg: bsFix(c, ctx) }); at = 0; }
+      list.unshift(list.splice(at, 1)[0]);
+      const seen = {}, out = [], base = dim.rule ? null : bsView(c, ctx);
+      list.forEach((o, j) => {
+        let k = dim.key(o.cfg), label = o.label;
+        if (!dim.rule) {
+          const v = bsView(o.cfg, ctx);
+          if (j && !v.n) return;
+          k = v.fp;
+          // A Market or Channel that brings crypto into view also switches your Assets and Coins picks back on: say so.
+          if (!dim.crypto && v.cryptoHere && !base.cryptoHere) { const on = [v.assetMode ? assetOf(v.assetMode).label + " only" : "", o.cfg.sigCoins ? "Coins " + (SIG_COIN_MODES.find(m => m.k === o.cfg.sigCoins) || SIG_COIN_MODES[0]).label : ""].filter(Boolean); if (on.length) label += " (" + on.join(", ") + ")"; }
+        }
         if (seen[k]) return;
-        seen[k] = 1; out.push({ label: o.label, key: k, cfg: cc });
+        seen[k] = 1; out.push({ i: o.i, label, key: dim.key(o.cfg), cfg: o.cfg, now: j === 0 });
       });
-      return out;
+      return out.sort((a, b) => a.i - b.i);
     }
     // ---- the search ----
     const bsOk = (s, m) => !!s && s.n >= (m || BS_MIN_N);
@@ -13266,8 +13344,8 @@
     const bsMinFor = n => Math.max(BS_MIN_N, Math.round(n * 0.1));
     // Greedy search: each setting in turn takes the option with the most total R (30+ trades), until a round changes nothing.
     async function bsGreedy(start, ctx, when, tag, dims, minN) {
-      let cur = JSON.parse(JSON.stringify(start)), best = await bsScore(cur, ctx, when, tag);
-      const fixedOnly = c => c.sigTgt ? c : bsPick(c, { sigTgt: "1R" });
+      let cur = bsFix(start, ctx), best = await bsScore(cur, ctx, when, tag);
+      const fixedOnly = c => c.sigTgt ? c : bsFix(bsPick(c, { sigTgt: "1R" }), ctx);
       if (!cur.sigTgt) { cur = fixedOnly(cur); best = await bsScore(cur, ctx, when, tag); }
       for (let round = 0; round < 3; round++) {
         let changed = false;
@@ -13275,7 +13353,7 @@
           if (BS.stop) return { cfg: cur, st: best.st };
           const opts = bsOptions(dim, cur, ctx);
           for (const o of opts) {
-            if (o.key === dim.key(cur)) continue;
+            if (o.now) continue;
             const cc = dim.id === "tgt" && !o.cfg.sigTgt ? null : o.cfg;     // Scanner is a baseline, never the search's pick
             if (!cc) continue;
             const s = await bsScore(cc, ctx, when, tag);
@@ -13288,25 +13366,33 @@
     }
     function bsRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
     // Settings in words, one line per setting.
-    function bsDescribe(c, dims) { return dims.map(d => ({ id: d.id, label: d.label, text: d.text(c) })); }
-    // The whole job: universe, one-at-a-time table, best combination, out-of-sample check, luck check.
+    // Coins is left out where no crypto is in view (Indian market, NSE channel): it does nothing there.
+    function bsDescribe(c, dims, ctx) { const v = bsView(c, ctx); return dims.filter(d => !(d.crypto && !v.cryptoHere)).map(d => ({ id: d.id, label: d.label, text: d.text(c) })); }
+    // What a search works with: the alerts of this kind and Period, the settings it has, and what exists to choose
+    // from - each market's channels among those alerts. Market by market, because Assets (a crypto filter, not
+    // searched) would hide NSE under Market All.
+    function bsCtx(cur0) {
+      const kind = sigKind(), ctx = { kind, range: sigPeriodRange(), raw: matchSignals(kind), dims: bsDimsFor(kind), memo: {}, views: {}, chans: [], chanMkt: {}, mkts: {} }, cc = {};
+      ["crypto", "nse"].forEach(m => bsWith(bsPick(cur0, { sigMarket: m, sigChan: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "" }), () => inSigScope(() => bsPairs(ctx.raw, ctx.range).pairs))
+        .forEach(pr => { const k = chanKey(pr.signal); cc[k] = 1; ctx.chanMkt[k] = m; ctx.mkts[m] = 1; }));
+      ctx.chans = FIBTL_CHANNELS.filter(k => cc[k]).concat(Object.keys(cc).filter(k => FIBTL_CHANNELS.indexOf(k) === -1));
+      return ctx;
+    }
+    // The whole job: the alerts in view, one-at-a-time table, best combination, out-of-sample check, luck check.
     async function bsRun() {
       if (BS.busy) return;
       BS.busy = true; BS.stop = false; BS.drawn = 0; BS.prog = { evals: 0, reads: 0, step: "Starting" };
       renderBestCard();
       try {
-        const kind = sigKind(), range = sigPeriodRange(), raw = matchSignals(kind), dims = bsDimsFor(kind);
-        const cur0 = bsSnap(), ref = cur0.sigTgt ? cur0 : bsPick(cur0, { sigTgt: "1R" });
-        const ctx = { raw, range, memo: {}, chans: [], mkts: {}, coins: false };
-        // What exists to choose from: channels, markets and coins among the alerts (before those filters).
-        const open = bsPick(cur0, { sigChan: "", sigMarket: "", sigCoins: "" });
-        const base = bsWith(open, () => bsPairs(raw, range).pairs);
-        const cc = {}; base.forEach(pr => { cc[chanKey(pr.signal)] = 1; ctx.mkts[isNseSig(pr.signal) ? "nse" : "crypto"] = 1; if (coinOf(pr.signal)) ctx.coins = true; });
-        ctx.chans = FIBTL_CHANNELS.filter(k => cc[k]).concat(Object.keys(cc).filter(k => FIBTL_CHANNELS.indexOf(k) === -1));
-        const all = bsWith(bsPick(cur0, { sigChan: "", sigMarket: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "" }), () => bsPairs(raw, range).pairs);
+        const cur0 = bsSnap(), ctx = bsCtx(cur0), kind = ctx.kind, range = ctx.range, raw = ctx.raw, dims = ctx.dims;
+        const ref = cur0.sigTgt ? cur0 : bsFix(bsPick(cur0, { sigTgt: "1R" }), ctx);
+        // The alerts in view now: they set the older 60% / newest 40% date cut and the fewest trades an option needs
+        // (it was every alert of the kind: on NSE 1D the "older 60%" was mostly crypto dates before NSE alerts began).
+        const all = bsWith(cur0, () => inSigScope(() => bsPairs(raw, range).pairs));
         const dates = all.map(pr => pr.signal.date).sort();
         const res = { at: Date.now(), kind, universe: all.length, range, dims: [], notes: [] };
         res.sig = bsSig();
+        res.view = dims.filter(d => !d.rule && !(d.crypto && !bsView(cur0, ctx).cryptoHere)).map(d => d.label + " " + d.text(cur0)).join(" · ");
         if (dates.length < 60) { res.tooFew = true; BS.res = res; return; }
         const cut = dates[Math.floor(dates.length * BS_SPLIT) - 1];
         const train = g => g.date <= cut, test = g => g.date > cut;
@@ -13319,8 +13405,10 @@
         res.refTgt = ref.sigTgt;
         for (const dim of dims) {
           if (BS.stop) break;
-          const baseC = dim.rule && dim.id !== "tgt" ? ref : cur0, opts = bsOptions(dim, baseC, ctx), row = { id: dim.id, label: dim.label, rule: !!dim.rule, now: dim.text(baseC), nowKey: dim.key(baseC), opts: [] };
-          for (const o of opts) { const s = await bsScore(o.cfg, ctx, null, "all"); row.opts.push({ label: o.label, key: o.key, cfg: o.cfg, st: s.st, left: s.left, now: o.key === row.nowKey }); }
+          const baseC = dim.rule && dim.id !== "tgt" ? ref : cur0, opts = bsOptions(dim, baseC, ctx), row = { id: dim.id, label: dim.label, rule: !!dim.rule, now: (dim.nowText || dim.text)(baseC), nowKey: dim.key(baseC), opts: [] };
+          for (const o of opts) { const s = await bsScore(o.cfg, ctx, null, "all"); row.opts.push({ label: o.label, key: o.key, cfg: o.cfg, st: s.st, left: s.left, now: o.now }); }
+          // One option only: nothing else is possible with the other settings as they are (the row says why).
+          if (row.opts.length < 2) row.only = dim.why ? dim.why(baseC, ctx) : "no other option has alerts here";
           const ok = row.opts.filter(o => bsOk(o.st, res.minN));
           row.bestTot = ok.reduce((b, o) => !b || o.st.tot > b.st.tot ? o : b, null);
           row.bestAvg = ok.reduce((b, o) => !b || o.st.avg > b.st.avg ? o : b, null);
@@ -13331,14 +13419,14 @@
         BS.prog.step = "Searching the best combination";
         const startC = ref;
         const full = await bsGreedy(startC, ctx, null, "all", dims, res.minN);
-        res.combo = { cfg: full.cfg, st: full.st, lines: bsDescribe(full.cfg, dims) };
+        res.combo = { cfg: full.cfg, st: full.st, lines: bsDescribe(full.cfg, dims, ctx) };
         // 3) the same search on the first 60% only, read on the last 40%
         BS.prog.step = "Out-of-sample check: searching the first " + Math.round(BS_SPLIT * 100) + "%";
         const tr = await bsGreedy(startC, ctx, train, "train", dims, bsMinFor(res.split.nTrain));
         res.minTrain = bsMinFor(res.split.nTrain);
         const trOnTest = await bsScore(tr.cfg, ctx, test, "test"), comboOnTest = await bsScore(full.cfg, ctx, test, "test");
         const curTrain = await bsScore(cur0, ctx, train, "train"), curTest = await bsScore(cur0, ctx, test, "test");
-        res.oos = { cfg: tr.cfg, lines: bsDescribe(tr.cfg, dims), train: tr.st, test: trOnTest.st, comboTest: comboOnTest.st, curTrain: curTrain.st, curTest: curTest.st };
+        res.oos = { cfg: tr.cfg, lines: bsDescribe(tr.cfg, dims, ctx), train: tr.st, test: trOnTest.st, comboTest: comboOnTest.st, curTrain: curTrain.st, curTest: curTest.st };
         // 4) luck check: random settings from the same lists (SL and Hold left as they are), on both halves
         BS.prog.step = "Luck check: " + BS_RANDOM + " random settings";
         const rnd = bsRng(20261114), rows = [], rdims = dims.filter(d => d.id !== "sl" && d.id !== "hold");
@@ -13356,8 +13444,9 @@
         BS.res = { err: String(e && e.message || e), at: Date.now(), sig: bsSig() };
       } finally { BS.busy = false; BS.prog = null; renderBestCard(); }
     }
-    // What the result was made from: a change in kind, period or the dropped-coin switch makes it stale.
-    function bsSig() { const r = sigPeriodRange(); return [sigKind(), r.from, r.to, state.ui.sigAsset || "", state.ui.sigSkipTiny === true ? 1 : 0, state.ui.sigNoFee === true ? 1 : 0, (state.signals || []).length].join("|"); }
+    // What the result was made from: a change in kind, Period, alerts or any setting on the tab makes it stale
+    // (the Now column and "the others as you have them now" are the settings the search started from).
+    function bsSig() { const r = sigPeriodRange(); return [sigKind(), r.from, r.to, state.ui.sigAsset || "", state.ui.sigSkipTiny === true ? 1 : 0, state.ui.sigNoFee === true ? 1 : 0, (state.signals || []).length, JSON.stringify(bsSnap())].join("|"); }
     // Use these settings on the tab.
     function bsUse(path) {
       const o = path.split(".").reduce((x, k) => x && x[k], BS.res);
@@ -13393,21 +13482,23 @@
         + (BS.busy ? '<button type="button" id="sigBestStop" onclick="bsCancel()" class="px-2.5 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500">Stop</button>' : '<button type="button" id="sigBestRun" onclick="bsRun()" class="px-2.5 py-1 rounded border border-amber-500/60 text-amber-200 hover:bg-amber-500/10 font-semibold">' + (r ? 'Search again' : 'Find best settings') + '</button>') + '</span></div>';
       h += '<div id="sigBestWarn" class="rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-[11px] px-3 py-2 mb-3 leading-relaxed"><b>Best of many tries is partly luck.</b> The more settings are tried, the better the best one looks on these same alerts, and it will not trade that well. Trust the <b>out-of-sample</b> lines (settings found on the older 60% of alerts, read on the newest 40% they never saw) and the luck check, not the top row. Few trades: take any of it lightly.</div>';
       if (BS.busy) h += '<p id="sigBestProg" class="text-slate-300">' + esc(BS.prog.step) + ' · ' + BS.prog.evals + ' settings scored · ' + BS.prog.reads + ' price reads…</p>';
-      if (!r && !BS.busy) h += '<p class="text-slate-500">Tries every option of every setting on the alerts in view (Fib / Trendline / Zone as picked, this Period, dropped coins as set), then searches all of them together. It can take a minute the first time: prices for each stop type are read once.</p>';
+      if (!r && !BS.busy) h += '<p class="text-slate-500">Tries every option of every setting on the alerts in view (Fib / Trendline / Zone as picked, this Period, your Market, Channel and Coins), then searches all of them together. Only settings the tab can really show are tried: no crypto market on an NSE channel, no Coins pick where there are no coins, no level without alerts. It can take a minute the first time: prices for each stop type are read once.</p>';
       if (r && r.err) h += '<p class="text-rose-300">Could not finish: ' + esc(r.err) + '</p>';
-      else if (r && r.tooFew) h += '<p class="text-slate-400">Only ' + r.universe + ' alerts in view: too few to search (60 needed). Widen the Period or pick another kind.</p>';
+      else if (r && r.tooFew) h += '<p id="sigBestFew" class="text-slate-400">Only ' + r.universe + ' alerts in view' + (r.view ? ' (' + esc(r.view) + ')' : '') + ': too few to search (60 needed). Widen the Period, or pick a wider Channel, Market, Coins or Level.</p>';
       else if (r) {
-        if (stale) h += '<p id="sigBestStale" class="text-amber-300 mb-2">The alerts or Period changed since this search. <button type="button" class="underline" onclick="bsRun()">Search again</button></p>';
-        h += '<p class="text-[10px] text-slate-500 mb-3">' + r.universe + ' ' + (SIG_KINDS.find(x => x.k === r.kind) || SIG_KINDS[0]).label.toLowerCase() + ' · ' + r.split.from + ' to ' + r.split.to + ' · older 60% = ' + r.split.nTrain + ' alerts up to ' + r.split.cut + ', newest 40% = ' + r.split.nTest + ' · ' + (r.evals || 0) + ' settings scored · fees ' + (state.ui.sigNoFee === true ? 'off' : 'on') + (r.refTgt && r.refTgt !== bsSnap().sigTgt ? ' · rules tried at Exit ' + r.refTgt + ' (you are on Scanner exits)' : '') + '</p>';
+        if (stale) h += '<p id="sigBestStale" class="text-amber-300 mb-2">Your settings, the alerts or the Period changed since this search: Now and the numbers below are for the settings it started from. <button type="button" class="underline" onclick="bsRun()">Search again</button></p>';
+        h += '<p id="sigBestView" class="text-[10px] text-slate-500 mb-3">' + r.universe + ' ' + (SIG_KINDS.find(x => x.k === r.kind) || SIG_KINDS[0]).label.toLowerCase() + ' in view' + (r.view ? ' (' + esc(r.view) + ')' : '') + ' · ' + r.split.from + ' to ' + r.split.to + ' · older 60% = ' + r.split.nTrain + ' alerts up to ' + r.split.cut + ', newest 40% = ' + r.split.nTest + ' · ' + (r.evals || 0) + ' settings scored · fees ' + (state.ui.sigNoFee === true ? 'off' : 'on') + (r.refTgt && r.refTgt !== bsSnap().sigTgt ? ' · rules tried at Exit ' + r.refTgt + ' (you are on Scanner exits)' : '') + '</p>';
         // A. every setting on its own
-        h += '<div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Each setting on its own <span class="text-slate-500 normal-case font-normal">· the others as you have them now · best = most Total R with ' + r.minN + '+ trades, a tenth of the alerts (filters also show best Avg R)</span></div>';
+        h += '<div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Each setting on its own <span class="text-slate-500 normal-case font-normal">· the others as you have them now · only options the tab can show · best = most Total R with ' + r.minN + '+ trades, a tenth of the alerts in view (filters also show best Avg R)</span></div>';
         h += '<div class="overflow-x-auto"><table id="sigBestTable" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Setting</th><th class="pr-2">Now</th><th class="pr-2">Best option</th>' + BS_HEAD + '<th></th></tr></thead><tbody>';
         r.dims.forEach((d, i) => {
-          const b = d.bestTot, same = b && b.key === d.nowKey, j = b ? d.opts.indexOf(b) : -1, ba = d.bestAvg, ja = ba ? d.opts.indexOf(ba) : -1;
-          h += '<tr data-bs="' + d.id + '" class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold text-slate-200 whitespace-nowrap">' + esc(d.label) + '</td><td class="pr-2 text-slate-400">' + esc(d.now) + '</td>'
-            + (b ? '<td class="pr-2 ' + (b.st.tot < 0 ? 'text-rose-300' : same ? 'text-slate-300' : 'text-emerald-300 font-bold') + '">' + esc(b.label) + (same ? ' <span class="text-slate-500 font-normal">(now)</span>' : '') + (b.st.tot < 0 ? ' <span class="text-[10px] font-normal text-rose-300">still loses</span>' : '') + '</td>' + bsCells(b.st) + '<td class="text-right">' + (same ? '' : '<button type="button" data-use="' + d.id + '" onclick="bsUseOpt(' + i + ',' + j + ')" class="underline text-amber-300">Use</button>') + '</td>'
+          const b = d.bestTot, same = b && b.now, j = b ? d.opts.indexOf(b) : -1, ba = d.bestAvg, ja = ba ? d.opts.indexOf(ba) : -1;
+          h += '<tr data-bs="' + d.id + '"' + (d.only ? ' data-only="1"' : '') + ' class="border-t border-terminal-border"><td class="py-1 pr-2 font-semibold text-slate-200 whitespace-nowrap">' + esc(d.label) + '</td><td class="pr-2 text-slate-400">' + esc(d.now) + '</td>'
+            // Nothing else is possible here: say why, show the numbers as they are, no Use.
+            + (d.only ? '<td class="pr-2 text-slate-500">' + esc(d.only) + '</td>' + (d.nowSt && d.nowSt.n ? bsCells(d.nowSt).replace(/text-(emerald|rose)-400/g, 'text-slate-500') : '<td colspan="9"></td>') + '<td></td>'
+              : b ? '<td class="pr-2 ' + (b.st.tot < 0 ? 'text-rose-300' : same ? 'text-slate-300' : 'text-emerald-300 font-bold') + '">' + esc(b.label) + (same ? ' <span class="text-slate-500 font-normal">(now)</span>' : '') + (b.st.tot < 0 ? ' <span class="text-[10px] font-normal text-rose-300">still loses</span>' : '') + '</td>' + bsCells(b.st) + '<td class="text-right">' + (same ? '' : '<button type="button" data-use="' + d.id + '" onclick="bsUseOpt(' + i + ',' + j + ')" class="underline text-amber-300">Use</button>') + '</td>'
               : '<td class="pr-2 text-slate-500" colspan="11">no option has ' + r.minN + '+ trades</td>') + '</tr>';
-          if (!d.rule && ba && ba !== b) h += '<tr class="text-slate-400"><td></td><td class="pr-2 text-[10px]">best Avg R</td><td class="pr-2">' + esc(ba.label) + '</td>' + bsCells(ba.st) + '<td class="text-right"><button type="button" onclick="bsUseOpt(' + i + ',' + ja + ')" class="underline text-amber-300">Use</button></td></tr>';
+          if (!d.rule && !d.only && ba && ba !== b) h += '<tr data-bsavg="' + d.id + '" class="text-slate-400"><td></td><td class="pr-2 text-[10px]">best Avg R</td><td class="pr-2">' + esc(ba.label) + (ba.now ? ' <span class="text-slate-500">(now)</span>' : '') + '</td>' + bsCells(ba.st) + '<td class="text-right">' + (ba.now ? '' : '<button type="button" onclick="bsUseOpt(' + i + ',' + ja + ')" class="underline text-amber-300">Use</button>') + '</td></tr>';
         });
         h += '</tbody></table></div>';
         // every option, folded
@@ -13420,7 +13511,7 @@
         h += '</details>';
         // B. best combination
         const cb = r.combo, oos = r.oos;
-        h += '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Best full combination <span class="text-slate-500 normal-case font-normal">· found on all ' + r.universe + ' alerts, so this is the flattering number</span></div>';
+        h += '<div class="mt-4 pt-3 border-t border-terminal-border"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Best full combination <span class="text-slate-500 normal-case font-normal">· every setting searched together, one possible change at a time, and found on the same alerts it is scored on, so this is the flattering number</span></div>';
         h += '<div class="overflow-x-auto"><table id="sigBestCombo" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Settings</th>' + BS_HEAD + '<th></th></tr></thead><tbody><tr class="border-t border-terminal-border"><td class="py-1 pr-2 text-emerald-300">' + cb.lines.map(x => '<span class="whitespace-nowrap"><span class="text-slate-500">' + esc(x.label) + '</span> ' + esc(x.text) + '</span>').join(' · ') + '</td>' + bsCells(cb.st) + '<td class="text-right"><button type="button" id="sigBestUse" onclick="bsUse(\'combo.cfg\')" class="underline text-amber-300">Use</button></td></tr>'
           + '<tr class="border-t border-terminal-border text-slate-400"><td class="py-1 pr-2">Your settings now</td>' + bsCells(r.cur) + '<td></td></tr></tbody></table></div>'
           + '<details id="sigBestFull" class="mt-1"><summary class="cursor-pointer text-slate-400 hover:text-amber-300 select-none">Every number for the best combination</summary>' + bsFull(cb.st) + '</details>';
@@ -15968,6 +16059,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-16.199', pr: 110, title: 'Best settings: only what is possible', pts: ['The card no longer offers things the tab cannot show: Crypto market on an NSE channel, a Coins pick with the Indian market, a crypto channel inside Indian, a level with no alerts (L1 + L3 was just L3), or a Move SL / Partial that never fires', 'It now searches the alerts you have in view (it said 1,554 fib alerts while you were on NSE 1D); a setting with nothing else to try says why, and two options that show the same alerts count as one', 'Use always lands on settings the tab keeps, with alerts in view; after Use or any change the card asks for a new search'] },
       { v: '2026-11-16.198', pr: 113, title: 'Early entry option', pts: ['Signals → How each trade is played: new Early entry row (Off, 0.01% to 0.2%). The order fills that much before the entry, above it for a buy and below it for a sell, so a trade that turned just short of the level is counted', 'Only the fill moves: SL, target, Move SL, Partial and Trail TP stay at the alert\'s prices; R is counted from your fill to the stop', 'In Best settings, compare tables, Demo account and CSV too; TL BROKEN alerts keep their market entry'] },
       { v: '2026-11-16.197', pr: 111, title: 'Signals lighter and clearer', pts: ['Filters take less room: tighter rows, a dot on every row you changed, and a Reset for Which alerts. On a phone both panels start folded, so the numbers come first', 'Calendar numbers fit their day; fib and trendline tables drop the empty Score column; prices without trailing zeros', 'Faster redraws on Edge & breakdowns, and fewer redraws while prices load on a slow device. No number changes'] },
       { v: '2026-11-14.195', pr: 109, title: 'NSE alerts from 1 Sep', pts: ['NSE alerts before 1 Sep are deleted and never read again: about 37% fewer alerts kept (23,539 to 14,839 on your data, 11.7 to 7.3 MB)', 'All 200 NSE stocks stay; crypto keeps history from 1 Jun', 'An NSE trade from before 1 Sep keeps the alert it came from, so its setup does not change'] },
