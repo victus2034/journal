@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-14.195">
+  <meta name="app-version" content="2026-11-16.197">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -8790,6 +8790,7 @@
       // and what the risk allows.
       let cap = num(i.cap);
       if (!(cap > 0 && cap <= 1e10)) { if (String(i.cap || '') !== '' && !(num(i.cap) === 0)) res.warns.push('Account size ' + i.cap + ' looks wrong; not used.'); cap = 0; }
+      if (cap > 0 && risk > cap) res.warns.push('Risk ₹' + risk.toLocaleString('en-IN') + ' is more than the whole account (₹' + cap.toLocaleString('en-IN') + '); the account caps the lots.');
       const K0 = Math.round(E / NIFTY_STEP) * NIFTY_STEP;
       const mkRow = o => {
         const K = up ? K0 + o * NIFTY_STEP : K0 - o * NIFTY_STEP;
@@ -15810,6 +15811,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-16.197', pr: 111, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
       { v: '2026-11-14.195', pr: 109, title: 'NSE alerts from 1 Sep', pts: ['NSE alerts before 1 Sep are deleted and never read again: about 37% fewer alerts kept (23,539 to 14,839 on your data, 11.7 to 7.3 MB)', 'All 200 NSE stocks stay; crypto keeps history from 1 Jun', 'An NSE trade from before 1 Sep keeps the alert it came from, so its setup does not change'] },
       { v: '2026-11-14.194', pr: 108, title: 'Dropped coins deleted, Top 30 on both brokers', pts: ['Alerts for coins the scanner no longer watches are deleted, not hidden: about 2,000 fewer alerts kept (25,565 to 23,539 on your data) and every scanner read skips them. The Hidden / Shown row is gone', 'A dropped coin keeps only the alerts one of your trades matches, so the trade keeps its setup', 'Top 10 / 20 / 30 count only coins on both CoinDCX and Delta (14 Nov volume). The scanner added AVAX, INJ, FIL, AAVE, TAO and ARB, and the list now comes from the scanner itself'] },
       { v: '2026-11-14.193', pr: 107, title: 'Current coins only, Top 10/20/30, best settings', pts: ['Coins dropped from the scanner on 8 Nov are hidden from every number by default (Shown switch under Coins); Coins gets Top 10 / 20 / 30 by 30-day volume', 'Edge & breakdowns: best option for every setting, the best full combination with all outputs, a 60/40 out-of-sample check and a luck check; Use puts it on the tab', 'Overfit warning on top: the best of many tries is partly luck, read the newest-40% lines'] },
