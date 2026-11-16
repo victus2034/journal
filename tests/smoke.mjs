@@ -6854,7 +6854,7 @@ async function bestSettingsRun() {
         }
         return { n, bad };
       });
-      check(chain.n > 100 && chain.bad.length === 0, 'search filter chain = the tab (' + chain.n + ' options): ' + JSON.stringify(chain.bad.slice(0, 5)));
+      check(chain.n > 80 && chain.bad.length === 0, 'search filter chain = the tab (' + chain.n + ' options): ' + JSON.stringify(chain.bad.slice(0, 5)));
       // 3) The tab is left exactly as it was before the search (nothing leaks out of bsEval).
       const left = await page.evaluate(() => {
         const was = JSON.stringify(bsSnap());
@@ -6874,6 +6874,132 @@ async function bestSettingsRun() {
       // 5) A search is stale once the Period moves.
       const stale = await page.evaluate(() => { state.ui.sigPeriod = { mode: 'all', from: '', to: '' }; renderSignalsTable(); return !!document.getElementById('sigBestStale'); });
       check(stale, 'the card says so when the Period changed since the search');
+      // 6) Only possible settings (lakky, 2026-11-14: "it still shows things which is not possible"): from many views,
+      // every option of every filter is put on the tab the way Use does. The tab must keep every setting (nothing
+      // reset or greyed), show exactly the alerts the search counted, and never an empty view; no two options of a
+      // setting may show the same alerts, and exactly one is "now".
+      const audit = await page.evaluate(async () => {
+        const bad = [], n = { bases: 0, opts: 0, only: {} }, J = JSON.stringify, snapOf = cfg => J(BS_KEYS.map(k => cfg[k]));
+        const put = cfg => { BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(J(cfg[k])); }); sigFixCoins = true; renderSignalsTable(); };
+        const fpTab = () => { const ids = sigView.pairs.map(pr => pr.signal.id + (pr.signal.lvlWhatIf ? '@' + pr.signal.lvlWhatIf : '')).sort(); return ids.length + ':' + bsHash(ids.join('|')); };
+        state.ui.sigPeriod = { mode: 'custom', from: '2026-10-10', to: '2026-10-25' }; state.ui.sigDay = '';
+        const done = {}, shape = {};
+        for (const kind of ['fib', 'trendline']) for (const asset of kind === 'fib' ? ['', 'crypto'] : ['']) for (const mkt of ['', 'crypto', 'nse']) for (const chan of ['', 'CRYPTO 4H', 'NSE 4H'])
+          for (const coins of ['', 'top3', 'dcx']) for (const lv of kind === 'fib' ? [[[], ''], [['L1'], 'L3']] : [[[], '']]) {
+            if (asset && (lv[0].length || chan === 'NSE 4H')) continue;
+            Object.assign(state.ui, { sigKind: kind, sigAsset: asset, sigMarket: mkt, sigChan: chan, sigCoins: coins, sigLvlOff: lv[0], sigLvl: lv[1], sigTlType: '', mktFilter: '', sigTgt: '1R', sigSl: { mode: '' }, sigStop: { mode: 'off' }, sigPart: { q: 0, beQ: 0 }, sigTrail: { on: false }, sigHold: 'tp' });
+            sigFixCoins = true; renderSignalsTable();
+            const base = bsSnap(), tag = kind + '|' + asset + '|' + snapOf(base);
+            if (done[tag]) continue;
+            done[tag] = 1; n.bases++;
+            const ctx = bsCtx(base), name = [kind, asset || 'both', base.sigMarket || 'all', base.sigChan || 'all ch', base.sigCoins || 'all coins', base.sigLvlOff.join('+'), base.sigLvl].join(' / ');
+            for (const dim of ctx.dims.filter(d => !d.rule)) {
+              const opts = bsOptions(dim, base, ctx), fps = {};
+              if (opts.filter(o => o.now).length !== 1) bad.push(name + ' ' + dim.id + ': now x' + opts.filter(o => o.now).length);
+              if (opts.length < 2) n.only[dim.id] = (n.only[dim.id] || 0) + 1;
+              if (kind === 'fib' && !asset && !lv[0].length) shape[[base.sigMarket, base.sigChan, base.sigCoins, dim.id].join('|')] = opts.map(o => (o.now ? '*' : '') + o.label).join(', ');
+              for (const o of opts) {
+                n.opts++;
+                const v = bsView(o.cfg, ctx), c = o.cfg, where = name + ' -> ' + dim.id + ' ' + o.label;
+                if (J(bsFix(c, ctx)) !== J(c)) bad.push(where + ': not as the tab keeps it');
+                if (!o.now && !v.n) bad.push(where + ': no alerts');
+                if (fps[v.fp]) bad.push(where + ': same alerts as ' + fps[v.fp]); fps[v.fp] = o.label;
+                if (c.sigChan && c.sigMarket && ctx.chanMkt[c.sigChan] !== c.sigMarket) bad.push(where + ': channel of another market');
+                if (dim.id === 'coins' && !v.cryptoHere && opts.length > 1) bad.push(where + ': Coins offered with no crypto in view');
+                put(c);
+                if (snapOf(bsSnap()) !== snapOf(c)) bad.push(where + ': the tab changed it to ' + snapOf(bsSnap()));
+                if (fpTab() !== v.fp) bad.push(where + ': tab shows ' + fpTab() + ', search ' + v.fp);
+              }
+            }
+          }
+        return { bad: bad.slice(0, 8), nBad: bad.length, n, shape };
+      });
+      check(audit.n.bases >= 40 && audit.n.opts >= 600 && audit.nBad === 0, 'every filter option is possible on the tab (' + audit.n.bases + ' views, ' + audit.n.opts + ' options): ' + audit.nBad + ' bad ' + JSON.stringify(audit.bad));
+      const sh = audit.shape;
+      // The screenshot's view: Indian market on an NSE channel, Coins left on CoinDCX.
+      check(sh['nse|NSE 4H|dcx|mkt'] === '*Indian' && sh['nse|NSE 4H|dcx|coins'] === '*CoinDCX', 'NSE channel: no other Market, no Coins to try: ' + JSON.stringify([sh['nse|NSE 4H|dcx|mkt'], sh['nse|NSE 4H|dcx|coins']]));
+      check(/^All Indian channels, \*NSE 4h/.test(sh['nse|NSE 4H|dcx|chan']) && !/CRYPTO/.test(sh['nse|NSE 4H|dcx|chan']), 'Indian market: Indian channels only: ' + sh['nse|NSE 4H|dcx|chan']);
+      check(sh['nse|NSE 4H|dcx|lvls'] && !/L1/.test(sh['nse|NSE 4H|dcx|lvls']), 'no level set with a level that has no alerts (NSE 4H has no L1): ' + sh['nse|NSE 4H|dcx|lvls']);
+      check(/^Crypto \(Coins CoinDCX\), \*Indian$/.test(sh['nse||dcx|mkt']), 'Indian, all channels: Crypto says the Coins pick comes back on, All folds into it: ' + sh['nse||dcx|mkt']);
+      check(sh['crypto|CRYPTO 4H||mkt'] === '*Crypto' && !/NSE/.test(sh['crypto|CRYPTO 4H||chan']) && /Top 3/.test(sh['crypto|CRYPTO 4H||coins']), 'crypto channel: its own market, its own channels, Coins to try: ' + JSON.stringify([sh['crypto|CRYPTO 4H||mkt'], sh['crypto|CRYPTO 4H||chan'], sh['crypto|CRYPTO 4H||coins']]));
+      // 7) Rules: no option the tab greys or warns about (Move SL at or past the target, a Partial that never books).
+      const rules = await page.evaluate(() => {
+        const bad = [], J = JSON.stringify; let n = 0;
+        Object.assign(state.ui, { sigKind: 'fib', sigAsset: '', sigMarket: '', sigChan: '', sigCoins: '', sigLvlOff: [], sigLvl: '', mktFilter: '' }); renderSignalsTable();
+        const ctx = bsCtx(bsSnap());
+        for (const tgt of ['1R', '1.5R', '3R', '1%', '3%']) for (const trail of [false, true]) for (const stop of [{ mode: 'off' }, { mode: 'be', beAt: 1, beAtP: 1 }, { mode: 'shift', shAt: 2, shTo: 1, shAtP: 2, shToP: 1 }])
+          for (const part of [{ q: 0, beQ: 0 }, { q: 50, at: 2, atP: 2, beQ: 0 }, { q: 0, beQ: 50 }]) {
+            Object.assign(state.ui, { sigTgt: tgt, sigTrail: { on: trail, step: 0.5, gap: 0.5, stepP: 0.5, gapP: 0.5 }, sigStop: stop, sigPart: part });
+            const base = bsSnap();
+            for (const dim of ctx.dims.filter(d => d.rule)) {
+              const opts = bsOptions(dim, base, ctx), keys = {};
+              if (opts.filter(o => o.now).length !== 1) bad.push([tgt, trail, stop.mode, J(part), dim.id, 'now x' + opts.filter(o => o.now).length].join(' '));
+              for (const o of opts) {
+                n++;
+                const c = o.cfg, where = [tgt, trail, stop.mode, J(part), '->', dim.id, o.label].join(' ');
+                if (keys[o.key]) bad.push(where + ': twice'); keys[o.key] = 1;
+                if (J(bsFix(c, ctx)) !== J(c)) bad.push(where + ': not as the tab keeps it');
+                BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(J(c[k])); });
+                renderSigStopBar(); renderSigPartBar();
+                if (document.getElementById('sigStopWarn') || document.getElementById('sigPartWarn')) bad.push(where + ': the tab warns it never fires');
+                if (document.querySelector('#sigStopAt option:checked:disabled, #sigStopTo option:checked:disabled, #sigPartAt option:checked:disabled')) bad.push(where + ': a greyed pick');
+                if (c.sigTgt && partRaw(c.sigPart).beQ && stopRaw(c.sigStop).mode === 'off') bad.push(where + ': books at a Move SL that is off');
+              }
+              BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(J(base[k])); });
+            }
+          }
+        // Picked on the tab but never fires: Now says off and why; the Trail TP option reads like the Now column.
+        Object.assign(state.ui, { sigTgt: '1%', sigStop: { mode: 'be', beAtP: 1 }, sigPart: { q: 0, beQ: 0 }, sigTrail: { on: true, step: 0.25, gap: 0, stepP: 0.25, gapP: 0 } });
+        const c = bsSnap(), stop = BS_DIMS.find(d => d.id === 'stop'), trail = BS_DIMS.find(d => d.id === 'trail');
+        const out = { bad: bad.slice(0, 8), nBad: bad.length, n, stopKey: stop.key(c), stopNow: stop.nowText(c), trailNow: trail.text(c), trailOpt: (bsOptions(trail, c, ctx).find(o => o.now) || {}).label };
+        Object.assign(state.ui, { sigStop: { mode: 'off' }, sigTrail: { on: false } }); renderSignalsTable();
+        return out;
+      });
+      check(rules.n > 3000 && rules.nBad === 0, 'every rule option can act on the tab (' + rules.n + ' options): ' + rules.nBad + ' bad ' + JSON.stringify(rules.bad));
+      check(rules.stopKey === 'off' && /^off \(BE at 1% never fires/.test(rules.stopNow) && rules.trailNow === rules.trailOpt && /SL at the TP reached/.test(rules.trailNow), 'a Move SL that cannot fire reads off, Trail TP reads the same in Now and Best: ' + JSON.stringify(rules));
+      // 8) A whole search from the screenshot's kind of view: Indian market, Coins left on CoinDCX, a Move SL that cannot fire.
+      await page.evaluate(() => { Object.assign(state.ui, { sigKind: 'trendline', sigAsset: 'crypto', sigMarket: 'nse', sigChan: '', sigCoins: 'dcx', sigTgt: '1%', sigSl: { mode: '' }, sigStop: { mode: 'be', beAtP: 1 }, sigPart: { q: 0, beQ: 0 }, sigTrail: { on: true, step: 0.25, gap: 0, stepP: 0.25, gapP: 0 }, sigHold: 'tp', sigTlType: '', mktFilter: '' }); sigFixCoins = true; save(); renderSignalsTable(); });
+      await settle();
+      const ind = await page.evaluate(async () => {
+        const J = JSON.stringify, snapOf = cfg => J(BS_KEYS.map(k => cfg[k])), inView = sigView.pairs.length;
+        await bsRun();
+        const r = BS.res;
+        if (!r || r.err || r.tooFew) return { err: r ? r.err || 'too few: ' + r.universe : 'no result' };
+        const row = id => document.querySelector('#sigBestTable tr[data-bs="' + id + '"]'), txt = id => row(id).innerText.replace(/\s+/g, ' ');
+        const out = { inView, universe: r.universe, head: document.getElementById('sigBestView').innerText, coins: txt('coins'), coinsUse: !!row('coins').querySelector('button'), coinsOnly: row('coins').dataset.only === '1',
+          mkt: r.dims.find(d => d.id === 'mkt').opts.map(o => o.label).join(', '), chan: r.dims.find(d => d.id === 'chan').opts.map(o => o.label).join(', '), stop: txt('stop'), comboCoins: r.combo.lines.some(x => x.id === 'coins'),
+          avgNowUse: [...document.querySelectorAll('#sigBestTable tr[data-bsavg]')].filter(tr => /\(now\)/.test(tr.innerText) && tr.querySelector('button')).length, stale0: !!document.getElementById('sigBestStale'), bad: [] };
+        // Every Use on the card (each row's best, best Avg R, the combination) and the out-of-sample settings.
+        const cfgs = [['combination', r.combo.cfg, r.combo.st.n], ['out of sample', r.oos.cfg, null]];
+        r.dims.forEach(d => { [d.bestTot, d.bestAvg].forEach(b => { if (b && !b.now && !d.only) cfgs.push([d.label + ': ' + b.label, b.cfg, b.st.n]); }); });
+        const ctx = bsCtx(bsSnap());
+        for (const [name, cfg, trades] of cfgs) {
+          if (J(bsFix(cfg, ctx)) !== J(cfg)) out.bad.push(name + ': not as the tab keeps it');
+          if (cfg.sigChan && cfg.sigMarket && ctx.chanMkt[cfg.sigChan] !== cfg.sigMarket) out.bad.push(name + ': channel of another market');
+          BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(J(cfg[k])); }); sigFixCoins = true; renderSignalsTable();
+          if (snapOf(bsSnap()) !== snapOf(cfg)) out.bad.push(name + ': the tab changed it');
+          if (!sigView.pairs.length || sigView.empty) out.bad.push(name + ': empty view');
+          if (document.getElementById('sigStopWarn') || document.getElementById('sigPartWarn')) out.bad.push(name + ': the tab warns a rule never fires');
+        }
+        out.uses = cfgs.length; out.stale1 = !!document.getElementById('sigBestStale');
+        return out;
+      });
+      check(!ind.err, 'Indian trendline search: ' + ind.err);
+      if (!ind.err) {
+        check(ind.universe === ind.inView && ind.universe >= 60 && new RegExp('^' + ind.universe + ' trendline alerts in view \\(Channel All Indian channels · Market Indian').test(ind.head) && !/Coins/.test(ind.head), 'the search starts from the alerts in view and says which: ' + JSON.stringify([ind.inView, ind.universe, ind.head.slice(0, 110)]));
+        check(ind.coinsOnly && !ind.coinsUse && /not used: no crypto alerts in this view/.test(ind.coins) && !ind.comboCoins, 'Indian market: Coins has nothing to try, no Use, and is left out of the combination: ' + JSON.stringify([ind.coins.slice(0, 70), ind.coinsUse, ind.comboCoins]));
+        check(/Crypto \(Crypto only, Coins CoinDCX\)/.test(ind.mkt) && !/CRYPTO/.test(ind.chan) && /^All Indian channels/.test(ind.chan), 'Market and Channel options: ' + JSON.stringify([ind.mkt, ind.chan]));
+        check(/off \(BE at 1% never fires/.test(ind.stop) && ind.avgNowUse === 0, 'Now says the Move SL cannot fire; no Use on the settings you already have: ' + JSON.stringify([ind.stop.slice(0, 80), ind.avgNowUse]));
+        check(ind.uses >= 4 && ind.bad.length === 0, 'every Use lands on settings the tab keeps, with alerts (' + ind.uses + '): ' + JSON.stringify(ind.bad.slice(0, 5)));
+        check(!ind.stale0 && ind.stale1, 'the card says so once the settings moved (after Use): ' + JSON.stringify([ind.stale0, ind.stale1]));
+      }
+      // 9) A view too thin to search says so, with what it is.
+      const few = await page.evaluate(async () => {
+        Object.assign(state.ui, { sigKind: 'fib', sigAsset: '', sigMarket: 'nse', sigChan: 'NSE 4H', sigCoins: 'dcx', sigTgt: '1R', sigStop: { mode: 'off' }, sigTrail: { on: false }, sigLvlOff: [], sigLvl: '' }); sigFixCoins = true; renderSignalsTable();
+        await bsRun();
+        return { few: !!(BS.res && BS.res.tooFew), n: BS.res && BS.res.universe, view: sigView.pairs.length, txt: (document.getElementById('sigBestFew') || {}).innerText || '' };
+      });
+      check(few.few && few.n === few.view && /NSE 4h/.test(few.txt) && /too few to search/.test(few.txt), 'a thin view is not searched: ' + JSON.stringify(few));
     }
   } catch (e) { errs.push('threw: ' + String(e.message).split('\n').slice(0, 2).join(' | ')); }
   await ctx.close();
