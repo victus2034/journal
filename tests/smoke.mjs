@@ -6754,6 +6754,109 @@ async function nseSinceRun(seed) {
 
 // Best settings (Edge & breakdowns): every number is what the tab shows once "Use" is pressed. Real fixture alerts
 // and Delta candles, the same as parityRun, through the whole search.
+// Lighter Signals (lakky, 2026-11-16: "make signals more optimize and clear and sharp ... its getting bulk"):
+// tighter filter rows, a dot on every row set away from its default, a Reset for Which alerts, phones open
+// with both panels folded, no empty Score column on fib / trendline alerts, prices without trailing zeros,
+// a calendar whose numbers fit, breakdown columns kept between redraws, and redraws while prices load
+// spaced to how long a draw takes. Nothing here may change a number: the strip is compared before and after.
+async function sigLightRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  // 30 alerts over 10 days in October, zone and fib, wins of +1.9R and losses of -1.08R, a few with big prices.
+  const sigs = [];
+  for (let i = 0; i < 30; i++) {
+    const r = [1.9, -1.08, -1.08][i % 3], big = i % 5 === 4;
+    sigs.push({ id: 'lt' + i, key: 'klt' + i, kind: i % 2 ? 'fib' : undefined, date: '2026-10-' + String(10 + i % 10).padStart(2, '0'), time: String(8 + i % 12).padStart(2, '0') + ':30',
+      symbol: ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD'][i % 4], side: i % 3 ? 'long' : 'short', score: i % 2 ? '' : '8/10', market: 'CRYPTO', timeframe: i % 4 ? '4H' : '1D',
+      channel: i % 4 ? 'CRYPTO 4H' : 'CRYPTO 1D', level: i % 2 ? 'L3' : undefined, filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true,
+      price: big ? 64699.8 : 100, entry: big ? 64699.8 : 100, stop: big ? (i % 3 ? 64000 : 65400) : (i % 3 ? 99 : 101) });
+  }
+  const strip = () => page.evaluate(() => document.getElementById('sigEdgeStrip').innerText.replace(/\s+/g, ' '));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(list => {
+      state.signals = list;
+      Object.assign(state.ui, { sigKind: 'zone', sigPeriod: { mode: 'custom', from: '2026-10-01', to: '2026-10-31' }, sigChan: '', sigDay: '', sigCalMonth: '2026-10', sigSec: 'alerts', mktFilter: '', sigTgt: '', sigNoFee: false, sigSkipTiny: false, sigCoins: '', sigAsset: '', sigMarket: '' });
+      switchTab('signals'); renderAll();
+    }, sigs);
+    const before = await strip();
+    let v = await page.evaluate(() => ({
+      rows: Array.from(document.querySelectorAll('#sigRulesPanel .sig-row')).filter(r => r.offsetHeight).map(r => r.offsetHeight),
+      chg: Array.from(document.querySelectorAll('#view-signals .sig-row.chg')).map(r => r.dataset.k),
+      reset: document.getElementById('sigWhichReset').innerText, score: getComputedStyle(document.querySelector('#sigTable th.c-score')).display,
+      px: Array.from(document.querySelectorAll('#signalsTableBody tr')).map(tr => tr.cells[5] && tr.cells[5].innerText).filter(Boolean)
+    }));
+    check(v.rows.length >= 6 && Math.max(...v.rows) <= 40, 'rule rows are one tight line each: ' + JSON.stringify(v.rows));
+    check(!v.chg.length && !v.reset, 'nothing set: no dot, no Reset: ' + JSON.stringify(v));
+    check(v.score !== 'none', 'zone alerts keep their Score column');
+    check(v.px.includes('64699.8') && v.px.includes('100') && !v.px.some(x => /\.\d*0$/.test(x)), 'prices without trailing zeros: ' + JSON.stringify(v.px));
+    // A rule and two filters set: their rows get the dot, Which alerts gets a Reset that clears only its own rows.
+    await page.evaluate(() => { state.ui.sigTgt = '1.5R'; state.ui.sigChan = 'CRYPTO 4H'; state.ui.mktFilter = 'bull'; save(); renderSignalsTable(); });
+    v = await page.evaluate(() => ({ chg: Array.from(document.querySelectorAll('#view-signals .sig-row.chg')).map(r => r.dataset.k).sort().join(','),
+      dot: getComputedStyle(document.querySelector('.sig-row.chg .sig-lab'), '::before').content, btn: !!document.getElementById('sigWhichResetBtn') }));
+    check(v.chg === 'btc,chan,tgt' && v.dot !== 'none' && v.btn, 'changed rows marked, Reset shown: ' + JSON.stringify(v));
+    await page.click('#sigWhichResetBtn');
+    v = await page.evaluate(() => ({ chan: state.ui.sigChan, mf: state.ui.mktFilter, tgt: state.ui.sigTgt, per: state.ui.sigPeriod.mode, open: document.getElementById('sigWhichPanel').open,
+      chg: Array.from(document.querySelectorAll('#view-signals .sig-row.chg')).map(r => r.dataset.k).join(','), btn: !!document.getElementById('sigWhichResetBtn') }));
+    check(v.chan === '' && v.mf === '' && v.tgt === '1.5R' && v.per === 'custom' && v.open && v.chg === 'tgt' && !v.btn, 'Which Reset clears its filters only, panel stays open: ' + JSON.stringify(v));
+    await page.evaluate(() => { state.ui.sigTgt = ''; save(); renderSignalsTable(); });
+    check(await strip() === before, 'numbers unchanged after the round trip: ' + before + ' / ' + await strip());
+    // Fib alerts: no score, so no Score column; the cells are still there (hidden), the row has its 14 cells.
+    await page.evaluate(() => setSigKind('fib'));
+    v = await page.evaluate(() => ({ th: getComputedStyle(document.querySelector('#sigTable th.c-score')).display, td: getComputedStyle(document.querySelector('#signalsTableBody td.c-score')).display,
+      cells: document.querySelector('#signalsTableBody tr').cells.length, kind: Array.from(document.querySelectorAll('#sigKindBar button')).map(b => b.innerText).join('|') }));
+    check(v.th === 'none' && v.td === 'none' && v.cells === 14, 'fib table leaves out Score: ' + JSON.stringify(v));
+    check(/^Zone alerts 15\|Fib alerts 15\|Trendline alerts 0$/.test(v.kind), 'kind bar reads the same on a laptop: ' + v.kind);
+    // Calendar: every day's numbers fit its cell.
+    const clip = () => page.evaluate(() => Array.from(document.querySelectorAll('#sigCalGrid .cal-cell')).filter(c => Array.from(c.querySelectorAll('span')).some(sp => sp.offsetWidth && sp.scrollWidth > c.clientWidth)).map(c => c.dataset.day));
+    let cut = await clip();
+    check(!cut.length, 'laptop calendar: nothing cut off: ' + cut.join(','));
+    // Breakdown columns stay the same elements across a redraw (only cards that change column move).
+    await page.evaluate(() => setSigSec('edge'));
+    await page.waitForTimeout(100);
+    v = await page.evaluate(() => { const a = Array.from(document.querySelectorAll('#sigBdGrid > .bd-col')); a.forEach((c, i) => { c._mark = 'c' + i; }); renderSignalsTable();
+      const b = Array.from(document.querySelectorAll('#sigBdGrid > .bd-col')); return { n: a.length, same: b.length === a.length && b.every((c, i) => c._mark === 'c' + i), cards: document.querySelectorAll('#sigBdGrid .bd-card').length }; });
+    check(v.n === 3 && v.same && v.cards === 8, 'breakdown columns kept on a redraw: ' + JSON.stringify(v));
+    // Redraws while prices load: every 1.5 s for a quick draw, longer for a slow one, never past 6 s.
+    v = await page.evaluate(() => { const was = sigDrawMs, now = Date.now(), out = [];
+      [[20, 1600], [20, 1400], [500, 3900], [500, 4100], [5000, 5900], [5000, 6100]].forEach(([ms, ago]) => { sigDrawMs = ms; out.push(sigRedrawDue(now - ago)); });
+      sigDrawMs = was; return out.join(','); });
+    check(v === 'true,false,false,true,false,true', 'redraw spacing follows the draw time: ' + v);
+    // Phone, first visit: both panels folded, their summaries readable; a tap opens one and is kept.
+    await page.evaluate(() => { setSigSec('alerts'); delete state.ui.sigFold; save(); });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload({ waitUntil: 'load' });
+    await page.evaluate(list => { state.signals = list; state.ui.sigKind = 'fib'; switchTab('signals'); renderAll(); }, sigs);
+    await page.waitForTimeout(150);
+    v = await page.evaluate(() => ({ which: document.getElementById('sigWhichPanel').open, rules: document.getElementById('sigRulesPanel').open, sum: document.getElementById('sigWhichSum').innerText,
+      stripTop: Math.round(document.getElementById('sigEdgeStrip').getBoundingClientRect().top + scrollY), wide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      kindW: document.getElementById('sigKindBar').scrollWidth - document.getElementById('sigKindBar').clientWidth }));
+    check(!v.which && !v.rules && /Fib alerts/.test(v.sum), 'phone opens with the filters folded: ' + JSON.stringify(v));
+    check(v.stripTop < 700 && v.wide <= 0 && v.kindW <= 0, 'phone: numbers on the first screen, nothing wider than the screen: ' + JSON.stringify(v));
+    cut = await clip();
+    check(!cut.length, 'phone calendar: nothing cut off: ' + cut.join(','));
+    await page.click('#sigRulesPanel > summary');
+    await page.waitForTimeout(100);
+    v = await page.evaluate(() => ({ open: document.getElementById('sigRulesPanel').open, fold: state.ui.sigFold }));
+    check(v.open && v.fold && v.fold.rules === false && v.fold.which === true, 'a tap opens it and is kept: ' + JSON.stringify(v));
+    await page.reload({ waitUntil: 'load' });
+    await page.evaluate(list => { state.signals = list; switchTab('signals'); renderAll(); }, sigs);
+    v = await page.evaluate(() => [document.getElementById('sigWhichPanel').open, document.getElementById('sigRulesPanel').open]);
+    check(JSON.stringify(v) === '[false,true]', 'kept after a reload: ' + JSON.stringify(v));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'Signals lighter: tight rows, changed-row dots, Which Reset, phone folded, no empty Score column, calendar fits, same numbers';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 async function bestSettingsRun() {
   const errs = [];
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
@@ -6943,6 +7046,7 @@ await parityRun();
 await droppedCoinsRun(data);
 await nseSinceRun(data);
 await bestSettingsRun();
+await sigLightRun(data);
 
 await browser.close();
 server.close();
