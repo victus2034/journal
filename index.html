@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-16.197">
+  <meta name="app-version" content="2026-11-16.198">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -382,6 +382,33 @@
     .sig-ctl .flex{flex-wrap:wrap}
     .sig-ctl button{white-space:nowrap}
     .sig-panel:not([open]) #sigPeriodHint{display:none}
+    /* Lighter Signals filters (lakky, 2026-11-16: "its getting bulk"): tighter rows and buttons,
+       and a row set away from its default shows it (amber label with a dot), so what is on
+       reads at a glance. */
+    #view-signals .sig-row{padding:.2rem 0}
+    #view-signals .sig-lab{line-height:1.75rem}
+    #view-signals .sig-ctl button{padding-top:.15rem;padding-bottom:.15rem}
+    #view-signals .sig-ctl input,#view-signals .sig-ctl select{padding-top:.2rem;padding-bottom:.2rem}
+    .sig-row.chg .sig-lab{color:var(--acc);font-weight:600}
+    .sig-row.chg .sig-lab:before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--acc);margin:0 .3rem .12rem -.1rem;vertical-align:middle}
+    .sig-rst{flex:0 0 auto;font-size:11.5px;white-space:nowrap}
+    .sig-rst:empty{display:none}
+    .sig-rst button{color:var(--acc);font-weight:500}
+    .sig-panel:not([open]) #sigWhichReset{margin-left:auto}
+    #sigTable.no-score .c-score{display:none}
+    /* Calendar and its report side by side from iPad width, the calendar wide enough for "-32.08R" in a day */
+    .sig-cal-wrap{display:grid;grid-template-columns:minmax(0,1fr);gap:1rem;align-items:start}
+    @media (min-width:1024px){.sig-cal-wrap{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr)}}
+    .cal-cell{min-height:3.5rem;min-width:0;overflow:hidden}
+    .cal-cell .mono-num{white-space:nowrap}
+    @media (max-width:639px){
+      .cal-cell{min-height:3rem;padding:2px 3px!important}
+      .cal-cell .mono-num{font-size:9.5px!important;letter-spacing:-.02em}
+      .cal-cell .cal-pct,.cal-cell .cal-w{display:none}
+      .sig-panel:not([open]) .sig-sum{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.35}
+      #sigKindBar{display:flex;width:100%}#sigKindBar button{flex:1 1 0;padding:.4rem .3rem;font-size:12.5px}
+      #sigKindBar .kb-w{display:none}
+    }
     #sigDemoRealForm button{white-space:nowrap}#sigDemoRealForm .flex{flex-wrap:wrap}
     @media (max-width:639px){.sig-row{grid-template-columns:3.3rem minmax(0,1fr);gap:.3rem .5rem}.sig-ctl .flex{gap:2px}.sig-ctl button{padding-left:.4rem;padding-right:.4rem}}
     @media (max-width:639px){.coin-picks{flex-wrap:nowrap!important;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}.coin-picks::-webkit-scrollbar{display:none}.coin-picks .sig-coin{flex:0 0 auto}}
@@ -751,7 +778,7 @@
            every section below. Folded, each says in one line what it is set to. -->
       <div class="sig-panels">
         <details id="sigWhichPanel" class="card sig-panel" data-fold="which" open>
-          <summary><span class="sig-chev">&#9662;</span><h3>Which alerts</h3><span id="sigWhichSum" class="sig-sum"></span><span id="sigPeriodHint" class="sig-ph-r"></span></summary>
+          <summary><span class="sig-chev">&#9662;</span><h3>Which alerts</h3><span id="sigWhichSum" class="sig-sum"></span><span id="sigPeriodHint" class="sig-ph-r"></span><span id="sigWhichReset" class="sig-rst"></span></summary>
           <div class="sig-row"><span class="sig-lab">Period</span><div class="sig-ctl">
             <div id="sigPeriodBar" class="flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
             <div id="sigCustomRange" class="hidden flex flex-wrap items-center gap-1.5">
@@ -759,24 +786,24 @@
               <span class="text-slate-500 text-xs">to</span>
               <input type="date" id="sigCustomTo" onchange="setSigPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
             </div></div></div>
-          <div id="sigMarketWrap" class="sig-row"><span class="sig-lab">Market</span><div id="sigMarketBar" class="sig-ctl"></div></div>
-          <div class="sig-row"><span class="sig-lab">Channel</span><div id="sigChanBar" class="sig-ctl"></div></div>
-          <div id="sigAssetWrap" class="sig-row"><span class="sig-lab">Assets</span><div id="sigAssetBar" class="sig-ctl"></div></div>
-          <div id="sigCoinWrap" class="sig-row"><span class="sig-lab">Coins</span><div id="sigCoinBar" class="sig-ctl"></div></div>
-          <div id="sigLvlOnWrap" class="sig-row"><span class="sig-lab">Levels on</span><div class="sig-ctl"><div id="sigLvlOnBar"></div></div></div>
-          <div id="sigLvlWrap" class="sig-row"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="sigLvlBar"></div></div></div>
-          <div id="sigTlWrap" class="sig-row"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="sigTlBar"></div></div></div>
-          <div class="sig-row"><span class="sig-lab">BTC day</span><div class="sig-ctl"><div id="sigMktBar"></div></div></div>
+          <div id="sigMarketWrap" class="sig-row" data-k="market"><span class="sig-lab">Market</span><div id="sigMarketBar" class="sig-ctl"></div></div>
+          <div class="sig-row" data-k="chan"><span class="sig-lab">Channel</span><div id="sigChanBar" class="sig-ctl"></div></div>
+          <div id="sigAssetWrap" class="sig-row" data-k="asset"><span class="sig-lab">Assets</span><div id="sigAssetBar" class="sig-ctl"></div></div>
+          <div id="sigCoinWrap" class="sig-row" data-k="coins"><span class="sig-lab">Coins</span><div id="sigCoinBar" class="sig-ctl"></div></div>
+          <div id="sigLvlOnWrap" class="sig-row" data-k="lvlon"><span class="sig-lab">Levels on</span><div class="sig-ctl"><div id="sigLvlOnBar"></div></div></div>
+          <div id="sigLvlWrap" class="sig-row" data-k="lvl"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="sigLvlBar"></div></div></div>
+          <div id="sigTlWrap" class="sig-row" data-k="tl"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="sigTlBar"></div></div></div>
+          <div class="sig-row" data-k="btc"><span class="sig-lab">BTC day</span><div class="sig-ctl"><div id="sigMktBar"></div></div></div>
         </details>
         <details id="sigRulesPanel" class="card sig-panel" data-fold="rules" open>
-          <summary><span class="sig-chev">&#9662;</span><h3>How each trade is played</h3><span id="sigRulesSum" class="sig-sum"></span><span id="sigRulesReset" class="sig-ph-r"></span></summary>
-          <div class="sig-row"><span class="sig-lab">Exit at</span><div class="sig-ctl"><div id="sigTgtBar"></div></div></div>
-          <div class="sig-row"><span class="sig-lab">SL</span><div class="sig-ctl"><div id="sigSlBar"></div></div></div>
-          <div class="sig-row"><span class="sig-lab">Move SL</span><div class="sig-ctl"><div id="sigStopBar"></div></div></div>
-          <div class="sig-row"><span class="sig-lab">Partial</span><div class="sig-ctl"><div id="sigPartBar"></div></div></div>
-          <div class="sig-row"><span class="sig-lab">Trail TP</span><div class="sig-ctl"><div id="sigTrailBar"></div></div></div>
-          <div class="sig-row"><span class="sig-lab">Hold</span><div class="sig-ctl"><div id="sigHoldBar"></div></div></div>
-          <div class="sig-row"><span class="sig-lab">Fees</span><div class="sig-ctl"><div id="sigFeeBar"></div></div></div>
+          <summary><span class="sig-chev">&#9662;</span><h3>How each trade is played</h3><span id="sigRulesSum" class="sig-sum"></span><span id="sigRulesReset" class="sig-ph-r sig-rst"></span></summary>
+          <div class="sig-row" data-k="tgt"><span class="sig-lab">Exit at</span><div class="sig-ctl"><div id="sigTgtBar"></div></div></div>
+          <div class="sig-row" data-k="sl"><span class="sig-lab">SL</span><div class="sig-ctl"><div id="sigSlBar"></div></div></div>
+          <div class="sig-row" data-k="stop"><span class="sig-lab">Move SL</span><div class="sig-ctl"><div id="sigStopBar"></div></div></div>
+          <div class="sig-row" data-k="part"><span class="sig-lab">Partial</span><div class="sig-ctl"><div id="sigPartBar"></div></div></div>
+          <div class="sig-row" data-k="trail"><span class="sig-lab">Trail TP</span><div class="sig-ctl"><div id="sigTrailBar"></div></div></div>
+          <div class="sig-row" data-k="hold"><span class="sig-lab">Hold</span><div class="sig-ctl"><div id="sigHoldBar"></div></div></div>
+          <div class="sig-row" data-k="fee"><span class="sig-lab">Fees</span><div class="sig-ctl"><div id="sigFeeBar"></div></div></div>
         </details>
       </div>
 
@@ -787,7 +814,7 @@
       <div id="sigSecBar" class="tabs"></div>
 
       <section data-sigsec="alerts" class="space-y-4">
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+        <div class="sig-cal-wrap">
           <div class="bg-terminal-card border border-terminal-border rounded-xl p-3">
           <div class="flex items-center justify-between gap-2 mb-2">
             <div class="flex items-center gap-2">
@@ -800,7 +827,7 @@
           <div class="grid grid-cols-7 gap-1 text-[9px] text-slate-500 font-mono text-center mb-1"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
           <div id="sigCalGrid" class="grid grid-cols-7 gap-1"></div>
           </div>
-          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 lg:col-span-2">
+          <div class="bg-terminal-card border border-terminal-border rounded-xl p-4">
             <div id="sigDayReport" class="text-[11px] font-mono text-slate-300"></div>
           </div>
         </div>
@@ -810,7 +837,7 @@
             <div id="sigModeBar" class="flex flex-wrap items-center gap-1.5"></div>
           </div>
         <div class="overflow-x-auto">
-          <table class="w-full text-left text-xs font-mono">
+          <table id="sigTable" class="w-full text-left text-xs font-mono">
             <thead class="bg-[#080D15] text-slate-400 uppercase text-[10px] tracking-wider border-b border-terminal-border">
               <tr>
                 <th class="py-2.5 px-3">Date</th>
@@ -821,7 +848,7 @@
                 <th class="py-2.5 px-3">Entry</th>
                 <th class="py-2.5 px-3">Stop</th>
                 <th class="py-2.5 px-3">SL Dist</th>
-                <th class="py-2.5 px-3">Score</th>
+                <th class="py-2.5 px-3 c-score">Score</th>
                 <th class="py-2.5 px-3">Status</th>
                 <th class="py-2.5 px-3" title="What the alert itself did: -1R stopped out, +1R, +2R">Signal R</th>
                 <th class="py-2.5 px-3" title="Your trade measured against the alert's stop">My R</th>
@@ -3935,7 +3962,7 @@
       SIG_KINDS.forEach(x => {
         const b = document.createElement('button'); b.type = 'button';
         b.className = x.k === kind ? 'on' : '';
-        b.innerHTML = esc(x.label) + ' <span class="cnt">' + (n[x.k] || 0) + '</span>';
+        b.innerHTML = esc(x.label.replace(/ alerts$/, '')) + '<span class="kb-w"> alerts</span> <span class="cnt">' + (n[x.k] || 0) + '</span>';
         b.onclick = () => setSigKind(x.k);
         bar.appendChild(b);
       });
@@ -3992,17 +4019,17 @@
         const cell = document.createElement('button');
         cell.type = 'button'; cell.dataset.day = ds;
         const inRange = (!range.from || ds >= range.from) && (!range.to || ds <= range.to);
-        let cls = 'h-12 sm:h-14 p-1 rounded flex flex-col justify-between text-left transition-colors border ';
+        let cls = 'cal-cell p-1 rounded flex flex-col justify-between text-left transition-colors border ';
         if (!prs) {
           cls += 'bg-[#0A0F18] border-slate-800 text-slate-600 cursor-default';
-          cell.innerHTML = '<span class="text-[10px]">' + d + '</span><span class="text-[10px]">&mdash;</span>';
+          cell.innerHTML = '<span class="text-[10px]">' + d + '</span><span class="text-[10px] text-slate-700">&middot;</span>';
         } else {
           const f = sigDayFigures(prs);
           const good = f.graded ? f.net >= 0 : null;
           cls += (good === null ? 'bg-slate-800/40 border-slate-700 hover:border-amber-500' : good ? 'bg-emerald-950/40 border-emerald-700/60 hover:border-emerald-400' : 'bg-rose-950/40 border-rose-700/60 hover:border-rose-400') + ' cursor-pointer';
           cell.innerHTML = '<span class="text-[10px] text-slate-300">' + d + (f.taken ? ' <span class="text-amber-300" title="you took a trade">&bull;</span>' : '') + '</span>'
-            + '<span><span class="block text-[10px] sm:text-[11px] font-bold mono-num ' + (good === null ? 'text-slate-400' : good ? 'text-emerald-400' : 'text-rose-400') + '">' + (f.graded ? rfmt(f.net) : 'not graded') + '</span>' + (f.graded && f.netPct != null ? '<span class="block text-[9px] mono-num ' + (good ? 'text-emerald-400/80' : 'text-rose-400/80') + '">' + pfmt(f.netPct) + '</span>' : '')
-            + '<span class="block text-[9px] text-slate-500">' + f.n + ' alert' + (f.n === 1 ? '' : 's') + '</span></span>';
+            + '<span><span class="block text-[10px] sm:text-[11px] font-bold mono-num ' + (good === null ? 'text-slate-400' : good ? 'text-emerald-400' : 'text-rose-400') + '">' + (f.graded ? rfmt(f.net).replace(/R$/, '<span class="cal-w">R</span>') : '<span class="cal-w">not </span>graded') + '</span>' + (f.graded && f.netPct != null ? '<span class="block text-[9px] mono-num cal-pct ' + (good ? 'text-emerald-400/80' : 'text-rose-400/80') + '">' + pfmt(f.netPct) + '</span>' : '')
+            + '<span class="block text-[9px] text-slate-500">' + f.n + '<span class="cal-w"> alert' + (f.n === 1 ? '' : 's') + '</span></span></span>';
           cell.onclick = () => sigPickDay(ds);
           cell.title = f.n + ' alerts, ' + f.filled + ' filled, ' + f.graded + ' graded' + (f.taken ? ', ' + f.taken + ' taken by you' : '') + '. Click to see this day only.';
         }
@@ -4032,7 +4059,13 @@
           + item('My P&amp;L', f.taken ? Object.keys(f.pnlBy).map(c => '<span class="' + (f.pnlBy[c] >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + signedMoney(f.pnlBy[c], c) + '</span>').join(' · ') : '&mdash;')
           + '</div>' : '<div class="text-slate-500">No alerts in this ' + (picked ? 'day' : 'period') + '.</div>');
     }
-    function renderSignalsTable() { return withOutcomeCache(() => inSigScope(renderSignalsNow)); }
+    // How long the last full draw of the tab took: redraws while prices load are spaced to
+    // match, so a phone that takes 300 ms a draw is not redrawing every 1.5 s (sigRedrawDue).
+    let sigDrawMs = 0;
+    // An alert's price in the table: 4 decimals at most, no trailing zeros (64699.8, not 64699.8000).
+    function sigPx(v) { const x = +v; return isFinite(x) ? x.toFixed(4).replace(/\.?0+$/, '') : '—'; }
+    function renderSignalsTable() { const t0 = performance.now(); try { return withOutcomeCache(() => inSigScope(renderSignalsNow)); } finally { sigDrawMs = performance.now() - t0; } }
+    function sigRedrawDue(last) { return Date.now() - last > Math.max(1500, Math.min(6000, sigDrawMs * 8)); }
     function renderSignalsNow() {
       const tbody = document.getElementById('signalsTableBody');
       if (!tbody) return;
@@ -4218,6 +4251,9 @@
         });
       }
       const shown = pairs.filter(SIG_MODES.find(m => m.k === mode).test);
+      // Fib and trendline alerts have no score: their column of dashes is left out.
+      const tbl = document.getElementById('sigTable');
+      if (tbl) tbl.classList.toggle('no-score', kind !== 'zone');
 
       tbody.innerHTML = '';
       const moreBar = document.getElementById('sigMoreBar');
@@ -4256,7 +4292,7 @@
           tr.onclick = () => openInspector(t);
           const own = stopOk(t);
           tr.innerHTML = `
-            <td class="py-2.5 px-3 text-white">${esc(t.date)}</td>
+            <td class="py-2.5 px-3 text-white whitespace-nowrap">${esc(t.date)}</td>
             <td class="py-2.5 px-3 text-slate-400">${esc(t.time || '—')}</td>
             <td class="py-2.5 px-3 text-slate-500">no alert</td>
             <td class="py-2.5 px-3 font-bold text-white">${esc(t.symbol)}</td>
@@ -4264,7 +4300,7 @@
             <td class="py-2.5 px-3">${t.entry ? esc(cleanNum(t.entry)) : '—'}</td>
             <td class="py-2.5 px-3 text-slate-400">${own ? esc(cleanNum(t.stop)) : '—'}</td>
             <td class="py-2.5 px-3 text-slate-500">${own ? (Math.abs(t.entry - t.stop) / t.entry * 100).toFixed(2) + '%' : '—'}</td>
-            <td class="py-2.5 px-3 text-slate-600">—</td>
+            <td class="py-2.5 px-3 text-slate-600 c-score">—</td>
             <td class="py-2.5 px-3 whitespace-nowrap"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-500/20 text-violet-300">No alert</span></td>
             <td class="py-2.5 px-3 text-slate-600">—</td>
             <td class="py-2.5 px-3 font-bold whitespace-nowrap">${t.r != null ? `<span class="${t.r >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${rfmt(t.r)}</span>${pTag(tradePct(t))}` : `<span class="text-slate-600 font-normal">—</span>${pTag(tradePct(t))}`}</td>
@@ -4348,15 +4384,15 @@
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-terminal-cardHover/80 transition-colors border-b border-terminal-border/60';
         tr.innerHTML = `
-          <td class="py-2.5 px-3 text-white">${esc(sig.date)}</td>
+          <td class="py-2.5 px-3 text-white whitespace-nowrap">${esc(sig.date)}</td>
           <td class="py-2.5 px-3 text-slate-400">${esc(sig.time || '—')}</td>
-          <td class="py-2.5 px-3 text-slate-400">${sig.channel ? esc(chanLabel(chanKey(sig))) : '—'}</td>
+          <td class="py-2.5 px-3 text-slate-400 whitespace-nowrap">${sig.channel ? esc(chanLabel(chanKey(sig))) : '—'}</td>
           <td class="py-2.5 px-3 font-bold text-white">${esc(sig.symbol)}</td>
           <td class="py-2.5 px-3"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${sig.side === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">${esc(sig.side.toUpperCase())}</span></td>
-          <td class="py-2.5 px-3">${entry != null ? (+entry).toFixed(4) : '—'}</td>
-          <td class="py-2.5 px-3 text-slate-400">${sig.stop != null ? (+sig.stop).toFixed(4) : '—'}</td>
+          <td class="py-2.5 px-3">${entry != null ? sigPx(entry) : '—'}</td>
+          <td class="py-2.5 px-3 text-slate-400">${sig.stop != null ? sigPx(sig.stop) : '—'}</td>
           <td class="py-2.5 px-3 text-slate-500">${slDistHtml(sp, sig)}</td>
-          <td class="py-2.5 px-3 text-amber-300">${esc(sig.score || '—')}</td>
+          <td class="py-2.5 px-3 text-amber-300 c-score">${esc(sig.score || '—')}</td>
           <td class="py-2.5 px-3 whitespace-nowrap"><span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${badgeCls}">${label}</span></td>
           <td class="py-2.5 px-3 font-bold whitespace-nowrap">${sigHtml}</td>
           <td class="py-2.5 px-3 font-bold whitespace-nowrap">${myHtml}</td>
@@ -4959,14 +4995,14 @@
     // instead of being cut off; at 11px it wraps.
     function fitStatRow(row) {
       if (!row || !row.offsetWidth) return;
-      row.querySelectorAll('.mono-num').forEach(el => {
-        el.style.removeProperty('font-size'); el.style.removeProperty('white-space'); el.classList.remove('fit-wrap');
-        const w = el.clientWidth;
-        if (!w || el.scrollWidth <= w + 0.5) return;
-        const fs = parseFloat(getComputedStyle(el).fontSize) || 16;
-        el.style.setProperty('font-size', Math.max(11, Math.floor(fs * w / el.scrollWidth * 0.97)) + 'px', 'important');
-        if (el.scrollWidth > w + 0.5) { el.style.setProperty('white-space', 'normal', 'important'); el.classList.add('fit-wrap'); }
-      });
+      // Reset every value, measure them all in one go, then set the sizes: one layout,
+      // not one per value.
+      const els = Array.from(row.querySelectorAll('.mono-num'));
+      els.forEach(el => { el.style.removeProperty('font-size'); el.style.removeProperty('white-space'); el.classList.remove('fit-wrap'); });
+      const wide = els.map(el => { const w = el.clientWidth, sw = el.scrollWidth; return w && sw > w + 0.5 ? { el, w, sw, fs: parseFloat(getComputedStyle(el).fontSize) || 16 } : null; }).filter(Boolean);
+      if (!wide.length) return;
+      wide.forEach(x => x.el.style.setProperty('font-size', Math.max(11, Math.floor(x.fs * x.w / x.sw * 0.97)) + 'px', 'important'));
+      wide.filter(x => x.el.scrollWidth > x.el.clientWidth + 0.5).forEach(x => { x.el.style.setProperty('white-space', 'normal', 'important'); x.el.classList.add('fit-wrap'); });
     }
     // Refit when a row is redrawn or changes width (rotating an iPad, opening a tab).
     // root: rows drawn later inside it (the Demo account's) are watched too.
@@ -9779,7 +9815,7 @@
           slcTried[k] = 1;
           try { const st = await slcOne(g); if (st.none === "no NSE candles") slcLive[k] = st; else tgtCache()[k] = st; ok++; } catch (e) { slcFail++; missed++; }
           slcProg.done++;
-          if (Date.now() - drawn > 1500) { drawn = Date.now(); tgtSave(); renderSignalsTable(); }
+          if (sigRedrawDue(drawn)) { drawn = Date.now(); tgtSave(); renderSignalsTable(); }
         }
       };
       try { await Promise.all([1, 2, 3, 4].map(worker)); } finally { slcBusy = false; slcProg = null; tgtSave(); renderSignalsTable(); }
@@ -10414,7 +10450,7 @@
           } catch (e) { tgtFail++; missed++; }
           tgtProg.done++;
           // Redrawn every 1.5 s; written to the device every 10 s (the whole store is one value).
-          if (Date.now() - drawn > 1500) { drawn = Date.now(); if (Date.now() - saved > 10000) { saved = Date.now(); tgtSave(); } renderSignalsTable(); }
+          if (sigRedrawDue(drawn)) { drawn = Date.now(); if (Date.now() - saved > 10000) { saved = Date.now(); tgtSave(); } renderSignalsTable(); }
         }
       };
       try { await Promise.all([1, 2, 3, 4].map(worker)); } finally { tgtBusy = false; tgtProg = null; tgtSave(); renderSignalsTable(); }
@@ -11243,7 +11279,9 @@
         if (el.dataset.init) return;
         el.dataset.init = '1';
         const k = el.dataset.fold, f = state.ui.sigFold && typeof state.ui.sigFold === 'object' ? state.ui.sigFold : {};
-        el.open = !f[k];
+        // A phone that never folded or opened one starts with the Signals filters folded: their
+        // one-line summaries instead of two screens of buttons before the first number.
+        el.open = f[k] === undefined && /^sig/.test(el.id) && window.innerWidth < 640 ? false : !f[k];
         el.addEventListener('toggle', () => {
           const g = state.ui.sigFold && typeof state.ui.sigFold === 'object' ? state.ui.sigFold : {};
           if (!!g[k] === !el.open) return;
@@ -11251,9 +11289,28 @@
         });
       });
     }
-    // One line per panel, shown when it is folded (and the rules' Reset button).
+    // "Which alerts" back to everything: Market, Channel, Assets, Coins, Levels, Type and BTC day
+    // (the kind of alert and the Period stay as they are).
+    function resetSigWhich() {
+      Object.assign(state.ui, { sigMarket: "", sigChan: "", sigAsset: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "", sigDay: "" });
+      sigVisible = SIG_PAGE; save(); renderSignalsTable();
+    }
+    // Which rows are set away from their default (a dot on the label). Period is left out: any
+    // period is a normal pick.
+    function sigRowsChanged(coinSet, assetMode) {
+      const p = partRaw();
+      return { market: !!sigMarketMode(), chan: !!state.ui.sigChan, asset: !!assetMode, coins: !!coinSet, lvlon: sigLvlOff().length > 0, lvl: !!sigLvl(), tl: !!sigTlType(), btc: !!mktFilter(),
+        tgt: !!sigTgt(), sl: !!slRaw().mode, stop: stopRaw().mode !== "off", part: !!(p.q || p.beQ), trail: !!trailRaw().on, hold: sigHold() !== "tp", fee: state.ui.sigNoFee === true };
+    }
+    const SIG_WHICH_KEYS = ["market", "chan", "asset", "coins", "lvlon", "lvl", "tl", "btc"];
+    // One line per panel, shown when it is folded (and each panel's Reset button).
     function renderSigPanelSums(kind, coinSet, assetMode) {
       initPanelFolds();
+      const chg = sigRowsChanged(coinSet, assetMode);
+      document.querySelectorAll('#view-signals .sig-row[data-k]').forEach(r => r.classList.toggle('chg', !!chg[r.dataset.k]));
+      const wr = document.getElementById('sigWhichReset');
+      // The same test as the dots, so Reset shows exactly when a dot does (a Coins pick hidden by the Indian market has no dot).
+      if (wr) wr.innerHTML = SIG_WHICH_KEYS.some(k => chg[k]) ? '<button type="button" id="sigWhichResetBtn" onclick="event.preventDefault();event.stopPropagation();resetSigWhich()" title="Back to every alert of this kind in the period: all markets, channels, assets, coins, levels, types and BTC days">Reset</button>' : '';
       const which = document.getElementById('sigWhichSum');
       if (which) {
         const per = state.ui.sigDay ? state.ui.sigDay : (SIG_PERIODS.find(x => x.k === sigPeriod().mode) || SIG_PERIODS[3]).label;
@@ -11481,15 +11538,24 @@
       if (!force && n === bdCols) return;
       bdCols = n;
       const cards = Array.from(grid.querySelectorAll('.bd-card')).sort((a, b) => a.dataset.ord - b.dataset.ord);
-      grid.innerHTML = '';
-      const cols = [];
-      for (let i = 0; i < n; i++) { const el = document.createElement('div'); el.className = 'bd-col'; grid.appendChild(el); cols.push(el); }
-      // Measure each card at the column width, then place them.
-      cards.forEach(card => cols[0].appendChild(card));
+      let cols = Array.from(grid.querySelectorAll(':scope > .bd-col'));
+      // Same number of columns as last time: every card is already at the column width, so it is
+      // measured where it is and only the cards that change column move (a redraw used to empty
+      // the grid and lay all eight out twice).
+      const keep = cols.length === n && cards.every(card => card.parentElement && card.parentElement.parentElement === grid);
+      if (!keep) {
+        grid.innerHTML = '';
+        cols = [];
+        for (let i = 0; i < n; i++) { const el = document.createElement('div'); el.className = 'bd-col'; grid.appendChild(el); cols.push(el); }
+        // Measure each card at the column width, then place them.
+        cards.forEach(card => cols[0].appendChild(card));
+      }
       const shown = cards.filter(card => !card.classList.contains('hidden'));
       const where = bdSplit(shown.map(card => card.offsetHeight), n, 16);
-      shown.forEach((card, i) => cols[where[i]].appendChild(card));
-      cards.filter(card => card.classList.contains('hidden')).forEach(card => cols[n - 1].appendChild(card));
+      const want = cards.map(card => { const i = shown.indexOf(card); return cols[i === -1 ? n - 1 : where[i]]; });
+      // Already where they belong, in order: nothing moves.
+      if (keep && cols.every(col => { const kids = Array.from(col.children), mine = cards.filter((c, i) => want[i] === col); return kids.length === mine.length && kids.every((k, i) => k === mine[i]); })) return;
+      cards.forEach((card, i) => want[i].appendChild(card));
     }
     // One breakdown card: a header, then one short row per group (alerts, won,
     // total R, a bar for the average, average R and %). A narrow card drops the bar,
@@ -11947,7 +12013,7 @@
         + (rows.length > LIMIT ? '<div class="text-center mt-2"><button type="button" onclick="btShowAllRows()" class="px-3 py-1 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-[11px]">' + (btShowAll ? 'Show top ' + LIMIT : 'Show all ' + rows.length) + '</button></div>' : '')
         + '<p class="text-[10px] text-slate-500 mt-1">Click a column to sort. Max DD is the deepest fall inside that group, its alerts in order at 1R. Taken = alerts you traded.</p></div>';
 
-      host.innerHTML = head + '<p class="text-slate-500 text-[11px] mb-3">Every alert with a result in this view, in the order they fired, as if each was taken at 1R. Results are after fees, as the scanner prices them.</p>'
+      host.innerHTML = head + '<p class="text-slate-500 text-[11px] mb-3">Every graded alert in view at 1R, in the order they fired, after fees.</p>'
         + stats + sigSureHtml(graded, pairs, st) + curve + sigCoinCompareHtml(sigView && sigView.preCoin ? sigView.preCoin : pairs)
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + hist + mix + '</div>'
         + '<div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-3">' + cutHtml + sweepHtml + '</div>'
@@ -12257,7 +12323,7 @@
           : '<p class="text-slate-500 text-[11px] pb-2">Any size, any stop: positions are risk ÷ stop, however small, with no leverage limit but yours.</p>')
         + '</div>';
       host.innerHTML = '<div class="flex items-center gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Demo account</h3></div>'
-        + '<p class="text-slate-500 text-[11px] mb-3">A pretend account that takes every alert with a result in this view, one after another in the order they fired, and compounds. Results follow the filters above: Exit at, Type or Level, channel, period and BTC day. Fees are your broker\'s, set below. With real orders on, each trade is placed as ' + esc(vn) + ' would take it: whole contracts, the coin\'s max leverage, no stop tighter than the min.</p>'
+        + '<p class="text-slate-500 text-[11px] mb-3" title="Results follow the filters above: Exit at, Type or Level, channel, period and BTC day. With real orders on, each trade is placed as ' + esc(vn) + ' would take it: whole contracts, the coin\'s max leverage, no stop tighter than the min.">A pretend account: every graded alert in view, in order, compounded. Follows the filters above; fees are your broker\'s (below).</p>'
         + form + fees + real + '<div id="sigDemoOut"></div>';
       if (rl && bk === 'delta') demoSpecsLoad();
       demoDrawOut();
@@ -14276,11 +14342,18 @@
     setInterval(autoTick, 60e3);
     document.addEventListener("visibilitychange", autoTick);
     // Under the Signals title: how current this device's alerts are.
+    // The newest alert's time, worked out again only when the alerts change (it read every alert on each draw).
+    let sigFreshMemo = { list: null, n: -1, last: "" };
     function renderSigFresh() {
       const el = document.getElementById('sigFresh');
       if (!el) return;
-      let last = "";
-      (state.signals || []).forEach(g => { const k = (g.date || "") + " " + (g.time || ""); if (k > last) last = k; });
+      const list = state.signals || [];
+      if (sigFreshMemo.list !== list || sigFreshMemo.n !== list.length) {
+        let newest = "";
+        list.forEach(g => { const k = (g.date || "") + " " + (g.time || ""); if (k > newest) newest = k; });
+        sigFreshMemo = { list, n: list.length, last: newest };
+      }
+      const last = sigFreshMemo.last;
       const at = state.ui.sigAutoAt ? new Date(state.ui.sigAutoAt) : null;
       el.innerText = (last ? "Newest alert " + last.trim() + (at ? " · checked " + hhmm(at.getHours() * 60 + at.getMinutes()) : "") : "")
         + (sigAutoFailAt ? (last ? " · " : "") + "couldn't reach the scanner, trying again in 2 min" : last ? " · auto every 10 min" : "");
@@ -15811,7 +15884,8 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
-      { v: '2026-11-16.197', pr: 112, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
+      { v: '2026-11-16.198', pr: 112, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
+      { v: '2026-11-16.197', pr: 111, title: 'Signals lighter and clearer', pts: ['Filters take less room: tighter rows, a dot on every row you changed, and a Reset for Which alerts. On a phone both panels start folded, so the numbers come first', 'Calendar numbers fit their day; fib and trendline tables drop the empty Score column; prices without trailing zeros', 'Faster redraws on Edge & breakdowns, and fewer redraws while prices load on a slow device. No number changes'] },
       { v: '2026-11-14.195', pr: 109, title: 'NSE alerts from 1 Sep', pts: ['NSE alerts before 1 Sep are deleted and never read again: about 37% fewer alerts kept (23,539 to 14,839 on your data, 11.7 to 7.3 MB)', 'All 200 NSE stocks stay; crypto keeps history from 1 Jun', 'An NSE trade from before 1 Sep keeps the alert it came from, so its setup does not change'] },
       { v: '2026-11-14.194', pr: 108, title: 'Dropped coins deleted, Top 30 on both brokers', pts: ['Alerts for coins the scanner no longer watches are deleted, not hidden: about 2,000 fewer alerts kept (25,565 to 23,539 on your data) and every scanner read skips them. The Hidden / Shown row is gone', 'A dropped coin keeps only the alerts one of your trades matches, so the trade keeps its setup', 'Top 10 / 20 / 30 count only coins on both CoinDCX and Delta (14 Nov volume). The scanner added AVAX, INJ, FIL, AAVE, TAO and ARB, and the list now comes from the scanner itself'] },
       { v: '2026-11-14.193', pr: 107, title: 'Current coins only, Top 10/20/30, best settings', pts: ['Coins dropped from the scanner on 8 Nov are hidden from every number by default (Shown switch under Coins); Coins gets Top 10 / 20 / 30 by 30-day volume', 'Edge & breakdowns: best option for every setting, the best full combination with all outputs, a 60/40 out-of-sample check and a luck check; Use puts it on the tab', 'Overfit warning on top: the best of many tries is partly luck, read the newest-40% lines'] },
