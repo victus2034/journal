@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-16.199">
+  <meta name="app-version" content="2026-11-16.200">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -8829,6 +8829,7 @@
       // and what the risk allows.
       let cap = num(i.cap);
       if (!(cap > 0 && cap <= 1e10)) { if (String(i.cap || '') !== '' && !(num(i.cap) === 0)) res.warns.push('Account size ' + i.cap + ' looks wrong; not used.'); cap = 0; }
+      if (cap > 0 && risk > cap) res.warns.push('Risk ₹' + risk.toLocaleString('en-IN') + ' is more than the whole account (₹' + cap.toLocaleString('en-IN') + '); the account caps the lots.');
       const K0 = Math.round(E / NIFTY_STEP) * NIFTY_STEP;
       const mkRow = o => {
         const K = up ? K0 + o * NIFTY_STEP : K0 - o * NIFTY_STEP;
@@ -16059,6 +16060,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-16.200', pr: 112, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
       { v: '2026-11-16.199', pr: 110, title: 'Best settings: only what is possible', pts: ['The card no longer offers things the tab cannot show: Crypto market on an NSE channel, a Coins pick with the Indian market, a crypto channel inside Indian, a level with no alerts (L1 + L3 was just L3), or a Move SL / Partial that never fires', 'It now searches the alerts you have in view (it said 1,554 fib alerts while you were on NSE 1D); a setting with nothing else to try says why, and two options that show the same alerts count as one', 'Use always lands on settings the tab keeps, with alerts in view; after Use or any change the card asks for a new search'] },
       { v: '2026-11-16.198', pr: 113, title: 'Early entry option', pts: ['Signals → How each trade is played: new Early entry row (Off, 0.01% to 0.2%). The order fills that much before the entry, above it for a buy and below it for a sell, so a trade that turned just short of the level is counted', 'Only the fill moves: SL, target, Move SL, Partial and Trail TP stay at the alert\'s prices; R is counted from your fill to the stop', 'In Best settings, compare tables, Demo account and CSV too; TL BROKEN alerts keep their market entry'] },
       { v: '2026-11-16.197', pr: 111, title: 'Signals lighter and clearer', pts: ['Filters take less room: tighter rows, a dot on every row you changed, and a Reset for Which alerts. On a phone both panels start folded, so the numbers come first', 'Calendar numbers fit their day; fib and trendline tables drop the empty Score column; prices without trailing zeros', 'Faster redraws on Edge & breakdowns, and fewer redraws while prices load on a slow device. No number changes'] },

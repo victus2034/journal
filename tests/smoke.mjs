@@ -6433,6 +6433,12 @@ async function optionsRun(seed) {
       const odd = await page.innerText('#optOut');
       check(/wrong side of the entry/.test(odd) && /India VIX 900 looks wrong; using 14/.test(odd) && /Lot size -5 looks wrong; using 65/.test(odd) && /Brokerage ₹99999 an order looks wrong; using ₹20/.test(odd) && /Nifty 25,750, 1R/.test(odd) && /\b65 qty|130 qty|195 qty/.test(odd), w + 'odd inputs: ' + odd.slice(0, 400));
       await page.fill('#optVix', '14'); await page.fill('#optLot', '65'); await page.fill('#optBrok', '20'); await page.fill('#optTarget', '');
+      // A risk bigger than the whole account says so (the account caps the lots).
+      await page.fill('#optCap', '50000'); await page.fill('#optRisk', '999999');
+      check(/Risk ₹9,99,999 is more than the whole account \(₹50,000\)/.test(await page.innerText('#optOut')), w + 'risk over the account not flagged');
+      await page.fill('#optRisk', '400');
+      check(!/more than the whole account/.test(await page.innerText('#optOut')), w + 'risk under the account flagged');
+      await page.fill('#optCap', ''); await page.fill('#optRisk', '');
       // Kept after a reload.
       await page.fill('#optRisk', '10000');
       await page.reload({ waitUntil: 'load' }); await page.waitForTimeout(300);
