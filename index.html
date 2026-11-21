@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-21.201">
+  <meta name="app-version" content="2026-11-21.202">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -10967,7 +10967,9 @@
     // lower line (SP TL BR) or a long through the upper line (RS TL BR). The scanner
     // does not send break alerts yet (2026-10-31); they show here once it does.
     const SIG_TL_TYPES = [{ k: "", label: "All" }, { k: "support", label: "Support TL", line: 0, side: "long" }, { k: "resistance", label: "Resistance TL", line: 1, side: "short" },
-      { k: "spbr", label: "SP TL BR", line: 0, side: "short" }, { k: "rsbr", label: "RS TL BR", line: 1, side: "long" }];
+      { k: "spbr", label: "SP TL BR", line: 0, side: "short" }, { k: "rsbr", label: "RS TL BR", line: 1, side: "long" },
+      // Touches / Breaks (lakky, 2026-11-21): both lines at once - the live bot's "breaks only" in one view.
+      { k: "touch", label: "Touches", br: false }, { k: "br", label: "Breaks", br: true }];
     function sigTlType() { return sigKind() === 'trendline' ? SIG_TL_TYPES.find(x => x.k && x.k === state.ui.sigTlType) || null : null; }
     function setSigTlType(k) { state.ui.sigTlType = k; sigVisible = SIG_PAGE; save(); renderSignalsTable(); }
     function renderSigTlBar(kind) {
@@ -10976,7 +10978,7 @@
       wrap.classList.toggle('hidden', kind !== 'trendline');
       const cur = sigTlType() ? sigTlType().k : "";
       bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
-      bar.title = "Support TL: longs at the lower line. Resistance TL: shorts at the upper line. SP TL BR: shorts on a break of the lower line. RS TL BR: longs on a break of the upper line (once the scanner sends breaks).";
+      bar.title = "Support TL: longs at the lower line. Resistance TL: shorts at the upper line. SP TL BR: shorts on a break of the lower line. RS TL BR: longs on a break of the upper line. Touches / Breaks: both lines together (Breaks = the live bot's breaks only).";
       bar.innerHTML = '';
       SIG_TL_TYPES.forEach(x => {
         const b = document.createElement('button'); b.type = 'button';
@@ -11026,6 +11028,7 @@
     function sigLvlPairs(pairs) {
       pairs = sigLvlOnPairs(pairs);
       const tt = sigTlType();
+      if (tt && tt.br !== undefined) return pairs.filter(pr => pr.signal.kind === "trendline" && sigIsBreak(pr.signal) === tt.br);
       if (tt) return pairs.filter(pr => pr.signal.kind === "trendline" && sigTlLine(pr.signal) === tt.line && (pr.signal.side === "short" ? "short" : "long") === tt.side);
       const k = sigLvl();
       if (!k) return pairs;
@@ -16278,6 +16281,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-21.202', pr: 115, title: 'Trendline Type: Touches and Breaks', pts: ['Signals → Trendline alerts → Type has two new choices: Touches (both touch types) and Breaks (SP TL BR + RS TL BR together), so the live bot\'s breaks only shows in one view', 'Checked against an independent retest on real Delta candles: 1D crypto breaks 1 Jun - 21 Nov, all 210 alerts the same R (202 closed, +0.29R a trade)'] },
       { v: '2026-11-21.201', pr: 114, title: 'Trades tagged Auto or Manual', pts: ['Every trade now shows AUTO (placed by the live bot) or MANUAL (placed by you), past ones too: found from the bot\'s own order log in your sync repo', 'Analysis → Which trades: new Placed by row (All / Auto / Manual) narrows every number, table and the broker report; the Dashboard trade list has the same filter', 'Wrong tag? Open the trade and tap Auto or Manual under Placed by'] },
       { v: '2026-11-16.200', pr: 112, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
       { v: '2026-11-16.199', pr: 110, title: 'Best settings: only what is possible', pts: ['The card no longer offers things the tab cannot show: Crypto market on an NSE channel, a Coins pick with the Indian market, a crypto channel inside Indian, a level with no alerts (L1 + L3 was just L3), or a Move SL / Partial that never fires', 'It now searches the alerts you have in view (it said 1,554 fib alerts while you were on NSE 1D); a setting with nothing else to try says why, and two options that show the same alerts count as one', 'Use always lands on settings the tab keeps, with alerts in view; after Use or any change the card asks for a new search'] },
