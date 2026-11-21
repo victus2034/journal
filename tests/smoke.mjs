@@ -7417,6 +7417,147 @@ async function botTagRun(seed) {
 }
 
 const data = fixture();
+// BTC market day (lakky, 2026-11-21: "fix the sideways market, it should be accurate and logical"):
+// each day is BTC's market going into it, from closed Delta daily candles only (20-day EMA, ATR 14),
+// never the day's own close. Real candles (Feb - Oct 2026) against a reference worked out here from
+// the rule, no hindsight, the 05:30 IST edge, the calendar, the filter and a clicked day's hours.
+async function marketDayRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const days = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/btc-1d-delta-2026.json'), 'utf8')).days;
+  // The rule, written again from its words: EMA 20 from the first close, ATR 14 = mean true range,
+  // Bullish when the last close is 0.75+ ATR above an EMA higher than 5 days before, Bearish the mirror.
+  const ref = {};
+  { const a = 2 / 21, rows = []; let ema = null;
+    days.forEach(([d, o, h, l, c], i) => { const pc = i ? days[i - 1][4] : o; ema = ema == null ? c : c * a + ema * (1 - a); rows.push({ d, c, ema, tr: Math.max(h, pc) - Math.min(l, pc) }); });
+    for (let i = 39; i < rows.length; i++) {
+      const atr = rows.slice(i - 13, i + 1).reduce((x, r) => x + r.tr, 0) / 14, dist = (rows[i].c - rows[i].ema) / atr, slope = rows[i].ema - rows[i - 5].ema;
+      const next = new Date(Date.parse(rows[i].d + 'T00:00:00Z') + 864e5).toISOString().slice(0, 10);
+      ref[next] = dist >= 0.75 && slope > 0 ? 'bull' : dist <= -0.75 && slope < 0 ? 'bear' : 'side';
+    } }
+  const seeded = JSON.parse(JSON.stringify(seed));
+  const byDate = {}; days.forEach(([d, o, h, l, c]) => { byDate[d] = { o, c, h, l, pct: +((c - o) / o * 100).toFixed(2) }; });
+  seeded.mktCandles = { symbol: 'BTCUSD', byDate, fetchedAt: Date.now() };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    const got = await page.evaluate(() => { const m = mktTrend(), o = {}; Object.keys(m).forEach(k => { o[k] = m[k].bias; }); return o; });
+    const keys = Object.keys(ref), off = keys.filter(k => got[k] !== ref[k]);
+    check(keys.length === 210 && Object.keys(got).length === 210 && !off.length, 'every day = the rule worked out here (210 days): ' + Object.keys(got).length + ' days, off: ' + off.slice(0, 5).map(k => k + ' ' + got[k] + '/' + ref[k]).join(', '));
+    // What the chart shows: the 62-65k chop of 4-14 Jul is sideways, the run of 20 Aug - 8 Sep bullish, 28 Mar - 1 Apr bearish.
+    const run = (a, b) => keys.filter(k => k >= a && k <= b).map(k => got[k]).join(',');
+    check(/^(side,){10}side$/.test(run('2026-07-04', '2026-07-14')), '4-14 Jul sideways: ' + run('2026-07-04', '2026-07-14'));
+    check(/^(bull,){19}bull$/.test(run('2026-08-20', '2026-09-08')), '20 Aug - 8 Sep bullish: ' + run('2026-08-20', '2026-09-08'));
+    check(run('2026-03-28', '2026-03-31') === 'bear,bear,bear,bear', '28-31 Mar bearish: ' + run('2026-03-28', '2026-03-31'));
+    // No hindsight: a day's own candle never changes the market its alerts and trades are filed under.
+    const hs = await page.evaluate(() => {
+      const k = mktCache().byDate['2026-09-18'], keep = { c: k.c, l: k.l }, before = [mktBiasOn('2026-09-18', '10:00'), mktBiasOn('2026-09-19', '10:00')];
+      k.c = k.c * 0.8; k.l = Math.min(k.l, k.c); mktCache().fetchedAt++;
+      const after = [mktBiasOn('2026-09-18', '10:00'), mktBiasOn('2026-09-19', '10:00')];
+      Object.assign(k, keep); mktCache().fetchedAt--; mktTrendMemo = null;
+      return { before, after, old: (k.c - k.o) / k.o * 100 };
+    });
+    check(hs.before[0] === 'side' && hs.after[0] === 'side' && hs.old > 1.5, '18 Sep (+5.9%, Bullish by the old same-day rule) stays Sideways when its own close moves: ' + JSON.stringify(hs));
+    check(hs.before[1] === 'bull' && hs.after[1] === 'bear', 'the next day reads the close that moved: ' + JSON.stringify(hs));
+    // The day starts at 05:30 IST (00:00 UTC), like Delta's candle and the journal's day.
+    const edge = await page.evaluate(() => [mktBiasOn('2026-09-19', '05:29'), mktBiasOn('2026-09-19', '05:30'), mktBiasOfTrade({ rep: true, date: '2026-09-19', time: '10:00', openDate: '2026-09-18', openTime: '23:00' }), mktBiasOfTrade({ date: '2026-09-19', time: '10:00' })]);
+    check(JSON.stringify(edge) === '["side","bull","side","bull"]', '05:29 IST is the day before, 05:30 the day; a report trade goes by when it opened: ' + JSON.stringify(edge));
+    // The calendar: colour = market going in, the % = what BTC then did, counts and the month.
+    await page.evaluate(() => {
+      const sg = (id, date, time, r) => ({ id, key: 'k' + id, kind: 'trendline', date, time, symbol: 'ETHUSD', side: 'long', score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H', filled: true, outcome: r > 0 ? '+1R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 99, entry: 100 });
+      state.signals = [sg('s1', '2026-09-18', '10:00', -1), sg('s2', '2026-09-19', '05:00', 1), sg('s3', '2026-09-19', '10:00', 1), sg('s4', '2026-09-20', '10:00', 1)];
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'market', mktFilter: '', mktMonth: '2026-09', mktDay: '', sigTgt: '', sigCoins: '', sigMarket: '', sigAsset: '' });
+      save(); switchTab('signals'); renderAll(); setSigSec('market');
+    });
+    await page.waitForSelector('#mktCalSignals [data-mkt]');
+    const cal = await page.evaluate(() => ({
+      cells: [...document.querySelectorAll('#mktCalSignals [data-mkt]')].map(c => c.getAttribute('data-mkt')),
+      d18: (document.querySelectorAll('#mktCalSignals [data-mkt]')[17] || {}).innerText, t18: (document.querySelectorAll('#mktCalSignals [data-mkt]')[17] || { title: '' }).title,
+      sum: document.getElementById('mktCalSignalsSum').innerText.replace(/\s+/g, ' '),
+      rows: [...document.querySelectorAll('#mktCalSignals tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').trim()) }));
+    const want = keys.filter(k => k.startsWith('2026-09')).map(k => ref[k]);
+    check(JSON.stringify(cal.cells) === JSON.stringify(want), 'Sep cells = the rule: ' + cal.cells.join(','));
+    check(/\+5\.9%/.test(cal.d18) && /^Sideways going into the day: BTC closed 0\.\d\d ATR (above|below) its 20-day EMA on 17 Sep/.test(cal.t18), '18 Sep: sideways going in, then +5.9%: ' + cal.d18 + ' | ' + cal.t18);
+    check(/^Mostly bullish 20 bullish 0 bearish 10 sideways days out of 30 known BTC \+6\.4% this month$/.test(cal.sum), 'month line: ' + cal.sum);
+    check(/^Bullish 2 · 100% won/.test(cal.rows[0]) && /^Sideways 2 · 50% won/.test(cal.rows[2]), 'alerts filed by the market going in (05:00 on the 19th = the 18th): ' + JSON.stringify(cal.rows));
+    // The filter: Sideways keeps the 18th's alert and the 05:00 one.
+    await page.evaluate(() => setMktFilter('mktCalSignals', 'side'));
+    const kept = await page.evaluate(() => (sigView && sigView.pairs || []).map(p => p.signal.id).sort().join(','));
+    check(kept === 's1,s2', 'Sideways filter: ' + kept);
+    await page.evaluate(() => setMktFilter('mktCalSignals', ''));
+    // A clicked day's hours are its candle's: 05:30 to 04:30 IST, the next morning's alert included.
+    await page.evaluate(() => {
+      const bars = {}, t0 = Date.parse('2026-09-18T00:00:00Z') / 1000;
+      for (let h = -2; h < 26; h++) bars[t0 + h * 3600] = [100, 101, 99, 100.5];
+      mktHr = { fetchedAt: Date.now(), bars }; mktHrFailedAt = 0;
+      mktPickDay('mktCalSignals', '2026-09-18');
+    });
+    const hr = await page.evaluate(() => { const el = document.getElementById('mktCalSignalsHourly'); return { head: el.innerText.split('\n').slice(0, 3).join(' | '), hours: [...el.querySelectorAll('tbody tr')].map(tr => tr.children[0].innerText.slice(0, 5)) }; });
+    check(hr.hours.length === 24 && hr.hours[0] === '05:30' && hr.hours[23] === '04:30', 'a day\'s hours run 05:30 to 04:30: ' + hr.hours.join(','));
+    check(/05:30 IST to 05:30 IST next day/.test(hr.head) && /Market going in: Sideways/.test(hr.head + (await page.evaluate(() => document.getElementById('mktCalSignalsHourly').innerText))) , 'the day says its window and market: ' + hr.head);
+    const an = await page.evaluate(() => { const t = document.getElementById('mktCalSignalsHourly').innerText; const m = /Alerts: (\d+)/.exec(t); return m ? +m[1] : -1; });
+    check(an === 2, 'the 18th\'s alerts: 10:00 that day and 05:00 the next morning: ' + an);
+  } catch (e) { errs.push('threw: ' + e.message); }
+  await ctx.close();
+  if (errs.length) failures.push('BTC market day:\n     ' + errs.join('\n     '));
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'BTC market day: going into the day from closed candles (no hindsight), = rule on 210 real days, calendar, filter, 05:30 day');
+}
+
+// A trade the live bot placed takes the stop the bot put on the exchange (lakky's AVAX of 18 Nov read
+// +13R on an alert stop 0.14% under entry); a typed stop or a trade set to Manual keeps its own.
+async function botStopRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const now = new Date().toISOString();
+  const order = o => Object.assign({ broken: false, status: 'closed', exchange_id: 'x' }, o);
+  const orders = [
+    order({ id: 'tl|AVAXUSD|1d|0|1|2@1794930501', pair: 'DELTA:AVAXUSD', symbol: 'AVAXUSD', side: 'long', qty: 5, placed_ts: 1794930759, sent_ts: 1794930501, fill_ts: 1795017846, exit_ts: 1795100291, entry: 6.968, sl: 6.778, risk: 0.95 }),
+    order({ id: 'tl|ENAUSD|1d|0|1|2@1795124000', pair: 'DELTA:ENAUSD', symbol: 'ENAUSD', side: 'long', qty: 85, placed_ts: 1795124255, sent_ts: 1795124000, fill_ts: 1795129385, exit_ts: 1795232057, entry: 0.10519, sl: 0.09329 }),
+    order({ id: 'tl|SUIUSD|1d|0|1|2@1795124000', pair: 'DELTA:SUIUSD', symbol: 'SUIUSD', side: 'long', qty: 10, placed_ts: 1795124255, sent_ts: 1795124000, fill_ts: 1795129385, exit_ts: 1795232057, entry: 0.7, sl: 0.65 }),
+    order({ id: 'tl|DOGEUSD|1d|0|1|2@1795124000', pair: 'DELTA:DOGEUSD', symbol: 'DOGEUSD', side: 'long', qty: 100, placed_ts: 1795124255, sent_ts: 1795124000, fill_ts: 1795129385, exit_ts: 1795232057, entry: 0.2, sl: 0.19 })
+  ];
+  const dx = { id: 'acc_dx', name: 'Delta', market: 'crypto', currency: 'USD', startBalance: 50, maxRiskPct: 1.5, dailyLossLimit: 2.5, maxTradesPerDay: 5, defaultLeverage: 10, updatedAt: now };
+  const tr = (id, symbol, date, time, exitDate, exitTime, qty, entry, exit, stop, extra) => Object.assign({ id, accountId: 'acc_dx', date, time, exitDate, exitTime, symbol, direction: 'long', entry, exit, stop, qty, fees: 0.041518, leverage: 10, setup: '', rules: [false, false, false, false, false], notes: '', updatedAt: now }, extra || {});
+  const seeded = JSON.parse(JSON.stringify(seed));
+  seeded.accounts.push(dx);
+  seeded.trades = seeded.trades.concat([
+    tr('avax', 'AVAXUSD', '2026-11-18', '21:32', '2026-11-19', '20:23', 5, 6.968, 7.106, 6.9580275, { stopSrc: 'alert' }), // alert stop, 0.14% under entry
+    tr('ena', 'ENAUSD', '2026-11-20', '04:30', '2026-11-21', '09:01', 85, 0.10519, 0.0932, 0), // no stop
+    tr('sui', 'SUIUSD', '2026-11-20', '04:30', '2026-11-21', '09:01', 10, 0.7, 0.72, 0.68), // a stop typed by hand
+    tr('doge', 'DOGEUSD', '2026-11-20', '04:30', '2026-11-21', '09:01', 100, 0.2, 0.21, 0, { by: 'manual' }) // set to Manual
+  ]);
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const read = () => page.evaluate(() => Object.fromEntries(state.trades.filter(t => ['avax', 'ena', 'sui', 'doge'].includes(t.id)).map(t => [t.id, { stop: t.stop, src: t.stopSrc || '', r: derive(t).r, by: tradeBy(t) }])));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(file => { botOrdersTake(file); renderAll(); }, JSON.stringify({ version: 1, orders: Object.fromEntries(orders.map(o => [o.id, o])) }));
+    const g = await read();
+    // By hand: AVAX (7.106 - 6.968) x 5 - 0.041518 = 0.648482 on (6.968 - 6.778) x 5 = 0.95 -> +0.6826R.
+    check(g.avax.stop === 6.778 && g.avax.src === 'bot' && Math.abs(g.avax.r - 0.648482 / 0.95) < 1e-9, 'AVAX: the bot\'s stop, +0.68R: ' + JSON.stringify(g.avax));
+    // ENA (0.0932 - 0.10519) x 85 - 0.041518 = -1.060668 on (0.10519 - 0.09329) x 85 = 1.0115 -> -1.0486R.
+    check(g.ena.stop === 0.09329 && g.ena.src === 'bot' && Math.abs(g.ena.r - (-1.060668 / 1.0115)) < 1e-6, 'ENA: gets an R from the bot\'s stop: ' + JSON.stringify(g.ena));
+    check(g.sui.stop === 0.68 && g.sui.src === '' && g.sui.by === 'auto', 'a typed stop is kept: ' + JSON.stringify(g.sui));
+    check(g.doge.stop === 0 && g.doge.r === null && g.doge.by === 'manual', 'a trade set to Manual is left alone: ' + JSON.stringify(g.doge));
+    // Kept through a reload (the sanitizer keeps the source), and the inspector says where the stop came from.
+    await page.reload({ waitUntil: 'load' });
+    const g2 = await read();
+    check(g2.avax.src === 'bot' && g2.avax.stop === 6.778, 'kept after a reload: ' + JSON.stringify(g2.avax));
+    const insp = await page.evaluate(() => { openInspector(state.trades.find(t => t.id === 'avax')); return document.getElementById('inspR').innerText; });
+    check(/\+0\.68R/.test(insp) && /stop the bot placed/.test(insp), 'inspector: ' + insp);
+  } catch (e) { errs.push('threw: ' + e.message); }
+  await ctx.close();
+  if (errs.length) failures.push('Bot stops:\n     ' + errs.join('\n     '));
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Bot stops: Auto trades take the stop the bot placed (AVAX +13R -> +0.68R), typed stops and Manual kept');
+}
+
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
   await run(name + ', sample journal', vp, data);
@@ -7480,6 +7621,8 @@ await nseSinceRun(data);
 await bestSettingsRun();
 await sigLightRun(data);
 await botTagRun(data);
+await marketDayRun(data);
+await botStopRun(data);
 
 await browser.close();
 server.close();
