@@ -472,11 +472,11 @@ async function backtestRun(seed) {
     // Its Review button opens the same Trade Inspector a journal trade does; Edit Trade there opens the form.
     await page.click('#btBody [data-repreview]');
     const insp = await page.evaluate(() => ({ open: !document.getElementById('tradeInspectorDrawer').classList.contains('translate-x-full'), del: document.getElementById('inspDelBtn').innerText,
-      rows: document.querySelectorAll('#inspChecklist button:not([data-setup])').length, tags: document.querySelectorAll('#inspTagsMistake button').length, id: activeInspectTrade && activeInspectTrade.id }));
+      rows: document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])').length, tags: document.querySelectorAll('#inspTagsMistake button').length, id: activeInspectTrade && activeInspectTrade.id }));
     check(insp.open && insp.del === 'Report rows' && insp.rows === 5 && insp.tags > 5 && insp.id === btnId, 'report trade inspector: ' + JSON.stringify(insp));
-    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // tap: Risk within limit on
+    await page.click('#inspChecklist button:not([data-setup]):not([data-inspby]):nth-of-type(2)'); // tap: Risk within limit on
     check(await page.evaluate(id => JSON.stringify(state.repReviews[id].rules), btnId) === '[false,true,false,false,false]', 'tapping a rule on a report trade did not save');
-    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // and off again
+    await page.click('#inspChecklist button:not([data-setup]):not([data-inspby]):nth-of-type(2)'); // and off again
     await page.evaluate(() => editActiveTrade());
     await page.waitForSelector('#modalSheet:not(.hidden)');
     await page.check('#mRule0'); await page.check('#mRule2');
@@ -1331,7 +1331,9 @@ async function cdxSizeRun(seed) {
       check((r.flags.indexOf('oversize') !== -1) === (w.x != null && w.x > 1), w.id + ' oversize flag: ' + r.flags.join());
     }
     const line = id => v.table.find(r => r[1] === id + 'X/USDT') || [];
-    check(line('L')[2] === 'LONG' && line('S')[2] === 'SHORT' && line('U')[2] === 'REPORT', 'side column: ' + JSON.stringify(v.table.map(r => r.slice(1, 3))));
+    // The side pill, then the Auto / Manual tag (no live bot here: all Manual).
+    const side = id => String(line(id)[2] || '').split(/\s+/);
+    check(side('L').join(' ') === 'LONG MANUAL' && side('S').join(' ') === 'SHORT MANUAL' && side('U').join(' ') === 'REPORT MANUAL', 'side column: ' + JSON.stringify(v.table.map(r => r.slice(1, 3))));
     check(line('L')[4] === '₹10,000.00' && line('U')[4] === '—' && line('U')[5] === '—', 'position column: ' + JSON.stringify(v.table.map(r => r.slice(1, 6))));
     check(/(^| \| )TRADES CHECKED 4 \|/i.test(v.strip), 'headline: ' + v.strip);
     check(v.onePair === 1, 'pair filter in the analysis: ' + v.onePair + ' rows');
@@ -1375,10 +1377,10 @@ async function reviewRun(seed) {
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForTimeout(300);
     await page.evaluate(() => openInspector(allTrades().find(t => t.id === 'tr1')));
-    const rows = () => page.evaluate(() => [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' ')));
+    const rows = () => page.evaluate(() => [...document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])')].map(b => b.innerText.replace(/\s+/g, ' ')));
     const before = await rows();
-    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // Risk within limit: missed -> kept
-    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(1)'); // Traded a planned setup: kept -> missed
+    await page.click('#inspChecklist button:not([data-setup]):not([data-inspby]):nth-of-type(2)'); // Risk within limit: missed -> kept
+    await page.click('#inspChecklist button:not([data-setup]):not([data-inspby]):nth-of-type(1)'); // Traded a planned setup: kept -> missed
     await page.click('#inspTagsPositive button:has-text("Trailed Stop Loss")');
     await page.click('#inspTagsMistake button:has-text("FOMO Entry")');
     await page.click('#inspChecklist button:has-text("Volume spike")');
@@ -3647,7 +3649,7 @@ async function cleanupRun(seed) {
       // Inspector: setup chips and the FIB checklist with L4 ticked.
       openInspector(allTrades().find(t => t.id === 'tf1'));
       out.chips = [...document.querySelectorAll('#inspChecklist [data-setup]')].map(b => b.textContent);
-      out.rows = [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' '));
+      out.rows = [...document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])')].map(b => b.innerText.replace(/\s+/g, ' '));
       out.rTxt = document.getElementById('inspR').innerText;
       document.querySelector('#inspChecklist [data-setup="None"]').click();
       out.afterNone = { setup: state.trades.find(t => t.id === 'tf1').setup, pr: state.trades.find(t => t.id === 'tf1').playRules || null };
@@ -3777,8 +3779,8 @@ async function setupLevelRun(seed) {
       out.cov = document.getElementById('playCoverage').innerText;
       // The inspector: one level at a time, and a level tapped by hand is yours.
       openInspector(allTrades().find(t => t.id === 'a1'));
-      out.rows0 = [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' ')).slice(-4);
-      [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].find(b => /RESISTANCE/.test(b.innerText) && !/BROKEN/.test(b.innerText)).click();
+      out.rows0 = [...document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])')].map(b => b.innerText.replace(/\s+/g, ' ')).slice(-4);
+      [...document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])')].find(b => /RESISTANCE/.test(b.innerText) && !/BROKEN/.test(b.innerText)).click();
       out.after = one('a1');
       alertFillKey = ''; fillFromAlerts();
       out.kept = one('a1');
@@ -7228,6 +7230,192 @@ async function bestSettingsRun() {
   errs.forEach(e => { console.log('     ' + e); failures.push('best settings: ' + e); });
 }
 
+// Auto / Manual (lakky, 2026-11-21): the journal reads the live bot's order log from the sync repo
+// (coindcx_live_state.json) and tags each trade the bot placed AUTO, every other one MANUAL, past
+// trades too. Orders and trades are lakky's real ones of 14-20 Nov (bot times, Delta trades, CoinDCX
+// rows and fills), plus hand trades the rules must leave Manual: same coin before the fill, wrong side,
+// other broker, other size on a long limit, NSE. Analysis' Placed by row and the Dashboard list filter
+// on it; the inspector changes a tag and the change is kept through a save and read back.
+async function botTagRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ts = s => Date.parse(s + '+05:30') / 1000;
+  const order = o => Object.assign({ broken: false, status: 'closed', exchange_id: 'x' + o.id.length }, o);
+  const orders = [
+    order({ id: 'tl|HYPEUSD|1d|0|1|2@1794627173', pair: 'B-HYPE_USDT', symbol: 'HYPEUSD', side: 'long', qty: 0.1, placed_ts: 1794633203, sent_ts: 1794627173, fill_ts: 1794660376, exit_ts: 1794674820, fill_price: 67.946, exit_why: 'SL' }),
+    order({ id: 'tlbreak|XRPUSD|1d|0|1|2@1794709973', pair: 'B-XRP_USDT', symbol: 'XRPUSD', side: 'short', qty: 15.8, placed_ts: 1794710474, sent_ts: 1794709973, fill_ts: 1794710606, exit_ts: 1794783627, broken: true }),
+    order({ id: 'tlbreak|INJUSD|1d|0|1|2@1794709973', pair: 'B-INJ_USDT', symbol: 'INJUSD', side: 'short', qty: 0.9, placed_ts: 1794710474, sent_ts: 1794709973, fill_ts: 1794710606, status: 'open', broken: true }),
+    order({ id: 'tlbreak|BTCUSD|1d|0|1|2@1794709973', pair: 'B-BTC_USDT', symbol: 'BTCUSD', side: 'short', placed_ts: 1794710474, sent_ts: 1794709973, status: 'skipped', reason: 'min order' }),
+    order({ id: 'tl|AVAXUSD|1d|0|1|2@1794930501', pair: 'DELTA:AVAXUSD', symbol: 'AVAXUSD', side: 'long', qty: 5, placed_ts: 1794930759, sent_ts: 1794930501, fill_ts: 1795017846, exit_ts: 1795100291, exchange_id: '14830:1693453227' }),
+    order({ id: 'tl|ENAUSD|1d|0|1|2@1795124000', pair: 'DELTA:ENAUSD', symbol: 'ENAUSD', side: 'long', qty: 85, placed_ts: 1795124255, sent_ts: 1795124000, fill_ts: 1795129385, exit_ts: 1795232057 }),
+    // A limit that sat a day before it filled: a hand trade of another size inside that day is not it.
+    order({ id: 'tl|SOLUSD|1d|0|1|2@1', pair: 'DELTA:SOLUSD', symbol: 'SOLUSD', side: 'long', qty: 10, placed_ts: ts('2026-11-18T09:00:00'), sent_ts: ts('2026-11-18T08:59:00'), fill_ts: ts('2026-11-19T15:00:00'), exit_ts: ts('2026-11-19T18:00:00') }),
+    order({ id: 'tl|DOGEUSD|1d|0|1|2@1', pair: 'DELTA:DOGEUSD', symbol: 'DOGEUSD', side: 'long', placed_ts: ts('2026-11-20T09:00:00'), sent_ts: ts('2026-11-20T09:00:00'), status: 'waiting' })
+  ];
+  const stateFile = drop => JSON.stringify({ version: 1, realized: -4.3, started_ts: 1794560717, until_ts: 0, events: [], orders: Object.fromEntries(orders.filter(o => o.symbol !== drop).map(o => [o.id, o])) });
+  const now = new Date().toISOString();
+  const dx = { id: 'acc_dx', name: 'Delta', market: 'crypto', currency: 'USD', startBalance: 50, maxRiskPct: 1.5, dailyLossLimit: 2.5, maxTradesPerDay: 5, defaultLeverage: 10, updatedAt: now };
+  const tr = (id, symbol, direction, date, time, exitDate, exitTime, qty, entry, exit, src) => ({ id, accountId: 'acc_dx', date, time, exitDate, exitTime, symbol, direction, entry, exit, stop: 0, qty, fees: 0.01, leverage: 10, setup: '', rules: [false, false, false, false, false], notes: '', updatedAt: now, ...(src ? { src } : {}) });
+  const mine = [
+    tr('b1', 'AVAXUSD', 'long', '2026-11-18', '21:32', '2026-11-19', '20:23', 5, 6.968, 7.106, 'delta:1696157497'), // the bot's
+    tr('b2', 'ENAUSD', 'long', '2026-11-20', '04:30', '2026-11-21', '09:01', 85, 0.10519, 0.0932, 'delta:1697457829'), // the bot's
+    tr('b3', 'XRPUSD', 'long', '2026-11-16', '16:21', '2026-11-16', '16:21', 1, 0.9522, 0.952, 'delta:1686286326'), // the bot's order test
+    tr('m1', 'AVAXUSD', 'long', '2026-11-18', '10:00', '2026-11-18', '11:00', 5, 6.9, 6.95, 'delta:m1'), // inside AVAX's wait, same size: b1 fits better
+    tr('m2', 'ENAUSD', 'short', '2026-11-20', '04:31', '2026-11-20', '04:40', 85, 0.105, 0.104, 'delta:m2'), // wrong side
+    tr('m3', 'HYPEUSD', 'short', '2026-11-15', '08:12', '2026-11-15', '09:00', 0.18, 66, 65, 'delta:m3'), // the bot's HYPE short was on CoinDCX
+    tr('m4', 'SOLUSD', 'long', '2026-11-19', '10:00', '2026-11-19', '11:00', 3, 140, 141, 'delta:m4'), // 3 vs the bot's 10, hours before its fill
+    tr('m5', 'SOLUSD', 'long', '2026-11-19', '14:58', '2026-11-20', '10:00', 10, 140, 141, 'delta:m5') // the bot's size at its fill, but still open long after the bot saw its trade close
+  ];
+  const row = (id, at, sym, gross, fee) => ({ id, file: 'cdx-api', sym, at, kind: 'order', type: 'By Order', gross, settle: 0, fee, net: gross - fee, cur: 'INR' });
+  const fill = (id, at, sym, side, price, qty) => ({ id, at, sym, side, price, qty, cur: 'INR' });
+  const backtest = {
+    files: [{ id: 'cdx-api', name: 'CoinDCX API', sheet: 'Futures transactions', broker: 'CoinDCX', importedAt: '2026-10-18T18:44:48.596Z', updatedAt: now, rows: 9, added: 0, net: 0, cur: 'INR', checked: true,
+      fills: [fill('f1', '2026-11-14 18:14:54', 'B-HYPE_USDT', 'buy', 67.946, 0.1), fill('f2', '2026-11-14 22:15:42', 'B-HYPE_USDT', 'sell', 65.564, 0.1),
+        fill('f3', '2026-11-15 08:11:17', 'B-XRP_USDT', 'sell', 0.9477, 15.8), fill('f4', '2026-11-16 04:30:07', 'B-XRP_USDT', 'buy', 0.972, 15.8),
+        fill('f5', '2026-11-15 08:11:22', 'B-INJ_USDT', 'sell', 6.877, 0.9),
+        fill('f6', '2026-11-17 10:00:04', 'B-ETH_USDT', 'buy', 3000, 0.01), fill('f7', '2026-11-17 12:00:09', 'B-ETH_USDT', 'sell', 3050, 0.01),
+        fill('f8', '2026-11-14 12:00:00', 'B-HYPE_USDT', 'buy', 60, 0.3), fill('f9', '2026-11-14 13:00:00', 'B-HYPE_USDT', 'sell', 61, 0.3)] }],
+    rows: [row('c1', '2026-11-14 18:14:55', 'B-HYPE_USDT', 0, 0.164), row('c2', '2026-11-14 22:15:43', 'B-HYPE_USDT', -24.296, 10.396),
+      row('c3', '2026-11-15 08:11:18', 'B-XRP_USDT', 0, 0.901), row('c4', '2026-11-16 04:30:07', 'B-XRP_USDT', -39.162, 0.924),
+      row('c5', '2026-11-15 08:11:22', 'B-INJ_USDT', 0, 0.372),
+      row('c6', '2026-11-17 10:00:05', 'B-ETH_USDT', 0, 0.5), row('c7', '2026-11-17 12:00:10', 'B-ETH_USDT', 50, 0.5),
+      row('c8', '2026-11-14 12:00:01', 'B-HYPE_USDT', 0, 0.1), row('c9', '2026-11-14 13:00:01', 'B-HYPE_USDT', 5, 0.1)]
+  };
+  const seeded = JSON.parse(JSON.stringify(seed));
+  seeded.accounts.push(dx);
+  seeded.trades = seeded.trades.concat(mine);
+  seeded.backtest = backtest;
+  seeded.sync = { token: 'tok', repo: 'victus/sync', branch: 'main', auto: false, lastAt: '', lastSha: '' };
+  seeded.ui = Object.assign({}, seeded.ui, { anPeriod: 'all', account: 'all' });
+  let reads = 0, drop = '', status = 200;
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/'), r => r.abort());
+  await ctx.route('https://api.github.com/**', route => {
+    const u = route.request().url(), h = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+    if (/\/repos\/victus\/sync\/contents\/coindcx_live_state\.json\?ref=main$/.test(u)) {
+      reads++;
+      if (!/raw/.test(route.request().headers()['accept'] || '')) return route.fulfill({ status: 400, headers: h, body: '{"message":"ask for the raw file"}' });
+      return route.fulfill({ status, headers: h, body: status === 200 ? stateFile(drop) : '{"message":"Not Found"}' });
+    }
+    return route.fulfill({ status: 404, headers: h, body: '{"message":"Not Found"}' });
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  // Every trade's tag: journal trades by id, report trades by coin and open time.
+  const tags = () => page.evaluate(() => {
+    const o = {};
+    state.trades.forEach(t => { o[t.id] = tradeBy(t); });
+    reportTrades().forEach(t => { o[t.symbol + ' ' + t.openAt] = tradeBy(t); });
+    reportBooks().open.forEach(t => { o['open ' + t.sym] = repIdBy(t.id); });
+    return o;
+  });
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    // Read by itself a few seconds after opening (with the sync token, the raw file).
+    await page.waitForFunction(() => state.ui.botOrders && state.ui.botOrders.list.length > 0, null, { timeout: 15000 });
+    const kept = await page.evaluate(() => state.ui.botOrders.list.map(o => o.pair).join(' '));
+    check(reads === 1 && kept === 'B-HYPE_USDT B-XRP_USDT B-INJ_USDT DELTA:AVAXUSD DELTA:SOLUSD DELTA:ENAUSD', 'read once, only orders that traded are kept (skipped / waiting left out): ' + reads + ' read(s), ' + kept);
+    const want = { b1: 'auto', b2: 'auto', b3: 'auto', m1: 'manual', m2: 'manual', m3: 'manual', m4: 'manual', m5: 'manual', tr0: 'manual', tr1: 'manual',
+      'HYPE/USDT 2026-11-14 18:14:55': 'auto', 'XRP/USDT 2026-11-15 08:11:18': 'auto', 'ETH/USDT 2026-11-17 10:00:05': 'manual', 'HYPE/USDT 2026-11-14 12:00:01': 'manual', 'open B-INJ_USDT': 'auto' };
+    let got = await tags();
+    const diff = g => Object.keys(want).filter(k => g[k] !== want[k]).map(k => k + '=' + g[k]);
+    check(!diff(got).length, 'tags by hand (bot trades Auto, hand trades Manual): ' + diff(got).join(', '));
+    check(Object.keys(got).filter(k => got[k] === 'auto').length === 6, 'exactly 6 Auto (AVAX, ENA, order test, CoinDCX HYPE, XRP, open INJ): ' + JSON.stringify(got));
+    const why = await page.evaluate(() => [tradeByWhy(state.trades.find(t => t.id === 'b1')), tradeByWhy(state.trades.find(t => t.id === 'm4')), tradeByWhy(state.trades.find(t => t.id === 'b3'))]);
+    check(/live bot \(TL BUY\) on Delta: in 17 Nov 21:22, filled by 18 Nov 21:34, qty 5/.test(why[0]) && /no order of the live bot/.test(why[1]) && /order test/.test(why[2]), 'the tag says why: ' + JSON.stringify(why));
+    // Not read again inside 10 minutes; a forced read is.
+    await page.evaluate(() => botOrdersKick());
+    await page.waitForTimeout(200);
+    check(reads === 1, 'no second read inside 10 minutes: ' + reads);
+    // The bot drops AVAX from its file (a reset): this device still knows it.
+    drop = 'AVAXUSD';
+    await page.evaluate(() => botOrdersKick(true));
+    await page.waitForFunction(() => !botReadBusy);
+    got = await tags();
+    check(reads === 2 && got.b1 === 'auto' && !diff(got).length, 'an order once read is kept when the file drops it: ' + reads + ' ' + diff(got).join(', '));
+    // GitHub refuses: the orders already read stay, the reason is kept.
+    status = 500;
+    await page.evaluate(() => botOrdersKick(true));
+    await page.waitForFunction(() => !botReadBusy);
+    got = await tags();
+    check(!diff(got).length && await page.evaluate(() => state.ui.botOrders.err) === 'GitHub 500', 'a failed read keeps the tags: ' + diff(got).join(', '));
+    status = 200; drop = '';
+
+    // Analysis: Placed by row, counts, filter, Clear.
+    await page.evaluate(() => { switchTab('analysis'); renderAll(); });
+    const bar = () => page.$$eval('#anByBar [data-anby]', bs => bs.map(b => b.innerText.replace(/\s+/g, ' ').trim()));
+    const total = await page.evaluate(() => statScoped().length);
+    let b = await bar();
+    check(JSON.stringify(b) === JSON.stringify(['All ' + total, 'Auto 5', 'Manual ' + (total - 5)]), 'Placed by counts (5 closed Auto): ' + JSON.stringify(b));
+    await page.click('#anByBar [data-anby="auto"]');
+    const pills = () => page.$$eval('#anBody tr', trs => trs.map(tr => { const p = tr.querySelector('[data-by]'); return (tr.children[1] || {}).innerText + ':' + (p ? p.getAttribute('data-by') : '-'); }));
+    let ps = await pills();
+    check(ps.length === 5 && ps.every(x => /:auto$/.test(x)), 'Auto: the 5 bot trades, each with an AUTO tag: ' + JSON.stringify(ps));
+    const hint = await page.evaluate(() => document.getElementById('anFilterHint').innerText + ' | ' + !document.getElementById('anReset').classList.contains('hidden'));
+    check(/Auto \(bot\) trades/.test(hint) && /true$/.test(hint), 'the panel says Auto and offers Clear: ' + hint);
+    await page.click('#anByBar [data-anby="manual"]');
+    ps = await pills();
+    check(ps.length > 0 && ps.every(x => /:manual$/.test(x)), 'Manual: no AUTO tag left: ' + JSON.stringify(ps.slice(0, 12)));
+    const strip = await page.evaluate(() => { const r = analyzeTrades(statScoped()).filter(x => anPassBy(x.t)); return r.length; });
+    check(strip === total - 5, 'Manual narrows the analysis to the ' + (total - 5) + ' hand trades: ' + strip);
+    await page.click('#anReset');
+    check(await page.evaluate(() => anByMode()) === '' && (await bar())[0] === 'All ' + total, 'Clear puts Placed by back to All');
+    // The CoinDCX report book's own table: open INJ is the bot's too.
+    await page.evaluate(() => { anBrokerPick('acct:rep-coindcx-inr'); setAnBy('auto'); });
+    const btRows = () => page.$$eval('#btBody tr[data-bttrade]', trs => trs.map(tr => tr.children[1].innerText + ':' + tr.querySelector('[data-by]').getAttribute('data-by')).sort());
+    let bt = await btRows();
+    check(JSON.stringify(bt) === '["HYPE/USDT:auto","INJ/USDT:auto","XRP/USDT:auto"]', 'report table, Auto: HYPE, XRP and the open INJ: ' + JSON.stringify(bt));
+    await page.evaluate(() => setAnBy('manual'));
+    bt = await btRows();
+    check(JSON.stringify(bt) === '["ETH/USDT:manual","HYPE/USDT:manual"]', 'report table, Manual: ETH and the hand HYPE: ' + JSON.stringify(bt));
+    // Nothing of a kind: says so, with the way back.
+    await page.evaluate(() => { anBrokerPick('all'); state.ui.anPeriod = 'custom'; state.ui.anCustom = { from: '2026-11-17', to: '2026-11-17' }; setAnBy('auto'); });
+    const empty = await page.evaluate(() => { const e = document.getElementById('anEmpty'); return e ? e.getAttribute('data-why') + ' | ' + e.innerText : ''; });
+    check(/^by \| No Auto \(bot\) trades in this period\.[\s\S]*Placed by: All \(\d+\)/.test(empty), 'an empty Auto view says why: ' + empty);
+    await page.evaluate(() => { state.ui.anPeriod = 'all'; anResetFilters(); });
+
+    // Dashboard trade list: 18 Nov has the bot's AVAX and the hand one.
+    await page.evaluate(() => { switchTab('dashboard'); activeLedgerDate = '2026-11-18'; activeLedgerFocus = null; renderLedgerView(); });
+    // (the sample journal's trades move with today's date: only AVAX is looked at)
+    const ledger = () => page.$$eval('#tradeLedgerTableBody tr', trs => trs.map(tr => { const p = tr.querySelector('[data-by]'); return p ? tr.children[2].innerText.trim() + ' ' + tr.children[0].innerText.trim() + ' ' + p.getAttribute('data-by') : ''; }).filter(x => /^AVAXUSD /.test(x)).sort());
+    const pickBy = v => page.evaluate(v => { document.getElementById('filterBySelect').value = v; document.getElementById('filterBySelect').dispatchEvent(new Event('change')); }, v);
+    let led = await ledger();
+    check(JSON.stringify(led) === '["AVAXUSD 10:00 manual","AVAXUSD 21:32 auto"]', 'Dashboard list tags each: ' + JSON.stringify(led));
+    await pickBy('auto');
+    led = await ledger();
+    check(JSON.stringify(led) === '["AVAXUSD 21:32 auto"]', 'Dashboard filter Auto: ' + JSON.stringify(led));
+    await pickBy('manual');
+    led = await ledger();
+    check(JSON.stringify(led) === '["AVAXUSD 10:00 manual"]', 'Dashboard filter Manual: ' + JSON.stringify(led));
+    await page.evaluate(() => resetLedgerFilters());
+    check(await page.$eval('#filterBySelect', s => s.value) === 'ALL', 'reset puts the Dashboard filter back');
+
+    // Inspector: change a tag by hand, both ways, journal and report trade; kept through a save and read back.
+    await page.evaluate(() => openInspector(hydrate(state.trades.find(t => t.id === 'm1'))));
+    await page.click('#inspByRow [data-inspby="auto"]');
+    let one = await page.evaluate(() => { const t = state.trades.find(x => x.id === 'm1'); return [t.by, tradeBy(t), document.getElementById('inspBy').innerText, document.getElementById('inspByWhy').innerText].join(' | '); });
+    check(/^auto \| auto \| AUTO\* \| Set by you/.test(one), 'tap Auto on a hand trade: ' + one);
+    const back = await page.evaluate(() => { const s = sanitizeState(JSON.parse(JSON.stringify(state))); return [s.trades.find(x => x.id === 'm1').by, cleanTrade(Object.assign({}, s.trades[0], { by: 'robot' })).by === undefined].join(' '); });
+    check(back === 'auto true', 'the pick survives a save and read back, a bad value does not: ' + back);
+    await page.click('#inspByRow [data-inspby="manual"]');
+    one = await page.evaluate(() => { const t = state.trades.find(x => x.id === 'm1'); return [String(t.by), tradeBy(t)].join(' '); });
+    check(one === 'undefined manual', 'tapping what the log says clears the pick: ' + one);
+    const repId = await page.evaluate(() => reportTrades().find(t => t.symbol === 'ETH/USDT').id);
+    await page.evaluate(id => openInspector(reportTrades().find(t => t.id === id)), repId);
+    await page.click('#inspByRow [data-inspby="auto"]');
+    one = await page.evaluate(id => { const r = state.repReviews[id]; const s = sanitizeState(JSON.parse(JSON.stringify(state))); return [r && r.by, tradeBy(reportTrades().find(t => t.id === id)), s.repReviews[id].by, isReviewed(s.repReviews[id])].join(' '); }, repId);
+    check(one === 'auto auto auto false', 'a report trade keeps its pick in its review (synced), not marking it reviewed: ' + one);
+    // No sync repo: nothing is read, every trade is Manual unless the device read the log before.
+    const noSync = await page.evaluate(async () => { const keep = state.sync; state.sync = { token: '', repo: '' }; const c = state.ui.botOrders; state.ui.botOrders = undefined; botMatchMemo = null; await botOrdersKick(true); const r = [tradeBy(state.trades.find(t => t.id === 'b1')), tradeBy(state.trades.find(t => t.id === 'b3'))].join(' '); state.sync = keep; state.ui.botOrders = c; botMatchMemo = null; return r; });
+    check(noSync === 'manual auto', 'no bot log on the device: Manual (the order test stays Auto): ' + noSync);
+  } catch (e) { errs.push('threw: ' + String(e.message).split('\n').slice(0, 2).join(' | ')); }
+  await ctx.close();
+  const label = 'Auto / Manual: bot trades found from its order log (past ones too), Placed by filter, inspector pick';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push('auto / manual: ' + e); });
+}
+
 const data = fixture();
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
@@ -7291,6 +7479,7 @@ await droppedCoinsRun(data);
 await nseSinceRun(data);
 await bestSettingsRun();
 await sigLightRun(data);
+await botTagRun(data);
 
 await browser.close();
 server.close();

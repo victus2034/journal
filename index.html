@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-16.200">
+  <meta name="app-version" content="2026-11-21.201">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -677,6 +677,12 @@
               <option value="ALL">All Accounts</option>
             </select>
 
+            <select id="filterBySelect" onchange="renderLedgerView()" title="Auto: placed by the live bot. Manual: placed by you." class="bg-[#070A11] border border-terminal-border text-xs px-2.5 py-1.5 rounded-lg text-slate-300 font-mono focus:outline-none">
+              <option value="ALL">Auto + Manual</option>
+              <option value="auto">Auto (bot)</option>
+              <option value="manual">Manual</option>
+            </select>
+
             <button onclick="resetLedgerFilters()" title="Reset to auto (Today or previous active day)" class="px-2.5 py-1.5 bg-terminal-card hover:bg-slate-800 border border-terminal-border hover:border-amber-500/50 text-amber-300 rounded-lg text-xs font-mono flex items-center gap-1">
               <span>⟲</span>
               <span>Today / Latest</span>
@@ -1274,7 +1280,7 @@
       </div>
       <div class="sig-panels">
         <details id="anWhichPanel" class="card sig-panel" data-fold="anWhich" open>
-          <summary><span class="sig-chev">&#9662;</span><h3>Which trades</h3><span id="anWhichSum" class="sig-sum"></span><span class="sig-ph-r"><span id="anFilterHint"></span> <button type="button" id="anReset" class="hidden" onclick="event.preventDefault();event.stopPropagation();anResetFilters()" title="Back to every trade: all history, every alert type, channel and coin, all days">Clear</button></span></summary>
+          <summary><span class="sig-chev">&#9662;</span><h3>Which trades</h3><span id="anWhichSum" class="sig-sum"></span><span class="sig-ph-r"><span id="anFilterHint"></span> <button type="button" id="anReset" class="hidden" onclick="event.preventDefault();event.stopPropagation();anResetFilters()" title="Back to every trade: all history, auto and manual, every alert type, channel and coin, all days">Clear</button></span></summary>
           <div class="sig-row"><span class="sig-lab">Period</span><div class="sig-ctl">
             <div id="anPeriodBar" class="flex gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px]"></div>
             <div id="anCustomRange" class="hidden flex flex-wrap items-center gap-1.5">
@@ -1282,6 +1288,7 @@
               <span class="text-slate-500 text-xs">to</span>
               <input type="date" id="anCustomTo" onchange="setAnPeriod('custom')" class="bg-[#070A11] border border-terminal-border text-xs px-2 py-1 rounded text-slate-200 font-mono">
             </div></div></div>
+          <div id="anByWrap" class="sig-row"><span class="sig-lab">Placed by</span><div class="sig-ctl"><div id="anByBar"></div></div></div>
           <div id="anMarketWrap" class="sig-row"><span class="sig-lab">Market</span><div id="anMarketBar" class="sig-ctl"></div></div>
           <div class="sig-row"><span class="sig-lab">Channel</span><div id="anChanBar" class="sig-ctl fsel"></div></div>
           <div id="anAssetWrap" class="sig-row"><span class="sig-lab">Assets</span><div id="anAssetBar" class="sig-ctl"></div></div>
@@ -1772,6 +1779,7 @@
           </div>
           <div class="text-right">
             <span id="inspSide" class="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">SHORT</span>
+            <span id="inspBy"></span>
             <div id="inspPnl" class="text-base font-bold text-rose-400 mt-1">-$0.48</div>
           </div>
         </div>
@@ -2079,6 +2087,8 @@
       if (t.playAuto === true && o.playRules) o.playAuto = true; else delete o.playAuto;
       if (t.noSetup === true && !String(o.setup || "").trim()) o.noSetup = true; else delete o.noSetup;
       if (t.reviewed === true) o.reviewed = true; else delete o.reviewed;
+      // Auto (the live bot) or Manual, when picked by hand in the inspector; else it is worked out (tradeBy).
+      if (t.by === "auto" || t.by === "manual") o.by = t.by; else delete o.by;
       return o;
     }
     function cleanAccount(a) {
@@ -2192,6 +2202,9 @@
       if (!s.ui || typeof s.ui !== "object") s.ui = {};
       delete s.ui.sigDropped; // v.193's Hidden / Shown switch: dropped symbols are deleted now
       if (s.ui.sigLive !== undefined && !(s.ui.sigLive && Array.isArray(s.ui.sigLive.list) && s.ui.sigLive.list.every(b => typeof b === "string" && b.length <= 20))) delete s.ui.sigLive;
+      // The live bot's orders this device has read (Auto / Manual tags), and Analysis' Placed by pick.
+      if (s.ui.botOrders !== undefined) { const bo = cleanBotOrders(s.ui.botOrders); if (bo) s.ui.botOrders = bo; else delete s.ui.botOrders; }
+      if (s.ui.anBy !== undefined && s.ui.anBy !== "auto" && s.ui.anBy !== "manual") delete s.ui.anBy;
       s.ui.account = cText(s.ui.account || "all", 40);
       if (s.ui.account !== "all" && !s.accounts.some(a => a.id === s.ui.account)) s.ui.account = "all";
       s.ui.month = cText(s.ui.month || "current", 10);
@@ -2350,7 +2363,10 @@
         renderAll();
       }).catch(() => {});
     };
+    // Bumped on every save, so a worked-out view of the trades (botMatches) knows to look again.
+    let saveCount = 0;
     function save() {
+      saveCount++;
       const ok = write(JSON.stringify(Object.assign({}, state, { signals: [] })));
       writeSignals();
       writeSettings();
@@ -3778,12 +3794,14 @@
       const query = (document.getElementById('tradeSearchInput')?.value || '').toLowerCase();
       const side = document.getElementById('filterSideSelect')?.value || 'ALL';
       const acc = document.getElementById('filterAccountSelect')?.value || 'ALL';
+      const by = document.getElementById('filterBySelect')?.value || 'ALL';
 
       const filtered = dayTrades.filter(t => {
         const matchesQuery = t.symbol.toLowerCase().includes(query) || (t.setup || '').toLowerCase().includes(query);
         const matchesSide = side === 'ALL' || (!!tradeSide(t) && (tradeSide(t) === 'long' ? 'BUY' : 'SHORT') === side);
         const matchesAcc = acc === 'ALL' || t.accountId === acc;
-        return matchesQuery && matchesSide && matchesAcc;
+        const matchesBy = by === 'ALL' || tradeBy(t) === by;
+        return matchesQuery && matchesSide && matchesAcc && matchesBy;
       });
 
       if (countBadge) {
@@ -3827,7 +3845,7 @@
               <span class="w-1.5 h-1.5 rounded-full shrink-0 ${isWin ? 'bg-emerald-400' : 'bg-rose-400'}"></span>${esc(trade.symbol)}
             </span>
           </td>
-          <td class="py-3 px-4 align-middle whitespace-nowrap">${sidePill}</td>
+          <td class="py-3 px-4 align-middle whitespace-nowrap">${sidePill} ${byPillHtml(trade)}</td>
           <td class="py-3 px-4 align-middle text-slate-300 whitespace-nowrap">${esc(trade.setup || '—')}</td>
           <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${esc(tradePx(trade, 'entry'))}</td>
           <td class="py-3 px-4 align-middle text-right tabular-nums text-slate-300 whitespace-nowrap">${esc(tradePx(trade, 'exit'))}</td>
@@ -3891,7 +3909,7 @@
           <td class="py-2.5 px-3 text-slate-400">${esc(trade.time || '—')}</td>
           <td class="py-2.5 px-3 text-slate-400">${esc(a.name)}</td>
           <td class="py-2.5 px-3 font-bold text-white">${esc(trade.symbol)}</td>
-          <td class="py-2.5 px-3">${sidePillHtml(trade)}</td>
+          <td class="py-2.5 px-3 whitespace-nowrap">${sidePillHtml(trade)} ${byPillHtml(trade)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${esc(tradePx(trade, 'entry'))}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${esc(tradePx(trade, 'exit'))}</td>
           <td class="py-2.5 px-3 text-right tabular-nums">${trade.rep ? (trade.px && trade.px.qty > 0 ? fmtQty(trade.px.qty) : '—') : fmtQty(trade.qty)}</td>
@@ -4468,7 +4486,7 @@
     function anNoFee() { return state.ui.anNoFee === true; }
     function anResetFilters() {
       // Fees are a rule of play now: the other panel's Reset puts them back.
-      Object.assign(state.ui, { anKind: "", anMarket: "", anChan: "", anLvl: "", anTlType: "", anCoins: "", anAsset: "", anPeriod: "all", mktFilter: "", anPair: "" });
+      Object.assign(state.ui, { anKind: "", anBy: "", anMarket: "", anChan: "", anLvl: "", anTlType: "", anCoins: "", anAsset: "", anPeriod: "all", mktFilter: "", anPair: "" });
       anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis();
     }
     function anSet(k, v) { state.ui[k] = v; anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis(); }
@@ -4532,7 +4550,8 @@
     function anEmptyWhy(c) {
       const btn = (label, js) => '<button type="button" class="px-2 py-0.5 rounded border border-amber-500/50 text-amber-200 hover:bg-amber-500/10 whitespace-nowrap" onclick="' + js + '">' + esc(label) + '</button>';
       const clear = btn('Clear filters', 'anResetFilters()'), al = c && c.asset ? assetOf(c.asset).label + ' ' : '';
-      if (!c || !c.baseN) return { why: 'period', msg: 'No trades in this period.', fix: anPeriodMode() !== 'all' ? btn('All history', "setAnPeriod('all')") : '' };
+      if (!c || (c.perN != null ? !c.perN : !c.baseN)) return { why: 'period', msg: 'No trades in this period.', fix: anPeriodMode() !== 'all' ? btn('All history', "setAnPeriod('all')") : '' };
+      if (c.by && !c.baseN) return { why: 'by', msg: 'No ' + (c.by === 'auto' ? 'Auto (bot)' : 'Manual') + ' trades in this period.', fix: btn('Placed by: All (' + c.perN + ')', "setAnBy('')") };
       if (!c.mktN) return { why: 'market', msg: 'No ' + marketOf(c.mkt).label + ' trades in this period.', fix: btn('Market: All', "setAnMarket('')") };
       if (!c.setupN) return { why: 'setup', msg: 'No trades of this alert type or channel here.', fix: clear };
       if (!c.assetN) return { why: 'assets', msg: 'No ' + al + 'trades here.', fix: btn('Assets: Both', "setAnAsset('')") };
@@ -4551,8 +4570,18 @@
       if (title) bar.title = title;
       bar.innerHTML = items.map(([k, l]) => '<button type="button" data-' + attr + '="' + esc(k) + '" onclick="' + fn + '(\'' + esc(k) + '\')" class="px-2 py-1 rounded-md font-semibold ' + (k === cur ? SEG_ON : SEG_OFF) + '">' + esc(l) + '</button>').join('');
     }
-    function renderAnFilters(map, base) {
-      // base: trades in the period (before the type / channel / level filters), with their setup.
+    function renderAnFilters(map, base, per) {
+      // base: trades in the period and Placed by pick (before the type / channel / level filters), with their setup.
+      // per: every trade in the period, for the Placed by row's counts.
+      per = per || base.map(x => x.t);
+      const byN = { "": per.length, auto: 0, manual: 0 };
+      per.forEach(t => { byN[tradeBy(t)]++; });
+      const byBar = document.getElementById('anByBar');
+      if (byBar) {
+        byBar.className = 'flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+        byBar.title = "Auto: trades the live bot placed (found in its order log). Manual: the ones you placed. A trade's tag can be changed in its inspector.";
+        byBar.innerHTML = BY_MODES.map(x => '<button type="button" data-anby="' + x.k + '" onclick="setAnBy(\'' + x.k + '\')" class="px-2 py-1 rounded-md font-semibold ' + (x.k === anByMode() ? SEG_ON : SEG_OFF) + '">' + x.label + ' <span class="text-[10px] opacity-60">' + byN[x.k] + '</span></button>').join('');
+      }
       const kind = anKind();
       const kb = document.getElementById('anKindBar');
       if (kb) {
@@ -4616,7 +4645,7 @@
       if (cryptoHere && anCoinMode() === "delta") demoSpecsLoad();
       // How many trades each filter leaves, for the empty view's "why".
       const ck = coinKeepOf(anCoinCur);
-      anEmptyCtx = { baseN: base.length, mkt, mktN: mktKeep ? base.filter(x => mktKeep(sigOfX(x))).length : base.length, setupN: setupPool.length, asset: anAsset, assetN: coinPool.length,
+      anEmptyCtx = { perN: per.length, by: anByMode(), baseN: base.length, mkt, mktN: mktKeep ? base.filter(x => mktKeep(sigOfX(x))).length : base.length, setupN: setupPool.length, asset: anAsset, assetN: coinPool.length,
         coinN: ck ? coinPool.filter(x => ck(sigOfX(x))).length : coinPool.length, blocks };
       document.getElementById('anLvlWrap').classList.toggle('hidden', kind !== 'fib');
       anSegBar('anLvlBar', [["", "All"]].concat(FIB_LEVEL_KEYS.map(k => [k, k])), anLvl(), "setAnLvl", "lvl", "The fib level the trade was taken at");
@@ -4624,10 +4653,11 @@
       anSegBar('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.k ? x.label : "All"]), anTlType() ? anTlType().k : "", "setAnTlType", "tltype", "Support / resistance bounce, or a break of the line");
       renderMktFilterBar('anMktBar', 'mktCalAnalysis');
       renderPlayTgtBar(PLAY.an); renderPlayStopBar(PLAY.an); renderPlayTrailBar(PLAY.an); renderPlayHoldBar(PLAY.an); renderPlayFeeBar(PLAY.an);
-      const anyOn = !!(anKind() || mkt || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anCoinMode() || anAssetMode() || mktFilter() || anPeriodMode() !== "all");
+      const anyOn = !!(anKind() || anByMode() || mkt || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anCoinMode() || anAssetMode() || mktFilter() || anPeriodMode() !== "all");
       document.getElementById('anReset').classList.toggle('hidden', !anyOn);
       const r = anRangeFull(), hint = [];
       hint.push(r.from || r.to ? (r.from || "start") + " → " + (r.to || "now") : "All history");
+      if (anByMode()) hint.push(anByMode() === "auto" ? "Auto (bot) trades" : "Manual trades");
       if (mkt) hint.push(marketOf(mkt).label + " market");
       if (state.ui.anChan) hint.push(chanLabel(state.ui.anChan));
       if (anAsset) hint.push(assetOf(anAsset).label + " only");
@@ -4642,6 +4672,7 @@
       if (ws) {
         const cm = SIG_COIN_MODES.find(x => x.k === anCoinMode());
         const bits = [(AN_KINDS.find(x => x.k === kind) || AN_KINDS[0]).label, (AN_PERIODS.find(p => p.k === mode) || AN_PERIODS[3]).label];
+        if (anByMode()) bits.push(anByMode() === "auto" ? "Auto (bot)" : "Manual");
         if (mkt) bits.push(marketOf(mkt).label + " market");
         bits.push(state.ui.anChan ? chanLabel(state.ui.anChan) : "all channels");
         if (anAsset) bits.push(assetOf(anAsset).label + " only");
@@ -4857,7 +4888,7 @@
       // ---- results by broker, each converted into the currency on screen ----
       const vc = viewCur();
       // The filters at the top narrow this table too.
-      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktBiasOn(t.date, t.time) === mfB) && anPassSetup(anTradeSetup(t, map)) && anPassCoin(t)).map(t => toView(t, vc))), open = reportBooks().open;
+      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktBiasOn(t.date, t.time) === mfB) && anPassBy(t) && anPassSetup(anTradeSetup(t, map)) && anPassCoin(t)).map(t => toView(t, vc))), open = reportBooks().open.filter(o => !anByMode() || !o.id || repIdBy(o.id) === anByMode());
       const lines = books.map(a => {
         const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
         const files = a.reportBroker ? btState().files.filter(f => f.broker === a.reportBroker) : [];
@@ -5726,8 +5757,10 @@
       const anMap = anAlertMap();
       const anRg = anRangeFull();
       // Trades in the period with their alert setup; the filters bar counts these.
-      const anBase = statScoped().filter(t => anInRange(dayOf(t), anRg)).map(t => ({ t, s: anTradeSetup(t, anMap) }));
-      renderAnFilters(anMap, anBase);
+      // Placed by (Auto / Manual) narrows them first; its own row counts the trades of the period.
+      const anPer = statScoped().filter(t => anInRange(dayOf(t), anRg));
+      const anBase = anPer.filter(anPassBy).map(t => ({ t, s: anTradeSetup(t, anMap) }));
+      renderAnFilters(anMap, anBase, anPer);
       renderAnBrokers(anMap);
       // A broker from an uploaded report shows its report; its Size & mistakes
       // section is the journal analysis below, run on the report's trades.
@@ -5750,18 +5783,19 @@
       const pairPick = rep ? (state.ui.btPair && state.ui.btPair !== "all" ? btSym(state.ui.btPair) : null) : (state.ui.anPair || null);
       // Balances need every trade, so the filters apply after the analysis.
       const all = analyzeTrades(anFeeView(statScoped()));
-      const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t)).sort((a, b) => -byWhen(a.t, b.t));
+      const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t)).sort((a, b) => -byWhen(a.t, b.t));
       const mfAn = mktFilter();
       const rows = mfAn ? inPeriod.filter(x => mktBiasOn(x.t.date, x.t.time) === mfAn) : inPeriod;
       rows.anchored = all.anchored;
       // Pair list for the report's dropdown: every pair before the pair filter.
-      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t) && (!mfAn || mktBiasOn(x.t.date, x.t.time) === mfAn)));
+      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t) && (!mfAn || mktBiasOn(x.t.date, x.t.time) === mfAn)));
       document.getElementById('anRepHead').classList.toggle('hidden', !!rep);
 
       const assume = document.getElementById('anAssumptions');
       const book = isAll() ? (state.accounts.find(a => a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {}) : acct(selected());
       assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's and CoinDCX's wallets, read by your PC's imports). " : "Balances before each trade are your starting balance plus the trades before it; once your PC imports Delta, they're anchored to its wallet. ")
         + "Deposits, withdrawals and funding can't be seen, so older balances are estimates. "
+        + "Auto = placed by the live bot: a trade one of its orders fits (its order log, coindcx_live_state.json in your sync repo: same broker, coin and side, opened between the order going in and the bot seeing the fill, closed by the time it saw the close, same size). Every other trade is Manual. Change one in its inspector. "
         + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Settings → Books & rules → Trading Books.`
         + (state.accounts.some(a => a.reportBroker) ? " A broker-report trade (CoinDCX) has no stop or prices of its own: its side and position value are worked out from its fees (or fills), its balance from the broker's wallet, and a trade whose fees don't add up shows — for size." : "")
         + (anDemoOn() ? " Demo: each trade with a stop (yours, else its alert's) is replayed from its own entry time and price on Delta's candles (1-minute for the first day, then 15-minute, then 4-hour), same size, with the target and stop rules picked above. A candle that touches the stop and the target counts as the stop; a stop fills 0.05% past its price; the demo pays the trade's own fees. NSE trades have no candles here." : "");
@@ -5881,7 +5915,7 @@
         tr.innerHTML = `
           <td class="py-2.5 px-3 whitespace-nowrap"><span class="text-white">${esc(t.date)}</span> <span class="text-slate-500">${esc(t.time || '')}</span></td>
           <td class="py-2.5 px-3 font-bold text-white">${esc(t.symbol)}</td>
-          <td class="py-2.5 px-3">${sidePillHtml(t)}</td>
+          <td class="py-2.5 px-3 whitespace-nowrap">${sidePillHtml(t)} ${byPillHtml(t)}</td>
           <td class="py-2.5 px-3 text-right tabular-nums text-slate-300">${x.before > 0 ? money(x.before * x.k, cur) : '—'}</td>
           <td class="py-2.5 px-3 text-right tabular-nums text-slate-300"${t.rep && x.notional != null ? ' title="Worked out from ' + (t.size.from === 'fills' ? "the broker's fills" : "the broker's fees") + '"' : ''}>${x.notional != null ? money(x.notional * x.k, cur) : '—'}</td>
           <td class="py-2.5 px-3 text-right tabular-nums font-bold ${isOver ? 'text-rose-400' : 'text-slate-200'}">${x.xBal != null ? x.xBal.toFixed(1) + '×' : '—'}</td>
@@ -6192,7 +6226,29 @@
         if (own) { row.type = 'button'; row.title = level ? (kept ? 'The level this trade was taken at. Tap to clear' : 'Tap if this trade was taken at this level') : kept ? 'Done right. Tap to mark it missed' : 'Missed. Tap to mark it done'; row.onclick = flip; }
         chk.appendChild(row);
       };
-      if (own) { const hint = document.createElement('div'); hint.className = 'text-[10px] text-slate-500'; hint.textContent = 'Rules followed · tap to change'; chk.appendChild(hint); }
+      // Auto (the live bot) or Manual: what the bot's order log says, or your pick, which wins.
+      const byEl = document.getElementById('inspBy');
+      if (byEl) byEl.innerHTML = byPillHtml(trade);
+      {
+        const found = tradeByFound(trade), cur = tradeBy(trade);
+        const head = document.createElement('div'); head.className = 'text-[10px] text-slate-500';
+        head.textContent = 'Placed by' + (own ? ' · tap to change' : '');
+        chk.appendChild(head);
+        const row = document.createElement('div'); row.className = 'flex flex-wrap items-center gap-1'; row.id = 'inspByRow';
+        [["auto", "Auto (bot)"], ["manual", "Manual"]].forEach(([k, label]) => {
+          const on = cur === k, b = document.createElement(own ? 'button' : 'span');
+          b.dataset.inspby = k;
+          b.className = 'px-2 py-0.5 rounded-full border text-[10px] ' + (on ? (k === 'auto' ? 'bg-violet-500/20 text-violet-300 border-violet-500/50' : 'bg-slate-600/30 text-slate-200 border-slate-500/60') : 'bg-[#080D15] text-slate-500 border-terminal-border' + (own ? ' hover:text-slate-300' : ''));
+          b.textContent = label;
+          if (own) { b.type = 'button'; b.onclick = () => reviewTrade(own, t => { if (k === found) delete t.by; else t.by = k; }); }
+          row.appendChild(b);
+        });
+        const why = document.createElement('span'); why.className = 'text-[10px] text-slate-500'; why.id = 'inspByWhy';
+        why.textContent = tradeByWhy(trade);
+        row.appendChild(why);
+        chk.appendChild(row);
+      }
+      if (own) { const hint = document.createElement('div'); hint.className = 'text-[10px] text-slate-500 pt-1.5 mt-1 border-t border-terminal-border'; hint.textContent = 'Rules followed · tap to change'; chk.appendChild(hint); }
       RULES.forEach((r, i) => tickRow(r, (trade.rules || [])[i], () => reviewTrade(own, t => { t.rules = RULES.map((x, j) => j === i ? !(t.rules || [])[j] : !!(t.rules || [])[j]); })));
       // The setup, one tap from the playbook's names, and its checklist even
       // before anything on it was ticked.
@@ -6570,6 +6626,8 @@
       if (sideSel) sideSel.value = 'ALL';
       const accSel = document.getElementById('filterAccountSelect');
       if (accSel) accSel.value = 'ALL';
+      const bySel = document.getElementById('filterBySelect');
+      if (bySel) bySel.value = 'ALL';
       renderLedgerView();
       toast("Switched to Today / Latest Session");
     }
@@ -14514,6 +14572,7 @@
       if (sigRenderLater && !typingNow()) { sigRenderLater = false; renderAll(); }
       autoRefreshAlerts();
       cdxKick();
+      botOrdersKick();
     }
     setInterval(autoTick, 60e3);
     document.addEventListener("visibilitychange", autoTick);
@@ -15384,11 +15443,11 @@
       Object.keys(groups).forEach(b => btTrades(btSkipDupes(groups[b])).forEach(t => {
         const accountId = repBookId(b, t.cur);
         // Still open: no P&L booked yet, so it waits until a close shows up.
-        if (!t.closed) { open.push({ accountId, day: t.day }); return; }
+        if (!t.closed) { open.push({ accountId, day: t.day, id: "rep:" + t.legs[0].id, broker: b, sym: t.sym, openAt: t.start }); return; }
         closed.push({
           id: "rep:" + t.legs[0].id, rep: true, broker: b, firstLeg: t.legs[0].id, accountId,
           date: t.end.slice(0, 10), time: t.end.slice(11, 16), exitDate: t.end.slice(0, 10), exitTime: t.end.slice(11, 16),
-          openDate: t.start.slice(0, 10), openTime: t.start.slice(11, 16), held: t.held, symbol: btSym(t.sym), direction: "",
+          openDate: t.start.slice(0, 10), openTime: t.start.slice(11, 16), openAt: t.start, closeAt: t.end, held: t.held, symbol: btSym(t.sym), direction: "",
           entry: 0, exit: 0, qty: 0, stop: 0, leverage: 1, fees: t.fees, funding: t.funding, gross: t.gross,
           pnl: t.net, risk: 0, r: null, setup: "", notes: "", rules: [], px: btPrices(t, fillsOf[b + "|" + t.cur + "|" + t.sym])
         });
@@ -15472,6 +15531,164 @@
       if (!d) return '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300" title="From a broker report; its side is not known">REPORT</span>';
       return `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${d === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}"${rep ? ' title="From a broker report; side worked out from its ' + ((t.orig || t).px ? 'fills' : 'fees') + '"' : ''}>${esc(d.toUpperCase())}</span>`;
     }
+
+    // ---- Auto (the live bot) or Manual (lakky, 2026-11-21: "trades from auto trades needs to
+    // be mark as auto and trades which are done manually are need to be mark as manual") ----
+    // The live bot (coindcx_live.py on the AWS server) keeps every order it placed in the sync
+    // repo's coindcx_live_state.json: the venue (a "DELTA:" pair is Delta, else CoinDCX), coin,
+    // side, size, when it went in, when the bot saw it filled and when it saw it closed. A trade
+    // is Auto when one of those orders fits it: same venue, coin and side, opened between the
+    // order going in and the bot seeing the fill, closed by the time the bot saw it close, and
+    // the same size (or opened within minutes of the fill the bot saw, for a part fill). Each
+    // order is one trade at most. Every other trade, NSE included, is Manual. The inspector can
+    // set a trade's tag by hand (t.by; a report trade's in its review), which then wins.
+    // The file is read with the sync token at most every 10 minutes and kept on this device,
+    // each read added to what it had, so an order once seen is never forgotten here.
+    const BOT_STATE_PATH = "coindcx_live_state.json", BOT_READ_MS = 10 * 60000, BOT_SLACK_MS = 3 * 60000, BOT_NEAR_MS = 10 * 60000, BOT_QTY_TOL = 0.03;
+    // Round trips the bot's code made outside its order log, by the Delta order that closed them:
+    // the one-contract Delta order test (trading-journal delta-order-test.yml) of 16 Nov 2026.
+    const BOT_TEST_TRADES = { "delta:1686286326": "Delta order test of 16 Nov (the bot's code, one contract)" };
+    const BY_MODES = [{ k: "", label: "All" }, { k: "auto", label: "Auto" }, { k: "manual", label: "Manual" }];
+    const botNum = v => { const x = Number(v); return isFinite(x) && x > 0 ? x : 0; };
+    // One order of the bot's file, kept short; null when it never traded (skipped, waiting, cancelled, still on the book).
+    function botOrderOf(o) {
+      if (!o || typeof o !== "object" || typeof o.pair !== "string" || !o.pair || (o.side !== "long" && o.side !== "short")) return null;
+      const placed = botNum(o.placed_ts) || botNum(o.sent_ts), fill = botNum(o.fill_ts), exit = botNum(o.exit_ts), id = String(o.id || "");
+      // Seen filled, or gone from the book before a tick saw the fill (it may have filled and closed in between).
+      if (!placed || !(fill || (o.status === "closed" && exit && o.exchange_id))) return null;
+      return { id: cText(id || o.pair + "@" + placed, 160), pair: cText(o.pair, 40), side: o.side, qty: botNum(o.qty), placed, fill, exit,
+        status: cText(o.status || "", 12), price: botNum(o.fill_price) || botNum(o.entry),
+        kind: /^tlbreak\|/.test(id) ? "TL BR" : /^tl\|/.test(id) ? "TL" : "", why: cText(o.exit_why || "", 40) };
+    }
+    // The copy this device keeps (state.ui.botOrders), checked like everything else read back.
+    function cleanBotOrders(c) {
+      if (!c || typeof c !== "object" || !Array.isArray(c.list)) return null;
+      const list = c.list.filter(o => o && typeof o === "object" && typeof o.id === "string" && typeof o.pair === "string" && (o.side === "long" || o.side === "short") && botNum(o.placed) && (botNum(o.fill) || botNum(o.exit)))
+        .slice(-2000).map(o => ({ id: cText(o.id, 160), pair: cText(o.pair, 40), side: o.side, qty: botNum(o.qty), placed: botNum(o.placed), fill: botNum(o.fill), exit: botNum(o.exit),
+          status: cText(o.status || "", 12), price: botNum(o.price), kind: cText(o.kind || "", 6), why: cText(o.why || "", 40) }));
+      return { list, at: Number(c.at) > 0 ? Number(c.at) : 0, read: Number(c.read) > 0 ? Number(c.read) : 0, err: cText(c.err || "", 120) };
+    }
+    function botOrders() { const c = state.ui.botOrders; return c && Array.isArray(c.list) ? c.list : []; }
+    // A read of the bot's file merged in: each order's newest copy, none dropped. True when something changed.
+    function botOrdersTake(text) {
+      let j = null; try { j = JSON.parse(text); } catch (e) { return false; }
+      const src = j && j.orders && typeof j.orders === "object" && !Array.isArray(j.orders) ? j.orders : null;
+      if (!src) return false;
+      const byId = {}, order = [];
+      botOrders().forEach(o => { byId[o.id] = o; order.push(o.id); });
+      let changed = false;
+      Object.keys(src).forEach(k => {
+        const o = botOrderOf(Object.assign({ id: k }, src[k]));
+        if (!o) return;
+        if (!byId[o.id]) order.push(o.id);
+        if (JSON.stringify(byId[o.id]) !== JSON.stringify(o)) { byId[o.id] = o; changed = true; }
+      });
+      const c = state.ui.botOrders || {};
+      state.ui.botOrders = { list: order.map(id => byId[id]).sort((a, b) => a.placed - b.placed), at: changed ? Date.now() : (c.at || Date.now()), read: Date.now(), err: "" };
+      if (changed) botMatchMemo = null;
+      return changed;
+    }
+    // Reads the bot's file when it is due (with the sync token, from the sync repo), then redraws if any order changed.
+    let botReadBusy = false;
+    async function botOrdersKick(force) {
+      if (botReadBusy || !state || !syncReady() || (!force && document.hidden)) return;
+      const c = state.ui.botOrders;
+      if (!force && c && Date.now() - (c.read || 0) < BOT_READ_MS) return;
+      botReadBusy = true;
+      try {
+        const res = await syncApi("/contents/" + BOT_STATE_PATH + "?ref=" + encodeURIComponent(syncCfg().branch || "main"), { headers: { Accept: "application/vnd.github.raw" } });
+        if (res.status === 404) { state.ui.botOrders = Object.assign(cleanBotOrders(c) || { list: [], at: 0 }, { read: Date.now(), err: "" }); save(); return; } // the bot never ran: every trade is manual
+        if (!res.ok) { state.ui.botOrders = Object.assign(cleanBotOrders(c) || { list: [], at: 0 }, { read: Date.now(), err: "GitHub " + res.status }); save(); return; }
+        const changed = botOrdersTake(await res.text());
+        // Read now, even if the file could not be used, so it is asked for again in 10 minutes, not every minute.
+        state.ui.botOrders = Object.assign(state.ui.botOrders || { list: [], at: 0 }, { read: Date.now() });
+        save();
+        if (changed) renderAll();
+      } catch (e) { /* offline: tried again on the next check */ }
+      finally { botReadBusy = false; }
+    }
+    // The venue and coin of a bot order or a trade, in one spelling: "delta|AVAXUSD", "coindcx|INJUSDT".
+    function botSymKey(s) { return String(s || "").toUpperCase().replace(/^DELTA:/, "").replace(/^B-/, "").replace(/[^A-Z0-9]/g, ""); }
+    function botOrderKey(o) { return (/^DELTA:/i.test(o.pair) ? "delta" : "coindcx") + "|" + botSymKey(o.pair); }
+    // A trade as the matcher sees it: venue and coin, side, size, and when it opened and closed (ms; a
+    // minute wide when only HH:MM is known). Null for a trade the bot can't have placed (NSE, a book of
+    // another broker).
+    function botCand(t) {
+      const a = acct(t.accountId), ist = s => Date.parse(String(s).replace(" ", "T") + "+05:30");
+      if (!a || a.market === "nse") return null;
+      if (t.rep) {
+        if (!/coindcx/i.test(t.broker || a.reportBroker || "")) return null;
+        const px = t.px, open = t.openAt ? ist(t.openAt) : istMs(t.openDate || t.date, t.openTime || t.time), close = t.closeAt ? ist(t.closeAt) : null;
+        return { id: t.id, key: "coindcx|" + botSymKey(t.symbol), side: tradeSide(t), qty: px && px.qty > 0 ? px.qty : 0, open, openW: t.openAt ? 1000 : 60000, close, closeW: 1000 };
+      }
+      const venue = /coindcx/i.test(a.name || "") ? "coindcx" : "delta";
+      const open = istMs(t.date, t.time), close = t.exitTime ? istMs(t.exitDate || t.date, t.exitTime) : null;
+      return { id: t.id, key: venue + "|" + botSymKey(t.symbol), side: t.direction, qty: t.qty > 0 ? t.qty : 0, open, openW: 60000, close, closeW: 60000 };
+    }
+    // How well bot order o fits trade c: a score (lower is better), or -1 when it can't be this order.
+    function botFit(o, c) {
+      if (!c || !isFinite(c.open) || botOrderKey(o) !== c.key || (c.side && c.side !== o.side)) return -1;
+      const placed = o.placed * 1000, seen = (o.fill || o.exit) * 1000;
+      if (c.open + c.openW < placed - BOT_SLACK_MS || c.open > seen + BOT_SLACK_MS) return -1;
+      if (o.exit && c.close != null && isFinite(c.close) && c.close > o.exit * 1000 + BOT_SLACK_MS) return -1;
+      const qd = o.qty > 0 && c.qty > 0 ? Math.abs(o.qty - c.qty) / Math.max(o.qty, c.qty) : 0, near = o.fill && Math.abs(c.open - o.fill * 1000) <= BOT_NEAR_MS;
+      if (qd > BOT_QTY_TOL && !near) return -1;
+      return qd * 10 + Math.abs(seen - c.open) / 864e5;
+    }
+    // { trade id: bot order } for every trade an order fits, each order and each trade used once (best fit first).
+    let botMatchMemo = null;
+    function botMatches() {
+      const orders = botOrders(), rb = reportBooks(), sig = orders.length + ":" + ((state.ui.botOrders || {}).at || 0) + ":" + (state.trades || []).length + ":" + saveCount;
+      if (botMatchMemo && botMatchMemo.sig === sig && botMatchMemo.rb === rb) return botMatchMemo.map;
+      const map = {};
+      if (orders.length) {
+        const cands = (state.trades || []).map(botCand).concat(rb.closed.map(botCand)).concat(rb.open.map(o => o.id ? botCand(Object.assign({ rep: true, symbol: btSym(o.sym), date: o.day }, o)) : null)).filter(Boolean);
+        const pairs = [];
+        orders.forEach(o => cands.forEach(c => { const f = botFit(o, c); if (f >= 0) pairs.push({ o, c, f }); }));
+        pairs.sort((a, b) => a.f - b.f);
+        const used = {};
+        pairs.forEach(p => { if (map[p.c.id] || used[p.o.id]) return; map[p.c.id] = p.o; used[p.o.id] = 1; });
+      }
+      botMatchMemo = { sig, rb, map };
+      return map;
+    }
+    // "auto" / "manual" as found from the bot's orders (and its known test trades), before any hand pick.
+    function tradeByFound(t) {
+      const o = t.orig || t;
+      if (o.src && BOT_TEST_TRADES[o.src]) return "auto";
+      return botMatches()[o.id] ? "auto" : "manual";
+    }
+    // The tag a trade shows and filters by: your pick in the inspector, else what was found.
+    function tradeBy(t) { const o = t.orig || t; return o.by === "auto" || o.by === "manual" ? o.by : tradeByFound(o); }
+    // Why a trade is tagged as it is, for its pill's tooltip and the inspector.
+    function tradeByWhy(t) {
+      const o = t.orig || t, b = tradeBy(o);
+      if (o.by === "auto" || o.by === "manual") return "Set by you in the inspector" + (b !== tradeByFound(o) ? " (the bot's order log says " + (b === "auto" ? "Manual" : "Auto") + ")" : "");
+      if (o.src && BOT_TEST_TRADES[o.src]) return BOT_TEST_TRADES[o.src];
+      const m = botMatches()[o.id];
+      if (!m) return "Placed by you: no order of the live bot fits it";
+      const when = ms => { const d = new Date(ms + 330 * 60000); return fmtDay(d.toISOString().slice(0, 10)) + " " + d.toISOString().slice(11, 16); };
+      return "Placed by the live bot" + (m.kind ? " (" + m.kind + " " + (m.side === "long" ? "BUY" : "SELL") + ")" : "") + " on " + (/^DELTA:/i.test(m.pair) ? "Delta" : "CoinDCX")
+        + ": in " + when(m.placed * 1000) + (m.fill ? ", filled by " + when(m.fill * 1000) : "") + (m.qty ? ", qty " + cleanNum(m.qty) : "");
+    }
+    function byPillHtml(t) {
+      const b = tradeBy(t), tip = esc(tradeByWhy(t)), hand = ((t.orig || t).by || "") ? "*" : "";
+      return b === "auto"
+        ? `<span data-by="auto" class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-500/20 text-violet-300" title="${tip}">AUTO${hand}</span>`
+        : `<span data-by="manual" class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-700/40 text-slate-400" title="${tip}">MANUAL${hand}</span>`;
+    }
+    // A report book's own table row (a btTrades trade, open or closed): its tag, by its first row's id.
+    function btTradeBy(t) { return repIdBy("rep:" + t.legs[0].id); }
+    function btByPillHtml(t) { const id = "rep:" + t.legs[0].id, rv = repReviewOf(id); return byPillHtml({ id, rep: true, by: rv && rv.by }); }
+    function repIdBy(id) {
+      const rv = repReviewOf(id);
+      if (rv && (rv.by === "auto" || rv.by === "manual")) return rv.by;
+      return botMatches()[id] ? "auto" : "manual";
+    }
+    // Analysis' Placed by row: "" every trade, "auto" the bot's, "manual" yours.
+    function anByMode() { return BY_MODES.some(x => x.k === state.ui.anBy) ? state.ui.anBy : ""; }
+    function anPassBy(t) { const m = anByMode(); return !m || tradeBy(t) === m; }
+    function setAnBy(k) { anSet('anBy', BY_MODES.some(x => x.k === k) ? k : ""); }
     function reportTrades() {
       const rv = state.repReviews || {};
       return reportBooks().closed.map(t => { const r = rv[t.id]; if (!r) return t; const o = Object.assign({}, t); REP_REVIEW_KEYS.forEach(k => { o[k] = r[k]; }); return o; });
@@ -15536,7 +15753,7 @@
       const pairs = uniq(inCur.map(t => t.sym)).sort();
       const pair = pairs.indexOf(state.ui.btPair) !== -1 ? state.ui.btPair : "all";
       // The Analysis period applies here too, by the day a trade closed (or opened, if still open).
-      const shown = inCur.filter(t => (pair === "all" || t.sym === pair) && anInRange(t.day));
+      const shown = inCur.filter(t => (pair === "all" || t.sym === pair) && anInRange(t.day) && (!anByMode() || btTradeBy(t) === anByMode()));
       btShown = shown; btCurShown = cur;
 
       // ---- filters ----
@@ -15668,7 +15885,7 @@
           <td class="py-2 px-3 text-right whitespace-nowrap ${pos(t.gross)}">${signedMoney(t.gross, cur)}</td>
           <td class="py-2 px-3 text-right whitespace-nowrap text-slate-400">${money(t.fees, cur)}</td>
           <td class="py-2 px-3 text-right whitespace-nowrap ${pos(t.funding)}">${t.funding || t.legs.some(r => r.kind === "funding") ? signedMoney(t.funding, cur) : "—"}</td>
-          <td class="py-2 px-3 whitespace-nowrap">${status}</td>
+          <td class="py-2 px-3 whitespace-nowrap">${status} ${btByPillHtml(t)}</td>
           <td class="py-2 px-3 whitespace-nowrap">${repReviewBtn(t)}</td></tr>`;
         if (btOpenTrade !== t.id) return row;
         const legs = t.legs.map(r => `<tr class="border-t border-terminal-border/60">
@@ -15694,7 +15911,7 @@
     }
     // A report trade's own review (rules kept, what went right, mistakes, notes):
     // the report has none, so it is kept apart, keyed by the trade's first row.
-    const REP_REVIEW_KEYS = ["rules", "tagsPositives", "tagsMistakes", "notes", "setup", "confidence", "playRules", "reviewed", "setupAuto", "playAuto", "noSetup"];
+    const REP_REVIEW_KEYS = ["rules", "tagsPositives", "tagsMistakes", "notes", "setup", "confidence", "playRules", "reviewed", "setupAuto", "playAuto", "noSetup", "by"];
     function repReviewOf(id) { return (state.repReviews || {})[id] || null; }
     // The Review button both trade tables show: how many rules were kept, once reviewed.
     function reviewBtnHtml(rv, attrs) {
@@ -15784,6 +16001,7 @@
         if (v.setupAuto === true) o[k].setupAuto = true;
         if (v.playAuto === true) o[k].playAuto = true;
         if (v.noSetup === true) o[k].noSetup = true;
+        if (v.by === "auto" || v.by === "manual") o[k].by = v.by;
       });
       return o;
     }
@@ -16060,6 +16278,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-21.201', pr: 114, title: 'Trades tagged Auto or Manual', pts: ['Every trade now shows AUTO (placed by the live bot) or MANUAL (placed by you), past ones too: found from the bot\'s own order log in your sync repo', 'Analysis → Which trades: new Placed by row (All / Auto / Manual) narrows every number, table and the broker report; the Dashboard trade list has the same filter', 'Wrong tag? Open the trade and tap Auto or Manual under Placed by'] },
       { v: '2026-11-16.200', pr: 112, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
       { v: '2026-11-16.199', pr: 110, title: 'Best settings: only what is possible', pts: ['The card no longer offers things the tab cannot show: Crypto market on an NSE channel, a Coins pick with the Indian market, a crypto channel inside Indian, a level with no alerts (L1 + L3 was just L3), or a Move SL / Partial that never fires', 'It now searches the alerts you have in view (it said 1,554 fib alerts while you were on NSE 1D); a setting with nothing else to try says why, and two options that show the same alerts count as one', 'Use always lands on settings the tab keeps, with alerts in view; after Use or any change the card asks for a new search'] },
       { v: '2026-11-16.198', pr: 113, title: 'Early entry option', pts: ['Signals → How each trade is played: new Early entry row (Off, 0.01% to 0.2%). The order fills that much before the entry, above it for a buy and below it for a sell, so a trade that turned just short of the level is counted', 'Only the fill moves: SL, target, Move SL, Partial and Trail TP stay at the alert\'s prices; R is counted from your fill to the stop', 'In Best settings, compare tables, Demo account and CSV too; TL BROKEN alerts keep their market entry'] },
@@ -16216,6 +16435,7 @@
       // A device that never kept the alerts Discord sent reads the scanner now, not in 10 minutes.
       setTimeout(() => signalsReady.then(() => autoRefreshAlerts(!sentStored && sigIdbOk)), 2500);
       setTimeout(cdxKick, 4000);
+      setTimeout(botOrdersKick, 3000); // the live bot's orders: which trades are Auto
       // A key saved by the earlier in-page CoinDCX import (CoinDCX never answered
       // it) is not kept on this device; the key belongs in GitHub's secrets.
       if (state.coindcx) { delete state.coindcx; save(); }
