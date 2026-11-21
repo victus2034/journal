@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-21.204">
+  <meta name="app-version" content="2026-11-21.205">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -509,7 +509,7 @@
                 <span id="goalNavLabel"></span>
                 <button type="button" onclick="stepGoal(1)" class="px-1.5 rounded hover:bg-white/5">&rsaquo;</button>
               </div>
-              <button type="button" onclick="openWithdraw()" title="Log money you took out to your bank" class="px-2 py-1 rounded text-slate-400 hover:text-white hover:bg-white/5">Withdraw</button>
+              <button type="button" onclick="openWithdraw()" title="Log money you took out to your bank, or put in" class="px-2 py-1 rounded text-slate-400 hover:text-white hover:bg-white/5">Withdraw</button>
               <button type="button" onclick="openGoal('new')" class="px-2 py-1 rounded text-slate-400 hover:text-white hover:bg-white/5">+ Add</button>
               <button type="button" id="goalEditBtn" onclick="openGoal(currentGoalId())" class="px-2 py-1 rounded text-amber-400 hover:bg-white/5">Edit</button>
             </div>
@@ -2110,7 +2110,11 @@
     }
     function cleanWithdrawal(w) {
       if (!w || typeof w !== "object" || !w.id || !DATE_RE.test(String(w.date)) || !(cNum(w.amount) > 0)) return null;
-      return { id: cText(w.id, 40), accountId: cText(w.accountId, 40), date: String(w.date), amount: cNum(w.amount), note: cText(w.note || "", 120), updatedAt: typeof w.updatedAt === "string" ? w.updatedAt.slice(0, 30) : "" };
+      const o = { id: cText(w.id, 40), accountId: cText(w.accountId, 40), date: String(w.date), amount: cNum(w.amount), note: cText(w.note || "", 120), updatedAt: typeof w.updatedAt === "string" ? w.updatedAt.slice(0, 30) : "" };
+      // Money in (a deposit) and the Delta wallet move it came from, when the import found it (wallet as the truth, v.205).
+      if (w.kind === "deposit") o.kind = "deposit";
+      if (typeof w.src === "string" && w.src) o.src = cText(w.src, 60);
+      return o;
     }
     function cleanGoal(g) {
       if (!g || typeof g !== "object" || !g.id) return null;
@@ -2172,7 +2176,7 @@
       if (!t || typeof t !== "object") return out;
       Object.keys(t).forEach(k => {
         if (!/^(trades|goals|accounts|reviews|playbook|backtest|withdrawals):/.test(k) || k.length > 80) return;
-        if (typeof t[k] === "string" && t[k] >= (k.indexOf("trades:src:") === 0 ? cutoff : short)) out[k] = t[k];
+        if (typeof t[k] === "string" && t[k] >= (k.indexOf("trades:src:") === 0 || k.indexOf("withdrawals:dtx") === 0 ? cutoff : short)) out[k] = t[k];
       });
       return out;
     }
@@ -2792,11 +2796,14 @@
     function greenOrReturn(greenDays, days, s, cur) {
       const showDays = state.ui.kpiGreenDays === true;
       const key = selectedMonthKey(), from = key === "all" ? "" : key + "-01";
-      const opening = sum(viewBooks().map(a => balanceAtStart(a, from) * fxk(a, cur)));
-      const pctRet = opening > 0 ? s.net / opening * 100 : null;
+      // A wallet can't hold less than nothing: a book emptied out (Delta, 28 Sep) opens at 0, not at the funding a few cents below.
+      const opening = sum(viewBooks().map(a => Math.max(0, balanceAtStart(a, from)) * fxk(a, cur)));
+      // Money put in during the period is capital too (a Delta deposit the import found, or one you logged).
+      const dep = bookDeposited(viewBooks(), from, key === "all" ? "" : key + "-31", cur), capital = opening + dep;
+      const pctRet = capital > 0 ? s.net / capital * 100 : null;
       const card = showDays
         ? { label: "Green days", val: `${greenDays} of ${days.length}`, sub: days.length ? pct(greenDays / days.length * 100) : "0%", color: "text-slate-200" }
-        : { label: "Return", val: pctRet == null ? "—" : (pctRet >= 0 ? "+" : "") + pctRet.toFixed(2) + "%", sub: pctRet == null ? "no balance to measure against" : `${signedMoney(s.net, cur)} on ${money(opening, cur)}`, color: pctRet == null ? "text-slate-200" : pctRet >= 0 ? "text-emerald-400" : "text-rose-400" };
+        : { label: "Return", val: pctRet == null ? "—" : (pctRet >= 0 ? "+" : "") + pctRet.toFixed(2) + "%", sub: pctRet == null ? "no balance to measure against" : `${signedMoney(s.net, cur)} on ${money(opening, cur)}` + (dep > 0.005 ? ` + ${money(dep, cur)} put in` : ""), color: pctRet == null ? "text-slate-200" : pctRet >= 0 ? "text-emerald-400" : "text-rose-400" };
       card.foot = showDays ? "click for % return" : "click for green days";
       card.onclick = () => { state.ui.kpiGreenDays = !showDays; save(); renderDashboard(); };
       return card;
@@ -3010,16 +3017,30 @@
     // Withdrawn from the goal's books inside its window, in the given currency.
     function goalWithdrawn(g, cur) {
       const ids = goalBooksOf(g).map(a => a.id), start = iso(goalWindowStart(g)), end = iso(goalPeriodEnd(g));
-      return sum((state.withdrawals || []).filter(w => ids.indexOf(w.accountId) !== -1 && w.date >= start && w.date <= end).map(w => w.amount * fxk(acct(w.accountId), cur)));
+      return sum((state.withdrawals || []).filter(w => w.kind !== "deposit" && ids.indexOf(w.accountId) !== -1 && w.date >= start && w.date <= end).map(w => w.amount * fxk(acct(w.accountId), cur)));
     }
-    function bookWithdrawn(id, before) { return sum((state.withdrawals || []).filter(w => w.accountId === id && (!before || w.date < before)).map(w => w.amount)); }
+    // Money out is +, money in (a deposit) is -: what left the book, net.
+    function wdOut(w) { return w.kind === "deposit" ? -w.amount : w.amount; }
+    function bookWithdrawn(id, before) { return sum((state.withdrawals || []).filter(w => w.accountId === id && (!before || w.date < before)).map(wdOut)); }
+    // Deposits into the books in view inside a period (from / to are days, "" = open), in cur.
+    function bookDeposited(books, from, to, cur) {
+      const ids = books.map(a => a.id);
+      return sum((state.withdrawals || []).filter(w => w.kind === "deposit" && ids.indexOf(w.accountId) !== -1 && (!from || w.date >= from) && (!to || w.date <= to)).map(w => w.amount * fxk(acct(w.accountId), cur)));
+    }
     function openWithdraw() {
       const g = state.goals[Math.min(state.ui.goalIdx || 0, state.goals.length - 1)];
       const defBook = g && g.accountId && g.accountId !== "all" && state.accounts.some(a => a.id === g.accountId) ? g.accountId : (!isAll() ? selected() : state.accounts[0].id);
       const list = (state.withdrawals || []).slice().sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0);
-      openModalSheet("Log a withdrawal", body => {
+      openModalSheet("Money in / out", body => {
         body.innerHTML = `
-          <div class="text-[11px] text-slate-500">Money you took out of a trading account to your bank. It counts toward any goal with a "Money withdrawn" target, and lowers a book's worked-out balance (a live Delta or CoinDCX wallet already shows it).</div>
+          <div class="text-[11px] text-slate-500">Money you took out of a trading account to your bank, or put into one. A withdrawal counts toward any goal with a "Money withdrawn" target. Both date the balance's changes, so Return and past balances stay right (a live Delta or CoinDCX wallet already shows them in the balance). Delta's own deposits and withdrawals come in by themselves.</div>
+          <div>
+            <label class="text-slate-400 block mb-1">Type</label>
+            <select id="wdKind" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
+              <option value="out">Withdrawal (money out)</option>
+              <option value="in">Deposit (money in)</option>
+            </select>
+          </div>
           <div>
             <label class="text-slate-400 block mb-1">From book</label>
             <select id="wdAcc" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
@@ -3043,29 +3064,29 @@
           <div>
             <label class="text-slate-400 block mb-1">Withdrawals so far</label>
             <div id="wdList" class="space-y-1 max-h-48 overflow-y-auto">
-              ${list.length ? list.map(w => `<div class="flex items-center justify-between gap-2 rounded bg-[#080D15] border border-terminal-border px-2.5 py-1.5 text-[11px]"><span class="text-slate-300">${esc(w.date)} · ${esc(acct(w.accountId).name)}${w.note ? ' · <span class="text-slate-500">' + esc(w.note) + '</span>' : ''}</span><span class="flex items-center gap-2"><span class="text-emerald-300 font-bold">${esc(money(w.amount, acct(w.accountId).currency))}</span><button type="button" data-wdrm="${esc(w.id)}" title="Remove" class="text-rose-400 hover:text-rose-300">✕</button></span></div>`).join('') : '<div class="text-slate-500 text-[11px]">None logged yet.</div>'}
+              ${list.length ? list.map(w => `<div class="flex items-center justify-between gap-2 rounded bg-[#080D15] border border-terminal-border px-2.5 py-1.5 text-[11px]"${w.src ? ' data-wdauto="1"' : ''}><span class="text-slate-300">${esc(w.date)} · ${esc(acct(w.accountId).name)}${w.src ? ' · <span class="text-sky-300">from Delta</span>' : ''}${w.note ? ' · <span class="text-slate-500">' + esc(w.note) + '</span>' : ''}</span><span class="flex items-center gap-2"><span class="${w.kind === 'deposit' ? 'text-sky-300' : 'text-emerald-300'} font-bold">${w.kind === 'deposit' ? '+' : ''}${esc(money(w.amount, acct(w.accountId).currency))} ${w.kind === 'deposit' ? 'in' : 'out'}</span><button type="button" data-wdrm="${esc(w.id)}" title="Remove" class="text-rose-400 hover:text-rose-300">✕</button></span></div>`).join('') : '<div class="text-slate-500 text-[11px]">None logged yet.</div>'}
             </div>
           </div>`;
         body.querySelectorAll('[data-wdrm]').forEach(b => { b.onclick = () => {
           const w = state.withdrawals.find(x => x.id === b.dataset.wdrm);
-          if (!w || !confirm('Remove the ' + money(w.amount, acct(w.accountId).currency) + ' withdrawal of ' + w.date + '?')) return;
+          if (!w || !confirm('Remove the ' + money(w.amount, acct(w.accountId).currency) + ' ' + (w.kind === 'deposit' ? 'deposit' : 'withdrawal') + ' of ' + w.date + '?')) return;
           noteDeleted("withdrawals", w.id);
           state.withdrawals = state.withdrawals.filter(x => x.id !== w.id);
           save(); renderAll(); closeModalSheet(); openWithdraw();
         }; });
       }, () => {
-        const amount = parseFloat(document.getElementById('wdAmt').value);
-        if (!(amount > 0)) { toast("Enter the amount you withdrew"); return false; }
+        const amount = parseFloat(document.getElementById('wdAmt').value), dep = (document.getElementById('wdKind') || {}).value === "in";
+        if (!(amount > 0)) { toast(dep ? "Enter the amount you put in" : "Enter the amount you withdrew"); return false; }
         // Today is the trading day (it rolls over at the cutoff), so a 1 AM payout counts toward the goal on screen.
         const date = document.getElementById('wdDate').value || todayDay(), accId = document.getElementById('wdAcc').value;
         if (!tradeDateOk(date)) { toast("Pick a date between 2000 and today"); return false; }
         const bal = bookBalance(acct(accId));
-        if (amount > bal && !confirm("That is more than " + acct(accId).name + "'s balance (" + money(bal, acct(accId).currency) + "). Log it anyway?")) return false;
+        if (!dep && amount > bal && !confirm("That is more than " + acct(accId).name + "'s balance (" + money(bal, acct(accId).currency) + "). Log it anyway?")) return false;
         state.withdrawals = state.withdrawals || [];
-        state.withdrawals.push(stamp({ id: uid(), accountId: accId, date, amount, note: document.getElementById('wdNote').value.trim().slice(0, 120) }));
+        state.withdrawals.push(stamp(Object.assign({ id: uid(), accountId: accId, date, amount, note: document.getElementById('wdNote').value.trim().slice(0, 120) }, dep ? { kind: "deposit" } : {})));
         save();
         renderAll();
-        toast("Withdrawal logged");
+        toast(dep ? "Deposit logged" : "Withdrawal logged");
         return true;
       });
     }
@@ -4706,8 +4727,9 @@
     function setAnTlType(k) { anSet('anTlType', SIG_TL_TYPES.some(x => x.k === k) ? k : ""); }
     // Every trade, in order, with the balance you had when you entered it. Past
     // balances are rebuilt from the trades and anchored to the balance the broker
-    // reports today (Delta's live balance, CoinDCX's wallet). Deposits,
-    // withdrawals and funding are invisible to this, so older balances are
+    // reports today (Delta's live balance, CoinDCX's wallet). Deposits and
+    // withdrawals (logged, or found in Delta's wallet by the import) come in on
+    // their day; funding is invisible to this, so older balances are close
     // estimates. A broker-report trade has no stop or prices of its own: its side
     // and size come from its fees or fills (btSize), and without them the checks
     // that need a size are skipped for it.
@@ -4730,10 +4752,14 @@
         else if (w) { offset = w.value - bookComputedBalance(a); anchored = true; }
         const maxRisk = a.maxRiskPct || 1, maxX = a.maxNotionalX || 3;
         let run = a.startBalance || 0, dayKey = null, dayN = 0, dayPnl = 0, prev = null, dayDone = [];
+        // Money in and out of the book, applied from its day on (a deposit before a trade that day counts).
+        const moves = (state.withdrawals || []).filter(x => x.accountId === id).sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0);
+        let mi = 0;
         list.forEach(t => {
           // Balance, size and risk come from the stored trade, in its book's own
           // currency; t itself may be a copy converted to the currency on screen.
           const o = t.orig || t, k = t.fxk || 1;
+          while (mi < moves.length && moves[mi].date <= dayOf(t)) run -= wdOut(moves[mi++]);
           const before = run + offset;
           const notional = tradeNotional(o);
           const xBal = before > 0 && notional != null ? notional / before : null;
@@ -5803,7 +5829,7 @@
       const assume = document.getElementById('anAssumptions');
       const book = isAll() ? (state.accounts.find(a => a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {}) : acct(selected());
       assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's and CoinDCX's wallets, read by your PC's imports). " : "Balances before each trade are your starting balance plus the trades before it; once your PC imports Delta, they're anchored to its wallet. ")
-        + "Deposits, withdrawals and funding can't be seen, so older balances are estimates. "
+        + "Deposits and withdrawals count from their day (Delta's come in by themselves); funding can't be seen, so older balances are close estimates. "
         + "Auto = placed by the live bot: a trade one of its orders fits (its order log, coindcx_live_state.json in your sync repo: same broker, coin and side, opened between the order going in and the bot seeing the fill, closed by the time it saw the close, same size). Every other trade is Manual. Change one in its inspector. "
         + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Settings → Books & rules → Trading Books.`
         + (state.accounts.some(a => a.reportBroker) ? " A broker-report trade (CoinDCX) has no stop or prices of its own: its side and position value are worked out from its fees (or fills), its balance from the broker's wallet, and a trade whose fees don't add up shows — for size." : "")
@@ -5990,12 +6016,18 @@
         const wordCls = fresh ? 'text-emerald-400' : 'text-amber-400';
         const wallet = !live && cdxWallet(a);
         const liveTitle = live ? 'Delta ' + esc(liveDeltaBalance.field) + ', ' + esc(deltaFetchedText())
-          + (fresh ? '' : ' — nothing newer since (is the PC on?); holding this last known figure') + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency))
-          : wallet ? esc(cdxWalletTitle(wallet)) + '. Journal-computed: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
+          + (fresh ? '' : ' — nothing newer since (is the PC on?); holding this last known figure') + '. Trades + logged money in / out: ' + esc(money(bookComputedBalance(a), a.currency))
+          : wallet ? esc(cdxWalletTitle(wallet)) + '. Trades + logged money in / out: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
+        // The wallet is the balance (lakky, 21 Nov: "make the wallet balance main"); what the trades and
+        // logged money moves add up to is only a check, shown when it is off by more than 1%.
+        const comp = bookComputedBalance(a), gap = (live || wallet) ? bookBalance(a) - comp : 0;
+        // Small gaps (funding, rounding) are left out: at least $0.50 / ₹40 and 1% of the balance.
+        const gapLine = Math.abs(gap) >= Math.max(a.currency === 'INR' ? 40 : 0.5, 0.01 * Math.max(Math.abs(bookBalance(a)), Math.abs(comp)))
+          ? `<div class="text-[10px] text-slate-500 mt-0.5" data-gap="${esc(a.id)}">The wallet is the balance. Your trades and logged money in / out add up to ${esc(money(comp, a.currency))}: the wallet has ${esc(money(Math.abs(gap), a.currency))} ${gap < 0 ? 'less' : 'more'}${live ? ' (funding, or money moved before the import could see it)' : ' (a deposit or withdrawal not logged)'}.</div>` : '';
         row.innerHTML = `
           <div>
             <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${empty[a.id] ? ' <span class="text-[10px] font-normal text-slate-500" title="Not on the book bar until it has a trade or a starting balance">· hidden from the bar (empty)</span>' : ''}${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Delta wallet, from your PC\'s import' : 'Last known Delta wallet — nothing newer from your PC\'s import'}"></span>` : ''}</div>
-            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'Delta wallet' : esc('Delta wallet from ' + (balTimeText(liveDeltaBalance.at) || 'before'))}</span>` : wallet ? (wallet.old ? ` <span class="text-amber-400">· CoinDCX wallet from ${esc(balTimeText(wallet.at) || 'before')} (import failing)</span>` : ` <span class="text-emerald-400">· CoinDCX wallet</span>`) : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>
+            <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'Delta wallet' : esc('Delta wallet from ' + (balTimeText(liveDeltaBalance.at) || 'before'))}</span>` : wallet ? (wallet.old ? ` <span class="text-amber-400">· CoinDCX wallet from ${esc(balTimeText(wallet.at) || 'before')} (import failing)</span>` : ` <span class="text-emerald-400">· CoinDCX wallet</span>`) : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>${gapLine}
           </div>
           <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
         host.appendChild(row);
@@ -6039,7 +6071,12 @@
         if (!(risk > 0) || !(cnt > 0) || !(lev > 0) || !(notionalX > 0)) { toast("Risk %, trades a day, leverage and biggest position must be above 0"); return false; }
         if (risk > 100) { toast("Max risk per trade is a % of the balance: 100 at most"); return false; }
         if (Math.round(cnt) < 1) { toast("Max trades a day must be 1 or more"); return false; }
-        a.startBalance = +(bal - net).toFixed(2);
+        // The balance typed (or the wallet's) less the trades, plus what was taken out net: so trades and
+        // money in / out add up to it again (logged withdrawals used to come off twice).
+        const start = +(bal - net + bookWithdrawn(a.id)).toFixed(2);
+        // When the starting balance was set: Delta's import counts deposits / withdrawals from then (the balance holds the earlier ones).
+        if (Math.abs(start - (a.startBalance || 0)) >= 0.005) a.startAt = new Date().toISOString();
+        a.startBalance = start;
         a.dailyLossLimit = lim; a.maxRiskPct = risk; a.maxTradesPerDay = Math.round(cnt); a.defaultLeverage = lev; a.maxNotionalX = notionalX;
         if (fx !== fxRate(a)) a.fxRate = fx; // only a changed rate is stored, so defaults can still improve later
         stamp(a);
@@ -16519,6 +16556,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-21.205', pr: 118, title: 'Wallet balance is the main balance', pts: ['Delta: your deposits and withdrawals now come in by themselves from Delta\'s wallet history, with their dates (the Delta gap of $27.6 was money moved: -$33.2 on 28 Sep, +$47.1 on 12 Oct, -$23.5 on 16 Oct, -$17.6 on 5 Nov)', 'Return counts money you put in, and past balances move on the day money came in or out (they were all placed at the start)', 'Withdraw is now Money in / out: log a deposit too. Trading Books shows the wallet as the balance and what your trades add up to only as a check'] },
       { v: '2026-11-21.204', pr: 117, title: 'BTC move filter (your ±1.5% rule)', pts: ['Signals and Analysis: new BTC move row: With BTC / Against BTC / BTC flat. It reads where BTC was when the alert fired or the trade opened, against its 05:30 IST open: up or down 1.5% or more is a move, else flat (last closed 15m candle, no hindsight)', 'Tested on 6,497 graded crypto alerts (1 Jan - 8 Nov): with BTC +0.02R a trade, against BTC -0.22R, flat -0.10R. Market days shows the same table for your alerts and trades', 'Also in Results by, What to cut and Best settings. The BTC day row (trend going in) stays as it was'] },
       { v: '2026-11-21.203', pr: 116, title: 'Sideways market fixed, numbers checked', pts: ['BTC day (Bullish / Bearish / Sideways) is now the market as it stood at 05:30 IST, from closed candles only: 20-day EMA + daily range (ATR), not the day\'s own close, which was only known after your trade (hindsight)', 'Auto trades take the stop the bot really placed: AVAX read +13R on an alert stop, now +0.68R; ENA gets its -1.02R', 'Checked on your real data: P&L, R, fees, ₹/$ totals, days and Auto/Manual all match a recount by hand. A clicked day\'s hours now run 05:30 to 05:30 like its candle'] },
       { v: '2026-11-21.202', pr: 115, title: 'Trendline Type: Touches and Breaks', pts: ['Signals → Trendline alerts → Type has two new choices: Touches (both touch types) and Breaks (SP TL BR + RS TL BR together), so the live bot\'s breaks only shows in one view', 'Checked against an independent retest on real Delta candles: 1D crypto breaks 1 Jun - 21 Nov, all 210 alerts the same R (202 closed, +0.29R a trade)'] },

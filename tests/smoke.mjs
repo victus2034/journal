@@ -1914,7 +1914,8 @@ async function deltaImportRun(seed) {
   const KEY = 'dx-key-1', SECRET = 'dx-secret-2', REPO = 'victus/sync';
   const errs = [];
   const check = (ok, what) => { if (!ok) errs.push(what); };
-  const mock = { fills: [], calls: [], bad: [], refuse: null, ip: '203.0.113.9', ipReads: 0, equity: '512.25', products: true };
+  const mock = { fills: [], txs: [], calls: [], bad: [], refuse: null, ip: '203.0.113.9', ipReads: 0, equity: '512.25', products: true };
+  const tx = (id, type, amount, at, asset = 'USD') => ({ uuid: 'e5f0c2a1-' + id, transaction_type: type, amount: String(amount), balance: '0', asset_symbol: asset, created_at: at, meta_data: {} });
   const fill = (id, sym, side, size, price, at, order, fee = 0.05) => ({ id, product_symbol: sym, side, size, price: String(price), commission: String(fee), created_at: at, order_id: order });
   const CV = { BTCUSD: 0.001, ETHUSD: 0.01, SOLUSD: 1 };
   function delta(req) {
@@ -1931,6 +1932,13 @@ async function deltaImportRun(seed) {
       const all = mock.fills.filter(f => Date.parse(f.created_at.replace(/(\.\d{3})\d+/, '$1')) * 1000 >= start).sort((a, b) => a.created_at < b.created_at ? 1 : -1);
       const page = all.slice(after, after + 2); // two a page, so paging is used
       if (size !== 200) mock.bad.push('page_size ' + size);
+      return [200, { result: page, meta: { after: after + 2 < all.length ? String(after + 2) : null } }];
+    }
+    if (path === '/v2/wallet/transactions') {
+      // Newest first, two a page, so paging is used.
+      const after = Number(u.searchParams.get('after') || 0), size = Number(u.searchParams.get('page_size'));
+      const all = mock.txs.slice().sort((a, b) => a.created_at < b.created_at ? 1 : -1), page = all.slice(after, after + 2);
+      if (size !== 100) mock.bad.push('tx page_size ' + size);
       return [200, { result: page, meta: { after: after + 2 < all.length ? String(after + 2) : null } }];
     }
     return [404, { error: { code: 'not_found' } }];
@@ -1982,7 +1990,9 @@ async function deltaImportRun(seed) {
     const [status, data] = github(req.method(), u, await req.allHeaders(), req.postData() || '');
     return route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
   });
-  const seeded = Object.assign({}, seed, { sync: { token: 'gh-token', repo: REPO, branch: 'main', auto: false, lastAt: '', lastSha: '' } });
+  // The crypto book's starting balance was set on 1 Oct: Delta money moves count from then.
+  const seeded = Object.assign({}, seed, { sync: { token: 'gh-token', repo: REPO, branch: 'main', auto: false, lastAt: '', lastSha: '' },
+    accounts: seed.accounts.map(a => a.id === 'acc_cry' ? Object.assign({}, a, { startAt: '2026-10-01T00:00:00.000Z' }) : a) });
   await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
   const page = await ctx.newPage();
   page.on('pageerror', e => errs.push('page error: ' + e.message));
@@ -2013,11 +2023,22 @@ async function deltaImportRun(seed) {
       fill(5, 'SOLUSD', 'sell', 2, 150, '2026-10-20T10:00:10Z', 'o5'), fill(6, 'SOLUSD', 'buy', 2, 148, '2026-10-20T10:30:10Z', 'o6'),
       fill(7, 'XRPUSD', 'buy', 5, 2, '2026-10-21T10:00:00Z', 'o7'), fill(8, 'XRPUSD', 'sell', 5, 2.1, '2026-10-21T11:00:00Z', 'o8')
     ];
+    // The wallet's own history: money in and out (taken), trading P&L, fees, funding and a rupee row (left out).
+    mock.txs = [
+      tx(500, 'deposit', 300, '2026-09-20T10:00:00Z'), // before the starting balance was set: already in it
+      tx(501, 'deposit', 100, '2026-10-19T18:45:00Z'), tx(502, 'cashflow', -5, '2026-10-20T20:00:00Z'), tx(503, 'commission', -0.1, '2026-10-20T20:00:00Z'),
+      tx(504, 'sub_account_transfer', -10, '2026-10-21T02:00:00Z'), tx(505, 'perpetual_futures_funding', -0.02, '2026-10-21T08:00:00Z'),
+      tx(506, 'withdrawal', -40.5, '2026-10-22T05:00:00Z'), tx(507, 'deposit', 500, '2026-10-22T06:00:00Z', 'INR')
+    ];
     r = await runImport();
     let j = stored(), dt = dTrades(j);
     const btc = dt.find(t => t.src === 'delta:o3');
-    check(r.code === 0 && /^Imported 1 new trade from Delta · 8 fills read · skipped XRPUSD \(Delta gave no contract size\) · balance 512\.25 \(net equity\)$/.test(r.out) && JSON.stringify(r.puts) === '["Delta: 1 new trade"]', 'first run: ' + JSON.stringify(r));
+    check(r.code === 0 && /^Imported 1 new trade from Delta · 8 fills read · skipped XRPUSD \(Delta gave no contract size\) · 3 deposits \/ withdrawals added · balance 512\.25 \(net equity\)$/.test(r.out) && JSON.stringify(r.puts) === '["Delta: 1 new trade"]', 'first run: ' + JSON.stringify(r));
     check(mock.bad.length === 0, 'requests Delta would refuse: ' + mock.bad.join(' | '));
+    // Money in / out: dated in India time (a 00:15 IST deposit is the 20th), deposits marked, each with its Delta id.
+    const mv = (j.withdrawals || []).filter(w => w.src).map(w => [w.id, w.date, w.amount, w.kind || 'out', w.src, w.accountId].join(' ')).sort();
+    check(JSON.stringify(mv) === JSON.stringify(['dtxe5f0c2a1-501 2026-10-20 100 deposit delta:tx:e5f0c2a1-501 acc_cry', 'dtxe5f0c2a1-504 2026-10-21 10 out delta:tx:e5f0c2a1-504 acc_cry', 'dtxe5f0c2a1-506 2026-10-22 40.5 out delta:tx:e5f0c2a1-506 acc_cry'])
+      && j.deltaImport.lastMoveAt === Date.parse('2026-10-22T06:00:00Z') && j.deltaImport.movesFrom === '2026-10-01T00:00:00.000Z' && mock.calls.some(x => x === '/v2/wallet/transactions?page_size=100&after=2'), 'money in / out from the wallet: ' + JSON.stringify(mv) + ' ' + j.deltaImport.lastMoveAt);
     check(btc && btc.accountId === 'acc_cry' && btc.date === '2026-10-20' && btc.time === '09:30' && btc.exitDate === '2026-10-21' && btc.exitTime === '01:30' && btc.direction === 'long' && btc.entry === 60100 && btc.exit === 61000 && btc.qty === 0.02 && Math.abs(btc.fees - 0.2) < 1e-9 && btc.leverage === 10 && btc.rules.length === 5 && btc.updatedAt, 'BTC trade: ' + JSON.stringify(btc));
     check(j.trades.find(t => t.id === 'hand1').src === 'delta:o6' && dt.length === 2, 'hand-logged SOL not matched: ' + JSON.stringify(dt.map(t => t.src)));
     check(j.deltaImport && j.deltaImport.lastFillTime === Date.parse('2026-10-21T11:00:00Z') * 1000 && JSON.stringify(j.deltaImport.openPositions) === JSON.stringify({ ETHUSD: Date.parse('2026-10-21T09:00:00Z') * 1000 }) && !('note' in j.deltaImport), 'resume point: ' + JSON.stringify(j.deltaImport));
@@ -2029,6 +2050,8 @@ async function deltaImportRun(seed) {
     let p = await page.evaluate(() => ({ n: state.trades.filter(t => t.src === 'delta:o3').length, bal: state.delta && state.delta.liveBalance && state.delta.liveBalance.value, di: !!state.deltaImport }));
     c = await card();
     check(s.ok && p.n === 1 && p.bal === 512.25 && p.di && /^Your PC imports Delta every 30 minutes/.test(c.status) && /2 Delta trades in the journal/.test(c.status) && !c.bad && c.steps === '', 'phone after the run: ' + JSON.stringify({ s, p, c }));
+    const pw = await page.evaluate(() => (state.withdrawals || []).filter(w => w.src).map(w => w.id + ':' + (w.kind || 'out')).sort().join(','));
+    check(pw === 'dtxe5f0c2a1-501:deposit,dtxe5f0c2a1-504:out,dtxe5f0c2a1-506:out', 'the phone keeps the moves and which way they went: ' + pw);
     s = await sync();
     check(s.ok && s.changed === false, 'second sync rewrote the file: ' + JSON.stringify(s));
 
@@ -2061,12 +2084,13 @@ async function deltaImportRun(seed) {
 
     // A trade deleted on the phone stays deleted, even when the record is lost and the whole history is read again.
     await sync();
-    await page.evaluate(() => { const t = state.trades.find(x => x.src === 'delta:o3'); noteDeleted('trades', t.id, t.src); state.trades = state.trades.filter(x => x !== t); save(); });
+    await page.evaluate(() => { const t = state.trades.find(x => x.src === 'delta:o3'); noteDeleted('trades', t.id, t.src); state.trades = state.trades.filter(x => x !== t);
+      noteDeleted('withdrawals', 'dtxe5f0c2a1-506'); state.withdrawals = state.withdrawals.filter(w => w.id !== 'dtxe5f0c2a1-506'); save(); });
     await sync();
     const lost = stored(); delete lost.deltaImport; const lt = JSON.stringify(lost); gh.files[REPO] = { text: lt, sha: crypto.createHash('sha1').update(lt).digest('hex') };
     r = await runImport();
     j = stored();
-    check(r.code === 0 && !r.out.startsWith('Imported') && !dTrades(j).some(t => t.src === 'delta:o3') && new Set(dTrades(j).map(t => t.src)).size === dTrades(j).length && j.deltaImport.lastFillTime > 0, 'full re-read after a delete: ' + JSON.stringify(r) + ' ' + JSON.stringify(dTrades(j).map(t => t.src)));
+    check(r.code === 0 && !r.out.startsWith('Imported') && !dTrades(j).some(t => t.src === 'delta:o3') && new Set(dTrades(j).map(t => t.src)).size === dTrades(j).length && j.deltaImport.lastFillTime > 0 && (j.withdrawals || []).filter(w => w.src).map(w => w.id).sort().join(',') === 'dtxe5f0c2a1-501,dtxe5f0c2a1-504', 'full re-read after a delete: ' + JSON.stringify(r) + ' ' + JSON.stringify(dTrades(j).map(t => t.src)));
     // Contract sizes unreadable: nothing imported, the reason kept.
     mock.products = false;
     r = await runImport();
@@ -7628,6 +7652,100 @@ async function btcMoveRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'BTC move: ±1.5% from the 05:30 open at entry (15m, no hindsight), With / Against / flat in Signals, Analysis, Market days, Results by');
 }
 
+// lakky (21 Nov): "make the wallet balance main". The wallet is the balance; Delta's own deposits and
+// withdrawals (the import brings them) and ones logged by hand date its changes, so Return, past
+// balances and the books line stay right without logging anything.
+async function walletMainRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const now = new Date().toISOString();
+  const seeded = JSON.parse(JSON.stringify(seed));
+  seeded.accounts = [{ id: 'dx', name: 'Delta', market: 'crypto', currency: 'USD', startBalance: 100, maxRiskPct: 1, dailyLossLimit: 0, maxTradesPerDay: 5, defaultLeverage: 10, updatedAt: now }];
+  const tr = (id, date, exit) => ({ id, accountId: 'dx', date, time: '12:00', exitDate: date, exitTime: '13:00', symbol: 'BTCUSD', direction: 'long', entry: 100, exit, stop: 99, qty: 1, fees: 0, leverage: 1, setup: '', rules: [false, false, false, false, false], notes: '', updatedAt: now });
+  seeded.trades = [tr('t1', '2026-10-10', 110), tr('t2', '2026-10-20', 95), tr('t3', '2026-11-05', 102)];
+  seeded.withdrawals = [
+    { id: 'dtx1', accountId: 'dx', date: '2026-10-15', amount: 50, kind: 'deposit', note: 'Delta deposit', src: 'delta:tx:1', updatedAt: now },
+    { id: 'dtx2', accountId: 'dx', date: '2026-11-02', amount: 30, note: 'Delta withdrawal', src: 'delta:tx:2', updatedAt: now },
+    { id: 'w3', accountId: 'dx', date: '2026-11-03', amount: 20, kind: 'deposit', note: '', updatedAt: now },
+    { id: 'w4', accountId: 'dx', date: '2026-11-10', amount: 5, note: '', updatedAt: now }];
+  seeded.goals = []; seeded.signals = [];
+  seeded.delta = { liveBalance: { value: 140, field: 'net equity', at: Date.now() } };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  page.on('dialog', d => d.accept());
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    // By hand: 100 + 10 - 5 + 2 trades, +50 in, -30 out, +20 in, -5 out = 142; the wallet says 140.
+    const b = await page.evaluate(() => { const a = acct('dx'); return [bookWithdrawn('dx'), bookComputedBalance(a), bookBalance(a), deltaAccountId()]; });
+    check(JSON.stringify(b) === '[-35,142,140,"dx"]', 'money out net, trades + moves, wallet: ' + JSON.stringify(b));
+    // Return: October opened at 98 (100, less the 2 the wallet is short) and 50 went in; November opened at 153 and 20 went in.
+    const ret = await page.evaluate(() => {
+      const out = {};
+      ['2026-10', '2026-11'].forEach(m => { Object.assign(state.ui, { account: 'dx', month: m, kpiGreenDays: false }); switchTab('dashboard'); renderAll();
+        const t = document.getElementById('kpiRibbon').innerText.replace(/\s+/g, ' '), i = t.indexOf('Return'); out[m] = t.slice(i, i + 60); });
+      return out;
+    });
+    check(/^Return \+3\.38% \+\$5\.00 on \$98\.00 \+ \$50\.00 put in/.test(ret['2026-10']), 'October: +5 on 98 + 50 = +3.38%: ' + ret['2026-10']);
+    check(/^Return \+1\.16% \+\$2\.00 on \$153\.00 \+ \$20\.00 put in/.test(ret['2026-11']), 'November: +2 on 153 + 20 = +1.16%: ' + ret['2026-11']);
+    // The balance each trade was entered with: money moves count from their day (it was 98 / 108 / 103 with them all at the start).
+    const bef = await page.evaluate(() => analyzeTrades(state.trades.map(hydrate)).map(x => x.before).join(','));
+    check(bef === '98,158,143', 'balance before each trade: ' + bef);
+    // Trading Books: the wallet is the balance, what the journal adds up to is the check.
+    const bk = await page.evaluate(() => { openSettings('books'); renderAll(); const el = document.querySelector('#booksList [data-gap="dx"]'); return { gap: el ? el.innerText : '', bal: document.getElementById('booksList').innerText.replace(/\s+/g, ' ') }; });
+    check(/Balance \$140\.00/.test(bk.bal) && /add up to \$142\.00: the wallet has \$2\.00 less/.test(bk.gap), 'Trading Books: ' + JSON.stringify(bk));
+    // A few cents of funding is not a gap worth a line (under $0.50); a book that would open October at -1 opens at 0 (5 on 149 put in).
+    const small = await page.evaluate(() => {
+      const keep = liveDeltaBalance.value; liveDeltaBalance.value = 141.7; openSettings('books'); renderAll();
+      const line = !!document.querySelector('#booksList [data-gap="dx"]'); liveDeltaBalance.value = keep;
+      state.withdrawals.push({ id: 'empty', accountId: 'dx', date: '2026-10-16', amount: 99, kind: 'deposit' }); // the wallet then held 99 less on 1 Oct: -1
+      Object.assign(state.ui, { account: 'dx', month: '2026-10', kpiGreenDays: false }); switchTab('dashboard'); renderAll();
+      const t = document.getElementById('kpiRibbon').innerText.replace(/\s+/g, ' '), i = t.indexOf('Return');
+      state.withdrawals = state.withdrawals.filter(w => w.id !== 'empty'); renderAll();
+      return { line, ret: t.slice(i, i + 60) };
+    });
+    check(!small.line && /^Return \+3\.36% \+\$5\.00 on \$0\.00 \+ \$149\.00 put in/.test(small.ret), 'small gap hidden, emptied book opens at 0: ' + JSON.stringify(small));
+    // A goal's "Money withdrawn" counts money out only.
+    const gl = await page.evaluate(() => {
+      const g = { id: 'gw', title: 'Bank it', target: 1000, metric: 'withdraw', targets: { withdraw: 1000 }, period: 'month', accountId: 'dx' };
+      const w0 = goalWithdrawn(g, 'USD');
+      state.withdrawals.push({ id: 'gin', accountId: 'dx', date: todayDay(), amount: 7, kind: 'deposit' }); const w1 = goalWithdrawn(g, 'USD');
+      state.withdrawals.push({ id: 'gout', accountId: 'dx', date: todayDay(), amount: 4 }); const w2 = goalWithdrawn(g, 'USD');
+      state.withdrawals = state.withdrawals.filter(w => w.id !== 'gin' && w.id !== 'gout');
+      return [w1 - w0, w2 - w1];
+    });
+    check(JSON.stringify(gl) === '[0,4]', 'goal withdrawn: a deposit adds 0, a withdrawal 4: ' + JSON.stringify(gl));
+    // Money in / out: log a deposit by hand; the list marks deposits and Delta's own.
+    await page.evaluate(() => { switchTab('dashboard'); renderAll(); openWithdraw(); });
+    await page.waitForSelector('#modalSheet:not(.hidden)');
+    const list = await page.evaluate(() => [...document.querySelectorAll('#wdList > div')].map(d => d.innerText.replace(/\s+/g, ' ').replace(' ✕', '')));
+    check(list.some(x => /^2026-10-15 · Delta · from Delta · Delta deposit \+\$50\.00 in$/.test(x)) && list.some(x => /^2026-11-10 · Delta \$5\.00 out$/.test(x)), 'list: ' + JSON.stringify(list));
+    await page.selectOption('#wdKind', 'in');
+    await page.selectOption('#wdAcc', 'dx');
+    await page.fill('#wdDate', '2026-11-12');
+    await page.fill('#wdAmt', '25');
+    await page.click('#modalSheetSaveBtn');
+    const dep = await page.evaluate(() => { const w = state.withdrawals.find(x => x.date === '2026-11-12'); return { kind: w && w.kind, amt: w && w.amount, comp: bookComputedBalance(acct('dx')) }; });
+    check(dep.kind === 'deposit' && dep.amt === 25 && dep.comp === 167, 'a deposit logged by hand: ' + JSON.stringify(dep));
+    // Kept through a reload and a sync round trip (kind and Delta id).
+    await page.reload({ waitUntil: 'load' });
+    const kept = await page.evaluate(() => { const back = sanitizeState(JSON.parse(JSON.stringify(syncPayload(state)))); return [state.withdrawals, back.withdrawals].map(l => l.map(w => w.id + ':' + (w.kind || 'out') + ':' + (w.src || '')).sort().join(',')); });
+    check(kept[0] === kept[1] && /dtx1:deposit:delta:tx:1/.test(kept[0]) && /dtx2:out:delta:tx:2/.test(kept[0]) && (kept[0].match(/:deposit:/g) || []).length === 3, 'kept: ' + JSON.stringify(kept));
+    // Typing the balance in the book editor: trades and money in / out add up to it (logged moves used to count twice), and the day is kept.
+    await page.evaluate(() => { openSettings('books'); renderAll(); openBookEditor('dx'); });
+    await page.waitForSelector('#modalSheet:not(.hidden)');
+    await page.fill('#bkBalance', '150');
+    await page.click('#modalSheetSaveBtn');
+    const ed = await page.evaluate(() => { const a = acct('dx'); return { comp: +bookComputedBalance(a).toFixed(2), start: a.startBalance, at: !!a.startAt && Date.now() - Date.parse(a.startAt) < 60000 }; });
+    check(ed.comp === 150 && ed.start === 83 && ed.at, 'book editor: ' + JSON.stringify(ed));
+  } catch (e) { errs.push('threw: ' + e.message.split('\n').slice(0, 3).join(' | ')); }
+  await ctx.close();
+  if (errs.length) failures.push('Wallet main:\n     ' + errs.join('\n     '));
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Wallet main: wallet is the balance, Delta / logged deposits and withdrawals dated, Return and past balances, books check line');
+}
+
 // A trade the live bot placed takes the stop the bot put on the exchange (lakky's AVAX of 18 Nov read
 // +13R on an alert stop 0.14% under entry); a typed stop or a trade set to Manual keeps its own.
 async function botStopRun(seed) {
@@ -7745,6 +7863,7 @@ await botTagRun(data);
 await marketDayRun(data);
 await btcMoveRun(data);
 await botStopRun(data);
+await walletMainRun(data);
 
 await browser.close();
 server.close();
