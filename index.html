@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-21.202">
+  <meta name="app-version" content="2026-11-21.203">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -2082,7 +2082,7 @@
       if (t.confidence !== undefined && t.confidence !== null) { const c = parseInt(t.confidence, 10); if (c >= 1 && c <= 5) o.confidence = c; else delete o.confidence; }
       if (o.stop && !stopOk(o)) o.stop = 0; // a stop on the wrong side of the entry is a bad match
       // Filled in from the matched alert, not typed: the inspector says so.
-      if (t.stopSrc === "alert" && o.stop) o.stopSrc = "alert"; else delete o.stopSrc;
+      if ((t.stopSrc === "alert" || t.stopSrc === "bot") && o.stop) o.stopSrc = t.stopSrc; else delete o.stopSrc;
       if (t.setupAuto === true) o.setupAuto = true; else delete o.setupAuto;
       if (t.playAuto === true && o.playRules) o.playAuto = true; else delete o.playAuto;
       if (t.noSetup === true && !String(o.setup || "").trim()) o.noSetup = true; else delete o.noSetup;
@@ -4253,7 +4253,7 @@
       if (chan) orphans = []; // your own trades carry no channel
       if (range.from) orphans = orphans.filter(t => t.date >= range.from);
       if (range.to) orphans = orphans.filter(t => t.date <= range.to);
-      if (mfSig) orphans = orphans.filter(t => mktBiasOn(t.date, t.time) === mfSig);
+      if (mfSig) orphans = orphans.filter(t => mktBiasOfTrade(t) === mfSig);
       if (mkt) orphans = orphans.filter(t => mktOfSig(anSigOf(t)) === mkt);
       if (coinKeep) orphans = orphans.filter(t => coinKeep({ symbol: t.symbol }));
       orphans = orphans.map(hydrate).sort((a, b) => -byWhen(a, b));
@@ -4741,7 +4741,7 @@
               riskAmt = Math.abs(px.entry - sig.stop) * px.qty * (notional != null ? notional / (px.entry * px.qty) : 1 / fxk(a, "USD"));
             }
           } else {
-            if (stopOk(t)) { stopUsed = t.stop; stopSrc = "your stop"; }
+            if (stopOk(t)) { stopUsed = t.stop; stopSrc = t.stopSrc === "alert" ? "alert stop" : t.stopSrc === "bot" ? "bot's stop" : "your stop"; }
             else if (sig && typeof sig.stop === "number" && stopOk(Object.assign({}, t, { stop: sig.stop }))) { stopUsed = sig.stop; stopSrc = "alert stop"; }
             if (stopUsed != null) riskAmt = Math.abs(o.entry - stopUsed) * o.qty;
           }
@@ -4888,7 +4888,7 @@
       // ---- results by broker, each converted into the currency on screen ----
       const vc = viewCur();
       // The filters at the top narrow this table too.
-      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktBiasOn(t.date, t.time) === mfB) && anPassBy(t) && anPassSetup(anTradeSetup(t, map)) && anPassCoin(t)).map(t => toView(t, vc))), open = reportBooks().open.filter(o => !anByMode() || !o.id || repIdBy(o.id) === anByMode());
+      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktBiasOfTrade(t) === mfB) && anPassBy(t) && anPassSetup(anTradeSetup(t, map)) && anPassCoin(t)).map(t => toView(t, vc))), open = reportBooks().open.filter(o => !anByMode() || !o.id || repIdBy(o.id) === anByMode());
       const lines = books.map(a => {
         const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
         const files = a.reportBroker ? btState().files.filter(f => f.broker === a.reportBroker) : [];
@@ -5785,10 +5785,10 @@
       const all = analyzeTrades(anFeeView(statScoped()));
       const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t)).sort((a, b) => -byWhen(a.t, b.t));
       const mfAn = mktFilter();
-      const rows = mfAn ? inPeriod.filter(x => mktBiasOn(x.t.date, x.t.time) === mfAn) : inPeriod;
+      const rows = mfAn ? inPeriod.filter(x => mktBiasOfTrade(x.t) === mfAn) : inPeriod;
       rows.anchored = all.anchored;
       // Pair list for the report's dropdown: every pair before the pair filter.
-      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t) && (!mfAn || mktBiasOn(x.t.date, x.t.time) === mfAn)));
+      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t) && (!mfAn || mktBiasOfTrade(x.t) === mfAn)));
       document.getElementById('anRepHead').classList.toggle('hidden', !!rep);
 
       const assume = document.getElementById('anAssumptions');
@@ -6209,7 +6209,7 @@
       document.getElementById('inspExit').innerText = trade.rep ? (px ? fmtPrice(px.exit, a.currency) : '—') : fmtPrice(trade.exit, a.currency);
       document.getElementById('inspSetup').innerText = (trade.setup || 'Discretionary') + (trade.setupAuto ? ' (from alert)' : '');
       document.getElementById('inspDuration').innerText = fmtHeld(heldMins(trade));
-      document.getElementById('inspR').innerText = rfmt(trade.r) + (pfmt(tradePct(trade)) ? ' (' + pfmt(tradePct(trade)) + ')' : '') + ((trade.orig || trade).stopSrc === 'alert' ? ' · stop from alert' : '');
+      document.getElementById('inspR').innerText = rfmt(trade.r) + (pfmt(tradePct(trade)) ? ' (' + pfmt(tradePct(trade)) + ')' : '') + ((trade.orig || trade).stopSrc === 'alert' ? ' · stop from alert' : (trade.orig || trade).stopSrc === 'bot' ? ' · stop the bot placed' : '');
       document.getElementById('inspFees').innerText = money((o.fees || 0) * k, cur) + (k !== 1 ? ' (' + money(o.fees || 0, a.currency) + ')' : '');
       document.getElementById('inspNotes').innerText = trade.notes ? `"${trade.notes}"` : '"No execution reflection notes entered."';
 
@@ -6498,7 +6498,27 @@
       if (ch) { stamp(own); hydrate(own); }
       return ch;
     }
+    // A trade the live bot placed (Auto) takes the stop the bot actually put on the exchange
+    // (its first stop; a later trail or SL shift moves it, R stays on the risk taken). A stop
+    // borrowed from an alert is replaced: the alert's level can sit far from the real one
+    // (lakky's AVAX of 18 Nov read +13R on an alert stop 0.14% under entry; the bot's stop made
+    // it +0.65R), and a trade with no stop gets its R (ENA of 20 Nov: -1.02R). A stop you typed,
+    // or a trade you set to Manual, is never touched.
+    function fillStopsFromBot() {
+      const m = botOrders().length ? botMatches() : null;
+      if (!m) return 0;
+      let n = 0;
+      (state.trades || []).forEach(t => {
+        const o = m[t.id];
+        if (!o || !(o.sl > 0) || t.by === "manual" || (stopOk(t) && t.stopSrc !== "alert") || t.stop === o.sl) return;
+        if (!stopOk(Object.assign({}, t, { stop: o.sl }))) return;
+        t.stop = o.sl; t.stopSrc = "bot"; stamp(t); hydrate(t); n++;
+      });
+      if (n) { botMatchMemo = null; save(); }
+      return n;
+    }
     function fillFromAlerts() {
+      fillStopsFromBot();
       const sigs = state.signals || [];
       if (!sigs.length && !sentSigs.length) return 0;
       const bt = state.backtest || {};
@@ -13605,9 +13625,60 @@
     // Daily BTC candles from Delta's public candle API (no key needed), cached on this
     // device only — like signals, this never goes into the GitHub sync payload.
     const MKT_SYMBOL = "BTCUSD";
-    const MKT_SIDE_PCT = 1.5; // a day inside +-1.5% close-to-close counts as sideways
     function mktCache() { state.mktCandles = state.mktCandles || { symbol: MKT_SYMBOL, byDate: {}, fetchedAt: 0 }; return state.mktCandles; }
-    function mktBias(pct) { return pct > MKT_SIDE_PCT ? "bull" : pct < -MKT_SIDE_PCT ? "bear" : "side"; }
+    // BTC's market going into a day (lakky, 2026-11-21: "fix the sideways market, it should be
+    // accurate and logical"). It used to be the day's own close vs its open (+-1.5%): known only
+    // when the day was over, so an alert at 10:00 was filed under where BTC closed 19 hours
+    // later (hindsight), and one fixed 1.5% made half of all days sideways in calm weeks and
+    // few in wild ones. Now each day is read at its start (05:30 IST, 00:00 UTC, when the
+    // daily candle and the journal's day begin) from closed daily candles only:
+    //   Bullish  = the last close is at least 0.75 of BTC's average daily range (ATR 14) above
+    //              its 20-day EMA, and that EMA is higher than 5 days before;
+    //   Bearish  = the same, below a falling EMA;
+    //   Sideways = anything else: close near the EMA, or price and the EMA's slope disagree.
+    // Every alert and trade of the day gets that day's market, so a filter on it is one you
+    // could have used at the time. Checked on Delta's BTC candles, Feb - Oct 2026: chop such as
+    // 4-14 Jul (62-65k) and 4-14 Aug (63-65k) reads sideways, 20 Aug - 8 Sep and 19-30 Sep bullish.
+    const MKT_EMA = 20, MKT_ATR = 14, MKT_SLOPE_DAYS = 5, MKT_BAND_ATR = 0.75, MKT_WARM = 40;
+    function utcDay(ms) { return new Date(ms == null ? Date.now() : ms).toISOString().slice(0, 10); }
+    function mktNextDay(d) { return utcDay(Date.parse(d + "T00:00:00Z") + 864e5); }
+    let mktTrendMemo = null;
+    // { "YYYY-MM-DD" (UTC day): { bias, dist, slope, ema, atr, close, asOf } } for every day the
+    // candles can judge: the day after each closed candle once MKT_WARM of them are in.
+    function mktTrend() {
+      const c = mktCache(), today = utcDay();
+      if (mktTrendMemo && mktTrendMemo.byDate === c.byDate && mktTrendMemo.at === c.fetchedAt && mktTrendMemo.today === today) return mktTrendMemo.map;
+      const ok = b => b && b.o > 0 && b.c > 0 && b.h > 0 && b.l > 0 && b.h >= b.l;
+      // Today's candle is still forming: it never judges a day.
+      const days = Object.keys(c.byDate).filter(d => DATE_RE.test(d) && d < today && ok(c.byDate[d])).sort();
+      const a = 2 / (MKT_EMA + 1), rows = [];
+      let ema = null;
+      days.forEach((d, i) => {
+        const b = c.byDate[d], pc = i ? c.byDate[days[i - 1]].c : b.o;
+        ema = ema == null ? b.c : b.c * a + ema * (1 - a);
+        rows.push({ d, c: b.c, ema, tr: Math.max(b.h, pc) - Math.min(b.l, pc) });
+      });
+      const map = {};
+      for (let i = Math.max(MKT_WARM, MKT_ATR, MKT_SLOPE_DAYS + 1) - 1; i < rows.length; i++) {
+        const r = rows[i];
+        let atr = 0; for (let j = i - MKT_ATR + 1; j <= i; j++) atr += rows[j].tr;
+        atr /= MKT_ATR;
+        if (!(atr > 0)) continue;
+        const dist = (r.c - r.ema) / atr, slope = (r.ema - rows[i - MKT_SLOPE_DAYS].ema) / atr;
+        const bias = dist >= MKT_BAND_ATR && slope > 0 ? "bull" : dist <= -MKT_BAND_ATR && slope < 0 ? "bear" : "side";
+        map[mktNextDay(r.d)] = { bias, dist, slope, ema: r.ema, atr, close: r.c, asOf: r.d };
+      }
+      mktTrendMemo = { byDate: c.byDate, at: c.fetchedAt, today, map };
+      return map;
+    }
+    function mktTrendOn(day) { return mktTrend()[day] || null; }
+    // Why a day reads as it does, in words, for its calendar tooltip.
+    function mktTrendWhy(t) {
+      if (!t) return "";
+      const side = t.dist >= 0 ? "above" : "below", ema = t.slope > 0 ? "rising" : t.slope < 0 ? "falling" : "flat";
+      return "BTC closed " + Math.abs(t.dist).toFixed(2) + " ATR " + side + " its 20-day EMA on " + fmtDay(t.asOf) + ", EMA " + ema
+        + (t.bias === "side" ? (Math.abs(t.dist) < MKT_BAND_ATR ? " (inside " + MKT_BAND_ATR + " ATR)" : " (price and EMA disagree)") : "");
+    }
     const MKT_LOOKBACK_DAYS = 400; // covers just over a year, enough for "All" and any custom range so far
     let mktLoading = false, mktLoadErr = "", mktFailedAt = 0;
     function mktNeedsFetch() {
@@ -13631,7 +13702,7 @@
           if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad response");
           const c = mktCache();
           j.result.forEach(k => {
-            const d = iso(new Date(k.time * 1000));
+            const d = utcDay(k.time * 1000); // Delta's daily candle is the UTC day, on any device's clock
             const pct = k.open > 0 ? (k.close - k.open) / k.open * 100 : 0;
             c.byDate[d] = { o: k.open, c: k.close, h: k.high, l: k.low, pct: +pct.toFixed(2) };
           });
@@ -13650,7 +13721,11 @@
       const d = new Date(date + "T" + (/^\d{1,2}:\d{2}/.test(time || "") ? String(time).slice(0, 5).padStart(5, "0") : "12:00") + ":00");
       return isNaN(d) ? date : d.toISOString().slice(0, 10);
     }
-    function mktBiasOn(date, time) { const k = mktCache().byDate[mktDayOf(date, time)]; return k ? mktBias(k.pct) : null; }
+    // The market an alert or trade met: its day's, as it stood when the day began.
+    function mktBiasOn(date, time) { const t = mktTrendOn(mktDayOf(date, time)); return t ? t.bias : null; }
+    // A trade's market is the one it was opened in: a broker-report trade's own date is its close.
+    function mktTradeDay(t) { const o = t.orig || t; return mktDayOf(o.openDate || o.date, o.openTime || o.time); }
+    function mktBiasOfTrade(t) { const m = mktTrendOn(mktTradeDay(t)); return m ? m.bias : null; }
     function mktFilter() { return ["bull", "bear", "side"].indexOf(state.ui.mktFilter) !== -1 ? state.ui.mktFilter : ""; }
     // What each tab last handed the card: its alerts and trades before the market filter,
     // and how to redraw the tab when the filter changes.
@@ -13668,7 +13743,7 @@
       const kinds = ["bull", "bear", "side"];
       const by = {}; kinds.concat(["none"]).forEach(k => { by[k] = { sr: [], tr: [], sp: [] }; });
       pairs.forEach(pr => { const o = outcomeOf(pr); if (!o) return; const g = by[mktBiasOn(pr.signal.date, pr.signal.time) || "none"]; g.sr.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) g.sp.push(p); });
-      trades.forEach(t => { by[mktBiasOn(t.date, t.time) || "none"].tr.push(derive(t).pnl || 0); });
+      trades.forEach(t => { by[mktBiasOfTrade(t) || "none"].tr.push(derive(t).pnl || 0); });
       const verdict = (n, v) => n < 3 ? '<span class="text-slate-500">too few</span>' : v > 0 ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-bold">Good</span>' : '<span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 font-bold">Bad</span>';
       const mf = mktFilter();
       const row = k => {
@@ -13690,7 +13765,7 @@
       return '<div class="xl:pt-0 pt-3 xl:border-0 border-t border-terminal-border"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Alerts and your trades by market day' + (ctx.scope ? ' <span class="text-slate-500 normal-case font-normal">· ' + esc(ctx.scope) + '</span>' : '') + '</div>'
         + '<div class="overflow-x-auto"><table class="w-full text-left text-[11px] font-mono"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">BTC day</th><th class="pr-3">Alerts graded</th><th class="pr-3">Alert result</th><th class="pr-3">Alerts</th><th class="pr-3">My trades</th><th class="pr-3">My P&amp;L</th><th>Me</th></tr></thead><tbody>'
         + shown.map(row).join('') + '</tbody></table></div>'
-        + '<p class="text-[10px] text-slate-500 mt-1">Good = average result above zero on those days; needs 3 or more to judge. Click a row, or a BTC day button at the top, to show only those days everywhere on this tab.</p></div>';
+        + '<p class="text-[10px] text-slate-500 mt-1">Each alert, and each trade by when it opened, is filed under its day\'s market as it stood at 05:30 IST, before anything that day happened. Good = average result above zero on those days; needs 3 or more to judge. Click a row, or a BTC day button at the top, to show only those days everywhere on this tab.</p></div>';
     }
     // Clicking a calendar day shows that day hour by hour below; clicking it again goes back.
     function mktPickDay(hostId, ds) {
@@ -13720,28 +13795,37 @@
       const [Y, M] = mk.split('-').map(Number);
       const lead = (new Date(Y, M - 1, 1).getDay() + 6) % 7, dim = new Date(Y, M, 0).getDate();
       const cache = mktCache().byDate;
-      const today = iso(new Date());
+      // The forming candle is the UTC day: 05:30 IST to 05:30 IST, the journal's own day.
+      const today = utcDay();
       let cells = '';
       for (let i = 0; i < lead; i++) cells += '<div></div>';
       let bull = 0, bear = 0, side = 0, known = 0, monthOpen = null, monthClose = null;
       for (let d = 1; d <= dim; d++) {
         const ds = mk + '-' + String(d).padStart(2, '0');
-        const k = cache[ds];
+        const k = cache[ds], t = ds <= today ? mktTrendOn(ds) : null;
         const pick = ' onclick="mktPickDay(\'' + hostId + '\',\'' + ds + '\')"';
         const picked = ds === state.ui.mktDay ? ' ring-2 ring-amber-400' : '';
-        if (!k) { cells += '<div' + pick + ' class="h-11 p-1 rounded bg-[#0A0F18] border border-slate-800 text-slate-600 flex flex-col justify-between cursor-pointer hover:border-amber-500' + picked + '" title="Click to see this day hour by hour"><span class="text-[10px]">' + d + '</span><span class="text-[9px]">&mdash;</span></div>'; continue; }
-        const bias = mktBias(k.pct); const tn = MKT_TONE[bias];
-        known++; if (bias === 'bull') bull++; else if (bias === 'bear') bear++; else side++;
-        if (monthOpen == null) monthOpen = k.o; monthClose = k.c;
+        if (k && k.o > 0) { if (monthOpen == null) monthOpen = k.o; monthClose = k.c; }
+        // The day's own move, for the cell: what BTC then did (so far, today).
+        const mv = k && k.o > 0 ? (k.c - k.o) / k.o * 100 : null;
+        const mvTxt = mv == null ? '&mdash;' : (mv >= 0 ? '+' : '') + mv.toFixed(1) + '%';
+        const mvTip = mv == null ? 'No BTC candle for this day.' : 'BTC that day' + (ds === today ? ' so far' : '') + ': ' + (mv >= 0 ? '+' : '') + mv.toFixed(2) + '% (open ' + k.o + ', ' + (ds === today ? 'now ' : 'close ') + k.c + ').';
+        if (!t) {
+          cells += '<div' + pick + ' data-mkt="" class="h-11 p-1 rounded bg-[#0A0F18] border border-slate-800 text-slate-600 flex flex-col justify-between cursor-pointer hover:border-amber-500' + picked + '" title="Market not known for this day (needs ' + MKT_WARM + ' closed daily candles before it). ' + mvTip + ' Click to see this day hour by hour."><span class="text-[10px]">' + d + (ds === today ? ' <span class="text-amber-400" title="today">&bull;</span>' : '') + '</span><span class="text-[9px] mono-num">' + mvTxt + '</span></div>';
+          continue;
+        }
+        const tn = MKT_TONE[t.bias];
+        known++; if (t.bias === 'bull') bull++; else if (t.bias === 'bear') bear++; else side++;
         // Only the clicked day gets a ring; today is marked with a small dot instead,
         // so it never reads as a second selected day.
-        const ring = picked;
-        cells += '<div' + pick + ' class="h-11 p-1 rounded ' + tn[0] + ' border ' + tn[1] + ' flex flex-col justify-between cursor-pointer hover:border-amber-500' + ring + '" title="' + MKT_LABEL[bias] + ', ' + (k.pct >= 0 ? '+' : '') + k.pct.toFixed(2) + '% · open ' + k.o + ' close ' + k.c + '. Click to see this day hour by hour.">'
-          + '<span class="text-[10px] text-slate-300">' + d + (ds === today ? ' <span class="text-amber-400" title="today">&bull;</span>' : '') + '</span>'
-          + '<span class="text-[10px] sm:text-[11px] font-bold ' + tn[2] + ' mono-num">' + (k.pct >= 0 ? '+' : '') + k.pct.toFixed(1) + '%</span></div>';
+        cells += '<div' + pick + ' data-mkt="' + t.bias + '" class="h-11 p-1 rounded ' + tn[0] + ' border ' + tn[1] + ' flex flex-col justify-between cursor-pointer hover:border-amber-500' + picked + '" title="' + MKT_LABEL[t.bias] + ' going into the day: ' + esc(mktTrendWhy(t)) + '. ' + mvTip + ' Click to see this day hour by hour.">'
+          + '<span class="text-[10px] text-slate-300 flex justify-between"><span>' + d + (ds === today ? ' <span class="text-amber-400" title="today">&bull;</span>' : '') + '</span><span class="text-[9px] font-bold ' + tn[2] + '">' + MKT_LABEL[t.bias].charAt(0) + '</span></span>'
+          + '<span class="text-[10px] sm:text-[11px] font-bold mono-num ' + (mv == null ? 'text-slate-600' : mv >= 0 ? 'text-emerald-300' : 'text-rose-300') + '">' + mvTxt + '</span></div>';
       }
       const monthPct = (monthOpen && monthClose) ? (monthClose - monthOpen) / monthOpen * 100 : null;
-      const overallBias = monthPct != null ? mktBias(monthPct) : null;
+      // The month is the market most of its days met (a tie reads sideways).
+      const overallBias = known ? (bull > bear && bull > side ? 'bull' : bear > bull && bear > side ? 'bear' : 'side') : null;
+      const thisMonth = mk === today.slice(0, 7);
       const err = mktLoadErr ? '<div class="text-[11px] text-rose-400 mt-2">' + esc(mktLoadErr) + ' <button type="button" onclick="mktFetch().then(()=>{const c=mktCtx[\'' + hostId + '\']; if (c && c.rerender) c.rerender(); else renderMarketCalendar(\'' + hostId + '\');})" class="underline">Retry</button></div>' : '';
       const loading = mktLoading ? '<span class="text-[10px] text-slate-500 ml-2">loading…</span>' : '';
       host.innerHTML = '<div class="flex items-center justify-between gap-2 mb-2 flex-wrap">'
@@ -13751,12 +13835,13 @@
         + '<span class="text-xs font-bold text-white uppercase min-w-[110px] text-center">' + new Date(Y, M - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) + '</span>'
         + '<button type="button" onclick="mktNav(\'' + hostId + '\',1)" class="px-2 py-0.5 rounded border border-terminal-border text-slate-300 hover:border-amber-500 text-xs">&rsaquo;</button>'
         + '</div></div>'
-        + (overallBias ? '<div class="flex flex-wrap items-center gap-3 mb-2 text-[11px] font-mono"><span class="px-2 py-1 rounded ' + MKT_TONE[overallBias][0] + ' border ' + MKT_TONE[overallBias][1] + ' ' + MKT_TONE[overallBias][2] + ' font-bold">' + MKT_LABEL[overallBias] + ' overall, ' + (monthPct >= 0 ? '+' : '') + monthPct.toFixed(1) + '%</span>'
-          + '<span class="text-emerald-400">' + bull + ' bullish</span><span class="text-rose-400">' + bear + ' bearish</span><span class="text-slate-400">' + side + ' sideways</span><span class="text-slate-600">days out of ' + known + ' known</span></div>' : '')
+        + (overallBias ? '<div id="' + hostId + 'Sum" class="flex flex-wrap items-center gap-3 mb-2 text-[11px] font-mono"><span class="px-2 py-1 rounded ' + MKT_TONE[overallBias][0] + ' border ' + MKT_TONE[overallBias][1] + ' ' + MKT_TONE[overallBias][2] + ' font-bold">Mostly ' + MKT_LABEL[overallBias].toLowerCase() + '</span>'
+          + '<span class="text-emerald-400">' + bull + ' bullish</span><span class="text-rose-400">' + bear + ' bearish</span><span class="text-slate-400">' + side + ' sideways</span><span class="text-slate-600">days out of ' + known + ' known</span>'
+          + (monthPct != null ? '<span class="' + (monthPct >= 0 ? 'text-emerald-300' : 'text-rose-300') + '">BTC ' + (monthPct >= 0 ? '+' : '') + monthPct.toFixed(1) + '% this month' + (thisMonth ? ' so far' : '') + '</span>' : '') + '</div>' : '')
         + '<div class="grid grid-cols-1 xl:grid-cols-5 gap-5 items-start"><div class="xl:col-span-2">'
         + '<div class="grid grid-cols-7 gap-1 text-[9px] text-slate-500 font-mono text-center mb-1"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>'
         + '<div class="grid grid-cols-7 gap-1 font-mono">' + cells + '</div>'
-        + '<p class="text-[10px] text-slate-500 mt-2">A day counts as sideways when BTC\'s close is within ' + MKT_SIDE_PCT + '% of its open. This reads the crypto market only, not NSE.</p>'
+        + '<p class="text-[10px] text-slate-500 mt-2">Colour = BTC\'s market going into the day, read at 05:30 IST from closed daily candles only, so it is what you could see before that day\'s alerts and trades: <span class="text-emerald-400">Bullish</span> = last close ' + MKT_BAND_ATR + '+ of a day\'s average range (ATR ' + MKT_ATR + ') above a rising ' + MKT_EMA + '-day EMA, <span class="text-rose-400">Bearish</span> = that far below a falling one, Sideways = anything else. The % is what BTC then did that day. Crypto market only, not NSE.</p>'
         + err + '</div>'
         + '<div class="xl:col-span-3">' + (Object.keys(mktCache().byDate).length ? mktAuditHtml(hostId, ctx) : '') + '</div></div>'
         + mktHourlyHtml(hostId, ctx);
@@ -13806,19 +13891,20 @@
       const slots = Array.from({ length: 24 }, () => ({ rng: [], mv: [], sr: [], sp: [], tn: 0, tp: 0, an: 0 }));
       Object.keys(mktHrCache().bars).forEach(t => {
         const ist = new Date((+t + 19800) * 1000);
-        if (day ? ist.toISOString().slice(0, 10) !== day : +t < since) return;
+        // A clicked day is its calendar cell's BTC day: 05:30 IST to 05:30 IST (the UTC day).
+        if (day ? utcDay(+t * 1000) !== day : +t < since) return;
         const [o, h, l, c] = mktHr.bars[t];
         const slot = ist.getUTCHours();
         slots[slot].rng.push((h - l) / o * 100); slots[slot].mv.push((c - o) / o * 100);
       });
       (ctx.pairs || []).forEach(pr => {
-        if (day && pr.signal.date !== day) return;
+        if (day && mktDayOf(pr.signal.date, pr.signal.time) !== day) return;
         const sl = istHourSlot(pr.signal.time); if (sl == null) return;
         slots[sl].an++;
         const o = outcomeOf(pr); if (!o) return;
         slots[sl].sr.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) slots[sl].sp.push(p);
       });
-      (ctx.trades || []).forEach(t => { if (day && t.date !== day) return; const sl = istHourSlot(t.time); if (sl == null) return; slots[sl].tn++; slots[sl].tp += derive(t).pnl || 0; });
+      (ctx.trades || []).forEach(t => { const o = t.orig || t; if (day && mktTradeDay(t) !== day) return; const sl = istHourSlot(o.openTime || o.time); if (sl == null) return; slots[sl].tn++; slots[sl].tp += derive(t).pnl || 0; });
       const cur = ctx.cur || viewCur();
       const have = slots.some(x => x.rng.length);
       const avgRng = slots.map(x => x.rng.length ? avg(x.rng) : null);
@@ -13831,12 +13917,13 @@
       const dayLbl = day ? new Date(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10)).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }) : '';
       const back = '<button type="button" onclick="mktPickDay(\'' + hostId + '\',\'' + day + '\')" class="px-2 py-0.5 rounded text-[10px] border border-amber-500 text-amber-300 hover:bg-amber-500/15">✕ Back to ' + days + 'D average</button>';
       let h = '<div id="' + hostId + 'Hourly" class="mt-5 pt-4 border-t border-terminal-border font-mono text-[11px]">'
-        + '<div class="flex flex-wrap items-center justify-between gap-2 mb-2"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-sm font-bold text-white uppercase tracking-wider">BTC hour by hour</h3><span class="text-[10px] ' + (day ? 'text-amber-300 font-bold' : 'text-slate-500') + '">' + (day ? esc(dayLbl) + ' (IST)' : 'IST, last ' + days + ' days · click a calendar day to see just that day') + loading + '</span></div>'
+        + '<div class="flex flex-wrap items-center justify-between gap-2 mb-2"><div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="text-sm font-bold text-white uppercase tracking-wider">BTC hour by hour</h3><span class="text-[10px] ' + (day ? 'text-amber-300 font-bold' : 'text-slate-500') + '">' + (day ? esc(dayLbl) + ', 05:30 IST to 05:30 IST next day' : 'IST, last ' + days + ' days · click a calendar day to see just that day') + loading + '</span></div>'
         + '<div class="flex gap-1">' + (day ? back : btn(7) + btn(30) + btn(60)) + '</div></div>';
       if (day) {
         const k = mktCache().byDate[day];
         const an = sum(slots.map(x => x.an)), gr = slots.reduce((a, x) => a.concat(x.sr), []), tn = sum(slots.map(x => x.tn)), tp = sum(slots.map(x => x.tp));
         h += '<div class="flex flex-wrap gap-2 mb-2 text-slate-400" style="column-gap:20px">'
+          + (mktTrendOn(day) ? '<span>Market going in: <span class="font-bold ' + MKT_TONE[mktTrendOn(day).bias][2] + '" title="' + esc(mktTrendWhy(mktTrendOn(day))) + '">' + MKT_LABEL[mktTrendOn(day).bias] + '</span></span>' : '')
           + (k ? '<span>BTC day: <span class="' + (k.pct >= 0 ? 'text-emerald-400' : 'text-rose-400') + ' font-bold">' + pfmt(k.pct) + '</span> · open ' + (+k.o).toFixed(2) + ' · close ' + (+k.c).toFixed(2) + ' · range ' + (k.o > 0 ? ((k.h - k.l) / k.o * 100).toFixed(2) + '%' : '—') + '</span>' : '')
           + '<span>Alerts: <span class="text-slate-200">' + an + '</span>' + (gr.length ? ' · ' + gr.length + ' graded · <span class="' + (sum(gr) >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + rfmt(sum(gr)) + '</span> total' : '') + '</span>'
           + '<span>My trades: <span class="text-slate-200">' + tn + '</span>' + (tn ? ' · <span class="' + (tp >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + signedMoney(tp, ctx.cur || viewCur()) + '</span>' : '') + '</span></div>';
@@ -13845,7 +13932,9 @@
       if (!have) return h + '<p class="text-slate-500">' + (mktHrErr ? esc(mktHrErr) + ' <button type="button" onclick="mktHrFailedAt=0;mktHrFetch().then(()=>renderMarketCalendar(\'' + hostId + '\'))" class="underline">Retry</button>' : 'Loading hourly candles…') + '</p></div>';
       h += '<p class="text-slate-500 mb-2">' + (day ? 'Each hour of this day, with the alerts and trades from it.' : 'How much BTC moves in each hour, with your alerts and trades placed by the hour they fired.') + ' <span class="text-amber-300">Busiest: ' + busy.map(lbl).join(', ') + '</span> · <span class="text-slate-400">Quietest: ' + quiet.map(lbl).join(', ') + '</span></p>'
         + '<div class="overflow-x-auto"><table class="w-full text-left"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">Hour</th><th class="pr-3 min-w-[160px]">' + (day ? 'Range' : 'Avg range') + ' (high-low)</th><th class="pr-3">' + (day ? 'Move' : 'Avg move') + '</th><th class="pr-3">' + (day ? 'Direction' : 'Up hours') + '</th><th class="pr-3">' + (day ? 'Alerts' : 'Alerts graded') + '</th><th class="pr-3">My trades</th></tr></thead><tbody>'
-        + slots.map((x, i) => {
+        // A day's hours run in its candle's order, 05:30 to 04:30 IST; the average starts at 00:30.
+        + Array.from({ length: 24 }, (_, j) => day ? (j + 5) % 24 : j).map(i => {
+          const x = slots[i];
           if (!x.rng.length && !x.sr.length && !x.tn && !x.an) return '';
           const r = avgRng[i], mv = x.mv.length ? avg(x.mv) : null, up = x.mv.length ? x.mv.filter(v => v > 0).length / x.mv.length * 100 : null;
           const tag = busy.indexOf(i) !== -1 ? ' <span class="px-1 rounded bg-amber-500/15 text-amber-300 text-[9px]">busy</span>' : quiet.indexOf(i) !== -1 ? ' <span class="px-1 rounded bg-slate-700/40 text-slate-400 text-[9px]">quiet</span>' : '';
@@ -15560,7 +15649,7 @@
       // Seen filled, or gone from the book before a tick saw the fill (it may have filled and closed in between).
       if (!placed || !(fill || (o.status === "closed" && exit && o.exchange_id))) return null;
       return { id: cText(id || o.pair + "@" + placed, 160), pair: cText(o.pair, 40), side: o.side, qty: botNum(o.qty), placed, fill, exit,
-        status: cText(o.status || "", 12), price: botNum(o.fill_price) || botNum(o.entry),
+        status: cText(o.status || "", 12), price: botNum(o.fill_price) || botNum(o.entry), sl: botNum(o.sl),
         kind: /^tlbreak\|/.test(id) ? "TL BR" : /^tl\|/.test(id) ? "TL" : "", why: cText(o.exit_why || "", 40) };
     }
     // The copy this device keeps (state.ui.botOrders), checked like everything else read back.
@@ -15568,7 +15657,7 @@
       if (!c || typeof c !== "object" || !Array.isArray(c.list)) return null;
       const list = c.list.filter(o => o && typeof o === "object" && typeof o.id === "string" && typeof o.pair === "string" && (o.side === "long" || o.side === "short") && botNum(o.placed) && (botNum(o.fill) || botNum(o.exit)))
         .slice(-2000).map(o => ({ id: cText(o.id, 160), pair: cText(o.pair, 40), side: o.side, qty: botNum(o.qty), placed: botNum(o.placed), fill: botNum(o.fill), exit: botNum(o.exit),
-          status: cText(o.status || "", 12), price: botNum(o.price), kind: cText(o.kind || "", 6), why: cText(o.why || "", 40) }));
+          status: cText(o.status || "", 12), price: botNum(o.price), sl: botNum(o.sl), kind: cText(o.kind || "", 6), why: cText(o.why || "", 40) }));
       return { list, at: Number(c.at) > 0 ? Number(c.at) : 0, read: Number(c.read) > 0 ? Number(c.read) : 0, err: cText(c.err || "", 120) };
     }
     function botOrders() { const c = state.ui.botOrders; return c && Array.isArray(c.list) ? c.list : []; }
@@ -16281,6 +16370,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-21.203', pr: 116, title: 'Sideways market fixed, numbers checked', pts: ['BTC day (Bullish / Bearish / Sideways) is now the market as it stood at 05:30 IST, from closed candles only: 20-day EMA + daily range (ATR), not the day\'s own close, which was only known after your trade (hindsight)', 'Auto trades take the stop the bot really placed: AVAX read +13R on an alert stop, now +0.68R; ENA gets its -1.02R', 'Checked on your real data: P&L, R, fees, ₹/$ totals, days and Auto/Manual all match a recount by hand. A clicked day\'s hours now run 05:30 to 05:30 like its candle'] },
       { v: '2026-11-21.202', pr: 115, title: 'Trendline Type: Touches and Breaks', pts: ['Signals → Trendline alerts → Type has two new choices: Touches (both touch types) and Breaks (SP TL BR + RS TL BR together), so the live bot\'s breaks only shows in one view', 'Checked against an independent retest on real Delta candles: 1D crypto breaks 1 Jun - 21 Nov, all 210 alerts the same R (202 closed, +0.29R a trade)'] },
       { v: '2026-11-21.201', pr: 114, title: 'Trades tagged Auto or Manual', pts: ['Every trade now shows AUTO (placed by the live bot) or MANUAL (placed by you), past ones too: found from the bot\'s own order log in your sync repo', 'Analysis → Which trades: new Placed by row (All / Auto / Manual) narrows every number, table and the broker report; the Dashboard trade list has the same filter', 'Wrong tag? Open the trade and tap Auto or Manual under Placed by'] },
       { v: '2026-11-16.200', pr: 112, title: 'Weekly check: options risk warning', pts: ['Nifty options: a typed risk bigger than the whole account now says so (the account caps the lots)', 'Weekly audit of every tab online and offline, desktop and phone, with bad inputs: no other bugs found'] },
