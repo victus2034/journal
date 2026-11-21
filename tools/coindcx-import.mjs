@@ -170,13 +170,13 @@ async function publicIp() {
   } catch (e) { return ''; }
 }
 function cdxWhy(r, ip) {
-  if (r && r.network) return `Could not reach CoinDCX (${oneLine(r.network)}). If this keeps happening, check the PC's internet.`;
+  if (r && r.network) return `Could not reach CoinDCX (${oneLine(r.network)}). If this keeps happening, check the server's internet.`;
   const said = r && r.body && (r.body.message || r.body.error || r.body.raw);
   const text = said ? oneLine(typeof said === 'string' ? said : JSON.stringify(said)) : '';
   const fix = ip ? `The key is locked to one IP: if it isn't ${ip}, make a CoinDCX key for ${ip} and put it in the two secrets.`
-    : "The key is locked to one IP: if the PC's IP changed (open api.ipify.org on it), make a CoinDCX key for the new IP and put it in the two secrets.";
-  if (r && r.status === 401) return `CoinDCX refused the key (401)${ip ? ` from this PC's IP ${ip}` : ''}. ${fix} Or a secret was copied short.`;
-  if (r && r.status === 403) return `CoinDCX refused the request (403${ip ? `, PC IP ${ip}` : ''}${text ? ': ' + text : ''}). ${fix}`;
+    : "The key is locked to one IP: if the server's IP changed, make a CoinDCX key for the new IP and put it in the two secrets.";
+  if (r && r.status === 401) return `CoinDCX refused the key (401)${ip ? ` from this server's IP ${ip}` : ''}. ${fix} Or a secret was copied short.`;
+  if (r && r.status === 403) return `CoinDCX refused the request (403${ip ? `, server IP ${ip}` : ''}${text ? ': ' + text : ''}). ${fix}`;
   if (r && r.status === 429) return 'CoinDCX says too many requests. The next run tries again.';
   if (r && r.status >= 500) return `CoinDCX is having trouble (it answered ${r.status}). The next run tries again.`;
   if (r && r.status) return `CoinDCX answered ${r.status}${text ? ': ' + text : ''}.`;

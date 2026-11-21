@@ -826,11 +826,11 @@ async function coindcxRun(seed) {
     // The key is locked to the PC's IP (CoinDCX, since 2026-10-29): the reason names the IP the PC has now.
     let ips = mock.ipReads;
     r = await runImport({ COINDCX_API_SECRET: 'wrong-secret' });
-    check(r.code === 1 && r.out === "::error::CoinDCX refused the key (401) from this PC's IP 203.0.113.7. The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets. Or a secret was copied short." && mock.calls.length === 1 && !r.puts.length && mock.ipReads === ips + 1, 'wrong secret: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
+    check(r.code === 1 && r.out === "::error::CoinDCX refused the key (401) from this server's IP 203.0.113.7. The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets. Or a secret was copied short." && mock.calls.length === 1 && !r.puts.length && mock.ipReads === ips + 1, 'wrong secret: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
     // The IP can't be read (or comes back as a page): the reason says how to find it instead.
     mock.ip = '';
     r = await runImport({ COINDCX_API_SECRET: 'wrong-secret' });
-    check(r.code === 1 && r.out === "::error::CoinDCX refused the key (401). The key is locked to one IP: if the PC's IP changed (open api.ipify.org on it), make a CoinDCX key for the new IP and put it in the two secrets. Or a secret was copied short.", 'wrong secret, no IP: ' + JSON.stringify(r));
+    check(r.code === 1 && r.out === "::error::CoinDCX refused the key (401). The key is locked to one IP: if the server's IP changed, make a CoinDCX key for the new IP and put it in the two secrets. Or a secret was copied short.", 'wrong secret, no IP: ' + JSON.stringify(r));
     mock.ip = '203.0.113.7';
     check(!r.out.includes(KEY) && !r.out.includes('wrong-secret'), 'the run printed the key');
 
@@ -1042,7 +1042,7 @@ async function coindcxRun(seed) {
     mock.mode = 'blocked';
     ips = mock.ipReads;
     r = await runImport();
-    check(r.code === 1 && /^::error::Could not reach CoinDCX \(.+\)\. If this keeps happening, check the PC's internet\.$/.test(r.out) && mock.ipReads === ips, 'blocked: ' + JSON.stringify(r) + ', IP read ' + (mock.ipReads - ips) + ' times');
+    check(r.code === 1 && /^::error::Could not reach CoinDCX \(.+\)\. If this keeps happening, check the server's internet\.$/.test(r.out) && mock.ipReads === ips, 'blocked: ' + JSON.stringify(r) + ', IP read ' + (mock.ipReads - ips) + ' times');
     mock.mode = 'ok';
     r = await runImport();
     check(r.code === 0 && JSON.stringify(r.puts) === '["CoinDCX import working again"]', 'after blocked: ' + JSON.stringify(r));
@@ -1088,7 +1088,7 @@ async function coindcxRun(seed) {
     // characters of it, and so does the file, so neither keeps rewriting it.
     mock.mode = 'forbidden';
     r = await runImport();
-    const pre = 'CoinDCX refused the request (403, PC IP 203.0.113.7: ';
+    const pre = 'CoinDCX refused the request (403, server IP 203.0.113.7: ';
     const said = (pre + '403 Forbidden Access denied ' + 'Request blocked. '.repeat(12)).slice(0, pre.length + 160) + "). The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets.";
     check(r.code === 1 && r.out === '::error::' + said && mock.calls.length === 1 && JSON.stringify(r.puts) === '["CoinDCX import failed"]', 'refused by CoinDCX: ' + JSON.stringify(r) + ' after ' + mock.calls.length + ' calls');
     check(said.length > 300 && stored().backtest.files.find(f => f.id === 'cdx-api').note === said.slice(0, 300), 'long reason on the file: ' + said.length);
@@ -1368,6 +1368,23 @@ async function reviewRun(seed) {
     }
     await ctx.close();
   }
+  // iPad portrait: the header takes two lines, so the tabs never sit on the version pill and every book shows (they slid over it, books cut to 10px).
+  for (const width of [768, 820]) {
+    const ctx = await browser.newContext({ viewport: { width, height: 1100 } });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push('page error: ' + (e.stack || e.message)));
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    const h = await page.evaluate(() => {
+      const r = s => document.querySelector(s).getBoundingClientRect(), pill = r('#appVerPill'), nav = r('.top-nav'), ab = document.getElementById('accountsBar'), bal = r('.hdr-balbox');
+      const over = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      return { onPill: over(pill, nav), cut: ab.scrollWidth - ab.clientWidth, balIn: bal.right <= innerWidth, wide: document.documentElement.scrollWidth - innerWidth, h: document.querySelector('header').offsetHeight };
+    });
+    check(!h.onPill && h.cut === 0 && h.balIn && h.wide <= 0 && h.h < 120, width + 'px (iPad portrait) header: ' + JSON.stringify(h));
+    await ctx.close();
+  }
   const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 } });
   await ctx.route(url => !url.href.startsWith(base), r => r.abort());
   await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
@@ -1399,7 +1416,7 @@ async function reviewRun(seed) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
   }
   await ctx.close();
-  const label = 'one-line header, trade review marked from the inspector';
+  const label = 'one-line header (two on iPad portrait), trade review marked from the inspector';
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
   errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
 }
@@ -1633,7 +1650,7 @@ async function deltaShareRun(seed) {
       return { before, after: bookBalance(acct(deltaAccountId())), top: document.getElementById('topBalVal').innerText, tag: tag.classList.contains('hidden') ? '' : tag.innerText,
         when: balTimeText(p.deltaBalance.at), green: tag.className.includes('emerald'), title: tag.title, stale: stale.delta.liveBalance.value, key: !!(state.delta && state.delta.key) };
     }, p);
-    check(got.after === 0.01 && got.before !== 0.01 && got.top.includes('0.01') && got.tag === got.when && /^\d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2} [AP]M$/.test(got.tag) && got.green && /by your PC's import/.test(got.title) && got.stale === 0.01 && !got.key,
+    check(got.after === 0.01 && got.before !== 0.01 && got.top.includes('0.01') && got.tag === got.when && /^\d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2} [AP]M$/.test(got.tag) && got.green && /by your server's import/.test(got.title) && got.stale === 0.01 && !got.key,
       'phone after sync: ' + JSON.stringify(got));
     // Three hours with nothing newer (PC off): still shown, marked last known.
     const old = await phone.page.evaluate(() => { liveDeltaBalance = Object.assign({}, liveDeltaBalance, { at: Date.now() - 3 * 3600e3 }); applyLiveBalance(); const t = document.getElementById('topBalLive');
@@ -1642,7 +1659,7 @@ async function deltaShareRun(seed) {
         // Fixed instants, worked out by hand: 15:00 UTC is 8:30 PM in India; 18:45 UTC is past midnight there; ISO strings too; nothing for junk.
         fixed: [balTimeText(Date.UTC(2026, 10, 14, 15, 0)), balTimeText(Date.UTC(2026, 10, 14, 18, 45)), balTimeText('2026-11-11T14:43:45.506Z'), balTimeText(Date.UTC(2026, 0, 1, 6, 30)), balTimeText('junk'), balTimeText(undefined), balTimeText(0)] };
     });
-    check(old.tag === old.when && old.amber && /^Nothing newer since /.test(old.title) && /is the PC on\?/.test(old.title) && old.books.includes('· Delta wallet from ' + old.when) && !/last known/i.test(old.books), 'old figure: ' + JSON.stringify(old));
+    check(old.tag === old.when && old.amber && /^Nothing newer since /.test(old.title) && /is the server's import running\?/.test(old.title) && old.books.includes('· Delta wallet from ' + old.when) && !/last known/i.test(old.books), 'old figure: ' + JSON.stringify(old));
     check(JSON.stringify(old.fixed) === JSON.stringify(['14 Nov, 8:30 PM', '15 Nov, 12:15 AM', '11 Nov, 8:13 PM', '1 Jan, 12:00 PM', '', '', '']), 'balance time text: ' + JSON.stringify(old.fixed));
     // All books: the total is as old as its oldest stale part (amber); none stale, the newest read (green).
     const mix = await phone.page.evaluate(() => {
@@ -2008,7 +2025,7 @@ async function deltaImportRun(seed) {
     let s = await sync();
     const j0 = stored(); j0.keysLock = { v: 1, data: 'kept-as-is' }; const t0 = JSON.stringify(j0); gh.files[REPO] = { text: t0, sha: crypto.createHash('sha1').update(t0).digest('hex') };
     let c = await card();
-    check(s.ok && /^Not set up yet/.test(c.status) && /DELTA_API_KEY/.test(c.steps) && /api\.ipify\.org/.test(c.steps), 'card before: ' + JSON.stringify(c));
+    check(s.ok && /^Not set up yet/.test(c.status) && /DELTA_API_KEY/.test(c.steps) && /whitelisted for your server's IP/.test(c.steps), 'card before: ' + JSON.stringify(c));
 
     // No secrets: says what to add and touches nothing.
     let r = await runImport({ DELTA_API_KEY: '' });
@@ -2046,14 +2063,22 @@ async function deltaImportRun(seed) {
     check(mock.calls.some(x => x.startsWith('/v2/fills?page_size=200&after=')) && !mock.calls.some(x => /start_time/.test(x)), 'first run paging: ' + mock.calls.join(','));
 
     // The phone syncs: the trade and the balance arrive, the card says it works, nothing to push back.
+    const pre = stored();
     s = await sync();
+    // Nothing of the run's to write back: the moves and the read point stay as the run wrote them (v.206).
+    check(JSON.stringify(stored().withdrawals) === JSON.stringify(pre.withdrawals) && JSON.stringify(stored().deltaImport) === JSON.stringify(pre.deltaImport), 'the sync rewrote the run\'s moves: ' + JSON.stringify([pre.withdrawals, stored().withdrawals, pre.deltaImport, stored().deltaImport]).slice(0, 900));
     let p = await page.evaluate(() => ({ n: state.trades.filter(t => t.src === 'delta:o3').length, bal: state.delta && state.delta.liveBalance && state.delta.liveBalance.value, di: !!state.deltaImport }));
     c = await card();
-    check(s.ok && p.n === 1 && p.bal === 512.25 && p.di && /^Your PC imports Delta every 30 minutes/.test(c.status) && /2 Delta trades in the journal/.test(c.status) && !c.bad && c.steps === '', 'phone after the run: ' + JSON.stringify({ s, p, c }));
+    check(s.ok && p.n === 1 && p.bal === 512.25 && p.di && /^Your server imports Delta every 30 minutes/.test(c.status) && /2 Delta trades in the journal/.test(c.status) && !c.bad && c.steps === '', 'phone after the run: ' + JSON.stringify({ s, p, c }));
     const pw = await page.evaluate(() => (state.withdrawals || []).filter(w => w.src).map(w => w.id + ':' + (w.kind || 'out')).sort().join(','));
     check(pw === 'dtxe5f0c2a1-501:deposit,dtxe5f0c2a1-504:out,dtxe5f0c2a1-506:out', 'the phone keeps the moves and which way they went: ' + pw);
     s = await sync();
     check(s.ok && s.changed === false, 'second sync rewrote the file: ' + JSON.stringify(s));
+    // The phone's sync keeps where the wallet was read up to (v.206: it dropped both, so the next run wrote them back, a commit both ways each time).
+    j = stored();
+    check(j.deltaImport.lastMoveAt === Date.parse('2026-10-22T06:00:00Z') && j.deltaImport.movesFrom === '2026-10-01T00:00:00.000Z'
+      && await page.evaluate(() => state.deltaImport.lastMoveAt === Date.parse('2026-10-22T06:00:00Z') && sanitizeState(JSON.parse(JSON.stringify({ deltaImport: state.deltaImport }))).deltaImport.movesFrom === '2026-10-01T00:00:00.000Z'),
+      'a sync dropped the wallet read point: ' + JSON.stringify(j.deltaImport));
 
     // Second run: ETH closes; only fills from the open ETH position on are read.
     mock.fills.push(fill(9, 'ETHUSD', 'buy', 100, 2400, '2026-10-22T09:00:00Z', 'o9'));
@@ -2064,11 +2089,15 @@ async function deltaImportRun(seed) {
     // Nothing new: no commit.
     r = await runImport();
     check(r.code === 0 && r.out.startsWith('Up to date, no new Delta trades') && !r.puts.length, 'nothing new: ' + JSON.stringify(r));
+    // A funding row newer than the read point is no reason to commit: every trade, fee and funding charge is one.
+    mock.txs.push(tx(508, 'perpetual_futures_funding', -0.01, '2026-10-22T14:00:00Z'));
+    r = await runImport();
+    check(r.code === 0 && !r.puts.length && stored().deltaImport.lastMoveAt === Date.parse('2026-10-22T06:00:00Z'), 'a funding row alone made a commit: ' + JSON.stringify(r));
 
     // The PC's IP moved: Delta names it, the run says so, the phone shows it in red with the steps.
     mock.refuse = 'ip';
     r = await runImport();
-    const why = "Delta refused this PC's IP 198.51.100.4: it isn't whitelisted on the key. On Delta, add 198.51.100.4 to the key's IPs (or make a Read Data key for it and update the two secrets).";
+    const why = "Delta refused this server's IP 198.51.100.4: it isn't whitelisted on the key. On Delta, add 198.51.100.4 to the key's IPs (or make a Read Data key for it and update the two secrets).";
     check(r.code === 1 && r.out === '::error::' + why && JSON.stringify(r.puts) === '["Delta import failed"]' && stored().deltaImport.note === why && stored().deltaImport.lastFillTime === j.deltaImport.lastFillTime, 'IP refused: ' + JSON.stringify(r));
     await sync();
     c = await card();
@@ -2077,7 +2106,7 @@ async function deltaImportRun(seed) {
     mock.refuse = 'ipBare';
     const ips = mock.ipReads;
     r = await runImport();
-    check(r.code === 1 && r.out.includes("Delta refused this PC's IP 203.0.113.9") && mock.ipReads === ips + 1, 'IP from ipify: ' + JSON.stringify(r));
+    check(r.code === 1 && r.out.includes("Delta refused this server's IP 203.0.113.9") && mock.ipReads === ips + 1, 'IP from ipify: ' + JSON.stringify(r));
     mock.refuse = null;
     r = await runImport();
     check(r.code === 0 && JSON.stringify(r.puts) === '["Delta import working again"]' && !('note' in stored().deltaImport), 'working again: ' + JSON.stringify(r));
@@ -2203,20 +2232,20 @@ async function importNowRun(seed) {
     await page.waitForTimeout(300);
     v = await view();
     check(gh.dispatched.length === 1 && gh.dispatched[0].ref === 'main', 'dispatch: ' + JSON.stringify(gh.dispatched));
-    check(/^Asked GitHub at /.test(v.text) && v.off && v.btn === 'Importing…' && v.toasts.some(t => /asked for: it runs on your PC\. A note pops up here when it's done\./.test(t)), 'after the press: ' + JSON.stringify(v));
+    check(/^Asked GitHub at /.test(v.text) && v.off && v.btn === 'Importing…' && v.toasts.some(t => /asked for: it runs on your server\. A note pops up here when it's done\./.test(t)), 'after the press: ' + JSON.stringify(v));
     const run1 = await newRun('queued');
     await settle(5000);
     v = await view();
-    check(/^Waiting for your PC since \d\d:\d\d( [AP]M)?: the import runs there\. Turn the PC on/.test(v.text) && v.link === RUN_URL + run1.id && v.off, 'queued: ' + JSON.stringify(v));
+    check(/^Waiting in GitHub's queue since \d\d:\d\d( [AP]M)?: your server runs one job at a time/.test(v.text) && v.link === RUN_URL + run1.id && v.off, 'queued: ' + JSON.stringify(v));
     // A second press while it watches only says where it is.
     await page.evaluate(() => pcImportNow());
     await page.waitForTimeout(200);
-    check(gh.dispatched.length === 1 && (await view()).toasts.pop().startsWith('Waiting for your PC'), 'second press started another run: ' + gh.dispatched.length);
+    check(gh.dispatched.length === 1 && (await view()).toasts.pop().startsWith('Waiting in GitHub\'s queue'), 'second press started another run: ' + gh.dispatched.length);
     // The PC comes on: running, then done; the sync brings its two rows.
     run1.status = 'in_progress';
     await settle(10000);
     v = await view();
-    check(v.text === 'Running on your PC…' && v.rows === 0, 'running: ' + JSON.stringify(v));
+    check(v.text === 'Running on your server…' && v.rows === 0, 'running: ' + JSON.stringify(v));
     await pcRun([40, -15]);
     Object.assign(run1, { status: 'completed', conclusion: 'success' });
     await settle(10000);
@@ -2234,7 +2263,7 @@ async function importNowRun(seed) {
     await press('#view-signals details.menu >> text=Import CoinDCX + Delta');
     await page.waitForTimeout(300);
     check(gh.dispatched.length === 2, 'Signals → More did not start it: ' + gh.dispatched.length);
-    const why = "CoinDCX refused the key (401) from this PC's IP 203.0.113.7. The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets. Or a secret was copied short.";
+    const why = "CoinDCX refused the key (401) from this server's IP 203.0.113.7. The key is locked to one IP: if it isn't 203.0.113.7, make a CoinDCX key for 203.0.113.7 and put it in the two secrets. Or a secret was copied short.";
     await pcRun([40, -15], why);
     const run2 = await newRun('completed');
     run2.conclusion = 'success';
@@ -2250,14 +2279,14 @@ async function importNowRun(seed) {
     await newRun('pending');
     await settle(5000);
     v = await view();
-    check(/^Waiting for your PC/.test(v.text) && v.off, 'pending: ' + JSON.stringify(v));
+    check(/^Waiting in GitHub's queue/.test(v.text) && v.off, 'pending: ' + JSON.stringify(v));
     await settle(15 * 60e3);
     // A look at GitHub fired inside those 15 minutes may still be answering (real time):
     // let it land and give it the poll after it, so a slow runner can't catch it mid-look.
     for (let i = 0; i < 40 && await page.evaluate(() => pcLive()); i++) await settle(10e3);
     v = await view();
-    check(/^Still waiting for your PC since \d\d:\d\d( [AP]M)?: .*New trades come in with the next sync\.$/.test(v.text) && !v.off && v.btn === 'Import now', 'gave up: ' + JSON.stringify(v));
-    check(/The run from \d\d:\d\d( [AP]M)? is waiting for your PC: the import runs there/.test(v.card) && !/Import last run/.test(v.card), 'card does not say the run waits for the PC: ' + JSON.stringify(v.card));
+    check(/^Still waiting in GitHub's queue since \d\d:\d\d( [AP]M)?: .*New trades come in with the next sync\.$/.test(v.text) && !v.off && v.btn === 'Import now', 'gave up: ' + JSON.stringify(v));
+    check(/The run from \d\d:\d\d( [AP]M)? is waiting in GitHub's queue: your server runs one job at a time/.test(v.card) && !/Import last run/.test(v.card), 'card does not say the run waits for the PC: ' + JSON.stringify(v.card));
     const reads = gh.runReads;
     await settle(60000);
     check(gh.runReads === reads, 'kept watching after 15 minutes: ' + (gh.runReads - reads));
@@ -2310,12 +2339,12 @@ async function importNowRun(seed) {
     await settle(5000);
     await page.waitForTimeout(600);
     v = await view();
-    check(v.text === 'CoinDCX import done · nothing new.' && v.dx === 'Running on your PC…' && v.off, 'CoinDCX done, Delta running: ' + JSON.stringify(v));
+    check(v.text === 'CoinDCX import done · nothing new.' && v.dx === 'Running on your server…' && v.off, 'CoinDCX done, Delta running: ' + JSON.stringify(v));
     gh.dx.runs[0].status = 'completed'; gh.dx.runs[0].conclusion = 'success';
     await settle(10000);
     await page.waitForTimeout(600);
     v = await view();
-    check(v.dx === 'Delta import done · 1 new trade.' && !v.dxBtn && /^Your PC imports Delta every 30 minutes/.test(v.dxCard) && v.toasts.includes('CoinDCX: nothing new · Delta: 1 new trade'), 'both done: ' + JSON.stringify(v));
+    check(v.dx === 'Delta import done · 1 new trade.' && !v.dxBtn && /^Your server imports Delta every 30 minutes/.test(v.dxCard) && v.toasts.includes('CoinDCX: nothing new · Delta: 1 new trade'), 'both done: ' + JSON.stringify(v));
 
     // 5. No GitHub Sync on this device: nothing is asked, it says what to connect.
     gh.dispatchStatus = 204;
@@ -4650,6 +4679,59 @@ async function cleanRun(seed) {
 }
 // What's new: tapping the version pill opens the update log. The newest entry
 // is this build's version and marked Current; versions only go down the list.
+// Backup file round trip (Settings → Backup): a fresh device restores everything the file
+// holds, setups included (v.206: they were left behind); junk files change nothing.
+async function backupRestoreRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, acceptDownloads: true });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  const data = Object.assign({}, seed, {
+    withdrawals: [{ id: 'w1', accountId: 'acc_cry', date: seed.trades[0].date, amount: 5, note: 'bank', updatedAt: seed.savedAt }, { id: 'w2', accountId: 'acc_cry', date: seed.trades[0].date, amount: 7, kind: 'deposit', note: '', updatedAt: seed.savedAt }],
+    reviews: { [seed.trades[0].date]: 'kept my stops' }, reviewsAt: { [seed.trades[0].date]: seed.savedAt },
+    playbook: [{ id: 'pb1', name: 'Breakout', rules: ['Volume spike', 'Above VWAP'], updatedAt: seed.savedAt }, { id: 'pbf', name: 'FIB', rules: ['L1', 'L2', 'L3', 'L4'], levels: true, updatedAt: seed.savedAt }]
+  });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(data));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  let accept = true;
+  page.on('dialog', d => accept ? d.accept() : d.dismiss());
+  const lastToast = () => page.evaluate(() => { const c = document.getElementById('toastContainer'); return c && c.lastElementChild ? c.lastElementChild.innerText : ''; });
+  const restore = async (name, text) => {
+    await page.setInputFiles('#restoreFileInput', { name, mimeType: 'application/json', buffer: Buffer.from(text) });
+    await page.waitForTimeout(300);
+  };
+  const snap = () => page.evaluate(() => JSON.stringify({ t: state.trades.map(t => t.id + ':' + t.pnl).sort(), g: state.goals.map(g => g.id), p: state.playbook.map(p => p.name + '/' + p.rules.join('|') + (p.levels ? '/lv' : '')), w: (state.withdrawals || []).map(w => w.id + ':' + (w.kind || 'out') + ':' + w.amount), r: state.reviews, a: state.accounts.map(a => a.id + ':' + a.startBalance) }));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => switchTab('data'));
+    const want = await snap();
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.evaluate(() => downloadBackupFile())]);
+    const file = fs.readFileSync(await dl.path(), 'utf8');
+    check(!/"keysLock"|"token"/.test(file), 'the backup holds keys or the token');
+    // A fresh device: nothing in it.
+    await page.evaluate(() => { state.trades = []; state.goals = []; state.playbook = []; state.withdrawals = []; state.reviews = {}; save(); renderAll(); });
+    await restore('backup.json', file);
+    check(await snap() === want && /restored/.test(await lastToast()), 'restored journal differs: ' + await snap() + ' vs ' + want);
+    // Junk: not JSON, the wrong shape, lists that aren't lists, an empty file. Nothing changes.
+    for (const [name, text, msg] of [['junk.json', '{"trades": [1, 2', /Invalid backup file/], ['other.json', '{"hello": "world"}', /not a journal backup/], ['bad.json', '{"accounts": [], "trades": [], "goals": "x"}', /not a journal backup/], ['null.json', 'null', /not a journal backup/], ['empty.json', '', /Invalid backup file/]]) {
+      await restore(name, text);
+      check(await snap() === want && msg.test(await lastToast()), name + ': ' + await lastToast());
+    }
+    // Saying no to the question keeps the journal as it is.
+    accept = false;
+    await restore('backup2.json', JSON.stringify(Object.assign(JSON.parse(file), { trades: [] })));
+    check(await snap() === want, 'cancelled restore changed the journal');
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  const label = 'backup file: download, restore on a fresh device (setups too), junk files refused';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 async function whatsNewRun(seed) {
   const errs = [];
   const check = (ok, what) => { if (!ok) errs.push(what); };
@@ -7864,6 +7946,7 @@ await marketDayRun(data);
 await btcMoveRun(data);
 await botStopRun(data);
 await walletMainRun(data);
+await backupRestoreRun(data);
 
 await browser.close();
 server.close();

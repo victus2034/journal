@@ -193,9 +193,11 @@ function movesFromOf(data, account) {
 function txId(x) { const v = x && (x.uuid != null ? x.uuid : x.id); return v == null ? '' : String(v).replace(/[^\w-]/g, '').slice(0, 37); }
 function moveEntry(x, account, at) {
   const amt = parseFloat(x.amount), when = Date.parse(x.created_at), id = txId(x);
+  // Keys in the order the journal keeps them, so its sync finds nothing to rewrite.
   const o = { id: 'dtx' + id, accountId: account.id, date: localParts(when).day, amount: +Math.abs(amt).toFixed(8),
-    note: 'Delta ' + String(x.transaction_type).replace(/_/g, ' ').slice(0, 60), src: 'delta:tx:' + id, updatedAt: at };
+    note: 'Delta ' + String(x.transaction_type).replace(/_/g, ' ').slice(0, 60), updatedAt: at };
   if (amt > 0) o.kind = 'deposit';
+  o.src = 'delta:tx:' + id;
   return o;
 }
 
@@ -264,14 +266,14 @@ async function publicIp() {
 }
 function oneLine(v) { return String(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160); }
 function deltaWhy(r, ip) {
-  if (r && r.network) return `Could not reach Delta (${oneLine(r.network)}). If this keeps happening, check the PC's internet.`;
+  if (r && r.network) return `Could not reach Delta (${oneLine(r.network)}). If this keeps happening, check the server's internet.`;
   const err = r && r.body && r.body.error, code = err && (err.code || (typeof err === 'string' ? err : ''));
   if (code === 'ip_not_whitelisted_for_api_key') return ip
-    ? `Delta refused this PC's IP ${ip}: it isn't whitelisted on the key. On Delta, add ${ip} to the key's IPs (or make a Read Data key for it and update the two secrets).`
-    : "Delta refused this PC's IP: it isn't whitelisted on the key. Open api.ipify.org on the PC and add that IP to the key on Delta.";
+    ? `Delta refused this server's IP ${ip}: it isn't whitelisted on the key. On Delta, add ${ip} to the key's IPs (or make a Read Data key for it and update the two secrets).`
+    : "Delta refused this server's IP: it isn't whitelisted on the key. Add the server's IP (setup-runner.sh printed it) to the key on Delta.";
   if (code === 'invalid_api_key') return 'Delta refused the key. Check DELTA_API_KEY and DELTA_API_SECRET were copied in full.';
   if (code === 'insufficient_permissions') return "This Delta key doesn't have Read Data permission.";
-  if (code === 'expired_signature' || code === 'signature_expired') return "Delta says the request was too old: check the PC's clock is right.";
+  if (code === 'expired_signature' || code === 'signature_expired') return "Delta says the request was too old: check the server's clock is right.";
   if (code) return `Delta refused the request (${oneLine(code)}).`;
   if (r && r.contracts) return "Delta's contract sizes could not be read, so nothing was imported (quantities would be wrong). The next run tries again.";
   if (r && r.status === 429) return 'Delta says too many requests. The next run tries again.';
@@ -367,7 +369,10 @@ function apply(data, got, note, balance, moves) {
   if (moveAt) next.lastMoveAt = moveAt;
   const from = moves && typeof moves.from === 'string' ? moves.from : was && typeof was.movesFrom === 'string' ? was.movesFrom : null;
   if (from !== null) next.movesFrom = from;
-  const moved = !was || (was.lastMoveAt || 0) !== (next.lastMoveAt || 0) || (was.movesFrom || '') !== (next.movesFrom || '') || was.lastFillTime !== next.lastFillTime || JSON.stringify(was.openPositions || {}) !== JSON.stringify(next.openPositions) || (was.note || '') !== (note || '');
+  // Every trade, fee and funding charge is a wallet row too, so the newest row moves on nearly every run:
+  // on its own it is saved at most once a day (the next run reads that day again), not a commit a run.
+  const moveAtMoved = newMoves.length > 0 || (next.lastMoveAt || 0) - ((was && was.lastMoveAt) || 0) >= 864e5;
+  const moved = !was || moveAtMoved || (was.movesFrom || '') !== (next.movesFrom || '') || was.lastFillTime !== next.lastFillTime || JSON.stringify(was.openPositions || {}) !== JSON.stringify(next.openPositions) || (was.note || '') !== (note || '');
   const old = data.deltaBalance && typeof data.deltaBalance === 'object' ? data.deltaBalance : null;
   const balMoved = !!balance && (!old || Math.abs(old.value - balance.value) >= 0.005 || Date.now() - (old.at || 0) >= BAL_HOLD_MS);
   if (!fresh.length && !tag.length && !moved && !balMoved && !newMoves.length) return { changed: false, added: 0 };
@@ -387,7 +392,7 @@ function report(text, bad) {
 
 async function main() {
   if (!env.DELTA_API_KEY || !env.DELTA_API_SECRET) {
-    report('Add the DELTA_API_KEY and DELTA_API_SECRET secrets to this repository (Settings → Secrets and variables → Actions): a Delta key with Read Data, whitelisted for this PC\'s IP. Then run this again.', true);
+    report('Add the DELTA_API_KEY and DELTA_API_SECRET secrets to this repository (Settings → Secrets and variables → Actions): a Delta key with Read Data, whitelisted for this server\'s IP. Then run this again.', true);
     return 1;
   }
   if (!env.GITHUB_TOKEN || !REPO) { report('GITHUB_TOKEN and GITHUB_REPOSITORY are needed to save journal.json.', true); return 1; }
