@@ -7041,8 +7041,8 @@ async function bestSettingsRun() {
     check(!out.err, 'search failed: ' + out.err);
     if (!out.err) {
       check(out.universe >= 60 && out.split.nTrain + out.split.nTest === out.universe && out.split.nTrain >= out.universe * 0.5 && out.split.nTrain <= out.universe * 0.7, 'universe and the 60 / 40 split: ' + JSON.stringify([out.universe, out.split]));
-      check(out.ids === 'tgt,sl,early,stop,part,trail,hold,chan,mkt,coins,lvls,lvl,btc', 'a row for every setting a fib tab has: ' + out.ids);
-      check(out.rows === 13 && out.hasCombo && out.hasOos && out.full >= 20, 'the card draws: ' + JSON.stringify([out.rows, out.hasCombo, out.hasOos, out.full]));
+      check(out.ids === 'tgt,sl,early,stop,part,trail,hold,chan,mkt,coins,lvls,lvl,btc,btcmv', 'a row for every setting a fib tab has: ' + out.ids);
+      check(out.rows === 14 && out.hasCombo && out.hasOos && out.full >= 20, 'the card draws: ' + JSON.stringify([out.rows, out.hasCombo, out.hasOos, out.full]));
       check(out.nowOk && out.bestIn && out.ptoo && out.minN >= 30, 'now / best rows: ' + JSON.stringify([out.nowOk, out.bestIn, out.ptoo, out.minN]));
       check(/partly luck/.test(out.warn) && /out-of-sample/.test(out.warn) && out.verdict.length > 20 && /Luck check: /.test(out.luck), 'warning, verdict and luck check: ' + JSON.stringify([out.warn.slice(0, 40), out.verdict, out.luck.slice(0, 60)]));
       check(out.rnd && out.rnd.k >= 0, 'random settings tried: ' + JSON.stringify(out.rnd));
@@ -7507,6 +7507,127 @@ async function marketDayRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'BTC market day: going into the day from closed candles (no hindsight), = rule on 210 real days, calendar, filter, 05:30 day');
 }
 
+// lakky's BTC move rule (2026-11-21): BTC at the alert / trade open (last 15m close by then) against its
+// 05:30 IST open, +-1.5% = a move, else flat; With / Against = the trade's side vs that move.
+async function btcMoveRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const days = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/btc-1d-delta-2026.json'), 'utf8')).days;
+  const fx = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/btc-15m-delta-2026-09.json'), 'utf8'));
+  const open = {}; days.forEach(([d, o]) => { open[d] = o; });
+  // The rule, written again here: the close of the candle that closed by then, against the UTC day's open.
+  const ref = ms => { const i = Math.floor((ms / 1000 - fx.t0) / 900) - 1, p = fx.c[i], o = open[new Date(ms).toISOString().slice(0, 10)]; const pct = (p - o) / o * 100; return { pct, bias: pct >= 1.5 ? 'bull' : pct <= -1.5 ? 'bear' : 'side' }; };
+  const seeded = JSON.parse(JSON.stringify(seed));
+  const byDate = {}; days.forEach(([d, o, h, l, c]) => { byDate[d] = { o, c, h, l, pct: +((c - o) / o * 100).toFixed(2) }; });
+  seeded.mktCandles = { symbol: 'BTCUSD', byDate, fetchedAt: Date.now() };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const asks = [];
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  // A Delta that serves 15m BTC candles for the last two days only (100000 + candle number).
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const u = new URL(route.request().url()), q = u.searchParams;
+    if (!u.pathname.startsWith('/v2/history/candles') || q.get('resolution') !== '15m') return route.abort();
+    const a = +q.get('start'), b = +q.get('end'), from = Math.floor(Date.now() / 1000 / 900) * 900 - 2 * 86400, rows = [];
+    asks.push([a, b]);
+    for (let t = Math.ceil(Math.max(a, from) / 900) * 900; t <= b; t += 900) rows.push({ time: t, open: 1, high: 1, low: 1, close: 100000 + (t - from) / 900, volume: 1 });
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: rows }) });
+  });
+  await ctx.addInitScript(([s, mv]) => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); localStorage.setItem('tapeAndTarget.btcMove15m', mv); sessionStorage.setItem('seeded', '1'); } }, [JSON.stringify(seeded), JSON.stringify({ t0: fx.t0, c: fx.c, fetchedAt: Date.now() })]);
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    // Every 15 minutes of 16-20 Sep = the rule worked out here.
+    const times = []; for (let k = 1; k < fx.c.length; k++) times.push((fx.t0 + k * 900) * 1000 + 7 * 60000);
+    const got = await page.evaluate(ts => ts.map(ms => { const m = mvAt(ms); return m ? [m.bias, m.pct] : null; }), times);
+    const off = times.filter((ms, k) => { const r = ref(ms); return !got[k] || got[k][0] !== r.bias || Math.abs(got[k][1] - r.pct) > 1e-9; });
+    const bulls = got.filter(g => g && g[0] === 'bull').length;
+    check(!off.length && bulls > 20, 'every 15 min of 16-20 Sep = the rule (' + times.length + ' times, ' + bulls + ' up): off ' + off.slice(0, 3).map(ms => new Date(ms).toISOString()).join(', '));
+    // By hand: 18 Sep 15:00 IST reads the 09:15-09:30 UTC close 78131 on the 76385.9 open = +2.285%.
+    const h = await page.evaluate(() => { const m = mvAt(Date.parse('2026-09-18T15:00:00+05:30')); return [m.bias, +m.pct.toFixed(3)]; });
+    check(JSON.stringify(h) === '["bull",2.285]', '18 Sep 15:00 = +2.285% by hand: ' + JSON.stringify(h));
+    // The day starts at 05:30 IST: 05:00 on the 19th is still the 18th's run-up, 05:35 is flat on the new open.
+    const edge = await page.evaluate(() => [mvAt(Date.parse('2026-09-19T05:00:00+05:30')).bias, mvAt(Date.parse('2026-09-19T05:35:00+05:30')).bias, mvAt(Date.parse('2026-09-18T10:00:00+05:30')).bias]);
+    check(JSON.stringify(edge) === '["bull","side","side"]', '05:00 on the 19th = the 18th (up), 05:35 = flat, 18 Sep 10:00 +1.13% flat: ' + JSON.stringify(edge));
+    // No hindsight: candles after the entry do not change it.
+    const hs = await page.evaluate(() => {
+      const ms = Date.parse('2026-09-18T15:00:00+05:30'), c = mvCache(), i = Math.floor((ms / 1000 - c.t0) / 900), keep = c.c.slice();
+      const before = mvAt(ms).pct; for (let j = i; j < c.c.length; j++) c.c[j] = 1; const after = mvAt(ms).pct; c.c = keep; return before === after;
+    });
+    check(hs, 'candles after the entry change nothing');
+    // The 1.5% line both ways (17 Sep open 76174.5).
+    const line = await page.evaluate(() => {
+      const c = mvCache(), keep = c.c.slice(), ms = Date.parse('2026-09-17T12:00:00+05:30'), i = Math.floor((ms / 1000 - c.t0) / 900) - 1, o = 76174.5;
+      const at = p => { c.c[i] = p; return mvAt(ms).bias; };
+      const out = [at(o * 1.0151), at(o * 1.0149), at(o * 0.9851), at(o * 0.9849)];
+      c.c = keep; return out;
+    });
+    check(JSON.stringify(line) === '["bull","side","side","bear"]', '+1.51% up, +1.49% flat, -1.49% flat, -1.51% down: ' + JSON.stringify(line));
+    // With / against for each side, and trades by when they opened.
+    const rel = await page.evaluate(() => [
+      mvOfSig({ date: '2026-09-18', time: '15:00', side: 'long' }), mvOfSig({ date: '2026-09-18', time: '15:00', side: 'short' }), mvOfSig({ date: '2026-09-17', time: '12:00', side: 'short' }),
+      mvOfTrade({ date: '2026-09-18', time: '15:00', direction: 'short' }),
+      mvOfTrade({ rep: true, date: '2026-09-20', time: '12:00', direction: 'long', orig: { date: '2026-09-20', time: '12:00:41', openDate: '2026-09-18', openTime: '15:00:12', direction: 'long' } }),
+      mvOfSig({ date: '2026-11-01', time: '10:00', side: 'long' })]);
+    check(JSON.stringify(rel) === '["with","against","flat","against","with",null]', 'long up = with, short up = against, flat, a report trade by its open, no data = none: ' + JSON.stringify(rel));
+    // Signals: the row, the filter, the hint, Results by and the Market days table.
+    await page.evaluate(() => {
+      const sg = (id, date, time, side, r) => ({ id, key: 'k' + id, kind: 'trendline', date, time, symbol: 'ETHUSD', side, score: '', market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H', filled: true, outcome: r > 0 ? '+1R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: side === 'short' ? 101 : 99, entry: 100 });
+      state.signals = [sg('a', '2026-09-18', '15:00', 'long', 1), sg('b', '2026-09-18', '18:00', 'short', -1), sg('c', '2026-09-17', '12:00', 'long', 1), sg('d', '2026-09-19', '05:00', 'short', -1), sg('e', '2026-09-20', '12:00', 'short', 1)];
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', sigSec: 'market', mktFilter: '', mvFilter: '', mktMonth: '2026-09', mktDay: '', sigTgt: '', sigCoins: '', sigMarket: '', sigAsset: '' });
+      save(); switchTab('signals'); renderAll(); setSigSec('market');
+    });
+    await page.waitForSelector('#mktCalSignalsMv');
+    const tab = await page.evaluate(() => ({ btns: [...document.querySelectorAll('#sigMvBar [data-mv]')].map(b => b.innerText).join('|'),
+      rows: [...document.querySelectorAll('#mktCalSignalsMv tbody tr')].map(tr => tr.getAttribute('data-mvrow') + ' ' + tr.children[1].innerText.replace(/\s+/g, ' ').trim()) }));
+    check(tab.btns === 'All|With BTC|Against BTC|BTC flat', 'Signals row: ' + tab.btns);
+    check(JSON.stringify(tab.rows.slice(0, 3)) === JSON.stringify(['with 1 · 100% won', 'against 2 · 0% won', 'flat 2 · 100% won']), 'Market days table by BTC move (sample trades of other months: No BTC data): ' + JSON.stringify(tab.rows));
+    await page.evaluate(() => setMvFilter('mktCalSignals', 'against'));
+    const f = await page.evaluate(() => ({ kept: (sigView && sigView.pairs || []).map(p => p.signal.id).sort().join(','), hint: document.getElementById('sigWhichSum').innerText, dot: document.querySelector('#view-signals .sig-row[data-k="btcmv"]').classList.contains('chg'), on: (document.querySelector('#sigMvBar [data-mv="against"]') || {}).className }));
+    check(f.kept === 'b,d' && /Against BTC at entry/.test(f.hint) && f.dot && /rose/.test(f.on), 'Against BTC keeps the two shorts into the run-up: ' + JSON.stringify(f));
+    // Both BTC rows at once: BTC flat (c, e) on a Bullish day (20 Sep; 17 Sep was Sideways) keeps only e.
+    await page.evaluate(() => { setMvFilter('mktCalSignals', 'flat'); setMktFilter('mktCalSignals', 'bull'); });
+    const both = await page.evaluate(() => (sigView && sigView.pairs || []).map(p => p.signal.id).sort().join(','));
+    check(both === 'e', 'BTC day Bullish + BTC move flat: ' + both);
+    await page.evaluate(() => { resetSigWhich(); });
+    const rs = await page.evaluate(() => [state.ui.mvFilter, state.ui.mktFilter, (sigView.pairs || []).length]);
+    check(JSON.stringify(rs) === '["","",5]', 'Reset clears both rows: ' + JSON.stringify(rs));
+    const split = await page.evaluate(() => { const d = BT_DIMS.find(x => x.k === 'btcmv'); return state.signals.map(g => d.fn(g)).join(','); });
+    check(split === 'With BTC,Against BTC,BTC flat,Against BTC,BTC flat', 'Results by BTC move: ' + split);
+    check(await page.evaluate(() => BS_DIMS.some(d => d.id === 'btcmv') && BS_KEYS.includes('mvFilter')), 'Best settings can try it');
+    // Analysis has the row too and filters your trades.
+    const an = await page.evaluate(() => {
+      state.ui.mvFilter = 'with'; save(); switchTab('analysis'); renderAll();
+      return { btns: document.querySelectorAll('#anMvBar [data-mv]').length, hint: document.getElementById('anFilterHint').innerText, reset: !document.getElementById('anReset').classList.contains('hidden') };
+    });
+    check(an.btns === 4 && /With BTC at entry/.test(an.hint) && an.reset, 'Analysis row: ' + JSON.stringify(an));
+    await page.evaluate(() => { anResetFilters(); });
+    check(await page.evaluate(() => state.ui.mvFilter === ''), 'Analysis Reset clears it');
+    // Loading: from the last candle kept, pages of at most 1800 candles, back as far as the daily candles.
+    check(asks.length === 0, 'nothing read before asked: ' + asks.length);
+    const ld = await page.evaluate(async () => {
+      localStorage.removeItem('tapeAndTarget.btcMove15m'); mvC = null; mvFailedAt = 0;
+      // With no prices the Market days card offers to load them (nothing is read until asked).
+      switchTab('signals'); renderAll(); setSigSec('market');
+      const btn = document.querySelector('#mktCalSignalsMvLoad button');
+      if (!btn) return { noBtn: true };
+      btn.click();
+      while (mvLoading) await new Promise(r => setTimeout(r, 50));
+      const c = mvCache(), now = Date.now(), from = Math.floor(now / 1000 / 900) * 900 - 2 * 86400;
+      const ms = (from + 40 * 900 + 60) * 1000, kept = JSON.parse(localStorage.getItem('tapeAndTarget.btcMove15m'));
+      return { n: c.c.length, span: (now / 1000 - c.t0) / 86400, p: mvPriceAt(ms), saved: kept && kept.c.length === c.c.length, err: mvErr };
+    });
+    check(!ld.noBtn && ld.p === 100039 && ld.saved && !ld.err && ld.span > 399 && ld.span < 401, 'a fresh load: ' + JSON.stringify(ld));
+    check(asks.length >= 21 && asks.every(([a, b]) => b - a <= 1800 * 900) && asks.every((x, k) => !k || x[0] > asks[k - 1][1]), 'paged ' + asks.length + ' times, 1800 candles a page, in order');
+    const n0 = asks.length;
+    await page.evaluate(async () => { mvCache().fetchedAt = 0; await mvFetch(); });
+    check(asks.length === n0 + 1, 'a refresh asks once, from the last candle: ' + (asks.length - n0));
+  } catch (e) { errs.push('threw: ' + e.message); }
+  await ctx.close();
+  if (errs.length) failures.push('BTC move:\n     ' + errs.join('\n     '));
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'BTC move: ±1.5% from the 05:30 open at entry (15m, no hindsight), With / Against / flat in Signals, Analysis, Market days, Results by');
+}
+
 // A trade the live bot placed takes the stop the bot put on the exchange (lakky's AVAX of 18 Nov read
 // +13R on an alert stop 0.14% under entry); a typed stop or a trade set to Manual keeps its own.
 async function botStopRun(seed) {
@@ -7622,6 +7743,7 @@ await bestSettingsRun();
 await sigLightRun(data);
 await botTagRun(data);
 await marketDayRun(data);
+await btcMoveRun(data);
 await botStopRun(data);
 
 await browser.close();

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-21.203">
+  <meta name="app-version" content="2026-11-21.204">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -800,6 +800,7 @@
           <div id="sigLvlWrap" class="sig-row" data-k="lvl"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="sigLvlBar"></div></div></div>
           <div id="sigTlWrap" class="sig-row" data-k="tl"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="sigTlBar"></div></div></div>
           <div class="sig-row" data-k="btc"><span class="sig-lab">BTC day</span><div class="sig-ctl"><div id="sigMktBar"></div></div></div>
+          <div class="sig-row" data-k="btcmv"><span class="sig-lab">BTC move</span><div class="sig-ctl"><div id="sigMvBar"></div></div></div>
         </details>
         <details id="sigRulesPanel" class="card sig-panel" data-fold="rules" open>
           <summary><span class="sig-chev">&#9662;</span><h3>How each trade is played</h3><span id="sigRulesSum" class="sig-sum"></span><span id="sigRulesReset" class="sig-ph-r sig-rst"></span></summary>
@@ -1296,6 +1297,7 @@
           <div id="anLvlWrap" class="sig-row hidden"><span class="sig-lab">Level</span><div class="sig-ctl"><div id="anLvlBar"></div></div></div>
           <div id="anTlWrap" class="sig-row hidden"><span class="sig-lab">Type</span><div class="sig-ctl"><div id="anTlBar"></div></div></div>
           <div id="anMktRow" class="sig-row"><span class="sig-lab">BTC day</span><div class="sig-ctl"><div id="anMktBar"></div></div></div>
+          <div id="anMvRow" class="sig-row"><span class="sig-lab">BTC move</span><div class="sig-ctl"><div id="anMvBar"></div></div></div>
         </details>
         <details id="anRulesPanel" class="card sig-panel" data-fold="anRules" open>
           <summary><span class="sig-chev">&#9662;</span><h3>How each trade is played</h3><span id="anRulesSum" class="sig-sum"></span><span id="anRulesReset" class="sig-ph-r"></span></summary>
@@ -4150,6 +4152,7 @@
       if (hint && assetKeep) hint.innerText += ` · ${assetOf(assetMode).label} only`;
       if (hint && coinSet) hint.innerText += ` · ${coinSetTxt(coinSet)}`;
       if (hint && mktFilter()) hint.innerText += ` · BTC ${MKT_LABEL[mktFilter()].toLowerCase()} days only`;
+      if (hint && mvFilter()) hint.innerText += ` · ${mvHint()} only`;
       if (hint && sigLvl()) hint.innerText += ` · entered at ${sigLvl()}`;
       if (hint && sigTlType()) hint.innerText += ` · ${sigTlType().label} only`;
 
@@ -4192,8 +4195,10 @@
         mktCtx['mktCalSignals'] = sigView.mkt;
         if (mktNeedsFetch() && !mktLoading) mktFetch().then(renderSignalsTable);
       }
-      const mfSig = mktFilter();
+      const mfSig = mktFiltersOn();
       renderMktFilterBar('sigMktBar', 'mktCalSignals');
+      renderMvFilterBar('sigMvBar', 'mktCalSignals');
+      mvLoadFor(renderSignalsTable, mvFilter() || state.ui.sigBtDim === "btcmv");
       renderSigTgtBar();
       renderSigSlBar();
       renderSigEarlyBar();
@@ -4207,7 +4212,7 @@
       renderSigTlBar(kind);
       renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
       renderSigPanelSums(kind, coinSet, assetMode);
-      if (mfSig) { pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig); preCoin = preCoin.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mfSig); }
+      if (mfSig) { pairs = pairs.filter(pr => mktPassSig(pr.signal)); preCoin = preCoin.filter(pr => mktPassSig(pr.signal)); }
 
       // Alerts whose stop is under 0.2% cannot be traded profitably: the 0.10% round-trip
       // fee alone is over half of R, and stop slippage adds more. They swing the
@@ -4233,7 +4238,7 @@
       // Nothing left: the strip says which filter emptied the view, with the way back,
       // instead of a row of dashes (lakky, 2026-11-14: xStocks + CoinDCX showed only dashes).
       sigView.empty = sigView.pairs.length ? null : sigEmptyWhy({ kind, all: allPairs.length, mkt, mktN: mktPairs.length, chan, chanN: chanPairs.length, rangeN: inRange.length,
-        asset: assetMode, assetN: coinPool.length, coinSet, coinN, blocks, dayN: pairs.length, mf: mfSig });
+        asset: assetMode, assetN: coinPool.length, coinSet, coinN, blocks, dayN: pairs.length, mf: mktFilter(), mv: mvFilter() });
       sigView.preCoin = coinKeep ? (skipTiny ? preCoin.filter(pr => !isTiny(pr)) : preCoin) : sigView.pairs;
       // The coins in view first, then the rest for the report's Top coins compare.
       tgtGen++;
@@ -4253,7 +4258,7 @@
       if (chan) orphans = []; // your own trades carry no channel
       if (range.from) orphans = orphans.filter(t => t.date >= range.from);
       if (range.to) orphans = orphans.filter(t => t.date <= range.to);
-      if (mfSig) orphans = orphans.filter(t => mktBiasOfTrade(t) === mfSig);
+      if (mfSig) orphans = orphans.filter(mktPassTrade);
       if (mkt) orphans = orphans.filter(t => mktOfSig(anSigOf(t)) === mkt);
       if (coinKeep) orphans = orphans.filter(t => coinKeep({ symbol: t.symbol }));
       orphans = orphans.map(hydrate).sort((a, b) => -byWhen(a, b));
@@ -4486,7 +4491,7 @@
     function anNoFee() { return state.ui.anNoFee === true; }
     function anResetFilters() {
       // Fees are a rule of play now: the other panel's Reset puts them back.
-      Object.assign(state.ui, { anKind: "", anBy: "", anMarket: "", anChan: "", anLvl: "", anTlType: "", anCoins: "", anAsset: "", anPeriod: "all", mktFilter: "", anPair: "" });
+      Object.assign(state.ui, { anKind: "", anBy: "", anMarket: "", anChan: "", anLvl: "", anTlType: "", anCoins: "", anAsset: "", anPeriod: "all", mktFilter: "", mvFilter: "", anPair: "" });
       anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis();
     }
     function anSet(k, v) { state.ui[k] = v; anVisible = AN_PAGE; anFilter = null; save(); renderAnalysis(); }
@@ -4652,8 +4657,10 @@
       document.getElementById('anTlWrap').classList.toggle('hidden', kind !== 'trendline');
       anSegBar('anTlBar', SIG_TL_TYPES.map(x => [x.k, x.k ? x.label : "All"]), anTlType() ? anTlType().k : "", "setAnTlType", "tltype", "Support / resistance bounce, or a break of the line");
       renderMktFilterBar('anMktBar', 'mktCalAnalysis');
+      renderMvFilterBar('anMvBar', 'mktCalAnalysis');
+      mvLoadFor(renderAnalysis, !!mvFilter());
       renderPlayTgtBar(PLAY.an); renderPlayStopBar(PLAY.an); renderPlayTrailBar(PLAY.an); renderPlayHoldBar(PLAY.an); renderPlayFeeBar(PLAY.an);
-      const anyOn = !!(anKind() || anByMode() || mkt || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anCoinMode() || anAssetMode() || mktFilter() || anPeriodMode() !== "all");
+      const anyOn = !!(anKind() || anByMode() || mkt || state.ui.anChan || (!anReportBook() && state.ui.anPair) || anCoinMode() || anAssetMode() || mktFiltersOn() || anPeriodMode() !== "all");
       document.getElementById('anReset').classList.toggle('hidden', !anyOn);
       const r = anRangeFull(), hint = [];
       hint.push(r.from || r.to ? (r.from || "start") + " → " + (r.to || "now") : "All history");
@@ -4665,6 +4672,7 @@
       if (anLvl()) hint.push("fib " + anLvl());
       if (anTlType()) hint.push(anTlType().label);
       if (mktFilter()) hint.push("BTC " + MKT_LABEL[mktFilter()].toLowerCase() + " days");
+      if (mvFilter()) hint.push(mvHint());
       const h = document.getElementById('anFilterHint'); if (h) h.innerText = hint.join(" · ");
       // Folded panels say in one line what they are set to.
       initPanelFolds();
@@ -4680,6 +4688,7 @@
         if (anLvl()) bits.push(anLvl());
         if (anTlType()) bits.push(anTlType().label);
         if (mktFilter()) bits.push("BTC " + MKT_LABEL[mktFilter()].toLowerCase() + " days");
+        if (mvFilter()) bits.push(mvHint());
         ws.innerText = bits.join(" · ");
       }
       const rs = document.getElementById('anRulesSum');
@@ -4874,7 +4883,7 @@
       save(); renderAll();
     }
     function renderAnBrokers(map) {
-      const rg = anRangeFull(), mfB = mktFilter();
+      const rg = anRangeFull(), mfB = mktFiltersOn();
       map = map || anAlertMap();
       const current = isAll() ? "all" : "acct:" + selected();
       // An empty book (an unused Dhan) stays off here too, as on the header's bar.
@@ -4888,7 +4897,7 @@
       // ---- results by broker, each converted into the currency on screen ----
       const vc = viewCur();
       // The filters at the top narrow this table too.
-      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktBiasOfTrade(t) === mfB) && anPassBy(t) && anPassSetup(anTradeSetup(t, map)) && anPassCoin(t)).map(t => toView(t, vc))), open = reportBooks().open.filter(o => !anByMode() || !o.id || repIdBy(o.id) === anByMode());
+      const live = anFeeView(allTrades().filter(t => anInRange(dayOf(t), rg) && (!mfB || mktPassTrade(t)) && anPassBy(t) && anPassSetup(anTradeSetup(t, map)) && anPassCoin(t)).map(t => toView(t, vc))), open = reportBooks().open.filter(o => !anByMode() || !o.id || repIdBy(o.id) === anByMode());
       const lines = books.map(a => {
         const ts = live.filter(t => t.accountId === a.id), s = computeStats(ts);
         const files = a.reportBroker ? btState().files.filter(f => f.broker === a.reportBroker) : [];
@@ -5772,7 +5781,7 @@
       renderAiReview();
       // One row of sections for every book; a report with no rows yet shows only how to add one.
       const live = !rep || document.getElementById('btEmpty').classList.contains('hidden');
-      ['anLive', 'anMktRow', 'anHowLive', 'anStrip'].forEach(id => document.getElementById(id).classList.toggle('hidden', !live));
+      ['anLive', 'anMktRow', 'anMvRow', 'anHowLive', 'anStrip'].forEach(id => document.getElementById(id).classList.toggle('hidden', !live));
       if (!live) { document.getElementById('anDemoLine').classList.add('hidden'); return; }
       renderSecBar('anSecBar', anSecList(), 'data-ansec', anCurSec(), setAnSec);
       const cur = viewCur();
@@ -5784,11 +5793,11 @@
       // Balances need every trade, so the filters apply after the analysis.
       const all = analyzeTrades(anFeeView(statScoped()));
       const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t)).sort((a, b) => -byWhen(a.t, b.t));
-      const mfAn = mktFilter();
-      const rows = mfAn ? inPeriod.filter(x => mktBiasOfTrade(x.t) === mfAn) : inPeriod;
+      const mfAn = mktFiltersOn();
+      const rows = mfAn ? inPeriod.filter(x => mktPassTrade(x.t)) : inPeriod;
       rows.anchored = all.anchored;
       // Pair list for the report's dropdown: every pair before the pair filter.
-      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t) && (!mfAn || mktBiasOfTrade(x.t) === mfAn)));
+      if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t) && (!mfAn || mktPassTrade(x.t))));
       document.getElementById('anRepHead').classList.toggle('hidden', !!rep);
 
       const assume = document.getElementById('anAssumptions');
@@ -5802,7 +5811,8 @@
 
       renderJournalArchive();
       renderMarketCalendar('mktCalAnalysis', { pairs: matchSignals().filter(pr => anInRange(pr.signal.date, anRg)), trades: inPeriod.map(x => x.t), cur, rerender: renderAnalysis, scope: from || anRg.to ? (from || 'start') + ' to ' + (anRg.to || 'now') : 'all history' });
-      if (mfAn) assume.innerText += ` Showing trades on BTC ${MKT_LABEL[mfAn].toLowerCase()} days only.`;
+      if (mktFilter()) assume.innerText += ` Showing trades on BTC ${MKT_LABEL[mktFilter()].toLowerCase()} days only.`;
+      if (mvFilter()) assume.innerText += ` Showing trades opened ${{ with: "with BTC's move", against: "against BTC's move", flat: "with BTC flat" }[mvFilter()]} only.`;
       if (!rows.length) {
         if (anChartInstance) { anChartInstance.destroy(); anChartInstance = null; }
         // Say which filter left nothing, with the way back (not a blank strip).
@@ -11446,17 +11456,17 @@
     // "Which alerts" back to everything: Market, Channel, Assets, Coins, Levels, Type and BTC day
     // (the kind of alert and the Period stay as they are).
     function resetSigWhich() {
-      Object.assign(state.ui, { sigMarket: "", sigChan: "", sigAsset: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "", sigDay: "" });
+      Object.assign(state.ui, { sigMarket: "", sigChan: "", sigAsset: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "", mvFilter: "", sigDay: "" });
       sigVisible = SIG_PAGE; save(); renderSignalsTable();
     }
     // Which rows are set away from their default (a dot on the label). Period is left out: any
     // period is a normal pick.
     function sigRowsChanged(coinSet, assetMode) {
       const p = partRaw();
-      return { market: !!sigMarketMode(), chan: !!state.ui.sigChan, asset: !!assetMode, coins: !!coinSet, lvlon: sigLvlOff().length > 0, lvl: !!sigLvl(), tl: !!sigTlType(), btc: !!mktFilter(),
+      return { market: !!sigMarketMode(), chan: !!state.ui.sigChan, asset: !!assetMode, coins: !!coinSet, lvlon: sigLvlOff().length > 0, lvl: !!sigLvl(), tl: !!sigTlType(), btc: !!mktFilter(), btcmv: !!mvFilter(),
         tgt: !!sigTgt(), sl: !!slRaw().mode, early: !!earlyRaw(), stop: stopRaw().mode !== "off", part: !!(p.q || p.beQ), trail: !!trailRaw().on, hold: sigHold() !== "tp", fee: state.ui.sigNoFee === true };
     }
-    const SIG_WHICH_KEYS = ["market", "chan", "asset", "coins", "lvlon", "lvl", "tl", "btc"];
+    const SIG_WHICH_KEYS = ["market", "chan", "asset", "coins", "lvlon", "lvl", "tl", "btc", "btcmv"];
     // One line per panel, shown when it is folded (and each panel's Reset button).
     function renderSigPanelSums(kind, coinSet, assetMode) {
       initPanelFolds();
@@ -11477,6 +11487,7 @@
         if (sigLvl()) bits.push(sigLvl());
         if (sigTlType()) bits.push(sigTlType().label);
         if (mktFilter()) bits.push('BTC ' + MKT_LABEL[mktFilter()].toLowerCase() + ' days');
+        if (mvFilter()) bits.push(mvHint());
         which.innerText = bits.join(' · ');
       }
       const rules = document.getElementById('sigRulesSum');
@@ -11871,7 +11882,8 @@
       { k: "weekday", label: "Weekday", fn: g => { const x = btDate(g.date); return x ? BT_WD[x.getDay()] : "?"; }, order: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] },
       { k: "week", label: "Week", fn: g => btWeekOf(g.date), sortKey: -1 },
       { k: "month", label: "Month", fn: g => String(g.date || "").slice(0, 7) || "?", sortKey: -1 },
-      { k: "btc", label: "BTC day", fn: g => { const b = mktBiasOn(g.date, g.time); return b ? MKT_LABEL[b] : "No BTC data"; }, order: ["Bullish", "Bearish", "Sideways", "No BTC data"] }
+      { k: "btc", label: "BTC day", fn: g => { const b = mktBiasOn(g.date, g.time); return b ? MKT_LABEL[b] : "No BTC data"; }, order: ["Bullish", "Bearish", "Sideways", "No BTC data"] },
+      { k: "btcmv", label: "BTC move", fn: g => { const r = mvOfSig(g); return r ? MV_LABEL[r] : "No BTC data"; }, order: ["With BTC", "Against BTC", "BTC flat", "No BTC data"] }
     ];
     // The numbers for a run of results, given in the order they happened.
     function sigRunStats(rs) {
@@ -12114,7 +12126,7 @@
       const minN = rs.length >= 100 ? 8 : 5;
       const cutDims = [BT_DIMS[0], BT_DIMS[2], { k: "stop", label: "Stop width", fn: g => { const v = slPct(g); return v == null ? null : v < 0.3 ? 'stop under 0.3%' : v < 0.6 ? 'stop 0.3-0.6%' : v < 1 ? 'stop 0.6-1%' : 'stop over 1%'; } },
         { k: "score", label: "Score", fn: g => { const m = String(g.score || '').match(/^(\d+)/); if (!m) return null; const v = +m[1]; return v >= 9 ? 'score 9+' : v === 8 ? 'score 8' : v === 7 ? 'score 7' : 'score 6 or less'; } },
-        { k: "session", label: "Time of day", fn: btSession }, BT_DIMS[6], BT_DIMS[9], BT_DIMS[1]];
+        { k: "session", label: "Time of day", fn: btSession }, BT_DIMS[6], BT_DIMS[9], BT_DIMS[10], BT_DIMS[1]];
       const cuts = [];
       cutDims.forEach(d => {
         const by = {};
@@ -13020,7 +13032,8 @@
         const why = st.blocks[cm.k] || (cm.venue ? cm.label + ' lists none of these ' + al + 'alerts' : 'none of these ' + al + 'alerts are on ' + coinSetTxt(st.coinSet, cm.label));
         return { why: 'coins', msg: 'No alerts left: ' + why + '. ' + st.assetN + ' ' + al + 'alert' + (st.assetN === 1 ? '' : 's') + ' before Coins.', fix: btn('Coins: All (' + st.assetN + ')', "setSigCoins('')") + (st.asset ? ' ' + btn('Assets: Both', "setSigAsset('')") : '') };
       }
-      if (!st.dayN && st.mf) return { why: 'btcday', msg: 'No alerts here on BTC ' + MKT_LABEL[st.mf].toLowerCase() + ' days.', fix: btn('All days', "setMktFilter('mktCalSignals','')") };
+      if (!st.dayN && st.mf) return { why: 'btcday', msg: 'No alerts here on BTC ' + MKT_LABEL[st.mf].toLowerCase() + ' days' + (st.mv ? ' with ' + MV_LABEL[st.mv] + ' at entry' : '') + '.', fix: btn('All days', "setMktFilter('mktCalSignals','')") };
+      if (!st.dayN && st.mv) return { why: 'btcmove', msg: mvLoading ? 'Loading BTC 15m prices for the BTC move row…' : 'No alerts here with ' + MV_LABEL[st.mv] + ' at entry' + (mvErr ? ' (' + mvErr + ')' : !mvCache().c.length ? ' (no BTC 15m prices yet)' : '') + '.', fix: btn('All', "setMvFilter('mktCalSignals','')") };
       return { why: 'tiny', msg: 'Every alert here has a tiny stop, and those are left out of the stats.', fix: btn('Include them', 'state.ui.sigSkipTiny=false;save();renderSignalsTable()') };
     }
     function renderSignalEdgeAnalysis(pairs) {
@@ -13194,13 +13207,13 @@
     const BS_MIN_N = 30;            // fewest trades a setting needs before it can be called best
     const BS_SPLIT = 0.6;           // share of the alerts (oldest first) the search may look at
     const BS_RANDOM = 100;          // random settings (15+ trades on both halves) for the luck check
-    const BS_KEYS = ["sigTgt", "sigSl", "sigEarly", "sigStop", "sigPart", "sigTrail", "sigHold", "sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter"];
+    const BS_KEYS = ["sigTgt", "sigSl", "sigEarly", "sigStop", "sigPart", "sigTrail", "sigHold", "sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter", "mvFilter"];
     const BS = { res: null, busy: false, prog: null, stop: false };
     // The settings now, normalised the way the tab reads them.
     function bsSnap() {
       const tg = sigTgt();
       return JSON.parse(JSON.stringify({ sigTgt: tg ? tg.k : "", sigSl: slRaw(), sigEarly: earlyRaw(), sigStop: stopRaw(), sigPart: partRaw(), sigTrail: trailRaw(), sigHold: sigHold(), sigChan: state.ui.sigChan || "",
-        sigMarket: sigMarketMode(), sigCoins: sigCoinMode(), sigLvlOff: sigLvlOff().slice().sort(), sigLvl: sigLvl(), sigTlType: sigTlType() ? sigTlType().k : "", mktFilter: mktFilter() }));
+        sigMarket: sigMarketMode(), sigCoins: sigCoinMode(), sigLvlOff: sigLvlOff().slice().sort(), sigLvl: sigLvl(), sigTlType: sigTlType() ? sigTlType().k : "", mktFilter: mktFilter(), mvFilter: mvFilter() }));
     }
     // Puts settings on the tab's state (not saved), returns what was there. Always undone in a finally.
     function bsPut(c) {
@@ -13229,8 +13242,7 @@
       const coinKeep = bothKeep(assetKeep, coinKeepOf(coinSet));
       let pairs = inRange;
       if (coinKeep) pairs = pairs.filter(pr => coinKeep(pr.signal));
-      const mf = mktFilter();
-      if (mf) pairs = pairs.filter(pr => mktBiasOn(pr.signal.date, pr.signal.time) === mf);
+      if (mktFiltersOn()) pairs = pairs.filter(pr => mktPassSig(pr.signal));
       if (state.ui.sigSkipTiny === true) pairs = pairs.filter(pr => { const p = slPct(pr.signal); return !(p != null && p < TINY_STOP_PCT); });
       if (when) pairs = pairs.filter(pr => when(pr.signal));
       // blocked: the Coins options the tab greys here (they keep nothing); a pick among them goes back to All on Use.
@@ -13247,7 +13259,7 @@
       a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909); b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
       return 4294967296 * (2097151 & b) + (a >>> 0);
     }
-    const BS_VIEW_KEYS = ["sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter"];
+    const BS_VIEW_KEYS = ["sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter", "mvFilter"];
     // What the tab shows with settings c: how many alerts, a fingerprint of exactly which ones (and at which fib
     // level they are entered), whether the crypto filters (Assets, Coins) act, the Coins options that keep nothing
     // and the fib levels the alerts entered at. Rules only matter when tiny stops are left out (the SL sets the stop).
@@ -13393,7 +13405,8 @@
           return out; } },
       { id: "lvl", label: "Level", fib: true, key: c => c.sigLvl, text: c => c.sigLvl || "As entered", why: () => "no level has a what-if here", opts: () => [""].concat(FIB_LEVEL_KEYS).map(k => ({ label: k || "As entered", patch: { sigLvl: k } })) },
       { id: "type", label: "Type", tl: true, key: c => c.sigTlType, text: c => c.sigTlType ? (SIG_TL_TYPES.find(x => x.k === c.sigTlType) || {}).label : "All", opts: () => SIG_TL_TYPES.map(x => ({ label: x.label, patch: { sigTlType: x.k } })) },
-      { id: "btc", label: "BTC day", key: c => c.mktFilter, text: c => c.mktFilter ? MKT_LABEL[c.mktFilter] : "All days", opts: () => [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]].map(x => ({ label: x[1], patch: { mktFilter: x[0] } })) }
+      { id: "btc", label: "BTC day", key: c => c.mktFilter, text: c => c.mktFilter ? MKT_LABEL[c.mktFilter] : "All days", opts: () => [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]].map(x => ({ label: x[1], patch: { mktFilter: x[0] } })) },
+      { id: "btcmv", label: "BTC move", key: c => c.mvFilter, text: c => c.mvFilter ? MV_LABEL[c.mvFilter] : "All", why: () => "no BTC 15m prices loaded yet", opts: () => mvCache().c.length ? [["", "All"], ["with", "With BTC"], ["against", "Against BTC"], ["flat", "BTC flat"]].map(x => ({ label: x[1], patch: { mvFilter: x[0] } })) : [] }
     ];
     const bsDimsFor = kind => BS_DIMS.filter(d => !(d.fib && kind !== "fib") && !(d.tl && kind !== "trendline"));
     // Options of one setting for settings c, each with its full settings (bsFix: as the tab keeps them) and key.
@@ -13455,7 +13468,7 @@
     // searched) would hide NSE under Market All.
     function bsCtx(cur0) {
       const kind = sigKind(), ctx = { kind, range: sigPeriodRange(), raw: matchSignals(kind), dims: bsDimsFor(kind), memo: {}, views: {}, chans: [], chanMkt: {}, mkts: {} }, cc = {};
-      ["crypto", "nse"].forEach(m => bsWith(bsPick(cur0, { sigMarket: m, sigChan: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "" }), () => inSigScope(() => bsPairs(ctx.raw, ctx.range).pairs))
+      ["crypto", "nse"].forEach(m => bsWith(bsPick(cur0, { sigMarket: m, sigChan: "", sigCoins: "", sigLvlOff: [], sigLvl: "", sigTlType: "", mktFilter: "", mvFilter: "" }), () => inSigScope(() => bsPairs(ctx.raw, ctx.range).pairs))
         .forEach(pr => { const k = chanKey(pr.signal); cc[k] = 1; ctx.chanMkt[k] = m; ctx.mkts[m] = 1; }));
       ctx.chans = FIBTL_CHANNELS.filter(k => cc[k]).concat(Object.keys(cc).filter(k => FIBTL_CHANNELS.indexOf(k) === -1));
       return ctx;
@@ -13744,15 +13757,21 @@
       const by = {}; kinds.concat(["none"]).forEach(k => { by[k] = { sr: [], tr: [], sp: [] }; });
       pairs.forEach(pr => { const o = outcomeOf(pr); if (!o) return; const g = by[mktBiasOn(pr.signal.date, pr.signal.time) || "none"]; g.sr.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) g.sp.push(p); });
       trades.forEach(t => { by[mktBiasOfTrade(t) || "none"].tr.push(derive(t).pnl || 0); });
+      // The same, by where BTC was at the entry (the BTC move row).
+      const byMv = {}; ["with", "against", "flat", "none"].forEach(k => { byMv[k] = { sr: [], tr: [], sp: [] }; });
+      if (mvCache().c.length) {
+        pairs.forEach(pr => { const o = outcomeOf(pr); if (!o) return; const g = byMv[mvOfSig(pr.signal) || "none"]; g.sr.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) g.sp.push(p); });
+        trades.forEach(t => { byMv[mvOfTrade(t) || "none"].tr.push(derive(t).pnl || 0); });
+      }
       const verdict = (n, v) => n < 3 ? '<span class="text-slate-500">too few</span>' : v > 0 ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-bold">Good</span>' : '<span class="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 font-bold">Bad</span>';
-      const mf = mktFilter();
-      const row = k => {
-        const g = by[k], sw = g.sr.filter(r => r > 0).length, tw = g.tr.filter(v => v > 0).length;
+      const mf = mktFilter(), mvf = mvFilter();
+      const row = (k, m) => {
+        const g = (m ? byMv : by)[k], sw = g.sr.filter(r => r > 0).length, tw = g.tr.filter(v => v > 0).length;
         const sAvg = g.sr.length ? avg(g.sr) : 0, tNet = sum(g.tr), tAvg = g.tr.length ? tNet / g.tr.length : 0;
-        const lbl = k === "none" ? "No BTC data" : MKT_LABEL[k];
-        const tone = k === "none" ? "text-slate-500" : MKT_TONE[k][2];
-        const click = k === "none" ? "" : ' onclick="setMktFilter(\'' + hostId + '\',\'' + k + '\')" title="Click to show only ' + lbl.toLowerCase() + ' days on this tab"';
-        return '<tr class="border-t border-terminal-border/60' + (k !== "none" ? ' cursor-pointer hover:bg-white/5' : '') + (mf === k ? ' bg-amber-500/10' : '') + '"' + click + '>'
+        const lbl = k === "none" ? "No BTC data" : (m ? MV_LABEL : MKT_LABEL)[k];
+        const tone = k === "none" ? "text-slate-500" : (m ? MV_TONE : MKT_TONE)[k][2];
+        const click = k === "none" ? "" : ' onclick="' + (m ? 'setMvFilter' : 'setMktFilter') + '(\'' + hostId + '\',\'' + k + '\')" title="Click to show only ' + (m ? lbl + ' at entry' : lbl.toLowerCase() + ' days') + ' on this tab"';
+        return '<tr' + (m ? ' data-mvrow="' + k + '"' : '') + ' class="border-t border-terminal-border/60' + (k !== "none" ? ' cursor-pointer hover:bg-white/5' : '') + ((m ? mvf : mf) === k ? ' bg-amber-500/10' : '') + '"' + click + '>'
           + '<td class="py-1.5 pr-3 font-bold ' + tone + '">' + lbl + '</td>'
           + '<td class="pr-3">' + (g.sr.length ? g.sr.length + ' <span class="text-slate-500">· ' + pct(sw / g.sr.length * 100) + ' won</span>' : '<span class="text-slate-600">—</span>') + '</td>'
           + '<td class="pr-3 ' + (sAvg >= 0 ? 'text-emerald-400' : 'text-rose-400') + '">' + (g.sr.length ? rfmt(sAvg) + pTag(g.sp.length ? avg(g.sp) : null) + ' <span class="text-slate-500">avg · ' + rfmt(sum(g.sr)) + pfmt(g.sp.length ? sum(g.sp) : null).replace(/^(.+)$/, ' ($1)') + '</span>' : '') + '</td>'
@@ -13762,10 +13781,18 @@
           + '<td>' + verdict(g.tr.length, tNet) + '</td></tr>';
       };
       const shown = kinds.concat(by.none.sr.length || by.none.tr.length ? ["none"] : []);
+      const mvOn = ["with", "against", "flat"].some(k => byMv[k].sr.length || byMv[k].tr.length);
+      const mvShown = ["with", "against", "flat"].concat(byMv.none.sr.length || byMv.none.tr.length ? ["none"] : []);
+      const head = first => '<thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">' + first + '</th><th class="pr-3">Alerts graded</th><th class="pr-3">Alert result</th><th class="pr-3">Alerts</th><th class="pr-3">My trades</th><th class="pr-3">My P&amp;L</th><th>Me</th></tr></thead>';
       return '<div class="xl:pt-0 pt-3 xl:border-0 border-t border-terminal-border"><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Alerts and your trades by market day' + (ctx.scope ? ' <span class="text-slate-500 normal-case font-normal">· ' + esc(ctx.scope) + '</span>' : '') + '</div>'
-        + '<div class="overflow-x-auto"><table class="w-full text-left text-[11px] font-mono"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">BTC day</th><th class="pr-3">Alerts graded</th><th class="pr-3">Alert result</th><th class="pr-3">Alerts</th><th class="pr-3">My trades</th><th class="pr-3">My P&amp;L</th><th>Me</th></tr></thead><tbody>'
-        + shown.map(row).join('') + '</tbody></table></div>'
-        + '<p class="text-[10px] text-slate-500 mt-1">Each alert, and each trade by when it opened, is filed under its day\'s market as it stood at 05:30 IST, before anything that day happened. Good = average result above zero on those days; needs 3 or more to judge. Click a row, or a BTC day button at the top, to show only those days everywhere on this tab.</p></div>';
+        + '<div class="overflow-x-auto"><table class="w-full text-left text-[11px] font-mono">' + head('BTC day') + '<tbody>'
+        + shown.map(k => row(k, false)).join('') + '</tbody></table></div>'
+        + '<p class="text-[10px] text-slate-500 mt-1">Each alert, and each trade by when it opened, is filed under its day\'s market as it stood at 05:30 IST, before anything that day happened. Good = average result above zero on those days; needs 3 or more to judge. Click a row, or a BTC day button at the top, to show only those days everywhere on this tab.</p>'
+        + (!mvCache().c.length ? '<p id="' + hostId + 'MvLoad" class="text-[10px] text-slate-500 mt-2">' + (mvLoading ? 'Loading BTC 15m prices…' : (mvErr ? esc(mvErr) + ' ' : '') + '<button type="button" class="text-amber-300 hover:underline" onclick="mvFailedAt = 0; mvFetch().then(() => { const c = mktCtx[\'' + hostId + '\']; if (c && c.rerender) c.rerender(); else renderMarketCalendar(\'' + hostId + '\'); })">Show by BTC move at entry</button> (loads BTC\'s 15m prices, about 20 reads)') + '</p>' : '')
+        + (mvOn ? '<div class="overflow-x-auto mt-3"><table id="' + hostId + 'Mv" class="w-full text-left text-[11px] font-mono">' + head('BTC move at entry') + '<tbody>'
+          + mvShown.map(k => row(k, true)).join('') + '</tbody></table></div>'
+          + '<p class="text-[10px] text-slate-500 mt-1">BTC move = where BTC was when the alert fired or the trade opened, against its 05:30 IST open (last closed 15m candle): ' + MV_PCT + '%+ up or down is a move, else flat. With BTC = a long on a move up or a short on a move down. Click a row, or a BTC move button, to filter the tab.</p>' : '')
+        + '</div>';
     }
     // Clicking a calendar day shows that day hour by hour below; clicking it again goes back.
     function mktPickDay(hostId, ds) {
@@ -13781,6 +13808,127 @@
       save(); renderMarketCalendar(hostId);
     }
     const MKT_TONE = { bull: ["bg-emerald-950/40", "border-emerald-700/60", "text-emerald-400"], bear: ["bg-rose-950/40", "border-rose-700/60", "text-rose-400"], side: ["bg-slate-800/40", "border-slate-700", "text-slate-300"] };
+    // BTC move at entry (lakky, 2026-11-21: "bullish and bearish when btc current price in 1.5% up or
+    // down and if not that sideways"). Where BTC stood when an alert fired or a trade opened, against
+    // its day's open (05:30 IST, Delta's daily candle): up 1.5% or more is a bullish move, down 1.5%
+    // or more bearish, else flat. The price is the close of the last 15m candle that had closed by
+    // then, so nothing after the entry is read. With BTC = a long on a bullish move or a short on a
+    // bearish one, Against BTC = the other way. Tested on 6,497 graded crypto alerts (1 Jan - 8 Nov
+    // 2026, R before fees): with +0.02R a trade (655), against -0.22R (742), flat -0.10R (78%); the
+    // split held in both halves of the year. The BTC day row (trend going in) stays as it is.
+    const MV_PCT = 1.5, MV_KEY = "tapeAndTarget.btcMove15m", MV_STEP = 900, MV_PAGE = 1800;
+    const MV_LABEL = { with: "With BTC", against: "Against BTC", flat: "BTC flat" };
+    const MV_TONE = { with: MKT_TONE.bull, against: MKT_TONE.bear, flat: MKT_TONE.side };
+    let mvC = null, mvLoading = false, mvErr = "", mvFailedAt = 0;
+    // { t0: first candle's open (s), c: closes every 15m from t0 (0 = no candle), fetchedAt }
+    function mvCache() {
+      if (!mvC) { try { mvC = JSON.parse(localStorage.getItem(MV_KEY) || "null"); } catch (e) { mvC = null; } }
+      if (!mvC || typeof mvC !== "object" || !(mvC.t0 > 0) || !Array.isArray(mvC.c)) mvC = { t0: 0, c: [], fetchedAt: 0 };
+      return mvC;
+    }
+    function mvNeedsFetch() {
+      if (mvLoading || (mvFailedAt && Date.now() - mvFailedAt < 60000)) return false;
+      const c = mvCache();
+      return !c.c.length || Date.now() - (c.fetchedAt || 0) > 15 * 60000;
+    }
+    // From the last candle kept (it may have been forming) to now, a page of 1800 candles at a time;
+    // the first time, as far back as the daily candles go. Each page is kept as it lands.
+    function mvFetch() {
+      if (mvLoading) return Promise.resolve();
+      mvLoading = true; mvErr = "";
+      const c = mvCache(), now = Math.floor(Date.now() / 1000);
+      const first = Math.floor((now - MKT_LOOKBACK_DAYS * 86400) / MV_STEP) * MV_STEP;
+      if (!c.c.length || c.t0 > first + 86400) { c.t0 = first; c.c = []; }
+      else if (c.t0 < first) { c.c = c.c.slice((first - c.t0) / MV_STEP); c.t0 = first; }
+      let from = c.t0 + Math.max(0, c.c.length - 1) * MV_STEP;
+      const page = () => {
+        if (from > now) return Promise.resolve();
+        const to = Math.min(now, from + MV_PAGE * MV_STEP);
+        return fetch(DELTA_BASE + "/v2/history/candles?resolution=15m&symbol=" + MKT_SYMBOL + "&start=" + from + "&end=" + to)
+          .then(res => res.json())
+          .then(j => {
+            if (!j || j.success !== true || !Array.isArray(j.result)) throw new Error("bad response");
+            j.result.forEach(k => {
+              const i = (k.time - c.t0) / MV_STEP;
+              if (i >= 0 && i === Math.floor(i) && k.close > 0) { while (c.c.length < i) c.c.push(0); c.c[i] = +(+k.close).toFixed(2); }
+            });
+            try { localStorage.setItem(MV_KEY, JSON.stringify(c)); } catch (e) {}
+            from = to + MV_STEP;
+            return page();
+          });
+      };
+      return page()
+        .then(() => { c.fetchedAt = Date.now(); mvFailedAt = 0; try { localStorage.setItem(MV_KEY, JSON.stringify(c)); } catch (e) {} })
+        .catch(e => { mvFailedAt = Date.now(); mvErr = "Could not load BTC 15m prices (" + (e.message || e) + ")."; })
+        .finally(() => { mvLoading = false; });
+    }
+    // BTC's price at ms: the close of the last 15m candle closed by then (a gap of up to an hour is bridged).
+    function mvPriceAt(ms) {
+      const c = mvCache();
+      if (!c.c.length || !isFinite(ms)) return null;
+      const i = Math.floor((ms / 1000 - c.t0) / MV_STEP) - 1;
+      if (i < 0 || i >= c.c.length) return null;
+      for (let j = i; j >= 0 && j > i - 4; j--) if (c.c[j] > 0) return c.c[j];
+      return null;
+    }
+    // { pct, bias } of BTC at ms against its day's open, or null with no candles for it.
+    function mvAt(ms) {
+      const p = mvPriceAt(ms);
+      if (!p) return null;
+      const b = mktCache().byDate[utcDay(ms)];
+      if (!b || !(b.o > 0)) return null;
+      const pct = (p - b.o) / b.o * 100;
+      return { pct, bias: pct >= MV_PCT ? "bull" : pct <= -MV_PCT ? "bear" : "side" };
+    }
+    // "with", "against" or "flat" for a long / short at ms; null with no BTC data.
+    function mvRel(ms, side) {
+      const m = mvAt(ms);
+      if (!m) return null;
+      if (m.bias === "side") return "flat";
+      return (m.bias === "bull") === (side !== "short") ? "with" : "against";
+    }
+    function mvOfSig(sig) { return mvRel(tgtAlertMs(sig), sig.side === "short" ? "short" : "long"); }
+    // A trade by when it opened (a broker-report trade's own date is its close).
+    function mvOfTrade(t) { const o = t.orig || t; return mvRel(istMs(o.openDate || o.date, String(o.openTime || o.time || "").slice(0, 5)), t.direction || o.direction); }
+    function mvFilter() { return ["with", "against", "flat"].indexOf(state.ui.mvFilter) !== -1 ? state.ui.mvFilter : ""; }
+    // Both BTC rows at once: the BTC day (trend going in) and the BTC move at entry.
+    function mktPassSig(sig) { const mf = mktFilter(), mv = mvFilter(); return (!mf || mktBiasOn(sig.date, sig.time) === mf) && (!mv || mvOfSig(sig) === mv); }
+    function mktPassTrade(t) { const mf = mktFilter(), mv = mvFilter(); return (!mf || mktBiasOfTrade(t) === mf) && (!mv || mvOfTrade(t) === mv); }
+    function mktFiltersOn() { return !!(mktFilter() || mvFilter()); }
+    function mvHint() { return mvFilter() ? MV_LABEL[mvFilter()] + " at entry" : ""; }
+    function setMvFilter(hostId, v) {
+      state.ui.mvFilter = mvFilter() === v ? "" : v;
+      sigVisible = SIG_PAGE; anVisible = AN_PAGE;
+      save();
+      const c = mktCtx[hostId];
+      if (c && c.rerender) c.rerender(); else renderMarketCalendar(hostId);
+    }
+    // Loads the 15m prices when something on the tab reads them, then redraws the tab.
+    function mvLoadFor(redraw, wanted) {
+      if (wanted && mvNeedsFetch()) mvFetch().then(redraw);
+    }
+    function renderMvFilterBar(barId, hostId) {
+      const bar = document.getElementById(barId);
+      if (!bar) return;
+      const mv = mvFilter();
+      bar.className = 'flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+      bar.title = "Where BTC was when the alert fired or the trade opened, against its 05:30 IST open: up or down " + MV_PCT + "%+ is a move, else flat. With BTC = a long on a move up or a short on a move down.";
+      bar.innerHTML = '';
+      [["", "All"], ["with", "With BTC"], ["against", "Against BTC"], ["flat", "BTC flat"]].forEach(([v, l]) => {
+        const b = document.createElement('button'); b.type = 'button';
+        b.setAttribute('data-mv', v);
+        b.className = 'px-2.5 py-1 rounded-md font-semibold transition-all ' + (mv === v ? (v ? MV_TONE[v][0] + ' border ' + MV_TONE[v][1] + ' ' + MV_TONE[v][2] : 'bg-terminal-card border border-terminal-borderLight text-amber-400') : 'text-slate-400 hover:text-white');
+        b.innerText = l;
+        b.onclick = () => setMvFilter(hostId, mv === v ? "" : v);
+        bar.appendChild(b);
+      });
+      if (mv && (mvLoading || mvErr || !mvCache().c.length)) {
+        const s = document.createElement('span');
+        s.className = 'px-1.5 text-[10px] ' + (mvErr ? 'text-rose-300' : 'text-slate-500');
+        s.innerText = mvLoading ? 'loading BTC 15m prices…' : mvErr ? mvErr : 'no BTC 15m prices yet';
+        bar.appendChild(s);
+      }
+    }
     const MKT_LABEL = { bull: "Bullish", bear: "Bearish", side: "Sideways" };
     // Shared by the Signals and Analysis tabs: same data, same month, same click behaviour.
     function renderMarketCalendar(hostId, ctxIn) {
@@ -13791,6 +13939,7 @@
       // When the candles arrive, redraw the whole tab so a market filter applies straight away.
       const redraw = () => { const c = mktCtx[hostId]; if (c && c.rerender) c.rerender(); else renderMarketCalendar(hostId); };
       if (mktNeedsFetch() && !mktLoading) { mktFetch().then(redraw); }
+      mvLoadFor(redraw, mvCache().c.length > 0); // keeps the BTC move table fresh once its prices were loaded
       const mk = mktMonth();
       const [Y, M] = mk.split('-').map(Number);
       const lead = (new Date(Y, M - 1, 1).getDay() + 6) % 7, dim = new Date(Y, M, 0).getDate();
@@ -16370,6 +16519,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-21.204', pr: 117, title: 'BTC move filter (your ±1.5% rule)', pts: ['Signals and Analysis: new BTC move row: With BTC / Against BTC / BTC flat. It reads where BTC was when the alert fired or the trade opened, against its 05:30 IST open: up or down 1.5% or more is a move, else flat (last closed 15m candle, no hindsight)', 'Tested on 6,497 graded crypto alerts (1 Jan - 8 Nov): with BTC +0.02R a trade, against BTC -0.22R, flat -0.10R. Market days shows the same table for your alerts and trades', 'Also in Results by, What to cut and Best settings. The BTC day row (trend going in) stays as it was'] },
       { v: '2026-11-21.203', pr: 116, title: 'Sideways market fixed, numbers checked', pts: ['BTC day (Bullish / Bearish / Sideways) is now the market as it stood at 05:30 IST, from closed candles only: 20-day EMA + daily range (ATR), not the day\'s own close, which was only known after your trade (hindsight)', 'Auto trades take the stop the bot really placed: AVAX read +13R on an alert stop, now +0.68R; ENA gets its -1.02R', 'Checked on your real data: P&L, R, fees, ₹/$ totals, days and Auto/Manual all match a recount by hand. A clicked day\'s hours now run 05:30 to 05:30 like its candle'] },
       { v: '2026-11-21.202', pr: 115, title: 'Trendline Type: Touches and Breaks', pts: ['Signals → Trendline alerts → Type has two new choices: Touches (both touch types) and Breaks (SP TL BR + RS TL BR together), so the live bot\'s breaks only shows in one view', 'Checked against an independent retest on real Delta candles: 1D crypto breaks 1 Jun - 21 Nov, all 210 alerts the same R (202 closed, +0.29R a trade)'] },
       { v: '2026-11-21.201', pr: 114, title: 'Trades tagged Auto or Manual', pts: ['Every trade now shows AUTO (placed by the live bot) or MANUAL (placed by you), past ones too: found from the bot\'s own order log in your sync repo', 'Analysis → Which trades: new Placed by row (All / Auto / Manual) narrows every number, table and the broker report; the Dashboard trade list has the same filter', 'Wrong tag? Open the trade and tap Auto or Manual under Placed by'] },
