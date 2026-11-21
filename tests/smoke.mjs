@@ -472,11 +472,11 @@ async function backtestRun(seed) {
     // Its Review button opens the same Trade Inspector a journal trade does; Edit Trade there opens the form.
     await page.click('#btBody [data-repreview]');
     const insp = await page.evaluate(() => ({ open: !document.getElementById('tradeInspectorDrawer').classList.contains('translate-x-full'), del: document.getElementById('inspDelBtn').innerText,
-      rows: document.querySelectorAll('#inspChecklist button:not([data-setup])').length, tags: document.querySelectorAll('#inspTagsMistake button').length, id: activeInspectTrade && activeInspectTrade.id }));
+      rows: document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])').length, tags: document.querySelectorAll('#inspTagsMistake button').length, id: activeInspectTrade && activeInspectTrade.id }));
     check(insp.open && insp.del === 'Report rows' && insp.rows === 5 && insp.tags > 5 && insp.id === btnId, 'report trade inspector: ' + JSON.stringify(insp));
-    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // tap: Risk within limit on
+    await page.click('#inspChecklist button:not([data-setup]):not([data-inspby]):nth-of-type(2)'); // tap: Risk within limit on
     check(await page.evaluate(id => JSON.stringify(state.repReviews[id].rules), btnId) === '[false,true,false,false,false]', 'tapping a rule on a report trade did not save');
-    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // and off again
+    await page.click('#inspChecklist button:not([data-setup]):not([data-inspby]):nth-of-type(2)'); // and off again
     await page.evaluate(() => editActiveTrade());
     await page.waitForSelector('#modalSheet:not(.hidden)');
     await page.check('#mRule0'); await page.check('#mRule2');
@@ -1331,7 +1331,9 @@ async function cdxSizeRun(seed) {
       check((r.flags.indexOf('oversize') !== -1) === (w.x != null && w.x > 1), w.id + ' oversize flag: ' + r.flags.join());
     }
     const line = id => v.table.find(r => r[1] === id + 'X/USDT') || [];
-    check(line('L')[2] === 'LONG' && line('S')[2] === 'SHORT' && line('U')[2] === 'REPORT', 'side column: ' + JSON.stringify(v.table.map(r => r.slice(1, 3))));
+    // The side pill, then the Auto / Manual tag (no live bot here: all Manual).
+    const side = id => String(line(id)[2] || '').split(/\s+/);
+    check(side('L').join(' ') === 'LONG MANUAL' && side('S').join(' ') === 'SHORT MANUAL' && side('U').join(' ') === 'REPORT MANUAL', 'side column: ' + JSON.stringify(v.table.map(r => r.slice(1, 3))));
     check(line('L')[4] === '₹10,000.00' && line('U')[4] === '—' && line('U')[5] === '—', 'position column: ' + JSON.stringify(v.table.map(r => r.slice(1, 6))));
     check(/(^| \| )TRADES CHECKED 4 \|/i.test(v.strip), 'headline: ' + v.strip);
     check(v.onePair === 1, 'pair filter in the analysis: ' + v.onePair + ' rows');
@@ -1375,10 +1377,10 @@ async function reviewRun(seed) {
     await page.goto(base, { waitUntil: 'load' });
     await page.waitForTimeout(300);
     await page.evaluate(() => openInspector(allTrades().find(t => t.id === 'tr1')));
-    const rows = () => page.evaluate(() => [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' ')));
+    const rows = () => page.evaluate(() => [...document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])')].map(b => b.innerText.replace(/\s+/g, ' ')));
     const before = await rows();
-    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(2)'); // Risk within limit: missed -> kept
-    await page.click('#inspChecklist button:not([data-setup]):nth-of-type(1)'); // Traded a planned setup: kept -> missed
+    await page.click('#inspChecklist button:not([data-setup]):not([data-inspby]):nth-of-type(2)'); // Risk within limit: missed -> kept
+    await page.click('#inspChecklist button:not([data-setup]):not([data-inspby]):nth-of-type(1)'); // Traded a planned setup: kept -> missed
     await page.click('#inspTagsPositive button:has-text("Trailed Stop Loss")');
     await page.click('#inspTagsMistake button:has-text("FOMO Entry")');
     await page.click('#inspChecklist button:has-text("Volume spike")');
@@ -3647,7 +3649,7 @@ async function cleanupRun(seed) {
       // Inspector: setup chips and the FIB checklist with L4 ticked.
       openInspector(allTrades().find(t => t.id === 'tf1'));
       out.chips = [...document.querySelectorAll('#inspChecklist [data-setup]')].map(b => b.textContent);
-      out.rows = [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' '));
+      out.rows = [...document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])')].map(b => b.innerText.replace(/\s+/g, ' '));
       out.rTxt = document.getElementById('inspR').innerText;
       document.querySelector('#inspChecklist [data-setup="None"]').click();
       out.afterNone = { setup: state.trades.find(t => t.id === 'tf1').setup, pr: state.trades.find(t => t.id === 'tf1').playRules || null };
@@ -3777,8 +3779,8 @@ async function setupLevelRun(seed) {
       out.cov = document.getElementById('playCoverage').innerText;
       // The inspector: one level at a time, and a level tapped by hand is yours.
       openInspector(allTrades().find(t => t.id === 'a1'));
-      out.rows0 = [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].map(b => b.innerText.replace(/\s+/g, ' ')).slice(-4);
-      [...document.querySelectorAll('#inspChecklist button:not([data-setup])')].find(b => /RESISTANCE/.test(b.innerText) && !/BROKEN/.test(b.innerText)).click();
+      out.rows0 = [...document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])')].map(b => b.innerText.replace(/\s+/g, ' ')).slice(-4);
+      [...document.querySelectorAll('#inspChecklist button:not([data-setup]):not([data-inspby])')].find(b => /RESISTANCE/.test(b.innerText) && !/BROKEN/.test(b.innerText)).click();
       out.after = one('a1');
       alertFillKey = ''; fillFromAlerts();
       out.kept = one('a1');
