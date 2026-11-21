@@ -14,6 +14,10 @@
 // is kept in journal.json as `deltaImport`, with the reason when a run fails,
 // which the journal's Delta card shows. The wallet figure goes in
 // `deltaBalance`, the field the journal already shares between devices.
+// Money moved in or out of the wallet (deposits, withdrawals, transfers) goes
+// into the journal's money in / out list (`withdrawals`, a deposit marked
+// kind "deposit"), dated by Delta, so the wallet is the balance and Return and
+// past balances know when it changed (lakky, 21 Nov: "make the wallet balance main").
 //
 // Environment (GitHub sets the ones marked *):
 //   DELTA_API_KEY, DELTA_API_SECRET       the repo's Actions secrets (a Read Data key)
@@ -166,6 +170,35 @@ function parseDeltaBalance(body) {
   return null;
 }
 
+// Wallet transactions that are money in or out, not trading: trade P&L ("cashflow"),
+// fees, funding and credits stay out (the trades already carry them).
+const MOVE_RE = /deposit|withdraw|transfer/i;
+const NOT_MOVE_RE = /fee|commission|funding|cashflow|credit|rebate|bonus|interest|stake|conversion|settlement|liquidation|spot/i;
+const MOVE_PAGE = 100, MOVE_MAX_PAGES = 40;
+function isMove(x) {
+  const t = String((x && x.transaction_type) || '');
+  const asset = String((x && (x.asset_symbol || (x.asset && x.asset.symbol))) || 'USD');
+  return MOVE_RE.test(t) && !NOT_MOVE_RE.test(t) && /^(USD|USDT|USDC)$/i.test(asset) && isFinite(parseFloat(x.amount)) && parseFloat(x.amount) !== 0 && txId(x) !== '';
+}
+// A move as the journal keeps it: money out is a withdrawal, money in a deposit.
+// Moves count from when the book's starting balance was set, which already holds the money before:
+// the book's startAt, else when it was last saved. Kept once chosen, so a later edit does not move it.
+function movesFromOf(data, account) {
+  const d = data.deltaImport;
+  if (d && typeof d === 'object' && typeof d.movesFrom === 'string') return d.movesFrom;
+  const s = account && (account.startAt || account.updatedAt);
+  return s && isFinite(Date.parse(s)) ? new Date(Date.parse(s)).toISOString() : '';
+}
+// Delta's wallet rows carry a uuid (no numeric id).
+function txId(x) { const v = x && (x.uuid != null ? x.uuid : x.id); return v == null ? '' : String(v).replace(/[^\w-]/g, '').slice(0, 37); }
+function moveEntry(x, account, at) {
+  const amt = parseFloat(x.amount), when = Date.parse(x.created_at), id = txId(x);
+  const o = { id: 'dtx' + id, accountId: account.id, date: localParts(when).day, amount: +Math.abs(amt).toFixed(8),
+    note: 'Delta ' + String(x.transaction_type).replace(/_/g, ' ').slice(0, 60), src: 'delta:tx:' + id, updatedAt: at };
+  if (amt > 0) o.kind = 'deposit';
+  return o;
+}
+
 // ---- Delta ----
 // Every private call is signed: HMAC-SHA256 (hex) of method + timestamp + path + query.
 async function deltaCall(path, query = '', signed = true) {
@@ -198,6 +231,20 @@ async function fetchFills(startMicros) {
     fills = fills.concat(rows);
     after = body.meta && body.meta.after;
     if (!(after && rows.length && pages < MAX_PAGES)) return { fills, capped: pages >= MAX_PAGES && !!after };
+  }
+}
+// Wallet transactions, newest first, back to `sinceMs` (a day's overlap is read again and
+// matched by id); the first run reads the whole history once.
+async function fetchMoves(sinceMs) {
+  let rows = [], after = null, pages = 0;
+  for (;;) {
+    pages++;
+    const body = await deltaCall('/v2/wallet/transactions', 'page_size=' + MOVE_PAGE + (after ? '&after=' + after : ''));
+    const r = Array.isArray(body.result) ? body.result : [];
+    rows = rows.concat(r);
+    after = body.meta && body.meta.after;
+    const oldest = r.reduce((m, x) => { const t = Date.parse(x && x.created_at); return isFinite(t) && t < m ? t : m; }, Infinity);
+    if (!(after && r.length && pages < MOVE_MAX_PAGES) || (sinceMs && oldest < sinceMs - 864e5)) return rows;
   }
 }
 // A fill's size is in contracts; each perpetual has its own contract value. Public, unsigned.
@@ -301,7 +348,7 @@ function resumeOf(data) {
 }
 // Adds what this run found: new trades (each tag once), where it left off, the
 // reason it failed, the wallet figure. Nothing changes when nothing moved.
-function apply(data, got, note, balance) {
+function apply(data, got, note, balance, moves) {
   const was = data.deltaImport && typeof data.deltaImport === 'object' ? data.deltaImport : null;
   const { seen } = known(data);
   const fresh = got ? got.trades.filter(t => !seen[t.src]) : [];
@@ -312,16 +359,25 @@ function apply(data, got, note, balance) {
     openPositions: got && !got.capped ? got.open : (was && was.openPositions) || {}
   };
   if (note) next.note = note;
-  const moved = !was || was.lastFillTime !== next.lastFillTime || JSON.stringify(was.openPositions || {}) !== JSON.stringify(next.openPositions) || (was.note || '') !== (note || '');
+  // Money in / out from the wallet: each Delta transaction once, never one deleted in the journal.
+  const have = {}, tomb = data.tombstones || {};
+  (Array.isArray(data.withdrawals) ? data.withdrawals : []).forEach(w => { if (w && w.src) have[w.src] = 1; if (w && w.id) have['id:' + w.id] = 1; });
+  const newMoves = (moves && moves.list || []).filter(w => !have[w.src] && !have['id:' + w.id] && !tomb['withdrawals:' + w.id]);
+  const moveAt = moves && moves.newest > ((was && was.lastMoveAt) || 0) ? moves.newest : (was && was.lastMoveAt) || 0;
+  if (moveAt) next.lastMoveAt = moveAt;
+  const from = moves && typeof moves.from === 'string' ? moves.from : was && typeof was.movesFrom === 'string' ? was.movesFrom : null;
+  if (from !== null) next.movesFrom = from;
+  const moved = !was || (was.lastMoveAt || 0) !== (next.lastMoveAt || 0) || (was.movesFrom || '') !== (next.movesFrom || '') || was.lastFillTime !== next.lastFillTime || JSON.stringify(was.openPositions || {}) !== JSON.stringify(next.openPositions) || (was.note || '') !== (note || '');
   const old = data.deltaBalance && typeof data.deltaBalance === 'object' ? data.deltaBalance : null;
   const balMoved = !!balance && (!old || Math.abs(old.value - balance.value) >= 0.005 || Date.now() - (old.at || 0) >= BAL_HOLD_MS);
-  if (!fresh.length && !tag.length && !moved && !balMoved) return { changed: false, added: 0 };
+  if (!fresh.length && !tag.length && !moved && !balMoved && !newMoves.length) return { changed: false, added: 0 };
+  if (newMoves.length) data.withdrawals = (Array.isArray(data.withdrawals) ? data.withdrawals : []).concat(newMoves);
   tag.forEach(([t, src]) => { t.src = src; t.updatedAt = at; });
   if (fresh.length) data.trades = (Array.isArray(data.trades) ? data.trades : []).concat(fresh.map(t => Object.assign(t, { updatedAt: at })));
   // The balance before the record: the order the journal writes them in, so its sync has nothing to redo.
   if (balMoved) data.deltaBalance = { value: balance.value, field: balance.field, at: Date.now() };
   if (fresh.length || moved || tag.length) data.deltaImport = Object.assign(next, { updatedAt: at });
-  return { changed: true, added: fresh.length, tagged: tag.length, noteMoved: !!was && (was.note || '') !== (note || ''), balMoved };
+  return { changed: true, added: fresh.length, tagged: tag.length, noteMoved: !!was && (was.note || '') !== (note || ''), balMoved, moves: newMoves.length };
 }
 
 function report(text, bad) {
@@ -358,6 +414,12 @@ async function main() {
     failed = deltaWhy(r, await refusedIp(r));
   }
   if (got) { try { balance = parseDeltaBalance(await deltaCall('/v2/wallet/balances')); if (!balance) balWhy = 'an answer with no balance in it'; } catch (r) { balWhy = deltaWhy(r, ''); } }
+  // Money in / out of the wallet since the last run (a refusal here only skips it this run).
+  let moveRows = null, moveWhy = '';
+  if (got) {
+    const since = data.deltaImport && data.deltaImport.lastMoveAt > 0 ? data.deltaImport.lastMoveAt : 0;
+    try { moveRows = await fetchMoves(since); } catch (r) { if (r instanceof Error) throw r; moveWhy = deltaWhy(r, ''); }
+  }
   const note = failed ? failed.slice(0, 300) : null;
 
   let res, built = null;
@@ -368,10 +430,15 @@ async function main() {
       const b = fillsToTrades(got.fills, deltaAccount(data) || account, k.seen, k.existingByKey, got.cv, got.resume);
       built = { trades: b.trades, matched: b.matched, open: b.open, skipped: b.skipped, capped: got.capped, lastFillTime: got.maxT || 0 };
     }
-    res = apply(data, built, note, balance);
+    let moves = null;
+    if (moveRows) {
+      const acc = deltaAccount(data) || account, at = new Date().toISOString(), from = movesFromOf(data, acc), fromMs = from ? Date.parse(from) : 0;
+      moves = { from, list: moveRows.filter(x => isMove(x) && Date.parse(x.created_at) >= fromMs).map(x => moveEntry(x, acc, at)), newest: moveRows.reduce((m, x) => { const t = Date.parse(x && x.created_at); return isFinite(t) && t > m ? t : m; }, 0) };
+    }
+    res = apply(data, built, note, balance, moves);
     if (!res.changed) break;
     data.savedAt = new Date().toISOString();
-    const message = res.added ? `Delta: ${res.added} new trade${res.added === 1 ? '' : 's'}` : res.tagged ? 'Delta: trades logged by hand matched' : failed ? 'Delta import failed' : res.noteMoved ? 'Delta import working again' : res.balMoved ? 'Delta balance' : 'Delta import position';
+    const message = res.added ? `Delta: ${res.added} new trade${res.added === 1 ? '' : 's'}` : res.moves ? `Delta: ${res.moves} deposit${res.moves === 1 ? '' : 's'} / withdrawal${res.moves === 1 ? '' : 's'}` : res.tagged ? 'Delta: trades logged by hand matched' : failed ? 'Delta import failed' : res.noteMoved ? 'Delta import working again' : res.balMoved ? 'Delta balance' : 'Delta import position';
     if (await writeJournal(data, sha, message)) break;
     if (attempt >= 4) throw new Error(`${SYNC_PATH} kept changing while saving; the next run tries again.`);
     ({ data, sha } = await readJournal());
@@ -382,6 +449,8 @@ async function main() {
   msg += ` · ${got.fills.length} fill${got.fills.length === 1 ? '' : 's'} read`;
   if (got.capped) msg += ' · stopped at the 12,000-fill read cap; the next run reads the same window again';
   if (built.skipped.length) msg += ` · skipped ${built.skipped.join(', ')} (Delta gave no contract size)`;
+  if (res.moves) msg += ` · ${res.moves} deposit${res.moves === 1 ? '' : 's'} / withdrawal${res.moves === 1 ? '' : 's'} added`;
+  else if (moveWhy) msg += ` · deposits / withdrawals not read (${moveWhy.replace(/\.$/, '')})`;
   if (balance) msg += ` · balance ${balance.value} (${balance.field})`;
   else if (balWhy) msg += ` · balance not read (${balWhy.replace(/\.$/, '')})`;
   report(msg, false);
