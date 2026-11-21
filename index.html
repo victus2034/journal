@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-21.205">
+  <meta name="app-version" content="2026-11-22.206">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -35,6 +35,14 @@
       .top-nav button{padding-left:.4rem;padding-right:.4rem}
       /* The balance tag is a date and time now ("14 Nov, 2:57 PM"), a little longer than LAST KNOWN: tighter padding keeps the header as wide as it was. */
       .hdr-balbox{padding-left:.45rem;padding-right:.45rem}
+    }
+    /* iPad portrait (640-1023px): one line can't hold the brand, the book switcher and the tabs
+       (the tabs slid over the version pill and the books shrank to 10px), so the header takes two:
+       brand and books, then tabs, theme and balance. */
+    @media (min-width:640px) and (max-width:1023px){
+      .hdr-row{flex-wrap:wrap;row-gap:.5rem}
+      .hdr-left{flex:1 1 100%}
+      .hdr-right{flex:1 1 100%;justify-content:flex-end}
     }
     @media (min-width:1900px){ .hdr-bal{display:inline!important} }
     @media (max-width:639px){
@@ -771,7 +779,7 @@
               <summary class="px-2.5 py-1 text-xs font-mono bg-terminal-surface border border-terminal-border rounded hover:border-amber-500 cursor-pointer select-none text-slate-300">More ▾</summary>
               <div class="absolute right-0 z-40 mt-1 w-44 bg-terminal-card border border-terminal-border rounded-lg p-1 flex flex-col gap-1 shadow-subtle">
                 <button onclick="this.closest('details').open=false;openSignalImport()" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Paste signals</button>
-                <button onclick="this.closest('details').open=false;pcImportNow()" title="Run the CoinDCX and Delta imports now (they run on your PC)" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Import CoinDCX + Delta</button>
+                <button onclick="this.closest('details').open=false;pcImportNow()" title="Run the CoinDCX and Delta imports now (they run on your server)" class="px-2.5 py-1.5 text-xs font-mono text-left text-slate-200 rounded hover:bg-white/5">Import CoinDCX + Delta</button>
                 <button onclick="this.closest('details').open=false;deleteAllSignals()" class="px-2.5 py-1.5 text-xs font-mono text-left text-rose-400 rounded hover:bg-rose-500/10">Delete all signals</button>
               </div>
             </details>
@@ -1640,7 +1648,7 @@
             <div id="keysBox" class="pt-2 border-t border-terminal-border space-y-2"></div>
           </div>
 
-          <!-- Delta Exchange Import: a GitHub job on your PC (the IP the key is whitelisted for) imports for every device. No Delta key in the journal. -->
+          <!-- Delta Exchange Import: a GitHub job on your server (the IP the key is whitelisted for) imports for every device. No Delta key in the journal. -->
           <div class="bg-terminal-card border border-terminal-border rounded-xl p-4 space-y-3 font-mono text-xs">
             <div class="flex items-center justify-between border-b border-terminal-border pb-2">
               <div class="flex items-center gap-2">
@@ -1652,7 +1660,7 @@
             <div id="dxPcBox" class="space-y-2">
               <p id="dxPcStatus" class="text-slate-300 text-[11px] leading-relaxed"></p>
               <div class="flex flex-wrap items-center gap-2">
-                <button type="button" id="dxRunBtn" onclick="pcImportNow()" title="Ask GitHub to run the Delta and CoinDCX imports now. They run on your PC, so the PC must be on." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
+                <button type="button" id="dxRunBtn" onclick="pcImportNow()" title="Ask GitHub to run the Delta and CoinDCX imports now. They run on your server, one job at a time, so a run can wait a few minutes for the one ahead (the live bot's)." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
                 <a id="dxRunLink" href="#" target="_blank" rel="noopener" class="hidden text-[11px] text-sky-400 hover:underline">Open on GitHub</a>
                 <button type="button" onclick="undoDeltaFills()" class="px-3 py-1.5 text-rose-400 hover:bg-rose-500/10 rounded ml-auto">Undo Delta Trades</button>
                 <p id="dxRunStatus" class="w-full text-[11px] leading-relaxed text-slate-400"></p>
@@ -1660,7 +1668,7 @@
               <div id="dxPcSteps" class="space-y-2 text-[11px] leading-relaxed text-slate-300"></div>
             </div>
             <p class="text-slate-400 text-[11px] leading-relaxed">
-              Delta only answers a key from the IPs whitelisted on it, so your PC imports for every device: a job in your sync repo, run on the PC, reads Delta every 30 minutes and adds new trades and the wallet balance to the journal file. They arrive with each device's sync. The key lives only in GitHub's secrets, never in the journal.
+              Delta only answers a key from the IPs whitelisted on it, so your server imports for every device: a job in your sync repo, run on the server, reads Delta every 30 minutes and adds new trades and the wallet balance to the journal file. They arrive with each device's sync. The key lives only in GitHub's secrets, never in the journal.
             </p>
           </div>
 
@@ -1674,18 +1682,18 @@
               <span id="cdxStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">Not set up</span>
             </div>
             <p id="cdxStatus" class="text-slate-300 text-[11px] leading-relaxed"></p>
-            <!-- Start the import now, from any device: GitHub queues it and your PC runs it. -->
+            <!-- Start the import now, from any device: GitHub queues it and your server runs it. -->
             <div id="cdxRunRow" class="flex flex-wrap items-center gap-2">
-              <button type="button" id="cdxRunBtn" onclick="pcImportNow()" title="Ask GitHub to run the CoinDCX and Delta imports now. They run on your PC, so the PC must be on." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
+              <button type="button" id="cdxRunBtn" onclick="pcImportNow()" title="Ask GitHub to run the CoinDCX and Delta imports now. They run on your server, one job at a time, so a run can wait a few minutes for the one ahead (the live bot's)." class="px-3 py-1.5 bg-amber-500 text-black font-bold rounded hover:bg-amber-400">Import now</button>
               <a id="cdxRunLink" href="#" target="_blank" rel="noopener" class="hidden text-[11px] text-sky-400 hover:underline">Open on GitHub</a>
               <p id="cdxRunStatus" class="w-full text-[11px] leading-relaxed text-slate-400"></p>
             </div>
             <p class="text-slate-400 text-[11px] leading-relaxed">
-              CoinDCX doesn't answer web pages, so GitHub reads it for you: every hour a job in your sync repo, run on your PC, signs in with your key and adds new futures transactions (INR and USDT margined) to the journal file. They arrive with the next sync, in the CoinDCX book an uploaded report fills; rows a report already has count once.
+              CoinDCX doesn't answer web pages, so GitHub reads it for you: every hour a job in your sync repo, run on your server, signs in with your key and adds new futures transactions (INR and USDT margined) to the journal file. They arrive with the next sync, in the CoinDCX book an uploaded report fills; rows a report already has count once.
             </p>
             <div id="cdxSteps" class="space-y-2 text-[11px] leading-relaxed text-slate-300"></div>
             <p class="text-amber-300 text-[11px] leading-relaxed">
-              CoinDCX has no read-only keys, so this key can also place orders. Make a separate key just for the journal and keep it only in GitHub's secrets. CoinDCX locks every key to one IP address: make it for your PC's public IP (open api.ipify.org on the PC). When that IP changes, the card above names the new one.
+              CoinDCX has no read-only keys, so this key can also place orders. Make a separate key just for the journal and keep it only in GitHub's secrets. CoinDCX locks every key to one IP address: make it for your server's IP (it never changes). If CoinDCX refuses it, the card above names the IP the run came from.
             </p>
           </div>
 
@@ -1941,7 +1949,7 @@
           total += n;
           if (k === KEY || k === SAFE_KEY) parts.journal += n;
           else if (k === SIG_KEY) parts.alerts += n;
-          else if (k === "tapeAndTarget.mktHourly") parts.btc += n;
+          else if (k === "tapeAndTarget.mktHourly" || k === "tapeAndTarget.btcMove15m") parts.btc += n; // BTC hourly + 15m prices
           else parts.other += n;
         }
       } catch (e) { return null; }
@@ -1955,7 +1963,7 @@
       const warn = document.getElementById("storageWarn");
       if (!u) { if (line) line.innerText = ""; if (warn) warn.classList.add("hidden"); return; }
       const mb = n => (n / 1e6).toFixed(2);
-      const split = "journal " + mb(u.parts.journal) + (u.parts.alerts ? ", alerts " + mb(u.parts.alerts) : "") + ", BTC hourly cache " + mb(u.parts.btc) + ", other " + mb(u.parts.other);
+      const split = "journal " + mb(u.parts.journal) + (u.parts.alerts ? ", alerts " + mb(u.parts.alerts) : "") + ", BTC prices " + mb(u.parts.btc) + ", other " + mb(u.parts.other);
       if (line) line.innerText = "Browser storage used: " + mb(u.total) + " of about " + mb(STORAGE_LIMIT_CHARS) + " MB (" + Math.round(u.pct) + "%): " + split + "."
         + (u.parts.alerts ? "" : " Alerts (" + mb(u.idbAlerts) + " MB) are kept in a separate, much larger store and do not count here.");
       if (!warn) return;
@@ -3042,7 +3050,7 @@
             </select>
           </div>
           <div>
-            <label class="text-slate-400 block mb-1">From book</label>
+            <label class="text-slate-400 block mb-1">Book</label>
             <select id="wdAcc" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
               ${state.accounts.map(a => `<option value="${esc(a.id)}" ${a.id === defBook ? 'selected' : ''}>${esc(a.name)} (${esc(a.currency)})</option>`).join('')}
             </select>
@@ -3062,7 +3070,7 @@
             <input type="text" id="wdNote" placeholder="e.g. weekly payout to bank" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
           </div>
           <div>
-            <label class="text-slate-400 block mb-1">Withdrawals so far</label>
+            <label class="text-slate-400 block mb-1">Money in / out so far</label>
             <div id="wdList" class="space-y-1 max-h-48 overflow-y-auto">
               ${list.length ? list.map(w => `<div class="flex items-center justify-between gap-2 rounded bg-[#080D15] border border-terminal-border px-2.5 py-1.5 text-[11px]"${w.src ? ' data-wdauto="1"' : ''}><span class="text-slate-300">${esc(w.date)} · ${esc(acct(w.accountId).name)}${w.src ? ' · <span class="text-sky-300">from Delta</span>' : ''}${w.note ? ' · <span class="text-slate-500">' + esc(w.note) + '</span>' : ''}</span><span class="flex items-center gap-2"><span class="${w.kind === 'deposit' ? 'text-sky-300' : 'text-emerald-300'} font-bold">${w.kind === 'deposit' ? '+' : ''}${esc(money(w.amount, acct(w.accountId).currency))} ${w.kind === 'deposit' ? 'in' : 'out'}</span><button type="button" data-wdrm="${esc(w.id)}" title="Remove" class="text-rose-400 hover:text-rose-300">✕</button></span></div>`).join('') : '<div class="text-slate-500 text-[11px]">None logged yet.</div>'}
             </div>
@@ -5828,7 +5836,7 @@
 
       const assume = document.getElementById('anAssumptions');
       const book = isAll() ? (state.accounts.find(a => a.market === "crypto" && !a.reportBroker) || state.accounts[0] || {}) : acct(selected());
-      assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's and CoinDCX's wallets, read by your PC's imports). " : "Balances before each trade are your starting balance plus the trades before it; once your PC imports Delta, they're anchored to its wallet. ")
+      assume.innerText = (rows.anchored ? "Balances before each trade are rebuilt from your trades and anchored to the broker's balance today (Delta's and CoinDCX's wallets, read by your server's imports). " : "Balances before each trade are your starting balance plus the trades before it; once your server imports Delta, they're anchored to its wallet. ")
         + "Deposits and withdrawals count from their day (Delta's come in by themselves); funding can't be seen, so older balances are close estimates. "
         + "Auto = placed by the live bot: a trade one of its orders fits (its order log, coindcx_live_state.json in your sync repo: same broker, coin and side, opened between the order going in and the bot seeing the fill, closed by the time it saw the close, same size). Every other trade is Manual. Change one in its inspector. "
         + `Oversized means the stop would have cost more than ${book.maxRiskPct || 1}% of balance, or with no stop a position over ${book.maxNotionalX || 3}× balance. Change these in Settings → Books & rules → Trading Books.`
@@ -6016,7 +6024,7 @@
         const wordCls = fresh ? 'text-emerald-400' : 'text-amber-400';
         const wallet = !live && cdxWallet(a);
         const liveTitle = live ? 'Delta ' + esc(liveDeltaBalance.field) + ', ' + esc(deltaFetchedText())
-          + (fresh ? '' : ' — nothing newer since (is the PC on?); holding this last known figure') + '. Trades + logged money in / out: ' + esc(money(bookComputedBalance(a), a.currency))
+          + (fresh ? '' : ' — nothing newer since (is the server\'s import running?); holding this last known figure') + '. Trades + logged money in / out: ' + esc(money(bookComputedBalance(a), a.currency))
           : wallet ? esc(cdxWalletTitle(wallet)) + '. Trades + logged money in / out: ' + esc(money(bookComputedBalance(a), a.currency)) : 'Starting balance plus every logged trade.';
         // The wallet is the balance (lakky, 21 Nov: "make the wallet balance main"); what the trades and
         // logged money moves add up to is only a check, shown when it is off by more than 1%.
@@ -6026,7 +6034,7 @@
           ? `<div class="text-[10px] text-slate-500 mt-0.5" data-gap="${esc(a.id)}">The wallet is the balance. Your trades and logged money in / out add up to ${esc(money(comp, a.currency))}: the wallet has ${esc(money(Math.abs(gap), a.currency))} ${gap < 0 ? 'less' : 'more'}${live ? ' (funding, or money moved before the import could see it)' : ' (a deposit or withdrawal not logged)'}.</div>` : '';
         row.innerHTML = `
           <div>
-            <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${empty[a.id] ? ' <span class="text-[10px] font-normal text-slate-500" title="Not on the book bar until it has a trade or a starting balance">· hidden from the bar (empty)</span>' : ''}${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Delta wallet, from your PC\'s import' : 'Last known Delta wallet — nothing newer from your PC\'s import'}"></span>` : ''}</div>
+            <div class="text-white font-bold flex items-center gap-1.5">${esc(a.name)} <span class="text-slate-500 font-normal">${esc(a.currency)}</span>${empty[a.id] ? ' <span class="text-[10px] font-normal text-slate-500" title="Not on the book bar until it has a trade or a starting balance">· hidden from the bar (empty)</span>' : ''}${live ? `<span class="w-1.5 h-1.5 rounded-full ${dotCls}" title="${fresh ? 'Delta wallet, from your server\'s import' : 'Last known Delta wallet — nothing newer from your server\'s import'}"></span>` : ''}</div>
             <div class="text-[11px] text-slate-400">Balance <span class="text-slate-200" title="${liveTitle}">${money(bookBalance(a), a.currency)}</span>${a.currency !== viewCur() ? ` <span class="text-slate-500">(${money(balIn(a, viewCur()), viewCur())})</span>` : ''}${live ? ` <span class="${wordCls}">· ${fresh ? 'Delta wallet' : esc('Delta wallet from ' + (balTimeText(liveDeltaBalance.at) || 'before'))}</span>` : wallet ? (wallet.old ? ` <span class="text-amber-400">· CoinDCX wallet from ${esc(balTimeText(wallet.at) || 'before')} (import failing)</span>` : ` <span class="text-emerald-400">· CoinDCX wallet</span>`) : ''} · Rate <span class="text-slate-200" title="Rupees per dollar used to show this book in ₹ or $">₹${esc(cleanNum(fxRate(a)))}/$</span> · Daily loss limit <span class="text-slate-200">${a.dailyLossLimit > 0 ? money(a.dailyLossLimit, a.currency) : 'off'}</span> · Max risk <span class="text-slate-200">${esc(a.maxRiskPct || 1)}%</span></div>${gapLine}
           </div>
           <button data-id="${esc(a.id)}" onclick="openBookEditor(this.dataset.id)" class="px-3 py-1 rounded bg-terminal-card border border-terminal-borderLight hover:border-amber-500/50 text-slate-200 text-[11px]">Edit</button>`;
@@ -7346,6 +7354,11 @@
       const op = d.openPositions && typeof d.openPositions === "object" && !Array.isArray(d.openPositions) ? d.openPositions : {};
       Object.keys(op).slice(0, 500).forEach(k => { const v = Number(op[k]); if (v > 0) o.openPositions[cText(k, 40)] = v; });
       if (d.note) o.note = cText(d.note, 300);
+      // Where the wallet's money in / out was last read, and from when it counts (v.205). Dropped here
+      // until v.206, so every sync pushed them away and the next import wrote them back: a commit both
+      // ways on every run, and the import re-read the whole wallet history each time.
+      if (Number(d.lastMoveAt) > 0) o.lastMoveAt = Number(d.lastMoveAt);
+      if (typeof d.movesFrom === "string") o.movesFrom = cText(d.movesFrom, 40);
       if (typeof d.updatedAt === "string" && d.updatedAt) o.updatedAt = cText(d.updatedAt, 40);
       return o;
     }
@@ -8133,7 +8146,7 @@
       if (b && typeof b.value === "number" && (!liveDeltaBalance || b.at > liveDeltaBalance.at)) liveDeltaBalance = b;
     }
     // "fetched 10:42" on the device that asked Delta, "fetched 10:42 on another device" elsewhere.
-    function deltaFetchedText() { return "read " + new Date(liveDeltaBalance.at).toLocaleString() + " by your PC's import"; }
+    function deltaFetchedText() { return "read " + new Date(liveDeltaBalance.at).toLocaleString() + " by your server's import"; }
     function applyLiveBalance() {
       const valEl = document.getElementById('topBalVal');
       const tag = document.getElementById('topBalLive');
@@ -8170,7 +8183,7 @@
         const since = deltaIn ? "Delta " + liveDeltaBalance.field + ", " + deltaFetchedText() : "";
         const cdx = wallets.length ? cdxWalletTitle(wallets.find(w => w.old) || wallets[0]) : "";
         tag.title = (when ? (ok ? "Balance read " : "Nothing newer since ") + when + " (India time). " : "")
-          + [since + (deltaIn && !fresh ? " — nothing newer since (is the PC on?); holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
+          + [since + (deltaIn && !fresh ? " — nothing newer since (is the server's import running?); holding this last known figure" : ""), cdx].filter(Boolean).join(". ")
           + ". Journal-computed balance: " + money(lastComputedBalance.value, cur);
         if (chartEl) { chartEl.innerText = money(liveTotal, cur); chartEl.title = tag.title; }
       } else {
@@ -8185,7 +8198,7 @@
     function undoDeltaFills() {
       const n = state.trades.filter(t => t.src && t.src.startsWith('delta:')).length;
       if (!n) { toast("There are no Delta trades to remove"); return; }
-      if (!confirm(`Remove all ${n} trades imported from Delta? Stops, notes, tags and ratings you added to them are lost, on every synced device. Your PC's next Delta import brings the trades back without them.`)) return;
+      if (!confirm(`Remove all ${n} trades imported from Delta? Stops, notes, tags and ratings you added to them are lost, on every synced device. Your server's next Delta import brings the trades back without them.`)) return;
       const initialCount = state.trades.length;
       state.trades.filter(t => t.src && t.src.startsWith('delta:')).forEach(t => noteDeleted("trades", t.id));
       state.trades = state.trades.filter(t => !t.src || !t.src.startsWith('delta:'));
@@ -8286,7 +8299,7 @@
       }));
       save();
       renderCdxCard(); renderDxPc();
-      if (pcLive()) { toast("Import asked for: it runs on your PC. A note pops up here when it's done."); setTimeout(() => pcWatch(runs), 4e3); }
+      if (pcLive()) { toast("Import asked for: it runs on your server. A note pops up here when it's done."); setTimeout(() => pcWatch(runs), 4e3); }
       else toast(pcSummary());
     }
     async function pcWatch(runs) {
@@ -8335,16 +8348,16 @@
         ? `GitHub refused (${run.code}): give the sync token Actions: Read and write, then press Import now again.`
         : `GitHub couldn't start it (it answered ${run.code}). Try again in a minute.`;
       if (run.step === "asked") return "Asked GitHub at " + hm(run.asked) + "; waiting for the run to show up…";
-      if (run.step === "syncing") return "Done on your PC; bringing the trades in…";
+      if (run.step === "syncing") return "Done on your server; bringing the trades in…";
       if (run.step === "done") return run.conclusion !== "success"
-        ? (run.conclusion === "cancelled" ? "GitHub cancelled the run: the PC was off for a day, or a newer run took its place. Press Import now again." : "The run failed on your PC (" + (run.conclusion || "no result") + "). Open it on GitHub to see why.")
-        : !run.synced ? "Done on your PC. This device couldn't sync just now; the trades come in with the next sync."
+        ? (run.conclusion === "cancelled" ? "GitHub cancelled the run: a newer run took its place, or it waited a day. Press Import now again." : "The run failed on your server (" + (run.conclusion || "no result") + "). Open it on GitHub to see why.")
+        : !run.synced ? "Done on your server. This device couldn't sync just now; the trades come in with the next sync."
         : run.note ? "Ran at " + hm(run.at) + ", but " + job.name + " said no: " + run.note
         // The job stops before writing anything when its secrets are missing; GitHub still calls that run a success.
         : run.unset ? "Ran at " + hm(run.at) + ", but nothing reached the journal: " + job.name + " isn't set up on GitHub yet. Add the " + job.secrets + " secrets (steps below); if they're there, open the run to see why."
         : job.name + " import done · " + (run.added > 0 ? run.added + " new " + job.unit + (run.added === 1 ? "" : "s") : "nothing new") + ".";
-      if (run.status === "in_progress") return "Running on your PC…";
-      if (cdxRunWaiting(run.status)) return (run.live ? "Waiting" : "Still waiting") + " for your PC since " + hm(run.asked) + ": the import runs there. Turn the PC on (with internet); it starts by itself." + (run.live ? "" : " New trades come in with the next sync.");
+      if (run.status === "in_progress") return "Running on your server…";
+      if (cdxRunWaiting(run.status)) return (run.live ? "Waiting" : "Still waiting") + " in GitHub's queue since " + hm(run.asked) + ": your server runs one job at a time (the live bot's, the other import), and starts this one by itself when the one ahead ends." + (run.live ? "" : " New trades come in with the next sync.");
       return run.live ? "Waiting for GitHub…" : "No word from GitHub yet. New trades come in with the next sync once it has run.";
     }
     // Every import in a line, for the toast: one says it in full, two in short.
@@ -8363,8 +8376,8 @@
       if (run.step === "done") return run.conclusion !== "success" ? (run.conclusion === "cancelled" ? "cancelled by GitHub" : "run failed")
         : !run.synced ? "done, comes in with the next sync" : run.note ? "refused, see its card" : run.unset ? "not set up yet, see its card"
         : run.added > 0 ? run.added + " new " + job.unit + (run.added === 1 ? "" : "s") : "nothing new";
-      if (run.status === "in_progress") return "running on your PC";
-      if (cdxRunWaiting(run.status)) return (run.live ? "" : "still ") + "waiting for your PC";
+      if (run.status === "in_progress") return "running on your server";
+      if (cdxRunWaiting(run.status)) return (run.live ? "" : "still ") + "waiting in GitHub's queue";
       return run.live ? "asked" : "no word yet";
     }
     function renderPcRuns() {
@@ -8396,20 +8409,20 @@
         badge.className = "text-[10px] px-2 py-0.5 rounded " + (d && d.note ? "bg-rose-950/60 text-rose-300" : d ? "bg-slate-800 text-emerald-300" : "bg-slate-800 text-slate-300");
       }
       status.className = "text-[11px] leading-relaxed " + (d && d.note ? "text-rose-300" : "text-slate-300");
-      status.innerText = !repo ? "Connect GitHub Sync above first: your PC writes the trades into that repo's journal file."
-        : !d ? `Not set up yet, so no new Delta trades come in (${n} in the journal now). With it, your PC imports Delta every 30 minutes and every device (this phone too) gets the trades with its sync, no key needed here.`
-        : (d.note ? "GitHub's last Delta run failed: " + d.note + " " : "Your PC imports Delta every 30 minutes while it's on; trades arrive with the sync. ")
+      status.innerText = !repo ? "Connect GitHub Sync above first: your server writes the trades into that repo's journal file."
+        : !d ? `Not set up yet, so no new Delta trades come in (${n} in the journal now). With it, your server imports Delta every 30 minutes and every device (this phone too) gets the trades with its sync, no key needed here.`
+        : (d.note ? "GitHub's last Delta run failed: " + d.note + " " : "Your server imports Delta every 30 minutes; trades arrive with the sync. ")
           + `${n} Delta trade${n === 1 ? "" : "s"} in the journal` + (d.updatedAt ? ", last change " + new Date(d.updatedAt).toLocaleString() : "") + "."
           + (state.ui.dxKickErr ? " This device can't start it (GitHub said " + state.ui.dxKickErr + "): give the sync token Actions: Read and write."
-            : waiting ? " The run from " + hm(lastRun.at) + " is waiting for your PC: it has to be on (with internet)." : "");
+            : waiting ? " The run from " + hm(lastRun.at) + " is waiting in GitHub's queue: your server runs one job at a time and starts it when the one ahead ends." : "");
       const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">${esc(text)}</a>`;
       const gh = "https://github.com/" + repo;
       const old = oldDeltaKey(), small = (fn, text) => `<button type="button" onclick="${fn}" class="px-3 py-1 rounded bg-terminal-surface border border-terminal-border text-slate-200 hover:border-amber-500">${text}</button>`;
       steps.innerHTML = !repo || (d && !d.note) ? ""
-        : `<p>1. ${old ? "Use the Delta key saved on this device (copy it below), or make" : "On Delta, make"} an API key with <b>Read Data</b> only, whitelisted for your PC's public IP (open <span class="text-amber-300">api.ipify.org</span> on the PC).</p>
+        : `<p>1. ${old ? "Use the Delta key saved on this device (copy it below), or make" : "On Delta, make"} an API key with <b>Read Data</b> only, whitelisted for your server's IP (it never changes; if Delta refuses one, the reason above names it).</p>
           <p>2. Open ${link(gh + "/settings/secrets/actions", "Settings → Secrets → Actions")} and add <code class="text-amber-300">DELTA_API_KEY</code> and <code class="text-amber-300">DELTA_API_SECRET</code>.</p>
-          ${old ? `<div id="dxOldKey" class="flex flex-wrap items-center gap-2"><span>Saved on this device:</span>${small("copyOldDeltaKey('key')", "Copy key")}${small("copyOldDeltaKey('secret')", "Copy secret")}<button type="button" onclick="forgetOldDeltaKey()" class="text-rose-400 hover:underline">Delete it</button><span class="w-full text-slate-400">Deleted from here by itself once the PC's import works.</span></div>` : ""}
-          <p>3. Press <b>Import now</b> (or ${link(gh + "/actions/workflows/delta.yml", "Actions → Delta import")} → Run workflow). When the PC's IP changes, the reason above names the new one to whitelist.</p>`;
+          ${old ? `<div id="dxOldKey" class="flex flex-wrap items-center gap-2"><span>Saved on this device:</span>${small("copyOldDeltaKey('key')", "Copy key")}${small("copyOldDeltaKey('secret')", "Copy secret")}<button type="button" onclick="forgetOldDeltaKey()" class="text-rose-400 hover:underline">Delete it</button><span class="w-full text-slate-400">Deleted from here by itself once the server's import works.</span></div>` : ""}
+          <p>3. Press <b>Import now</b> (or ${link(gh + "/actions/workflows/delta.yml", "Actions → Delta import")} → Run workflow). If Delta refuses the server's IP, the reason above names it to whitelist.</p>`;
       renderPcRuns();
     }
     function cdxWalletTitle(w) {
@@ -8433,7 +8446,7 @@
         : (f.note ? "GitHub's last run failed: " + f.note + " " : "") + `${n} CoinDCX row${n === 1 ? "" : "s"} in the journal, last changed ${new Date(f.updatedAt).toLocaleString()}.`
           + (f.wallet ? (f.note ? " Last known wallet (from before the failure, so newer deposits and trades are missing): " : " Wallet: ") + [["INR", "INR futures"], ["USD", "USDT futures"]].filter(([k]) => k in f.wallet).map(([k, label]) => money(f.wallet[k], k) + " " + label).join(" · ") + "." : "")
           + (f && state.ui.cdxKickErr ? " This device can't start the hourly import itself (GitHub said " + state.ui.cdxKickErr + "): give the sync token Actions: Read and write, or GitHub's own schedule runs it when it can."
-            : f && waiting ? " The run from " + hm(lastRun.at) + " is waiting for your PC: the import runs there, so the PC has to be on (with internet)."
+            : f && waiting ? " The run from " + hm(lastRun.at) + " is waiting in GitHub's queue: your server runs one job at a time and starts it when the one ahead ends."
             : f && state.ui.cdxKickAt ? " Import last run " + hm(state.ui.cdxKickAt) + "; this journal starts it every hour while open." : "");
       renderPcRuns();
       const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">${esc(text)}</a>`;
@@ -15032,6 +15045,8 @@
           if (p.backtest && typeof p.backtest === "object") state.backtest = p.backtest;
           if (p.repReviews && typeof p.repReviews === "object") state.repReviews = cleanRepReviews(p.repReviews);
           if (Array.isArray(p.withdrawals)) state.withdrawals = p.withdrawals.map(cleanWithdrawal).filter(Boolean);
+          // Setups and their rules are in every backup too (they were left behind, so a new device restored without them).
+          if (Array.isArray(p.playbook)) state.playbook = p.playbook;
           sanitizeState(state);
           save();
           renderAll();
@@ -16556,6 +16571,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-22.206', pr: 119, title: 'Audit fixes: Delta sync, iPad header, backup', pts: ['Delta money in / out: a sync no longer drops where the import last read the wallet, so the import and your devices stop rewriting journal.json on every run', 'iPad portrait: the header takes two lines, so the tabs no longer cover the version and every book shows', 'Imports now say "your server" (they run on the AWS server, not your PC); a waiting run is in GitHub\'s queue. Restoring a backup brings your setups back too'] },
       { v: '2026-11-21.205', pr: 118, title: 'Wallet balance is the main balance', pts: ['Delta: your deposits and withdrawals now come in by themselves from Delta\'s wallet history, with their dates (the Delta gap of $27.6 was money moved: -$33.2 on 28 Sep, +$47.1 on 12 Oct, -$23.5 on 16 Oct, -$17.6 on 5 Nov)', 'Return counts money you put in, and past balances move on the day money came in or out (they were all placed at the start)', 'Withdraw is now Money in / out: log a deposit too. Trading Books shows the wallet as the balance and what your trades add up to only as a check'] },
       { v: '2026-11-21.204', pr: 117, title: 'BTC move filter (your ±1.5% rule)', pts: ['Signals and Analysis: new BTC move row: With BTC / Against BTC / BTC flat. It reads where BTC was when the alert fired or the trade opened, against its 05:30 IST open: up or down 1.5% or more is a move, else flat (last closed 15m candle, no hindsight)', 'Tested on 6,497 graded crypto alerts (1 Jan - 8 Nov): with BTC +0.02R a trade, against BTC -0.22R, flat -0.10R. Market days shows the same table for your alerts and trades', 'Also in Results by, What to cut and Best settings. The BTC day row (trend going in) stays as it was'] },
       { v: '2026-11-21.203', pr: 116, title: 'Sideways market fixed, numbers checked', pts: ['BTC day (Bullish / Bearish / Sideways) is now the market as it stood at 05:30 IST, from closed candles only: 20-day EMA + daily range (ATR), not the day\'s own close, which was only known after your trade (hindsight)', 'Auto trades take the stop the bot really placed: AVAX read +13R on an alert stop, now +0.68R; ENA gets its -1.02R', 'Checked on your real data: P&L, R, fees, ₹/$ totals, days and Auto/Manual all match a recount by hand. A clicked day\'s hours now run 05:30 to 05:30 like its candle'] },
