@@ -13,6 +13,7 @@
 // Last, the journal loads the scanner's alerts by itself and a fresh trade matches one.
 // Delta and Gemini keys travel locked in journal.json between several devices, and a
 // setup link / code / QR connects a new one (the QR is read back with jsQR).
+// Phone alerts: the imports push to a fake ntfy once they saved, and the Settings card syncs the picks.
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7887,6 +7888,254 @@ async function botStopRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Bot stops: Auto trades take the stop the bot placed (AVAX +13R -> +0.68R), typed stops and Manual kept');
 }
 
+// Phone alerts (v.208): the Delta and CoinDCX imports read `push` from journal.json
+// and send to a fake ntfy once they saved; the Settings card makes the topic, sends a
+// test straight to ntfy and syncs the picks; what the imports remember (`pushSent`)
+// rides through the journal's sync untouched.
+async function pushRun(seed) {
+  const REPO = 'victus/sync', TOPIC = 'victus-abcdefghij0123456789';
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const ntfy = { posts: [], status: 200 };
+  const dx = { fills: [], txs: [], refuse: false };
+  const cdx = { inr: [], wallet: '5000', refuse: false };
+  const gh = { files: {}, puts: [] };
+  const CV = { BTCUSD: 0.001, ETHUSD: 0.01, SOLUSD: 1 };
+  const fill = (id, sym, side, size, price, at, order) => ({ id, product_symbol: sym, side, size, price: String(price), commission: '0.05', created_at: at, order_id: order });
+  const dtx = (id, type, amount, at) => ({ uuid: 'aa00bb11-' + id, transaction_type: type, amount: String(amount), balance: '0', asset_symbol: 'USD', created_at: at, meta_data: {} });
+  let txn = 0;
+  const ctx_ = (pair, stage, amount, fee, at) => ({ id: 'tx' + (++txn), pair, stage, amount, fee_amount: fee, margin_currency_short_name: 'INR', position_id: 'pos-' + pair, created_at: Date.parse(at) });
+  function delta(u) {
+    const p = u.pathname.replace(/^\/dx/, '');
+    if (p === '/v2/products') return [200, { result: Object.keys(CV).map(k => ({ symbol: k, contract_value: String(CV[k]) })) }];
+    if (dx.refuse) return [401, { success: false, error: { code: 'ip_not_whitelisted_for_api_key', context: { client_ip: '198.51.100.4' } } }];
+    if (p === '/v2/wallet/balances') return [200, { meta: { net_equity: '150.5' }, result: [] }];
+    if (p === '/v2/fills') {
+      const start = Number(u.searchParams.get('start_time') || 0);
+      return [200, { result: dx.fills.filter(f => Date.parse(f.created_at) * 1000 >= start).sort((a, b) => a.created_at < b.created_at ? 1 : -1), meta: { after: null } }];
+    }
+    if (p === '/v2/wallet/transactions') return [200, { result: dx.txs.slice().sort((a, b) => a.created_at < b.created_at ? 1 : -1), meta: { after: null } }];
+    return [404, {}];
+  }
+  function coindcx(u, method, body) {
+    const p = u.pathname.replace(/^\/cdx/, '');
+    if (cdx.refuse) return [401, { code: 401, message: 'Invalid credentials', status: 'error' }];
+    let b = {}; try { b = JSON.parse(body); } catch (e) {}
+    if (p === '/exchange/v1/derivatives/futures/wallets') return [200, [{ currency_short_name: 'INR', balance: cdx.wallet, locked_balance: '0', cross_order_margin: '0', cross_user_margin: '0' }]];
+    if (p === '/exchange/v1/derivatives/futures/trades') return [200, []];
+    if (p === '/exchange/v1/derivatives/futures/positions/transactions') return [200, b.page === '1' && b.margin_currency_short_name && b.margin_currency_short_name[0] === 'INR' ? cdx.inr : []];
+    return [404, { message: 'Not found' }];
+  }
+  function github(method, url, headers, body) {
+    const u = new URL(url), m = u.pathname.match(/^(?:\/gh)?\/repos\/([^/]+\/[^/]+)\/contents\/journal\.json$/);
+    if (!m || headers.authorization !== 'Bearer gh-token') return [404, { message: 'Not Found' }];
+    const f = gh.files[m[1]];
+    if (method === 'GET') return f ? [200, { sha: f.sha, size: f.text.length, encoding: 'base64', content: Buffer.from(f.text).toString('base64') }] : [404, { message: 'Not Found' }];
+    if (method === 'PUT') {
+      const p = JSON.parse(body || '{}');
+      if (f ? p.sha !== f.sha : !!p.sha) return [409, { message: 'conflict' }];
+      const text = Buffer.from(String(p.content || ''), 'base64').toString('utf8'), sha = crypto.createHash('sha1').update(text).digest('hex');
+      gh.files[m[1]] = { text, sha }; gh.puts.push(p.message);
+      return [f ? 200 : 201, { content: { sha } }];
+    }
+    return [405, {}];
+  }
+  const fake = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      const u = new URL(req.url, 'http://x');
+      let out;
+      if (u.pathname === '/ip') out = [200, '203.0.113.9'];
+      else if (u.pathname.startsWith('/ntfy')) { let j = null; try { j = JSON.parse(body); } catch (e) {} ntfy.posts.push({ path: u.pathname, method: req.method, type: req.headers['content-type'], j }); out = [ntfy.status, { id: 'x' }]; }
+      else if (u.pathname.startsWith('/dx/')) out = delta(u);
+      else if (u.pathname.startsWith('/cdx/')) out = coindcx(u, req.method, body);
+      else out = github(req.method, 'http://x' + req.url, req.headers, body);
+      res.writeHead(out[0], { 'Content-Type': 'application/json' });
+      res.end(typeof out[1] === 'string' ? out[1] : JSON.stringify(out[1]));
+    });
+  });
+  await new Promise(r => fake.listen(0, '127.0.0.1', r));
+  const fb = 'http://127.0.0.1:' + fake.address().port;
+  const run = (tool, extra = {}) => new Promise(resolve => {
+    const before = gh.puts.length, sent = ntfy.posts.length;
+    execFile(process.execPath, [path.join(ROOT, 'tools', tool)], {
+      env: Object.assign({ PATH: process.env.PATH, TZ: 'UTC', DELTA_API_KEY: 'k', DELTA_API_SECRET: 's', COINDCX_API_KEY: 'k', COINDCX_API_SECRET: 's', GITHUB_TOKEN: 'gh-token', GITHUB_REPOSITORY: REPO,
+        GITHUB_API_URL: fb + '/gh', DELTA_BASE: fb + '/dx', COINDCX_BASE: fb + '/cdx', IP_URL: fb + '/ip', NTFY_URL: fb + '/ntfy' }, extra),
+      timeout: 60000
+    }, (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : -1) : 0, out: (stdout + stderr).trim(), puts: gh.puts.slice(before), sent: ntfy.posts.slice(sent).map(x => x.j) }));
+  });
+  const stored = () => JSON.parse(gh.files[REPO].text);
+  const edit = fn => { const j = stored(); fn(j); const t = JSON.stringify(j); gh.files[REPO] = { text: t, sha: crypto.createHash('sha1').update(t).digest('hex') }; };
+  const titles = r => JSON.stringify(r.sent.map(x => x && x.title));
+
+  // ---- the imports ----
+  gh.files[REPO] = (() => { const t = JSON.stringify({ version: 1, savedAt: '2026-11-22T10:00:00.000Z', accounts: [{ id: 'acc_dx', name: 'Delta', market: 'crypto', currency: 'USD', startBalance: 100, startAt: '2026-10-01T00:00:00.000Z' }], trades: [], tombstones: {}, push: { topic: TOPIC, on: true, trades: true, money: true, problems: true, updatedAt: '2026-11-22T10:00:00.000Z' } }); return { text: t, sha: crypto.createHash('sha1').update(t).digest('hex') }; })();
+  try {
+    // Delta, first run: the whole history is no news.
+    dx.fills = [fill(1, 'BTCUSD', 'buy', 10, 60000, '2026-11-01T04:00:00Z', 'o1'), fill(2, 'BTCUSD', 'sell', 10, 61000, '2026-11-01T06:00:00Z', 'o2')];
+    dx.txs = [dtx(1, 'deposit', 20, '2026-10-05T10:00:00Z')];
+    let r = await run('delta-import.mjs');
+    check(r.code === 0 && r.puts.length === 1 && !r.sent.length && stored().pushSent === undefined, 'delta first run sent alerts: ' + JSON.stringify(r));
+    // Two trades close and money comes in: one alert each, sent after the save.
+    dx.fills.push(fill(3, 'ETHUSD', 'buy', 100, 2500, '2026-11-20T04:00:00Z', 'o3'), fill(4, 'ETHUSD', 'sell', 100, 2550, '2026-11-20T05:00:00Z', 'o4'),
+      fill(5, 'SOLUSD', 'sell', 2, 150, '2026-11-20T06:00:00Z', 'o5'), fill(6, 'SOLUSD', 'buy', 2, 152, '2026-11-20T07:00:00Z', 'o6'));
+    dx.txs.push(dtx(2, 'deposit', 50, '2026-11-20T08:00:00Z'), dtx(3, 'withdrawal', -12.5, '2026-11-21T08:00:00Z'));
+    r = await run('delta-import.mjs');
+    const [ta, ma] = r.sent;
+    check(r.code === 0 && r.sent.length === 2 && /Delta: 2 trades closed, \+\$45\.80/.test(ta && ta.title) && /ETHUSD long \+\$49\.90/.test(ta.message) && /SOLUSD short −\$4\.10/.test(ta.message)
+      && ta.topic === TOPIC && !('click' in ta) && ta.tags[0] === 'chart_with_upwards_trend', 'delta trades alert: ' + JSON.stringify(r));
+    check(ma && ma.title === 'Delta: 2 deposits / withdrawals' && /Deposit \+\$50\.00 · 20 Nov/.test(ma.message) && /Withdrawal −\$12\.50 · 21 Nov/.test(ma.message) && /Money in \/ out/.test(ma.message), 'delta money alert: ' + JSON.stringify(ma));
+    check(ntfy.posts.slice(-2).every(x => x.method === 'POST' && x.path === '/ntfy/' && x.type === 'application/json'), 'ntfy request: ' + JSON.stringify(ntfy.posts.slice(-2)));
+    check(/phone alert sent: Delta: 2 trades closed/.test(r.out), 'run log: ' + r.out);
+    // Refused: the first failing run only notes it; the second alerts once; the third is quiet; then works again.
+    dx.refuse = true;
+    r = await run('delta-import.mjs');
+    check(r.code === 1 && !r.sent.length && JSON.stringify(r.puts) === '["Delta import failed"]', 'delta first failure: ' + JSON.stringify(r));
+    r = await run('delta-import.mjs');
+    check(r.code === 1 && titles(r) === '["Delta import is failing"]' && r.sent[0].priority === 4 && /198\.51\.100\.4/.test(r.sent[0].message) && stored().pushSent.delta.down === true && JSON.stringify(r.puts) === '["Delta: phone alert"]', 'delta second failure: ' + JSON.stringify(r));
+    r = await run('delta-import.mjs');
+    check(r.code === 1 && !r.sent.length && !r.puts.length, 'delta third failure not quiet: ' + JSON.stringify(r));
+    dx.refuse = false;
+    r = await run('delta-import.mjs');
+    let ps = stored().pushSent;
+    check(r.code === 0 && titles(r) === '["Delta import works again"]' && ps && !ps.delta && typeof ps.updatedAt === 'string', 'delta works again: ' + JSON.stringify(r) + ' ' + JSON.stringify(ps));
+    // Switches: trades off sends no trade alert; ntfy down never fails the import.
+    edit(j => { j.push.trades = false; });
+    dx.fills.push(fill(7, 'BTCUSD', 'buy', 10, 60000, '2026-11-21T04:00:00Z', 'o7'), fill(8, 'BTCUSD', 'sell', 10, 59000, '2026-11-21T05:00:00Z', 'o8'));
+    ntfy.status = 500;
+    r = await run('delta-import.mjs');
+    check(r.code === 0 && !r.sent.length && JSON.stringify(r.puts) === '["Delta: 1 new trade"]', 'trades off: ' + JSON.stringify(r));
+    edit(j => { j.push.trades = true; });
+    dx.fills.push(fill(9, 'BTCUSD', 'buy', 10, 60000, '2026-11-21T06:00:00Z', 'o9'), fill(10, 'BTCUSD', 'sell', 10, 60500, '2026-11-21T07:00:00Z', 'o10'));
+    r = await run('delta-import.mjs');
+    check(r.code === 0 && r.sent.length === 1 && /not sent: ntfy answered 500/.test(r.out) && /Imported 1 new trade/.test(r.out), 'ntfy down: ' + JSON.stringify(r));
+    ntfy.status = 200;
+    // Turned off (empty topic, as the journal leaves it): nothing sent, nothing remembered.
+    edit(j => { j.push = { topic: '', on: false, trades: true, money: true, problems: true, updatedAt: '2026-11-22T11:00:00.000Z' }; });
+    dx.refuse = true; await run('delta-import.mjs'); r = await run('delta-import.mjs'); dx.refuse = false;
+    check(!r.sent.length && !stored().pushSent.delta, 'off still alerts: ' + JSON.stringify(r));
+    r = await run('delta-import.mjs');
+    check(r.code === 0 && !r.sent.length, 'off, works again still alerts: ' + JSON.stringify(r));
+    edit(j => { j.push = PUSH_ON(); });
+
+    // ---- CoinDCX ----
+    cdx.inr = [ctx_('B-ETH_USDT', 'default', 0, 2, '2026-11-01T04:00:00Z'), ctx_('B-ETH_USDT', 'exit', 120, 2.5, '2026-11-01T05:00:00Z'), ctx_('B-ETH_USDT', 'funding', -1, 0, '2026-11-01T08:00:00Z')];
+    r = await run('coindcx-import.mjs');
+    check(r.code === 0 && !r.sent.length && stored().backtest.files[0].wallet.INR === 5000, 'cdx first run: ' + JSON.stringify(r));
+    // A loss closes (entry fee, exit, funding): the wallet moves by exactly that.
+    cdx.inr.push(ctx_('B-BTC_USDT', 'default', 0, 3, '2026-11-20T04:00:00Z'), ctx_('B-BTC_USDT', 'tpsl_exit', -60, 3, '2026-11-20T05:00:00Z'), ctx_('B-BTC_USDT', 'funding', -0.5, 0, '2026-11-20T08:00:00Z'));
+    cdx.wallet = '4933.5';
+    r = await run('coindcx-import.mjs');
+    check(r.code === 0 && titles(r) === '["CoinDCX: 1 trade closed, −₹63.00"]' && r.sent[0].message === 'BTC/USDT −₹63.00' && r.sent[0].tags[0] === 'chart_with_downwards_trend' && !(stored().pushSent.cdx), 'cdx trade alert: ' + JSON.stringify(r) + ' ' + JSON.stringify(stored().pushSent));
+    // Money in with no transaction: waits one run, then alerts once and starts again.
+    cdx.wallet = '5933.5';
+    r = await run('coindcx-import.mjs');
+    ps = stored().pushSent.cdx;
+    check(!r.sent.length && ps && ps.carry.INR === 1000 && ps.wait.INR === 1, 'cdx deposit first look: ' + JSON.stringify(r) + ' ' + JSON.stringify(ps));
+    r = await run('coindcx-import.mjs');
+    check(titles(r) === '["CoinDCX: wallet ₹1,000.00 more than trades explain"]' && /Money in \/ out/.test(r.sent[0].message) && !stored().pushSent.cdx && JSON.stringify(r.puts) === '["CoinDCX: phone alert"]', 'cdx deposit alert: ' + JSON.stringify(r) + ' ' + JSON.stringify(stored().pushSent));
+    r = await run('coindcx-import.mjs');
+    check(!r.sent.length && !r.puts.length, 'cdx quiet run: ' + JSON.stringify(r));
+    // A trade's transaction listed a run after the wallet moved: no money alert, just the trade.
+    cdx.wallet = '5853.5';
+    r = await run('coindcx-import.mjs');
+    check(!r.sent.length && stored().pushSent.cdx.carry.INR === -80, 'cdx late transaction, first run: ' + JSON.stringify(r));
+    cdx.inr.push(ctx_('B-SOL_USDT', 'exit', -78, 2, '2026-11-21T05:00:00Z'));
+    r = await run('coindcx-import.mjs');
+    check(titles(r) === '["CoinDCX: 1 trade closed, −₹80.00"]' && !stored().pushSent.cdx, 'cdx late transaction evened out: ' + JSON.stringify(r) + ' ' + JSON.stringify(stored().pushSent));
+    // Refused twice in a row: one alert; works again: one more.
+    cdx.refuse = true;
+    r = await run('coindcx-import.mjs');
+    check(r.code === 1 && !r.sent.length, 'cdx first failure: ' + JSON.stringify(r));
+    r = await run('coindcx-import.mjs');
+    check(titles(r) === '["CoinDCX import is failing"]' && /401/.test(r.sent[0].message), 'cdx second failure: ' + JSON.stringify(r));
+    cdx.refuse = false;
+    r = await run('coindcx-import.mjs');
+    check(titles(r) === '["CoinDCX import works again"]' && stored().pushSent.delta === undefined && !stored().pushSent.cdx, 'cdx works again: ' + JSON.stringify(r));
+    // Both imports kept the other's part and the journal's own fields.
+    check(stored().push.topic === TOPIC && stored().accounts.length === 1, 'fields lost: ' + gh.files[REPO].text.slice(0, 300));
+  } catch (e) { errs.push('imports threw: ' + e.message); }
+  function PUSH_ON() { return { topic: TOPIC, on: true, trades: true, money: true, problems: true, updatedAt: '2026-11-22T12:00:00.000Z' }; }
+
+  // ---- the Settings card ----
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Kolkata' });
+  const tests = [];
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.github.com/') && !url.href.startsWith('https://ntfy.sh/'), r => r.abort());
+  await ctx.route(url => url.href.startsWith('https://ntfy.sh/'), async route => { const req = route.request(); tests.push({ method: req.method(), url: req.url(), j: JSON.parse(req.postData() || 'null') }); return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*' }, body: '{}' }); });
+  await ctx.route('https://api.github.com/**', async route => {
+    const req = route.request(), u = req.url();
+    if (/\/actions\//.test(u)) return route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' }, body: '{}' });
+    const [status, d] = github(req.method(), u, await req.allHeaders(), req.postData() || '');
+    return route.fulfill({ status, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify(d) });
+  });
+  const REPO2 = 'victus/sync2';
+  const seeded = Object.assign({}, seed, { sync: { token: 'gh-token', repo: REPO2, branch: 'main', auto: false, lastAt: '', lastSha: '' } });
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seeded));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  page.on('dialog', d => d.accept());
+  const remote = () => JSON.parse(gh.files[REPO2].text);
+  const card = () => page.evaluate(() => { openSettings('connect'); renderDataView(); const b = document.getElementById('pushBox'); return { badge: document.getElementById('pushBadge').innerText, text: b.innerText, wide: b.scrollWidth > b.clientWidth + 1, topic: (document.getElementById('pushTopic') || {}).innerText || '', status: document.getElementById('pushStatus').innerText }; });
+  const settle = async () => { for (let i = 0; i < 40; i++) { if (await page.evaluate(() => !syncBusy)) break; await page.waitForTimeout(100); } await page.waitForTimeout(200); };
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForTimeout(300);
+    await page.evaluate(() => syncNow({ quiet: true }));
+    let c = await card();
+    check(c.badge === 'Off' && /Turn on/.test(c.text) && !/Connect GitHub sync first/.test(c.text), 'card off: ' + JSON.stringify(c));
+    await page.click('#pushOnBtn');
+    await settle();
+    c = await card();
+    const r1 = remote().push;
+    check(c.badge === 'On' && /^victus-[a-z0-9]{18}$/.test(c.topic) && /Install ntfy/.test(c.text) && /New trades/.test(c.text) && !c.wide, 'card on: ' + JSON.stringify(c));
+    check(r1 && r1.topic === c.topic && r1.on === true && r1.trades && r1.money && r1.problems && typeof r1.updatedAt === 'string', 'synced picks: ' + JSON.stringify(r1));
+    // Each switch syncs at once (auto sync is off here: the server reads the file).
+    await page.click('input[data-push="money"]');
+    await settle();
+    check(remote().push.money === false && remote().push.trades === true, 'money switch not synced: ' + JSON.stringify(remote().push));
+    // Send test goes straight to ntfy from the device.
+    await page.click('#pushTestBtn');
+    await page.waitForTimeout(300);
+    c = await card();
+    check(tests.length === 1 && tests[0].method === 'POST' && tests[0].url === 'https://ntfy.sh/' && tests[0].j.topic === c.topic && /Test alert/.test(tests[0].j.message) && /Test sent/.test(c.status), 'send test: ' + JSON.stringify(tests) + ' ' + c.status);
+  } catch (e) { errs.push('card threw: ' + e.message); }
+  try {
+    // What the server's imports remember comes in and goes back out untouched.
+    const t = JSON.parse(gh.files[REPO2].text); t.pushSent = { cdx: { carry: { INR: -12.5 } }, updatedAt: '2099-01-01T00:00:00.000Z' };
+    const tt = JSON.stringify(t); gh.files[REPO2] = { text: tt, sha: crypto.createHash('sha1').update(tt).digest('hex') };
+    await page.evaluate(() => syncNow({ quiet: true }));
+    await settle();
+    const local = await page.evaluate(() => JSON.stringify(state.pushSent));
+    check(local === JSON.stringify(t.pushSent) && JSON.stringify(remote().pushSent) === JSON.stringify(t.pushSent), 'pushSent not carried: ' + local);
+    // New topic, then off: an older copy from another device can't turn it back on.
+    const before = (await card()).topic;
+    await page.evaluate(() => pushNewTopic());
+    await settle();
+    let c = await card();
+    check(c.topic && c.topic !== before && remote().push.topic === c.topic, 'new topic: ' + JSON.stringify(c));
+    await page.evaluate(() => pushTurnOff());
+    await settle();
+    c = await card();
+    check(c.badge === 'Off' && remote().push.topic === '' && remote().push.on === false, 'turn off: ' + JSON.stringify(remote().push));
+    const t2 = remote(); t2.push = { topic: TOPIC, on: true, trades: true, money: true, problems: true, updatedAt: '2026-01-01T00:00:00.000Z' };
+    const tt2 = JSON.stringify(t2); gh.files[REPO2] = { text: tt2, sha: crypto.createHash('sha1').update(tt2).digest('hex') };
+    await page.evaluate(() => syncNow({ quiet: true }));
+    await settle();
+    check((await card()).badge === 'Off' && remote().push.topic === '', 'older copy turned it back on: ' + JSON.stringify(remote().push));
+    // A bad topic in the file (typed by hand) is not used; without sync the card says so.
+    const bad = await page.evaluate(() => [cleanPush({ topic: 'short' }).topic, cleanPush({ topic: 'x'.repeat(20) + '<b>' }).topic, cleanPush('junk'), cleanPushSent({ a: 1 })]);
+    check(JSON.stringify(bad) === '["","",null,null]', 'bad push records kept: ' + JSON.stringify(bad));
+    await page.evaluate(() => { state.sync.token = ''; renderDataView(); });
+    c = await card();
+    check(/Connect GitHub sync first/.test(c.text), 'no-sync warning: ' + JSON.stringify(c));
+  } catch (e) { errs.push('card threw: ' + e.message); }
+  await ctx.close();
+  fake.close();
+  if (errs.length) failures.push('Phone alerts:\n     ' + errs.join('\n     '));
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Phone alerts: imports push closed trades / money moves / outages to ntfy once saved (2-run rule, carry), Settings card topic, switches, test, sync');
+}
+
 for (const [name, vp] of [['desktop', { width: 1366, height: 900 }], ['phone', { width: 390, height: 844 }]]) {
   await run(name + ', empty journal', vp, null);
   await run(name + ', sample journal', vp, data);
@@ -7954,6 +8203,7 @@ await marketDayRun(data);
 await btcMoveRun(data);
 await botStopRun(data);
 await walletMainRun(data);
+await pushRun(data);
 await backupRestoreRun(data);
 
 await browser.close();
