@@ -27,8 +27,10 @@
 //   JOURNAL_TZ                            the clock trades are written in (Asia/Kolkata)
 //   DELTA_BASE                            tests point this at a fake Delta
 //   IP_URL                                where this PC's public IP is read (api.ipify.org)
+//   NTFY_URL                              where phone alerts go (ntfy.sh), when the journal turned them on (tools/push.mjs)
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { pushConfig, sendAll, sentOf, setSent, tradesAlert, movesAlert, outageStep } from './push.mjs';
 
 const env = process.env;
 const DELTA_BASE = (env.DELTA_BASE || 'https://api.india.delta.exchange').replace(/\/+$/, '');
@@ -350,7 +352,8 @@ function resumeOf(data) {
 }
 // Adds what this run found: new trades (each tag once), where it left off, the
 // reason it failed, the wallet figure. Nothing changes when nothing moved.
-function apply(data, got, note, balance, moves) {
+// With phone alerts on (`push`), also works out which to send once this is saved.
+function apply(data, got, note, balance, moves, push) {
   const was = data.deltaImport && typeof data.deltaImport === 'object' ? data.deltaImport : null;
   const { seen } = known(data);
   const fresh = got ? got.trades.filter(t => !seen[t.src]) : [];
@@ -375,14 +378,36 @@ function apply(data, got, note, balance, moves) {
   const moved = !was || moveAtMoved || (was.movesFrom || '') !== (next.movesFrom || '') || was.lastFillTime !== next.lastFillTime || JSON.stringify(was.openPositions || {}) !== JSON.stringify(next.openPositions) || (was.note || '') !== (note || '');
   const old = data.deltaBalance && typeof data.deltaBalance === 'object' ? data.deltaBalance : null;
   const balMoved = !!balance && (!old || Math.abs(old.value - balance.value) >= 0.005 || Date.now() - (old.at || 0) >= BAL_HOLD_MS);
-  if (!fresh.length && !tag.length && !moved && !balMoved && !newMoves.length) return { changed: false, added: 0 };
+  const { alerts, sentMoved } = push ? phoneAlerts(data, push, was, note, fresh, newMoves) : { alerts: [], sentMoved: false };
+  if (!fresh.length && !tag.length && !moved && !balMoved && !newMoves.length && !sentMoved) return { changed: false, added: 0, alerts };
   if (newMoves.length) data.withdrawals = (Array.isArray(data.withdrawals) ? data.withdrawals : []).concat(newMoves);
   tag.forEach(([t, src]) => { t.src = src; t.updatedAt = at; });
   if (fresh.length) data.trades = (Array.isArray(data.trades) ? data.trades : []).concat(fresh.map(t => Object.assign(t, { updatedAt: at })));
   // The balance before the record: the order the journal writes them in, so its sync has nothing to redo.
   if (balMoved) data.deltaBalance = { value: balance.value, field: balance.field, at: Date.now() };
   if (fresh.length || moved || tag.length) data.deltaImport = Object.assign(next, { updatedAt: at });
-  return { changed: true, added: fresh.length, tagged: tag.length, noteMoved: !!was && (was.note || '') !== (note || ''), balMoved, moves: newMoves.length };
+  return { changed: true, added: fresh.length, tagged: tag.length, noteMoved: !!was && (was.note || '') !== (note || ''), balMoved, moves: newMoves.length, alerts, sentMoved };
+}
+// Trades that closed and money moved since the last run, and the import failing
+// two runs in a row (or working again). The first run's whole history is no news.
+function phoneAlerts(data, push, was, note, fresh, newMoves) {
+  const alerts = [], out = outageStep(push, sentOf(data, 'delta'), (was && was.note) || '', note || '', 'Delta');
+  if (out.alert) alerts.push(out.alert);
+  const curOf = id => { const a = (Array.isArray(data.accounts) ? data.accounts : []).find(x => x && x.id === id); return a && a.currency === 'INR' ? 'INR' : 'USD'; };
+  if (was && push.trades && fresh.length) {
+    const byCur = {};
+    fresh.forEach(t => {
+      const pnl = (t.exit - t.entry) * t.qty * (t.direction === 'short' ? -1 : 1) - (t.fees || 0);
+      (byCur[curOf(t.accountId)] = byCur[curOf(t.accountId)] || []).push({ label: `${t.symbol} ${t.direction}`, pnl });
+    });
+    Object.keys(byCur).forEach(c => alerts.push(tradesAlert('Delta', byCur[c], c)));
+  }
+  if (was && push.money && newMoves.length) {
+    const byCur = {};
+    newMoves.forEach(w => { (byCur[curOf(w.accountId)] = byCur[curOf(w.accountId)] || []).push({ amount: w.kind === 'deposit' ? w.amount : -w.amount, date: w.date }); });
+    Object.keys(byCur).forEach(c => alerts.push(movesAlert('Delta', byCur[c], c)));
+  }
+  return { alerts, sentMoved: setSent(data, 'delta', { down: out.down }) };
 }
 
 function report(text, bad) {
@@ -400,6 +425,8 @@ async function main() {
 
   let { data, sha } = await readJournal();
   const account = deltaAccount(data);
+  // Phone alerts on? Read again from the file as it is when saving.
+  let push = pushConfig(data);
   if (!account) { report('The journal has no crypto book to put Delta trades in. Add one in the journal (Settings → Books), sync, then run this again.', true); return 1; }
 
   // From where the last run left off, reaching back to the start of any
@@ -440,15 +467,19 @@ async function main() {
       const acc = deltaAccount(data) || account, at = new Date().toISOString(), from = movesFromOf(data, acc), fromMs = from ? Date.parse(from) : 0;
       moves = { from, list: moveRows.filter(x => isMove(x) && Date.parse(x.created_at) >= fromMs).map(x => moveEntry(x, acc, at)), newest: moveRows.reduce((m, x) => { const t = Date.parse(x && x.created_at); return isFinite(t) && t > m ? t : m; }, 0) };
     }
-    res = apply(data, built, note, balance, moves);
+    push = pushConfig(data);
+    res = apply(data, built, note, balance, moves, push);
     if (!res.changed) break;
     data.savedAt = new Date().toISOString();
-    const message = res.added ? `Delta: ${res.added} new trade${res.added === 1 ? '' : 's'}` : res.moves ? `Delta: ${res.moves} deposit${res.moves === 1 ? '' : 's'} / withdrawal${res.moves === 1 ? '' : 's'}` : res.tagged ? 'Delta: trades logged by hand matched' : failed ? 'Delta import failed' : res.noteMoved ? 'Delta import working again' : res.balMoved ? 'Delta balance' : 'Delta import position';
+    const message = res.added ? `Delta: ${res.added} new trade${res.added === 1 ? '' : 's'}` : res.moves ? `Delta: ${res.moves} deposit${res.moves === 1 ? '' : 's'} / withdrawal${res.moves === 1 ? '' : 's'}` : res.tagged ? 'Delta: trades logged by hand matched' : res.noteMoved && failed ? 'Delta import failed' : res.noteMoved ? 'Delta import working again' : res.balMoved ? 'Delta balance' : res.sentMoved ? 'Delta: phone alert' : failed ? 'Delta import failed' : 'Delta import position';
     if (await writeJournal(data, sha, message)) break;
     if (attempt >= 4) throw new Error(`${SYNC_PATH} kept changing while saving; the next run tries again.`);
     ({ data, sha } = await readJournal());
   }
+  // Only once saved, so a run that could not save never alerts, and a retry never alerts twice.
+  const sent = push && res.alerts.length ? await sendAll(push, res.alerts) : [];
 
+  sent.forEach(x => console.log(x));
   if (failed) { report(failed, true); return 1; }
   let msg = res.added ? `Imported ${res.added} new trade${res.added === 1 ? '' : 's'} from Delta` : 'Up to date, no new Delta trades';
   msg += ` · ${got.fills.length} fill${got.fills.length === 1 ? '' : 's'} read`;

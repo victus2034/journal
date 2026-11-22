@@ -18,10 +18,12 @@
 //   JOURNAL_TZ                            the clock CoinDCX's reports use (Asia/Kolkata)
 //   COINDCX_BASE                          tests point this at a fake CoinDCX
 //   IP_URL                                where this PC's public IP is read (api.ipify.org)
+//   NTFY_URL                              where phone alerts go (ntfy.sh), when the journal turned them on (tools/push.mjs)
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import { pushConfig, sendAll, sentOf, setSent, tradesAlert, outageStep, money } from './push.mjs';
 
 const env = process.env;
 const CDX_BASE = (env.COINDCX_BASE || 'https://api.coindcx.com').replace(/\/+$/, '');
@@ -365,7 +367,7 @@ function fileRecord(f, note, wallet, fills) {
   if (fills && fills.length) rec.fills = fills;
   return rec;
 }
-function apply(data, rows, note, wallet, fills) {
+function apply(data, rows, note, wallet, fills, push) {
   const old = data.backtest;
   const bt = old && Array.isArray(old.files) && Array.isArray(old.rows) ? old : { files: [], rows: [] };
   const have = {};
@@ -377,7 +379,10 @@ function apply(data, rows, note, wallet, fills) {
   const noteMoved = (f && f.note || '') !== (note || '');
   const hadFills = f && Array.isArray(f.fills) ? f.fills : [], keepFills = fills ? mergeFills(hadFills, fills) : hadFills;
   const fillsMoved = JSON.stringify(keepFills) !== JSON.stringify(hadFills);
-  if (!fresh.length && (!f || (!noteMoved && !walletMoved && !fillsMoved))) return { changed: false, added: 0, file: f };
+  // Phone alerts (with `push` on): worked out before the file changes, sent once it is saved.
+  const { alerts, sentMoved } = push ? phoneAlerts(data, push, f, note, fresh, now) : { alerts: [], sentMoved: false };
+  const fileMoved = fresh.length > 0 || (!!f && (noteMoved || walletMoved || fillsMoved));
+  if (!fileMoved) return { changed: sentMoved, added: 0, file: f, alerts, sentMoved };
   const at = new Date().toISOString();
   const keep = walletMoved ? Object.assign({ at }, now) : f && f.wallet;
   let rec;
@@ -400,7 +405,59 @@ function apply(data, rows, note, wallet, fills) {
   }
   if (i >= 0) bt.files[i] = rec; else bt.files.push(rec);
   data.backtest = bt;
-  return { changed: true, added: fresh.length, file: rec, noteMoved, walletMoved, fillsMoved };
+  return { changed: true, added: fresh.length, file: rec, noteMoved, walletMoved, fillsMoved, alerts, sentMoved };
+}
+
+// ---- phone alerts ----
+// "B-BTC_USDT" -> "BTC/USDT"
+function pairName(sym) { return String(sym).replace(/^B-/, '').replace('_', '/'); }
+// Closed trades: transactions with a P&L (an entry fill has none; funding is not a trade),
+// one line per pair, the fee taken off. The first import's whole history is no news.
+function cdxClosed(fresh) {
+  const by = {};
+  fresh.filter(r => r.kind === 'order' && Number(r.gross) !== 0).forEach(r => {
+    const k = r.cur + '|' + r.sym;
+    by[k] = by[k] || { cur: r.cur, label: pairName(r.sym), pnl: 0 };
+    by[k].pnl += Number(r.net) || 0;
+  });
+  return Object.keys(by).map(k => by[k]);
+}
+// Money in or out of a futures wallet that no transaction explains: how far the
+// wallet moved minus what the new transactions add up to, carried from run to run
+// (a transaction CoinDCX lists a run late evens it out). It alerts once it is
+// past what the journal's Trading Books calls a gap (at least ₹40 / $0.50 and 1%)
+// two runs in a row, then starts again from nothing.
+function cdxUnexplained(sent, f, now, fresh) {
+  const was = f && f.wallet ? walletOf(f.wallet) : null, carry = {}, wait = {}, alerts = [];
+  if (!was || fresh.length > 500) return { carry, wait, alerts };
+  ['INR', 'USD'].forEach(k => {
+    if (typeof was[k] !== 'number') return;
+    const net = sum(fresh.filter(r => r.cur === k).map(r => Number(r.net) || 0));
+    const read = !!now && typeof now[k] === 'number';
+    let c = btRound((Number(sent.carry && sent.carry[k]) || 0) + (read ? now[k] - was[k] : 0) - net);
+    // A run that did not read this wallet (it failed) is no second look: it waits as it was.
+    if (!read) { if (c) carry[k] = c; if (sent.wait && sent.wait[k]) wait[k] = 1; return; }
+    if (Math.abs(c) >= Math.max(k === 'INR' ? 40 : 0.5, 0.01 * Math.abs(now[k]))) {
+      if (sent.wait && sent.wait[k]) {
+        alerts.push({ title: `CoinDCX: wallet ${money(c, k, true)} ${c > 0 ? 'more' : 'less'} than trades explain`, message: `Money moved ${c > 0 ? 'in' : 'out'}? Log it under Money in / out in the journal, so Return stays right.`, tags: ['moneybag'] });
+        c = 0;
+      } else wait[k] = 1;
+    }
+    if (c) carry[k] = c;
+  });
+  return { carry, wait, alerts };
+}
+function phoneAlerts(data, push, f, note, fresh, now) {
+  const sent = sentOf(data, 'cdx'), alerts = [];
+  const out = outageStep(push, sent, (f && f.note) || '', note || '', 'CoinDCX');
+  if (out.alert) alerts.push(out.alert);
+  if (f && push.trades) {
+    const closed = cdxClosed(fresh), curs = [...new Set(closed.map(x => x.cur))];
+    curs.forEach(c => alerts.push(tradesAlert('CoinDCX', closed.filter(x => x.cur === c), c)));
+  }
+  const un = push.money ? cdxUnexplained(sent, f, now, fresh) : { carry: {}, wait: {}, alerts: [] };
+  alerts.push(...un.alerts);
+  return { alerts, sentMoved: setSent(data, 'cdx', { down: out.down, carry: un.carry, wait: un.wait }) };
 }
 
 function report(text, bad) {
@@ -429,16 +486,19 @@ async function main() {
   // The journal keeps 300 characters of it; the same here, or each would keep rewriting the other.
   const note = failed ? failed.slice(0, 300) : null;
 
-  let res;
+  let res, push = null;
   for (let attempt = 1; ; attempt++) {
-    res = apply(data, rows, note, wallet, fillRead && fillRead.fills);
+    push = pushConfig(data);
+    res = apply(data, rows, note, wallet, fillRead && fillRead.fills, push);
     if (!res.changed) break;
     data.savedAt = new Date().toISOString();
-    const message = res.added ? `CoinDCX: ${res.added} new row${res.added === 1 ? '' : 's'}` : failed ? 'CoinDCX import failed' : res.noteMoved ? 'CoinDCX import working again' : res.walletMoved ? 'CoinDCX wallet balance' : 'CoinDCX trade prices';
+    const message = res.added ? `CoinDCX: ${res.added} new row${res.added === 1 ? '' : 's'}` : failed && res.noteMoved ? 'CoinDCX import failed' : res.noteMoved ? 'CoinDCX import working again' : res.walletMoved ? 'CoinDCX wallet balance' : res.fillsMoved ? 'CoinDCX trade prices' : res.sentMoved ? 'CoinDCX: phone alert' : failed ? 'CoinDCX import failed' : 'CoinDCX trade prices';
     if (await writeJournal(data, sha, message)) break;
     if (attempt >= 4) throw new Error(`${SYNC_PATH} kept changing while saving; the next run tries again.`);
     ({ data, sha } = await readJournal());
   }
+  // Only once saved, so a run that could not save never alerts, and a retry never alerts twice.
+  (push && res.alerts.length ? await sendAll(push, res.alerts) : []).forEach(x => console.log(x));
 
   if (failed) { report(failed, true); return 1; }
   let msg = !rows.length ? 'No CoinDCX futures transactions found'
