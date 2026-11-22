@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-22.206">
+  <meta name="app-version" content="2026-11-22.207">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -16581,6 +16581,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-22.207', pr: 120, title: 'Weekly check: BTC day says why it is empty', pts: ['BTC day filter: when BTC candles could not load (offline or Delta down) the row and the empty note say so, instead of just "no alerts on bullish days"', 'Weekly audit of every tab online and offline with bad inputs: no other bugs found'] },
       { v: '2026-11-22.206', pr: 119, title: 'Audit fixes: Delta sync, iPad header, backup', pts: ['Delta money in / out: a sync no longer drops where the import last read the wallet, so the import and your devices stop rewriting journal.json on every run', 'iPad portrait: the header takes two lines, so the tabs no longer cover the version and every book shows', 'Imports now say "your server" (they run on the AWS server, not your PC); a waiting run is in GitHub\'s queue. Restoring a backup brings your setups back too'] },
       { v: '2026-11-21.205', pr: 118, title: 'Wallet balance is the main balance', pts: ['Delta: your deposits and withdrawals now come in by themselves from Delta\'s wallet history, with their dates (the Delta gap of $27.6 was money moved: -$33.2 on 28 Sep, +$47.1 on 12 Oct, -$23.5 on 16 Oct, -$17.6 on 5 Nov)', 'Return counts money you put in, and past balances move on the day money came in or out (they were all placed at the start)', 'Withdraw is now Money in / out: log a deposit too. Trading Books shows the wallet as the balance and what your trades add up to only as a check'] },
       { v: '2026-11-21.204', pr: 117, title: 'BTC move filter (your ±1.5% rule)', pts: ['Signals and Analysis: new BTC move row: With BTC / Against BTC / BTC flat. It reads where BTC was when the alert fired or the trade opened, against its 05:30 IST open: up or down 1.5% or more is a move, else flat (last closed 15m candle, no hindsight)', 'Tested on 6,497 graded crypto alerts (1 Jan - 8 Nov): with BTC +0.02R a trade, against BTC -0.22R, flat -0.10R. Market days shows the same table for your alerts and trades', 'Also in Results by, What to cut and Best settings. The BTC day row (trend going in) stays as it was'] },
