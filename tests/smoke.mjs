@@ -3190,6 +3190,14 @@ async function marketFilterRun(seed) {
     await click('#sigEmpty button');
     const xa = await read(), wX = want(x => /^(NVDAX|MRVL)/.test(x[0]));
     check(xa.coins === '' && xa.n === wX.n && xa.r === wX.r && xa.grey === 'top3,top5,top10,top20,top30,picks,dcx', 'Coins: All, and greyed what keeps no xStocks: ' + JSON.stringify(xa));
+    // BTC day with no BTC candles on the device (Delta unreachable): the empty note says so, not just "no alerts".
+    await page.evaluate(() => { const c = mktCache(), keep = c.byDate; window.__keepMkt = keep; c.byDate = {}; mktFailedAt = Date.now(); mktLoadErr = 'Could not load BTC candles (Failed to fetch). Check your connection and try again.'; state.ui.mktFilter = 'bull'; renderSignalsTable(); });
+    const bd = await read();
+    check(bd.empty === 'btcday' && /No alerts here on BTC bullish days \(Could not load BTC candles \(Failed to fetch\)\)\./.test(bd.emptyTxt) && /All days/.test(bd.emptyTxt), 'BTC day with no BTC candles says why: ' + JSON.stringify(bd));
+    check(/Could not load BTC candles \(Failed to fetch\)/.test(await page.evaluate(() => (document.getElementById('sigMktBarNote') || {}).innerText || '')), 'BTC day row shows the load error');
+    await page.evaluate(() => { mktLoadErr = ''; renderSignalsTable(); });
+    check(/\(no BTC daily candles yet\)/.test((await read()).emptyTxt), 'BTC day with no candles and no error says so');
+    await page.evaluate(() => { mktCache().byDate = window.__keepMkt; mktFailedAt = 0; state.ui.mktFilter = ''; renderSignalsTable(); });
     // A greyed option does nothing but say why.
     await click('#sigCoinBar button[data-coins="dcx"]');
     const toast = await page.evaluate(() => { const c = document.getElementById('toastContainer'); return c && c.lastElementChild ? c.lastElementChild.innerText : ''; });
