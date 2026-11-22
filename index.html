@@ -13082,8 +13082,9 @@
         const why = st.blocks[cm.k] || (cm.venue ? cm.label + ' lists none of these ' + al + 'alerts' : 'none of these ' + al + 'alerts are on ' + coinSetTxt(st.coinSet, cm.label));
         return { why: 'coins', msg: 'No alerts left: ' + why + '. ' + st.assetN + ' ' + al + 'alert' + (st.assetN === 1 ? '' : 's') + ' before Coins.', fix: btn('Coins: All (' + st.assetN + ')', "setSigCoins('')") + (st.asset ? ' ' + btn('Assets: Both', "setSigAsset('')") : '') };
       }
-      if (!st.dayN && st.mf) return { why: 'btcday', msg: 'No alerts here on BTC ' + MKT_LABEL[st.mf].toLowerCase() + ' days' + (st.mv ? ' with ' + MV_LABEL[st.mv] + ' at entry' : '') + '.', fix: btn('All days', "setMktFilter('mktCalSignals','')") };
-      if (!st.dayN && st.mv) return { why: 'btcmove', msg: mvLoading ? 'Loading BTC 15m prices for the BTC move row…' : 'No alerts here with ' + MV_LABEL[st.mv] + ' at entry' + (mvErr ? ' (' + mvErr + ')' : !mvCache().c.length ? ' (no BTC 15m prices yet)' : '') + '.', fix: btn('All', "setMvFilter('mktCalSignals','')") };
+      // With no BTC days on the device (loading, or Delta could not be reached) no alert can match: say so.
+      if (!st.dayN && st.mf) return { why: 'btcday', msg: mktLoading && !Object.keys(mktCache().byDate).length ? 'Loading BTC daily candles for the BTC day row…' : 'No alerts here on BTC ' + MKT_LABEL[st.mf].toLowerCase() + ' days' + (st.mv ? ' with ' + MV_LABEL[st.mv] + ' at entry' : '') + (mktLoadErr ? ' (' + mktLoadErr.replace(/\. Check your connection and try again\.$/, '') + ')' : !Object.keys(mktCache().byDate).length ? ' (no BTC daily candles yet)' : '') + '.', fix: btn('All days', "setMktFilter('mktCalSignals','')") };
+      if (!st.dayN && st.mv) return { why: 'btcmove', msg: mvLoading ? 'Loading BTC 15m prices for the BTC move row…' : 'No alerts here with ' + MV_LABEL[st.mv] + ' at entry' + (mvErr ? ' (' + String(mvErr).replace(/\.$/, '') + ')' : !mvCache().c.length ? ' (no BTC 15m prices yet)' : '') + '.', fix: btn('All', "setMvFilter('mktCalSignals','')") };
       return { why: 'tiny', msg: 'Every alert here has a tiny stop, and those are left out of the stats.', fix: btn('Include them', 'state.ui.sigSkipTiny=false;save();renderSignalsTable()') };
     }
     function renderSignalEdgeAnalysis(pairs) {
@@ -14211,7 +14212,7 @@
       const bar = document.getElementById(barId);
       if (!bar) return;
       const mf = mktFilter();
-      bar.className = 'flex items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
+      bar.className = 'flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono';
       bar.innerHTML = '';
       [["", "All days"], ["bull", "Bullish"], ["bear", "Bearish"], ["side", "Sideways"]].forEach(([v, l]) => {
         const b = document.createElement('button'); b.type = 'button';
@@ -14220,6 +14221,15 @@
         b.onclick = () => setMktFilter(hostId, mf === v ? "" : v);
         bar.appendChild(b);
       });
+      // A BTC day picked with no BTC days on the device keeps nothing: say why on the row itself.
+      const noDays = !Object.keys(mktCache().byDate).length;
+      if (mf && (mktLoadErr || noDays)) {
+        const s = document.createElement('span');
+        s.id = barId + 'Note';
+        s.className = 'px-1.5 text-[10px] ' + (mktLoadErr ? 'text-rose-300' : 'text-slate-500');
+        s.innerText = mktLoading ? 'loading BTC daily candles…' : mktLoadErr ? mktLoadErr.replace(/ Check your connection and try again\.$/, '') : 'no BTC daily candles yet';
+        bar.appendChild(s);
+      }
     }
 
     /* =================== SIGNAL TIME PERIOD =================== */
