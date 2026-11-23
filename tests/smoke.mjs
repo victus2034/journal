@@ -5370,8 +5370,9 @@ async function stopMoveRun(seed) {
       return { p: w.p, ta: w.ta, o, sc };
     });
     check(pure.sc && pure.sc.label === 'Target' && pure.sc.r === 2, 'stop moves from the next candle: ' + JSON.stringify(pure.sc));
-    // fill close +0.05R; +0.505R kept; +0.508R is within 0.01R (dropped, its dip -0.1R joins the next); +1.2R; then stopped (-1.5R)
-    check(JSON.stringify(pure.p) === '[[0.05,0.05],[0.505,-0.2],[1.2,-0.1]]' && pure.ta === -1.5, 'path kept: ' + JSON.stringify(pure));
+    // fill close +0.05R; then each new best with the dip since the last (its own candle's included): +0.505R (-0.2R),
+    // +0.508R (-0.1R; until v.210 merged into the next point, 0.01R steps), +1.2R (+0.3R); then stopped (-1.5R)
+    check(JSON.stringify(pure.p) === '[[0.05,0.05],[0.505,-0.2],[0.508,-0.1],[1.2,0.3]]' && pure.ta === -1.5, 'path kept: ' + JSON.stringify(pure));
     check(pure.o === 0.9, 'outside Signals the scanner result stands: ' + pure.o);
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
@@ -5601,6 +5602,46 @@ async function earlyEntryRun(seed) {
 //     16:00 high 202.4 body 201.6. At 0.75%+ (201.5): wick 201.8 (0.9%), body 201.6 (0.8%).
 // 15m walk: A fills, +1.6% (high 101.6), +2.1% (high 102.1), then low 98.5 (every stop).
 // B fills, -1.25% (low 197.5), then high 202.5 (every stop).
+// Wick / body SL look at the 300 candles closed before the alert (lakky, 2026-11-23 audit: an alert in the middle
+// of a candle got 299, so AVAX's body 300 candles back was missed and the trade had no stop). A lookup kept by an
+// older build ("slc|") is dropped and read again.
+async function slcLookbackRun() {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  const H4 = 14400, c0 = Date.parse('2026-10-01T00:00:00Z') / 1000; // the alert: 10:00 IST = 04:30 UTC, in the 04:00 candle
+  // Closed candles c0 (1st back) ... c0 - 309 H4; lows 101 except the 300th back (95) and the 301st (90); the forming one 80.
+  const rows = [[c0 + H4, 100, 102, 80, 100]];
+  for (let i = 0; i < 310; i++) rows.push([c0 - i * H4, 102, 103, i === 299 ? 95 : i === 300 ? 90 : 101, 102]);
+  await ctx.route(url => !url.href.startsWith(base) && !url.href.startsWith('https://api.india.delta.exchange/'), r => r.abort());
+  await ctx.route('https://api.india.delta.exchange/**', route => {
+    const u = new URL(route.request().url()), a = +u.searchParams.get('start'), b = +u.searchParams.get('end');
+    const body = u.searchParams.get('resolution') === '4h' ? rows.filter(x => x[0] >= a && x[0] <= b).map(([time, open, high, low, close]) => ({ time, open, high, low, close })) : [];
+    return route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, result: body }) });
+  });
+  await ctx.addInitScript(() => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.sigTgt', JSON.stringify({ 'slc|kz|long|4H': { n: 299, w: [101], b: [102] } })); sessionStorage.setItem('seeded', '1'); } });
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady, null, { timeout: 15000 });
+    const r = await page.evaluate(async () => {
+      const g = { key: 'kz', symbol: 'ZUSD', side: 'long', timeframe: '4H', date: '2026-10-01', time: '10:00' };
+      const old = Object.keys(tgtCache()).filter(k => k.indexOf('slc|') === 0);
+      return { old, key: slcKey(g), st: await slcOne(g) };
+    });
+    check(!r.old.length, 'an older build\'s lookup is dropped: ' + JSON.stringify(r.old));
+    check(r.key === 'slc2|kz|long|4H', 'kept under the new key: ' + r.key);
+    check(r.st.n === 300 && JSON.stringify(r.st.w) === '[101,95]', '300 closed candles, the 300th back in, the 301st and the forming one out: ' + JSON.stringify(r.st));
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n')[0]);
+  }
+  await ctx.close();
+  const label = 'Wick / body SL: the 300 candles closed before the alert; old lookups read again';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 async function slTypeRun(seed) {
   const errs = [];
   const check = (ok, msg) => { if (!ok) errs.push(msg); };
@@ -5651,7 +5692,7 @@ async function slTypeRun(seed) {
     // Candles come in fixed blocks shared by a coin's alerts: one or two per coin here.
     const slcReads = reads['4h'];
     check(slcReads >= 2 && slcReads <= 4, '4H blocks read per crypto coin, none for NSE: ' + slcReads);
-    const kept = await page.evaluate(() => ({ a: tgtCache()['slc|ka|long|4H'], b: tgtCache()['slc|kb|short|4H'], stops: sigView.pairs.map(pr => pr.signal.stop) }));
+    const kept = await page.evaluate(() => ({ a: tgtCache()['slc2|ka|long|4H'], b: tgtCache()['slc2|kb|short|4H'], stops: sigView.pairs.map(pr => pr.signal.stop) }));
     // The forming 04:00 candle (low 95 / high 210) is left out; older flat candles add no new step.
     check(JSON.stringify(kept.a && kept.a.w) === '[99.6,98.8,98.6]' && JSON.stringify(kept.a && kept.a.b) === '[100.4,99.8,99.2]', 'A steps: ' + JSON.stringify(kept.a));
     check(JSON.stringify(kept.b && kept.b.w) === '[201,201.8,202.4]' && JSON.stringify(kept.b && kept.b.b) === '[199.8,201,201.6]', 'B steps: ' + JSON.stringify(kept.b));
@@ -5915,8 +5956,8 @@ async function trailRun(seed) {
       const sig = { side: 'long', entry: 100, stop: 99, date: '2026-10-01', time: '10:00', timeframe: '4H' }, t = Date.parse('2026-10-01T10:00:00+05:30') / 1000;
       const cs = [[0, 100.2, 99.9, 100.1], [1, 104, 101, 103.5], [2, 103.8, 102.5, 103], [3, 103, 101.9, 102]].map(([i, high, low, close]) => ({ time: t + i * 900, high, low, close }));
       const w3 = tgtWalk(sig, cs.slice(0, 3), 15, 'tp'), w4 = tgtWalk(sig, cs, 15, 'tp'), w20 = tgtWalk(sig, cs, 15, '20');
-      // The path: a best held back (under 0.01R past the last) is kept once price dips after it,
-      // bests round down and dips up, so 2.2496R reads 2.249 and can't reach a 2.25R level early.
+      // The path: every new best is a point, with the dip since the last one; moves kept to 1e-9R, so
+      // 2.2496R stays 2.2496 (until v.210 it read 2.249 and a % level at 2.2493R read as missed).
       const r1 = tgtRec(0.01, 0); r1.bar(0.01, 0.005); r1.bar(0.01005, 0.009); r1.bar(0.0095, 0.0075); r1.bar(0.0102, 0.0099);
       const r2 = tgtRec(0.01, 0); r2.bar(0.022496, 0.019996);
       return { a, b, c, d, e, e2, w3: [w3.done, w3.tr], w4: [w4.done, w4.tr, w4.ta], w20: [w20.done, w20.tr], rec: JSON.stringify(r1.end()), rnd: JSON.stringify(r2.end()) };
@@ -5941,7 +5982,7 @@ async function trailRun(seed) {
     });
     check(fw.early.none && fw.early.wait === 1 && fw.over.none && !fw.over.wait && fw.late[0] === 1 && !fw.late[1], 'fill window: wait while open, filled on day 15: ' + JSON.stringify(fw));
     check(fw.base && !fw.nse && !fw.off, 'Exit at walks a scanner "no fill" crypto alert, not NSE, not with Scanner: ' + JSON.stringify(fw));
-    check(pure.rec === '{"p":[[1,0.5],[1.005,0.9],[1.02,0.75]],"ta":null}' && pure.rnd === '{"p":[[2.249,2]],"ta":null}', 'path kept for Trail TP: ' + pure.rec + ' ' + pure.rnd);
+    check(pure.rec === '{"p":[[1,0.5],[1.005,0.9],[1.02,0.75]],"ta":null}' && pure.rnd === '{"p":[[2.2496,1.9996]],"ta":null}', 'path kept for Trail TP: ' + pure.rec + ' ' + pure.rnd);
     check(JSON.stringify(pure.w3) === '[0,1]' && JSON.stringify(pure.w4) === '[1,1,1.9]' && pure.w20[1] === undefined, 'till TP / SL walk past 3R: ' + JSON.stringify(pure));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
@@ -6701,6 +6742,14 @@ const PARITY_COMBOS = [
   { name: 'fib 1.5R, entry 0.1% early', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', early: 0.1 },
   { name: 'TL 2R, wick SL, BE at 1R, entry 0.05% early', kind: 'trendline', from: '2026-10-10', to: '2026-10-25', tgt: '2R', sl: { mode: 'wick', gap: 0.75 }, stop: { mode: 'be', beAt: 1 }, early: 0.05 },
   { name: 'fib 2%, 1% SL, trail, entry 0.2% early, 20 candles', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '2%', sl: { mode: 'pct', pct: 1 }, trail: { on: true, stepP: 0.25, gapP: 0.25 }, early: 0.2, hold: '20' },
+  // Every condition (lakky, 2026-11-23: "do a backtest of all the alerts and make sure it matches with the
+  // backtest of journal with all conditions"): the scanner's own results, fib Next level / L4 box SL, Levels on,
+  // touches / breaks, tiny stops; every alert's fill and the strip's numbers are compared too.
+  { name: 'fib scanner', kind: 'fib', from: '2026-10-10', to: '2026-10-25' },
+  { name: 'TL scanner, no fees, breaks', kind: 'trendline', from: '2026-10-10', to: '2026-10-25', tl: 'br', nofee: true },
+  { name: 'fib 1R, Next level SL, L1 off', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '1R', sl: { mode: 'next' }, lvlOff: ['L1'] },
+  { name: 'fib 1.5R, L4 box SL, tiny stops out', kind: 'fib', from: '2026-10-10', to: '2026-10-25', tgt: '1.5R', sl: { mode: 'box' }, skipTiny: true },
+  { name: 'TL touches 2R, BE at 0.5R, crypto', kind: 'trendline', market: 'crypto', from: '2026-10-10', to: '2026-10-25', tgt: '2R', tl: 'touch', stop: { mode: 'be', beAt: 0.5 } },
 ];
 async function parityRun() {
   const errs = [];
@@ -6757,8 +6806,8 @@ async function parityRun() {
     for (const c of PARITY_COMBOS) {
       await page.evaluate(c => {
         const u = state.ui;
-        Object.assign(u, { sigKind: c.kind, sigChan: c.chan || '', sigMkt: 'all', sigPeriod: { mode: 'custom', from: c.from, to: c.to }, sigDay: '', sigCoins: '', mktFilter: '', sigSkipTiny: false,
-          sigTgt: c.tgt, sigHold: c.hold || 'tp', sigNoFee: !!c.nofee, sigLvl: c.lvl || '', sigLvlOff: [], sigTlType: c.tl || '', sigSec: 'edge', sigEarly: c.early || 0 });
+        Object.assign(u, { sigKind: c.kind, sigChan: c.chan || '', sigMkt: 'all', sigMarket: c.market || '', sigAsset: '', sigPeriod: { mode: 'custom', from: c.from, to: c.to }, sigDay: '', sigCoins: '', mktFilter: '', mvFilter: '', sigSkipTiny: !!c.skipTiny,
+          sigTgt: c.tgt || '', sigHold: c.hold || 'tp', sigNoFee: !!c.nofee, sigLvl: c.lvl || '', sigLvlOff: c.lvlOff || [], sigTlType: c.tl || '', sigSec: 'edge', sigEarly: c.early || 0 });
         u.sigSl = Object.assign({ mode: '', gap: 0.75, pct: 1 }, c.sl || {});
         u.sigStop = Object.assign({ mode: 'off', beAt: 1, shAt: 1, shTo: 0.75, beAtP: 1, shAtP: 1, shToP: 0.5 }, c.stop || {});
         u.sigTrail = Object.assign({ on: false, step: 0.25, gap: 0.25, stepP: 0.25, gapP: 0.25 }, c.trail || {});
@@ -6776,11 +6825,17 @@ async function parityRun() {
         if (reads === r0 && !(await page.evaluate(() => tgtBusy || slcBusy || tgtQ.length > 0 || slcQ.length > 0))) break;
         quiet = 0;
       }
-      const d = await page.evaluate(() => withOutcomeCache(() => inSigScope(() => ({
-        rows: sigView.pairs.map(pr => { const o = outcomeOf(pr); return [pr.signal.key, o ? o.r : null]; }),
-        banner: (document.getElementById('sigNotFinal') || {}).innerText || '', total: (document.getElementById('sigEdgeStrip').innerText.match(/Total R\s*([+-]?[\d.]+R)/) || [])[1] || ''
-      }))));
-      app[c.name] = Object.fromEntries(d.rows);
+      // Each alert's R, whether it filled and the strip as shown (tools/signals-audit.mjs reads the same).
+      const d = await page.evaluate(() => withOutcomeCache(() => inSigScope(() => {
+        const strip = {};
+        document.querySelectorAll('#sigEdgeStrip > div').forEach(card => {
+          const lab = card.querySelector('span'), val = card.querySelector('.mono-num'), sub = card.querySelector('.my-0\\.5 > .text-\\[10px\\]');
+          if (lab && val) strip[lab.innerText.trim()] = { val: val.innerText.trim(), sub: sub ? sub.innerText.trim() : '' };
+        });
+        return { rows: Object.fromEntries(sigView.pairs.map(pr => { const o = outcomeOf(pr); return [pr.signal.key, [o ? o.r : null, tgtFilled(pr), o ? (o.label || pr.signal.outcome || '') : '']]; })),
+          strip, empty: sigView.empty ? sigView.empty.why : '', banner: (document.getElementById('sigNotFinal') || {}).innerText || '' };
+      })));
+      app[c.name] = { rows: d.rows, strip: d.strip, empty: d.empty };
       shown[c.name] = d;
       check(!d.banner, c.name + ': numbers left "not final": ' + d.banner);
     }
@@ -6792,7 +6847,7 @@ async function parityRun() {
     const cells = l => (l.match(/("([^"]|"")*"|[^,]*)(,|$)/g) || []).map(x => x.replace(/,$/, '').replace(/^"|"$/g, '').replace(/""/g, '"'));
     const lines = csv.replace(/^\uFEFF/, '').split('\r\n'), head = cells(lines[0]), ri = head.indexOf('signal_r');
     const last = PARITY_COMBOS[PARITY_COMBOS.length - 1].name, sumCsv = lines.slice(1).reduce((t, l) => { const v = cells(l)[ri]; return t + (v ? +v : 0); }, 0);
-    const sumApp = Object.values(app[last]).reduce((t, v) => t + (v == null ? 0 : v), 0);
+    const sumApp = Object.values(app[last].rows).reduce((t, v) => t + (v[0] == null ? 0 : v[0]), 0);
     check(head.includes('what_if') && head.includes('exit') && Math.abs(sumCsv - sumApp) < 0.01 * Math.max(1, lines.length), 'CSV signal_r = the what-if shown: ' + sumCsv.toFixed(3) + ' vs ' + sumApp.toFixed(3) + ' (' + (lines.length - 1) + ' rows) ' + lines.slice(0, 2).join(' / ').slice(0, 400));
   } catch (e) {
     errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
@@ -6804,10 +6859,10 @@ async function parityRun() {
   fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(app));
   const py = await new Promise(done => execFile('python3', [path.join(ROOT, 'tools', 'signals-retest.py'), fxFile, path.join(dir, 'combos.json'), path.join(dir, 'retest.json'), '--app', path.join(dir, 'app.json')], { timeout: 120000 }, (err, out, er) => done({ err, out: String(out || '') + String(er || '') })));
   check(!py.err, 'journal vs independent retest:\n       ' + py.out.trim().split('\n').join('\n       '));
-  const n = Object.values(app).reduce((t, x) => t + Object.values(x).filter(v => v != null).length, 0);
+  const n = Object.values(app).reduce((t, x) => t + Object.values(x.rows).filter(v => v[0] != null).length, 0);
   check(n >= 400, 'trades compared: ' + n);
   fs.rmSync(dir, { recursive: true, force: true });
-  const nNse = Object.entries(app).filter(([k]) => /^NSE /.test(k)).reduce((t, [, x]) => t + Object.values(x).filter(v => v != null).length, 0);
+  const nNse = Object.entries(app).filter(([k]) => /^NSE /.test(k)).reduce((t, [, x]) => t + Object.values(x.rows).filter(v => v[0] != null).length, 0);
   check(nNse >= 40, 'NSE trades compared: ' + nNse);
   const label = `Signals parity: journal = independent retest on real alerts + Delta / NSE candles (${PARITY_COMBOS.length} settings, ${n} trades, ${nNse} in NSE-only settings)`;
   console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
@@ -8186,6 +8241,7 @@ await stopMoveRun(data);
 await partialRun(data);
 await earlyEntryRun(data);
 await slTypeRun(data);
+await slcLookbackRun();
 await holdPctRun(data);
 await trailRun(data);
 await tgtHeadRun(data);
