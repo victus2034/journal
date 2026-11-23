@@ -6033,7 +6033,7 @@ async function tgtHeadRun(seed) {
       const again = tgtCache()[k];
       return { v: w.v, head: sc(w), coarse: sc(coarse), again: again && again.v === TGT_WALK_V && sc(again) };
     }, [sigOf(day), hr]);
-    check(r.v === 3 && JSON.stringify(r.head) === '["Trail TP",0.9495]', '15m: Trail TP ends at +1R on the dip: ' + JSON.stringify(r));
+    check(r.v === 4 && JSON.stringify(r.head) === '["Trail TP",0.9495]', '15m: Trail TP ends at +1R on the dip: ' + JSON.stringify(r));
     check(JSON.stringify(r.coarse) === '["Trail TP",2.44875]', 'one 1h candle hides the dip: ' + JSON.stringify(r.coarse));
     check(JSON.stringify(r.again) === '["Trail TP",0.9495]', 'a walk kept by an older build is walked again on 15m: ' + JSON.stringify(r.again));
     // Reads: only 15m, whole blocks of 1800 candles, each once, and only the block(s) the
@@ -6212,7 +6212,7 @@ async function nseCandlesRun() {
     await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady);
     const b0 = blobReads, t0r = treeReads;
     const again = await page.evaluate(async sig => { const w = await tgtOne(sig, 'tp'); return [w.sl, w.v]; }, sigA);
-    check(JSON.stringify(again) === '[1,3]' && blobReads === b0 && treeReads === t0r + 1, 'after a reload: list read, files from the device: ' + JSON.stringify(again) + ' blobs ' + (blobReads - b0));
+    check(JSON.stringify(again) === '[1,4]' && blobReads === b0 && treeReads === t0r + 1, 'after a reload: list read, files from the device: ' + JSON.stringify(again) + ' blobs ' + (blobReads - b0));
     // No branch yet: says so. No sync: says how.
     branch = false;
     await page.evaluate(sig => { nseIdx = null; Object.keys(nseSer).forEach(k => delete nseSer[k]); tgtRetry(); state.signals = [Object.assign({}, sig, { id: 'n2', key: 'tl|ABC.NS|4h|0|1|3', date: '2026-10-21' })]; Object.assign(state.ui, { sigKind: 'trendline', sigChan: '', sigPeriod: { mode: 'all', from: '', to: '' }, sigTgt: '1R', sigSl: { mode: '', gap: 0.75, pct: 1 } }); save(); switchTab('signals'); renderAll(); }, sigA);
