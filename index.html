@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-23.209">
+  <meta name="app-version" content="2026-11-23.210">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -10067,7 +10067,9 @@
       }
       return { w, b };
     }
-    function slcKey(sig) { return "slc|" + [sig.key || sig.symbol + "|" + sig.date + "|" + sig.time, sig.side === "short" ? "short" : "long", sig.timeframe].join("|"); }
+    // "slc2|": the 300 candles closed before the alert (v.210). An "slc|" one read from 300 candles
+    // back to the alert, so the candle forming then left 299 (lakky, 2026-11-23 audit): dropped, read again.
+    function slcKey(sig) { return "slc2|" + [sig.key || sig.symbol + "|" + sig.date + "|" + sig.time, sig.side === "short" ? "short" : "long", sig.timeframe].join("|"); }
     // Pure: the stop rule r gives this alert: a price, null (none this way) or undefined
     // (its candles are not read yet). st = its kept candle steps (slcStairs).
     function slStopFor(sig, r, st) {
@@ -10127,9 +10129,10 @@
         return bars.length ? Object.assign({ n: bars.length }, slcStairs(bars, s)) : { none: "no NSE candles" };
       }
       const res = AI_RES.slice().reverse().find(x => tf % x[0] === 0) || AI_RES[0];
-      const n = Math.min(1900, Math.ceil(SLC_BARS * tf / res[0]));
+      // One candle more than SLC_BARS: the one forming at the alert is not closed yet.
+      const n = Math.min(1900, Math.ceil((SLC_BARS + 1) * tf / res[0]));
       const rows = await tgtRead(tgtSym(sig.symbol), res[1], t0 - n * res[0] * 60000, t0);
-      const bars = slcBars(rows, tf, res[0], t0);
+      const bars = slcBars(rows, tf, res[0], t0).slice(-SLC_BARS);
       return bars.length ? Object.assign({ n: bars.length }, slcStairs(bars, s)) : { none: "no candles on Delta" };
     }
     async function slcLoad(sigs) {
@@ -10368,37 +10371,30 @@
     }
     // The biggest target as a fraction of entry: past it every target is settled.
     function tgtCapFrac(rk) { return Math.max(...SIG_TGTS.filter(x => x.k).map(x => x.r != null ? x.r * rk : x.p / 100)); }
-    // Pure: the price path, small enough to keep, for "Move SL". p = each new best
-    // move (in R, at least 0.01R past the last one kept) with the worst move since
-    // the one before it, in candle order; ta = the worst move after the last one.
-    // From that a stop moved at any trigger, and any target, can be replayed.
+    // Pure: the price path, for "Move SL", Trail TP and Partial. p = each candle's new best
+    // move (in R) with the worst move since the point before it (that candle's own low
+    // included), in candle order; ta = the worst move after the last one. From that a stop
+    // moved at any trigger, and any target or level, is replayed exactly as candle by
+    // candle (v.210, lakky's 2026-11-23 audit: until then moves were kept in 0.001R steps
+    // and small new bests merged, so a % level between two steps, e.g. 3% = 0.5102R, could
+    // read as missed, or a dip after a merged best as before the stop moved; 50 of ~4 million
+    // trades in the audit). Moves are kept to 1e-9 R, under the 1e-9 every comparison allows.
     // rk = stop distance as a fraction of entry; m0 = the fill candle's close move.
     // timed: also pt, each point's candle times [best, dip] in minutes after the fill
     // (bar's tm), and tta, the last dip's; the exit time of any rule is read from them.
     function tgtRec(rk, m0, timed) {
-      // Bests round down and dips round up (0.001R), so a level is never reached early.
-      const F = v => Math.floor(v / rk * 1000 + 1e-6) / 1000, C = v => Math.ceil(v / rk * 1000 - 1e-6) / 1000, p = [], pt = [];
-      let best = Math.max(0, m0), kept = best, seg = Infinity, pend = null, after = Infinity, segT = null, pendT = null, afterT = null;
-      if (best > 0) { p.push([F(best), C(best)]); pt.push([0, 0]); }
+      const F = v => Math.round(v / rk * 1e9) / 1e9, p = [], pt = [];
+      let best = Math.max(0, m0), seg = Infinity, segT = null;
+      if (best > 0) { p.push([F(best), F(best)]); pt.push([0, 0]); }
       const dip = (adv, tm) => { if (adv < seg) { seg = adv; segT = tm; } };
       return {
         bar(fav, adv, tm) {
-          if (fav > best) {
-            dip(adv, tm); best = fav;
-            if (fav - kept >= 0.01 * rk) { p.push([F(fav), C(seg)]); pt.push([tm, segT]); kept = fav; seg = Infinity; pend = null; }
-            else { pend = [F(fav), C(seg)]; pendT = [tm, segT]; }
-            after = Infinity;
-            return;
-          }
-          // A best held back (under 0.01R past the last one) is kept once price dips after it.
-          if (pend) { p.push(pend); pt.push(pendT); kept = best; seg = Infinity; pend = null; }
-          dip(adv, tm); if (adv < after) { after = adv; afterT = tm; }
+          dip(adv, tm);
+          if (fav > best) { best = fav; p.push([F(fav), F(seg)]); pt.push([tm, segT]); seg = Infinity; segT = null; }
         },
         end(advLast, tm) {
-          if (advLast != null) { if (pend) { p.push(pend); pt.push(pendT); pend = null; seg = Infinity; } dip(advLast, tm); if (advLast < after) { after = advLast; afterT = tm; } }
-          if (pend) { p.push(pend); pt.push(pendT); }
-          const t = pend ? after : seg;
-          return timed ? { p, ta: isFinite(t) ? C(t) : null, pt, tta: isFinite(t) ? (pend ? afterT : segT) : null } : { p, ta: isFinite(t) ? C(t) : null };
+          if (advLast != null) dip(advLast, tm);
+          return timed ? { p, ta: isFinite(seg) ? F(seg) : null, pt, tta: isFinite(seg) ? segT : null } : { p, ta: isFinite(seg) ? F(seg) : null };
         }
       };
     }
@@ -10476,9 +10472,9 @@
         }
       }
       if (w.m >= d - 1e-12) {
-        // The first point at the target; past the last kept one (a rounding edge), the exit candle.
+        // The first point at the target (none: the exit candle).
         let t = null;
-        if (timed) { const i = w.p.findIndex(q => q[0] >= tR - 1e-3 - eps); t = i >= 0 ? T(i, 0) : te; }
+        if (timed) { const i = w.p.findIndex(q => q[0] >= tR - eps); t = i >= 0 ? T(i, 0) : te; }
         // Price passed every level under the target on the way.
         if (usePx) { book(tR); if (left <= eps) return { r: got - costR, label: "Partial", at: t }; }
         return res(tR, "Target", t);
@@ -10499,6 +10495,7 @@
       const done = stored => {
         // Newest wins: what was read this session, then IndexedDB, then the old copy.
         tgtMem = Object.assign({}, local || {}, stored || {}, tgtMem || {});
+        Object.keys(tgtMem).forEach(k => { if (k.indexOf("slc|") === 0) delete tgtMem[k]; }); // read again as "slc2|" (slcKey)
         tgtReady = true;
         if (local) tgtSave();
         if (state && !document.getElementById('view-signals').classList.contains('hidden')) renderSignalsTable();
@@ -10617,7 +10614,7 @@
     // invisible, one inside a 5m candle is not). TGT_WALK_V marks a walk made this way: one
     // kept by an older build is walked again once. tools/signals-retest.py replays the same
     // rules on its own, and the smoke test holds the two equal on real alerts and candles.
-    const TGT_RES = 15, TGT_RES_K = "15m", TGT_WALK_V = 3;
+    const TGT_RES = 15, TGT_RES_K = "15m", TGT_WALK_V = 4;
     // A walk still open (no TP or SL yet) is walked again after this long, as new candles come in.
     const TGT_LIVE_MS = 5 * 60000;
     // One read from Delta. Busy (429) or a server error: asked again, twice, a little later.
@@ -12601,9 +12598,12 @@
       };
     }
     // The alerts with a result, oldest first: the same set the Backtest report plays.
+    // In the order sent; alerts of the same minute by key, so the drawdown, the losing run and
+    // the Demo account come out the same on every device (they followed the order alerts were loaded in).
     function sigGraded(pairs) {
-      return pairs.map(pr => ({ pr, o: outcomeOf(pr) })).filter(x => x.o)
-        .sort((a, b) => sbtWhen(a.pr.signal) < sbtWhen(b.pr.signal) ? -1 : sbtWhen(a.pr.signal) > sbtWhen(b.pr.signal) ? 1 : 0);
+      const k = pr => sbtWhen(pr.signal) + "\u0000" + String(pr.signal.key || "");
+      return pairs.map(pr => ({ pr, o: outcomeOf(pr), k: k(pr) })).filter(x => x.o)
+        .sort((a, b) => a.k < b.k ? -1 : a.k > b.k ? 1 : 0);
     }
     // Each alert's result before fees (g): the scanner's and Exit at's results carry the
     // scanner's fee, so it is added back here and the broker's is charged in demoRun.
@@ -16915,6 +16915,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-23.210', pr: 123, title: 'Signals checked against a separate backtest', pts: ['Every Signals setting (Market, Channel, Period, Assets, Coins, BTC day / move, Levels, Type, Exit at, SL, Early entry, Move SL, Trail, Partial, Hold, Fees: 688 mixes) replayed on today\'s real alerts and candles by a separate backtest: every alert, fill and number matches', 'Fixed: Wick / Body SL looked back 299 candles, not 300; % targets with Move SL / Trail / Partial could read a touch right at the level wrong (up to 6 trades in 1,000)', 'Max drawdown, worst losing run and the Demo account no longer depend on the order alerts sent in the same minute were loaded'] },
       { v: '2026-11-23.209', pr: 122, title: 'Signals Estimator', pts: ['New Signals section Estimator: pick 1 week, 1 month, 3, 6 or 12 months (or your own length) and see likely trades, wins, R, balance and return', 'Shows the range 8 in 10 runs land in, the chance of profit, the worst fall, and what the last stretch really did', 'Follows every filter; money uses your Demo account settings'] },
       { v: '2026-11-22.208', pr: 121, title: 'Phone alerts', pts: ['Settings → Connections → Phone alerts: a push on your iPhone / iPad (free ntfy app) when trades close, money moves in or out, or an import stops working', 'Pick which alerts you want; Send test checks your phone gets them', 'Sent by the Delta and CoinDCX imports on your server, so they come even with the journal closed'] },
       { v: '2026-11-22.207', pr: 120, title: 'Weekly check: BTC day says why it is empty', pts: ['BTC day filter: when BTC candles could not load (offline or Delta down) the row and the empty note say so, instead of just "no alerts on bullish days"', 'Weekly audit of every tab online and offline with bad inputs: no other bugs found'] },
