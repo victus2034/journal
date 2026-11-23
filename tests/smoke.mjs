@@ -2975,6 +2975,156 @@ async function demoAccountRun(seed) {
   errs.forEach(e => { console.log('     ' + e); failures.push('demo account: ' + e); });
 }
 
+// Estimator (lakky, 2026-11-23: "in signals add estimator where if i give an time period so it
+// will give me results number example 1week, 1 month, 3 month, 6, 12 months"). Fourteen days,
+// 1-14 Oct, each with the same two trendline alerts: 10:00 -1R, 11:00 +2R on 1% stops. Every
+// day is alike, so every run of N days is too, and the numbers can be worked out by hand:
+// N days = 2N trades, N wins / N losses, +N R, worst fall -1R (the 10:00 loss from the last
+// high), $100 at 1% a trade x 0.99 x 1.02 a day. Then the pure parts on mixed data: the
+// day-joined drawdown against sigRunStats' trade-by-trade one, and the runs' average against
+// days x the history's average day.
+async function estimatorRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  const load = fresh => page.evaluate(fresh => {
+    const sg = (d, t, r, i) => ({ id: 'es' + i, key: 'e' + i, kind: 'trendline', date: '2026-10-' + String(d).padStart(2, '0'), time: t, symbol: 'E' + (i % 5) + 'USD', side: 'long', score: '',
+      market: 'CRYPTO', timeframe: '4H', channel: 'CRYPTO 4H', filled: true, outcome: r > 0 ? '+2R' : 'SL', resultR: r, hasReportR: true, price: 100, stop: 99, entry: 100 });
+    state.signals = [];
+    for (let d = 1; d <= 14; d++) { state.signals.push(sg(d, '10:00', -1, state.signals.length)); state.signals.push(sg(d, '11:00', 2, state.signals.length)); }
+    Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigDay: '', mktFilter: '', sigTgt: '', sigNoFee: false });
+    // Made-up coins aren't on Delta: money with real orders off (any size).
+    state.ui.sigDemo = Object.assign({}, state.ui.sigDemo || {}, { real: false, start: 100, mode: 'pct', pct: 1, cur: 'USD' });
+    if (fresh) delete state.ui.sigEst;
+    switchTab('signals'); renderAll();
+  }, fresh);
+  const text = () => page.evaluate(() => document.getElementById('sigEst').innerText.replace(/\s+/g, ' '));
+  const cards = () => page.$$eval('#sigEstStats [data-est]', cs => Object.fromEntries(cs.map(c => [c.dataset.est, c.innerText.replace(/\s+/g, ' ').trim()])));
+  const rows = () => page.$$eval('#sigEstTable tbody tr', trs => trs.map(tr => tr.innerText.replace(/\s+/g, ' ').trim()));
+  const usd = v => '$' + v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pc = v => (v >= 0 ? '+' : '-') + Math.abs(v).toFixed(2) + '%';
+  const bal = days => 100 * Math.pow(0.99 * 1.02, days);
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.evaluate(() => { state.ui.sigSec = 'alerts'; });
+    await load(true);
+    check(await text() === '', 'Estimator waits until opened');
+    const bar = await page.$$eval('#sigSecBar button', bs => bs.map(b => b.innerText.trim()));
+    check(bar.indexOf('Estimator') === bar.indexOf('Demo account') + 1, 'Estimator tab right after Demo account: ' + JSON.stringify(bar));
+    await page.evaluate(() => setSigSec('est'));
+    let t = await text();
+    check(t.includes('From 28 graded alerts over 14 days (1 Oct → 14 Oct): 2.0 a day · average +0.50R · 50% won.'), 'basis line: ' + t.slice(0, 600));
+    check(t.includes('Money as the Demo account: $100.00 start · 1% of the balance a trade · any size · fees on'), 'money line: ' + t.slice(0, 600));
+    // Default period: 1 month (30 days), longer than the 14-day history: said so, no real last month.
+    let c = await cards();
+    check(c.n === 'Trades 60 8 in 10: 60 to 60 · 30 days' && c.wl === 'Wins / losses 30W / 30L 50% of past alerts won' && c.r === 'Total R +30.00R 8 in 10: +30.00R to +30.00R', '1 month by hand: ' + JSON.stringify(c));
+    check(c.bal === 'Balance ' + usd(bal(30)) + ' +' + usd(bal(30) - 100) + ' from $100.00' && c.ret === 'Return ' + pc(bal(30) - 100) + ' 8 in 10: ' + pc(bal(30) - 100) + ' to ' + pc(bal(30) - 100), '1 month money ' + usd(bal(30)) + ': ' + JSON.stringify(c));
+    check(c.up === 'Chance of profit 100% runs that ended above 0R' && c.dd === 'Worst fall -1.00R 1 in 10 runs: -1.00R or worse' && c.last === 'Last 1 month, real — history is only 14 days', 'chance, fall, last: ' + JSON.stringify(c));
+    check(t.includes('The history in view is 14 days, shorter than 1 month'), 'short history said: ' + t.slice(0, 900));
+    // Every period in one table, by hand.
+    let rs = await rows();
+    const want = [['1 week', 7], ['1 month', 30], ['3 months', 91], ['6 months', 183], ['12 months', 365]].map(([l, d]) => l + (l === '1 month' ? ' picked' : '') + ' ' + 2 * d + ' +' + d.toFixed(2) + 'R +' + d.toFixed(2) + 'R to +' + d.toFixed(2) + 'R ' + usd(bal(d)) + ' ' + pc(bal(d) - 100) + ' 100% -1.00R ' + (d <= 14 ? '+' + d.toFixed(2) + 'R' : '—'));
+    check(JSON.stringify(rs) === JSON.stringify(want), 'table by hand:\n' + rs.join('\n') + '\nwant\n' + want.join('\n'));
+    // 1 week fits the history: the last 7 days really made +7R on 14 trades.
+    await page.click('#sigEst button[data-estp="1w"]');
+    c = await cards();
+    check(c.n.startsWith('Trades 14 ') && c.last === 'Last 1 week, real +7.00R 14 trades · ' + pc(bal(7) - 100), '1 week: ' + JSON.stringify(c));
+    check(!(await text()).includes('shorter than'), 'no short-history note for 1 week');
+    // A table row picks its period.
+    await page.click('#sigEstTable tr[data-estrow="6m"]');
+    c = await cards();
+    check(await page.evaluate(() => state.ui.sigEst.p) === '6m' && c.n.startsWith('Trades 366 ') && c.r.startsWith('Total R +183.00R'), 'row click picks 6 months: ' + JSON.stringify(c));
+    // Custom: 2 weeks = the whole history, so "last, real" is the Demo account's own result.
+    await page.click('#sigEst button[data-estp="custom"]');
+    check(await page.inputValue('#sigEstN') === '2' && await page.inputValue('#sigEstU') === 'w', 'custom starts at 2 weeks');
+    c = await cards();
+    check(c.n.startsWith('Trades 28 ') && c.last === 'Last 2 weeks, real +14.00R 28 trades · ' + pc(bal(14) - 100), 'custom 2 weeks: ' + JSON.stringify(c));
+    check((await rows()).some(r => r.startsWith('2 weeks picked 28 +14.00R')), 'custom row in the table');
+    await page.fill('#sigEstN', '10'); await page.selectOption('#sigEstU', 'd');
+    c = await cards();
+    check(c.n.startsWith('Trades 20 ') && c.r.startsWith('Total R +10.00R') && c.last.startsWith('Last 10 days, real +10.00R 20 trades'), '10 days: ' + JSON.stringify(c));
+    await page.fill('#sigEstN', '7');
+    check(await page.evaluate(() => document.activeElement && document.activeElement.id) === 'sigEstN', 'typing keeps focus in the box');
+    for (const [v, u, w] of [['', 'd', 'Enter how long: a number above 0.'], ['0', 'd', 'Enter how long'], ['-3', 'w', 'Enter how long'], ['abc', 'd', 'Enter how long'], ['0.2', 'd', 'under a day'], ['121', 'm', 'Keep it to 10 years'], ['1e9', 'd', 'Keep it to 10 years']]) {
+      await page.selectOption('#sigEstU', u); await page.fill('#sigEstN', v).catch(() => page.evaluate(x => estSet('n', x), v));
+      const x = await text();
+      check(x.includes(w) && !(await page.$('#sigEstStats')) && (await rows()).length === 5, v + ' ' + u + ' should say "' + w + '" and keep the 5 set periods: ' + x.slice(0, 400));
+    }
+    await page.selectOption('#sigEstU', 'm'); await page.fill('#sigEstN', '1.5');
+    c = await cards();
+    check(c.n.startsWith('Trades 92 ') && c.n.includes('46 days'), '1.5 months = 46 days (365/12 x 1.5 = 45.6): ' + JSON.stringify(c));
+    // Kept on the device.
+    await page.click('#sigEst button[data-estp="3m"]');
+    await page.reload({ waitUntil: 'load' });
+    await load();
+    await page.evaluate(() => setSigSec('est'));
+    check(((await cards()).n || '').startsWith('Trades 182 '), 'picked 3 months kept after reload: ' + JSON.stringify(await cards()));
+    // Money follows the Demo account: fixed $2 a trade = +$2 a day; a change there shows here.
+    await page.evaluate(() => { setSigSec('demo'); demoSet('mode', 'fixed'); demoSet('fixed', '2'); setSigSec('est'); estPick('1w'); });
+    c = await cards();
+    check(c.bal === 'Balance $114.00 +$14.00 from $100.00' && c.ret.startsWith('Return +14.00%'), 'fixed $2 a trade, 1 week: ' + JSON.stringify(c));
+    check((await text()).includes('$2.00 a trade'), 'money line says fixed risk');
+    // Same history, other check: whole history in the Demo account = the estimator's last 2 weeks.
+    await page.evaluate(() => { demoSet('mode', 'pct'); demoSet('pct', '1'); state.ui.sigEst = { p: 'custom', n: 14, u: 'd' }; save(); setSigSec('est'); });
+    const lastEst = (await cards()).last;
+    await page.evaluate(() => setSigSec('demo'));
+    const demoRet = await page.$eval('#sigDemoStats [data-demo="ret"]', el => el.innerText.replace(/\s+/g, ' '));
+    check(lastEst.endsWith(demoRet.match(/[+-]\d+\.\d+%/)[0]) && demoRet.includes(pc(bal(14) - 100)), 'last 14 days = Demo account return ' + pc(bal(14) - 100) + ': ' + lastEst + ' | ' + demoRet);
+    // A Demo setting that can't run leaves R and says why money is missing.
+    await page.evaluate(() => { demoSet('start', ''); setSigSec('est'); });
+    c = await cards(); t = await text();
+    check(c.bal.startsWith('Balance — no money estimate') && c.r.startsWith('Total R +14.00R') && t.includes('Enter a starting balance above 0.'), 'no money with a bad start: ' + JSON.stringify(c));
+    await page.evaluate(() => { demoSet('start', '100'); setSigSec('est'); });
+    // Same view, same numbers (seeded).
+    const a1 = await text(); await page.evaluate(() => estDrawOut()); check(a1 === await text(), 'same numbers on a redraw');
+    // Pure parts on mixed data.
+    const p = await page.evaluate(() => {
+      let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      // 1) Max drawdown joined by days = trade by trade.
+      let bad = 0;
+      for (let k = 0; k < 200; k++) {
+        const vs = Array.from({ length: 1 + Math.floor(rnd() * 40) }, () => rnd() < 0.45 ? 1 + rnd() * 2 : -1), days = [];
+        for (let i = 0; i < vs.length;) { const n = Math.floor(rnd() * 4); days.push(vs.slice(i, i + n)); i += n; }
+        const P = { e: 0, pk: 0, dd: 0, min: 0 }; days.forEach(d => estStep(P, estAgg(d)));
+        let e = 0, mn = 0; vs.forEach(v => { e += v; mn = Math.min(mn, e); });
+        if (Math.abs(P.dd - sigRunStats(vs).maxDD) > 1e-9 || Math.abs(P.e - e) > 1e-9 || Math.abs(P.min - mn) > 1e-9) bad++;
+      }
+      // 2) The runs' average = days x the average day (within 4 standard errors), and the same seed gives the same runs.
+      const dr = Array.from({ length: 40 }, () => { const n = Math.floor(rnd() * 6), rs = Array.from({ length: n }, () => rnd() < 0.4 ? 2 : -1); return { n, w: rs.filter(r => r > 0).length, l: rs.filter(r => r < 0).length, R: estAgg(rs), M: null }; });
+      const H = 30, runs = estSim(dr, H, 1000, 99), again = estSim(dr, H, 1000, 99);
+      const mean = a => a.reduce((x, y) => x + y, 0) / a.length, sd = a => { const m = mean(a); return Math.sqrt(a.reduce((x, y) => x + (y - m) * (y - m), 0) / (a.length - 1)); };
+      const dn = dr.map(d => d.n), dR = dr.map(d => d.R.s);
+      return { bad, nMean: mean(runs.map(x => x.n)), nWant: H * mean(dn), nSe: sd(dn) * Math.sqrt(H) / Math.sqrt(1000), rMean: mean(runs.map(x => x.R.e)), rWant: H * mean(dR), rSe: sd(dR) * Math.sqrt(H) / Math.sqrt(1000),
+        same: JSON.stringify(runs.map(x => x.R.e)) === JSON.stringify(again.map(x => x.R.e)), days: [estDaysOf(1, 'm'), estDaysOf(3, 'm'), estDaysOf(6, 'm'), estDaysOf(12, 'm'), estDaysOf(1, 'w')] };
+    });
+    check(p.bad === 0, 'day-joined drawdown differs from trade by trade in ' + p.bad + ' of 200');
+    check(Math.abs(p.nMean - p.nWant) < 4 * p.nSe && Math.abs(p.rMean - p.rWant) < 4 * p.rSe && p.same, 'runs average ' + JSON.stringify(p));
+    check(JSON.stringify(p.days) === '[30,91,183,365,7]', 'period days: ' + JSON.stringify(p.days));
+    // "Last, real" is the newest days: 14 Oct's +2R turned into -1R leaves the last week +4R (the first week stays +7R).
+    await page.evaluate(() => { const g = state.signals.find(x => x.date === '2026-10-14' && x.time === '11:00'); g.resultR = -1; g.outcome = 'SL'; renderAll(); setSigSec('est'); estPick('1w'); });
+    c = await cards();
+    check(c.last === 'Last 1 week, real +4.00R 14 trades · ' + pc(100 * Math.pow(0.99 * 1.02, 6) * 0.99 * 0.99 - 100), 'last week is the newest 7 days: ' + JSON.stringify(c));
+    // Nothing graded: says so instead of zeros.
+    await page.evaluate(() => { state.signals = []; renderAll(); setSigSec('est'); });
+    check((await text()).includes('No alerts with a result in this view yet'), 'empty view says so');
+    // Phone: no sideways scroll on the page.
+    await load();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => { setSigSec('est'); estPick('12m'); });
+    const sw = await page.evaluate(() => document.documentElement.scrollWidth);
+    check(sw <= 390, 'phone width scrolls sideways: ' + sw);
+  } catch (e) {
+    errs.push('threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+  }
+  await ctx.close();
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'Signals estimator: 1W-12M + custom worked out by hand, day-joined drawdown, money = Demo account');
+  errs.forEach(e => { console.log('     ' + e); failures.push('estimator: ' + e); });
+}
+
 // Demo account deep data (lakky, 2026-11-08: "graph does not show proper view ... every day
 // trades and every weeks trades and avg hold time avg top 3-5 cryptos"). Nine alerts on
 // 5-15 Oct, $1 fixed risk on 1% stops at Delta's fees (the fee the scanner's R already
@@ -8219,6 +8369,7 @@ await sigBacktestRun(data);
 await sigRedesignRun(data);
 await demoAccountRun(data);
 await demoRealRun(data);
+await estimatorRun(data);
 await coinVenueRun(data);
 await marketFilterRun(data);
 await demoDeepRun(data);

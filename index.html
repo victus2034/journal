@@ -887,6 +887,10 @@
         <div id="sigDemo" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
       </section>
 
+      <section data-sigsec="est" class="space-y-4 hidden">
+        <div id="sigEst" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
+      </section>
+
       <section data-sigsec="edge" class="space-y-4 hidden">
         <div id="sigTinyBar" class="flex justify-end"></div>
         <div id="sigBest" class="bg-terminal-card border border-terminal-border rounded-xl p-4 font-mono text-xs"></div>
@@ -12603,12 +12607,13 @@
     }
     // Each alert's result before fees (g): the scanner's and Exit at's results carry the
     // scanner's fee, so it is added back here and the broker's is charged in demoRun.
+    function demoRowOf(x, nf) {
+      const sig = x.pr.signal, g = x.o.source === "recorded" || nf ? x.o.r : x.o.r + sigFeeR(sig);
+      return { g, slp: slPct(sig), nse: isNseSig(sig), pr: x.pr, label: x.o.label || sig.outcome || "", hold: demoHoldOf(x.o, sig) };
+    }
     function renderSigDemo(pairs) {
       const nf = sigNoFee();
-      demoRows = sigGraded(pairs).map(x => {
-        const sig = x.pr.signal, g = x.o.source === "recorded" || nf ? x.o.r : x.o.r + sigFeeR(sig);
-        return { g, slp: slPct(sig), nse: isNseSig(sig), pr: x.pr, label: x.o.label || sig.outcome || "", hold: demoHoldOf(x.o, sig) };
-      });
+      demoRows = sigGraded(pairs).map(x => demoRowOf(x, nf));
       renderSigDemoNow();
       // Exit at walks kept before times are read once more while this is open (tgtWantTimes).
       if (sigTgt()) setTimeout(() => tgtLoad(pairs), 0);
@@ -12620,8 +12625,8 @@
       return sig.fillTs != null && sig.endTs != null && sig.endTs >= sig.fillTs ? Math.round((sig.endTs - sig.fillTs) / 60) : null;
     }
     // The rows demoRun plays, with this fee setting (on = charge fees).
-    function demoPlay(cfg, on) {
-      return demoRows.map(x => Object.assign({}, x, { r: x.g, fee: on && x.slp > 0 ? (x.nse ? DEMO_NSE_FEE : cfg.feePct) / x.slp : 0, spec: x.pr ? demoSpec(x.pr.signal, cfg) : x.spec }));
+    function demoPlay(cfg, on, rows) {
+      return (rows || demoRows).map(x => Object.assign({}, x, { r: x.g, fee: on && x.slp > 0 ? (x.nse ? DEMO_NSE_FEE : cfg.feePct) / x.slp : 0, spec: x.pr ? demoSpec(x.pr.signal, cfg) : x.spec }));
     }
     function demoFees(k) {
       const d = demoRaw();
@@ -13133,6 +13138,192 @@
         + trades
         + '<p class="text-[10px] text-slate-500 mt-2">Each trade risks ' + esc(riskTxt) + ' at the time it fires: a -1R loss takes that risk, +2R adds twice it. Fees come off on top: position × the round trip above (position = risk ÷ stop distance), per trade under Fee; Result is in R after them. With real orders on, the position is rounded down to whole contracts (Size), so a trade can risk a little less than planned, never more unless Take 1 is picked. Stop slippage (0.05%) counts either way, as on the rest of the tab. Trades that overlap are sized from the balance before them, and an account can\'t lose more than it holds. Alerts never filled or without a result yet are left out.</p>';
       demoChartBind(); watchStatRows(out);
+    }
+
+    /* =================== ESTIMATOR =================== */
+    // What the alerts in view would likely make over a coming week, month, 3, 6 or 12
+    // months (lakky, 2026-11-23: "in signals add estimator where if i give an time period
+    // so it will give me results number"). The history in view is cut into calendar days
+    // (a day keeps all its alerts in order; a quiet day counts as a day with none). Each
+    // of EST_RUNS runs picks that many days of it at random, with replacement, and adds
+    // them up, so busy and quiet stretches both show in the range. R is the Backtest
+    // report's (every graded alert at 1R, after fees); money is the Demo account's, each
+    // trade placed as it places it (start, risk, fees, real orders). Seeded, so the same
+    // view always gives the same numbers.
+    const EST_PERIODS = [{ k: "1w", label: "1 week", n: 1, u: "w" }, { k: "1m", label: "1 month", n: 1, u: "m" }, { k: "3m", label: "3 months", n: 3, u: "m" }, { k: "6m", label: "6 months", n: 6, u: "m" }, { k: "12m", label: "12 months", n: 12, u: "m" }];
+    const EST_UNITS = [{ k: "d", label: "days" }, { k: "w", label: "weeks" }, { k: "m", label: "months" }];
+    const EST_RUNS = 1000, EST_MAX_DAYS = 3650, EST_SEED = 20261123;
+    let estBase = null; // { rs, rows, days: [[graded index, ...] per calendar day], first, last, D }
+    // A month is 365 ÷ 12 days: 1 → 30, 3 → 91, 6 → 183, 12 → 365.
+    function estDaysOf(n, u) { return Math.round(u === "m" ? n * 365 / 12 : u === "w" ? n * 7 : n); }
+    function estRaw() { const e = state.ui.sigEst; return Object.assign({ p: "1m", n: 2, u: "w" }, e && typeof e === "object" ? e : {}); }
+    // The period picked, in days, or what is wrong with a custom one.
+    function estPicked() {
+      const e = estRaw(), p = EST_PERIODS.find(x => x.k === e.p);
+      if (p) return { k: p.k, label: p.label, days: estDaysOf(p.n, p.u) };
+      const n = (e.n === "" || e.n == null) ? NaN : Number(e.n), u = EST_UNITS.some(x => x.k === e.u) ? e.u : "w";
+      if (!isFinite(n) || !(n > 0)) return { k: "custom", err: "Enter how long: a number above 0." };
+      const days = estDaysOf(n, u), ul = EST_UNITS.find(x => x.k === u).label;
+      if (days < 1) return { k: "custom", err: "That is under a day. Enter at least 1 day." };
+      if (days > EST_MAX_DAYS) return { k: "custom", err: "Keep it to 10 years (3,650 days) or less." };
+      return { k: "custom", label: cleanNum(n) + " " + (n === 1 ? ul.slice(0, -1) : ul), days };
+    }
+    function estDayN(s) { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s || "")); return m ? Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5) : null; }
+    // Small seeded random numbers (mulberry32), 0 to 1.
+    function estRng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+    // One day's values in order (R, a log return or money) as a path needs them: the sum,
+    // the lowest and highest point from the day's start, and the deepest fall inside the
+    // day. estStep joins days into the exact max drawdown without walking each trade again.
+    function estAgg(vs) {
+      let s = 0, lo = 0, hi = 0, dd = 0;
+      for (let i = 0; i < vs.length; i++) { s += vs[i]; if (s < lo) lo = s; if (s > hi) hi = s; if (hi - s > dd) dd = hi - s; }
+      return { s, lo, hi, dd };
+    }
+    function estStep(p, a) {
+      const t = p.e + a.lo;
+      if (p.pk - t > p.dd) p.dd = p.pk - t;
+      if (a.dd > p.dd) p.dd = a.dd;
+      if (t < p.min) p.min = t;
+      if (p.e + a.hi > p.pk) p.pk = p.e + a.hi;
+      p.e += a.s;
+    }
+    // Each calendar day of the history: alerts, wins, losses, R, and money (mv per alert, or none).
+    function estDayRows(B, mv) {
+      return B.days.map(ix => ({
+        n: ix.length, w: ix.filter(i => B.rs[i] > 0).length, l: ix.filter(i => B.rs[i] < 0).length,
+        R: estAgg(ix.map(i => B.rs[i])), M: mv ? estAgg(ix.map(i => mv[i] || 0)) : null
+      }));
+    }
+    // H days, day j = dr[pick(j)], walked in order.
+    function estWalk(dr, pick, H) {
+      const R = { e: 0, pk: 0, dd: 0, min: 0 }, M = { e: 0, pk: 0, dd: 0, min: 0 };
+      let n = 0, w = 0, l = 0;
+      for (let j = 0; j < H; j++) { const d = dr[pick(j)]; n += d.n; w += d.w; l += d.l; estStep(R, d.R); if (d.M) estStep(M, d.M); }
+      return { n, w, l, R, M };
+    }
+    function estSim(dr, H, runs, seed) {
+      const rnd = estRng(seed), D = dr.length, out = [];
+      for (let k = 0; k < runs; k++) out.push(estWalk(dr, () => Math.floor(rnd() * D), H));
+      return out;
+    }
+    // A path's money from the start balance: % risk compounds (sum of log returns), fixed
+    // risk adds up; a fixed-risk path that touches 0 is blown and stays at 0.
+    function estMoney(cfg, M) {
+      if (cfg.mode === "pct") return cfg.start * Math.exp(M.e);
+      return cfg.start + M.min <= 0 ? 0 : cfg.start + M.e;
+    }
+    // The middle run and the 10th / 90th of 1,000 (8 in 10 runs land between them).
+    function estQ(a, p) { const b = a.slice().sort((x, y) => x - y); return b.length ? b[Math.round(p * (b.length - 1))] : null; }
+    function estSum(runs, cfg, money) {
+      const col = f => runs.map(f), n = col(p => p.n), r = col(p => p.R.e), dd = col(p => p.R.dd);
+      const ends = money ? col(p => estMoney(cfg, p.M)) : null;
+      return {
+        n: estQ(n, 0.5), n10: estQ(n, 0.1), n90: estQ(n, 0.9), w: estQ(col(p => p.w), 0.5), l: estQ(col(p => p.l), 0.5),
+        r: estQ(r, 0.5), r10: estQ(r, 0.1), r90: estQ(r, 0.9), dd: estQ(dd, 0.5), dd90: estQ(dd, 0.9),
+        up: r.filter(v => v > 0).length / r.length * 100,
+        end: ends ? estQ(ends, 0.5) : null, end10: ends ? estQ(ends, 0.1) : null, end90: ends ? estQ(ends, 0.9) : null
+      };
+    }
+    function renderSigEst(pairs) {
+      const nf = sigNoFee(), graded = sigGraded(pairs).filter(x => estDayN(x.pr.signal.date) != null);
+      estBase = null;
+      if (graded.length) {
+        const dn = graded.map(x => estDayN(x.pr.signal.date)), d0 = Math.min(...dn), D = Math.max(...dn) - d0 + 1;
+        const days = Array.from({ length: D }, () => []);
+        dn.forEach((d, i) => days[d - d0].push(i));
+        const firstI = dn.indexOf(d0), lastI = dn.lastIndexOf(d0 + D - 1);
+        estBase = { rs: graded.map(x => x.o.r), rows: graded.map(x => demoRowOf(x, nf)), days, first: graded[firstI].pr.signal.date, last: graded[lastI].pr.signal.date, D };
+      }
+      renderSigEstNow();
+    }
+    function estSet(k, v) {
+      const e = estRaw(); e[k] = v; state.ui.sigEst = e; save();
+      if (k === "p" || k === "u") renderSigEstNow(); else estDrawOut();
+    }
+    function estPick(k) { estSet("p", k); }
+    function renderSigEstNow() {
+      const host = document.getElementById('sigEst');
+      if (!host) return;
+      const e = estRaw(), pk = estPicked(), cust = pk.k === 'custom';
+      const segBtn = (on, label, click, data) => '<button type="button" ' + data + ' onclick="' + click + '" class="px-2 py-1 rounded-md font-semibold ' + (on ? 'bg-terminal-card border border-terminal-borderLight text-amber-400' : 'text-slate-400 hover:text-white') + '">' + label + '</button>';
+      const box = 'bg-[#070A11] border border-terminal-border p-2 rounded text-white focus:outline-none focus:border-amber-500';
+      host.innerHTML = '<div class="flex items-center gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-amber-400"></span><h3 class="font-bold text-white uppercase tracking-wider">Estimator</h3></div>'
+        + '<p class="text-slate-500 text-[11px] mb-3">Pick a period: what the alerts in view would likely make in it, from their own history. Follows every filter above.</p>'
+        + '<div id="sigEstForm" class="flex flex-wrap items-end gap-3 mb-3 pb-3 border-b border-terminal-border">'
+        + '<div><span class="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">Period</span><div class="flex flex-wrap items-center gap-1 bg-black/40 p-0.5 rounded-lg border border-terminal-border text-[11px] font-mono">'
+        + EST_PERIODS.map(p => segBtn(pk.k === p.k, p.label, "estPick('" + p.k + "')", 'data-estp="' + p.k + '"')).join('') + segBtn(cust, 'Custom', "estPick('custom')", 'data-estp="custom"') + '</div></div>'
+        + (cust ? '<div><span class="block text-[10px] uppercase tracking-wider text-slate-500 mb-1">How long</span><div class="flex items-center gap-1.5">'
+          + '<input type="number" id="sigEstN" step="any" min="0" inputmode="decimal" value="' + esc(e.n == null ? '' : e.n) + '" oninput="estSet(\'n\', this.value)" style="width:80px" class="' + box + '">'
+          + '<select id="sigEstU" onchange="estSet(\'u\', this.value)" class="' + box + '">' + EST_UNITS.map(u => '<option value="' + u.k + '"' + (e.u === u.k ? ' selected' : '') + '>' + u.label + '</option>').join('') + '</select></div></div>' : '')
+        + '</div><div id="sigEstOut"></div>';
+      estDrawOut();
+    }
+    function estDrawOut() {
+      const out = document.getElementById('sigEstOut');
+      if (!out) return;
+      const B = estBase;
+      if (!B) { out.innerHTML = '<p class="text-slate-500">No alerts with a result in this view yet. Widen the period or pick another channel.</p>'; return; }
+      const pk = estPicked(), cfg = demoCfg(), cur = cfg.cur, m = v => money(v, cur), sm = v => signedMoney(v, cur);
+      const tone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400', cnt = v => Number(v).toLocaleString('en-US');
+      // Money as the Demo account places each trade: its return on the balance (% risk) or its money (fixed).
+      let mv = null, run = null, moneyWhy = '';
+      if (cfg.err) moneyWhy = cfg.err;
+      else {
+        run = demoRun(demoPlay(cfg, cfg.feesOn, B.rows), cfg);
+        if (run.blownAt != null) moneyWhy = 'The Demo account blows up on this history at these settings.';
+        else if (run.tooBig) moneyWhy = 'The Demo account grows too large to count on this history.';
+        else if (!run.trades.length) moneyWhy = 'The Demo account places none of these alerts at these settings.';
+        else { mv = new Array(B.rs.length).fill(0); run.trades.forEach(t => { mv[t.i] = cfg.mode === 'pct' ? Math.log(t.bal / t.before) : t.pnl; }); }
+      }
+      const dr = estDayRows(B, mv), st = sigRunStats(B.rs);
+      const one = (k, label, H) => {
+        const s = estSum(estSim(dr, H, EST_RUNS, EST_SEED + H), cfg, !!mv);
+        const last = B.D >= H ? estWalk(dr, j => B.D - H + j, H) : null;
+        return { k, label, H, s, last, lastEnd: last && mv ? estMoney(cfg, last.M) : null };
+      };
+      const list = EST_PERIODS.map(p => one(p.k, p.label, estDaysOf(p.n, p.u)));
+      if (pk.k === 'custom' && !pk.err) list.push(one('custom', pk.label, pk.days));
+      const sel = pk.err ? null : list.find(x => x.k === pk.k);
+      const ret = v => v == null ? null : (v - cfg.start) / cfg.start * 100;
+      const riskTxt = cfg.mode === 'pct' ? cfg.pct + '% of the balance a trade' : m(cfg.fixed) + ' a trade';
+      const bkl = demoBroker(cfg.broker).label, sk = run ? run.skips.length : 0;
+      const moneyLine = '<div id="sigEstMoney" class="rounded-lg border border-sky-500/40 bg-sky-500/5 p-2 mb-3 text-[11px]"><b class="text-sky-300">Money as the Demo account</b>'
+        + (cfg.err ? ': <span class="text-rose-400">' + esc(cfg.err) + '</span>'
+          : ': ' + m(cfg.start) + ' start · ' + (cfg.real && cfg.lot1 === 'always' ? '1 order a trade (test)' : esc(riskTxt)) + (cfg.lev ? ' · max ' + cfg.lev + 'x' : '') + ' · ' + (cfg.real ? 'real orders on ' + esc(bkl) + (sk ? ' (places ' + cnt(run.trades.length) + ' of ' + cnt(B.rs.length) + ')' : '') : 'any size') + ' · ' + (cfg.feesOn ? 'fees on' : 'no fees')
+            + (moneyWhy ? ' · <span class="text-amber-300">' + esc(moneyWhy) + '</span>' : ''))
+        + ' <button type="button" onclick="setSigSec(\'demo\')" class="underline text-sky-300">Change</button></div>';
+      const fd = s => fmtDay(s);
+      const basis = '<p id="sigEstBasis" class="text-[11px] text-slate-400 mb-3">From <b class="text-slate-100">' + cnt(st.n) + '</b> graded alert' + (st.n === 1 ? '' : 's') + ' over <b class="text-slate-100">' + B.D + '</b> day' + (B.D === 1 ? '' : 's') + ' (' + esc(fd(B.first)) + ' → ' + esc(fd(B.last)) + '): <b class="text-slate-100">' + (st.n / B.D).toFixed(1) + '</b> a day · average <b class="' + tone(st.avg) + '">' + rfmt(st.avg) + '</b> · <b class="text-slate-100">' + pct(st.win) + '</b> won.</p>';
+      const notes = [];
+      if (st.n < 30) notes.push('Only ' + st.n + ' result' + (st.n === 1 ? '' : 's') + ': a couple of trades swing this, so read it as a rough guess.');
+      if (sel && B.D < sel.H) notes.push('The history in view is ' + B.D + ' day' + (B.D === 1 ? '' : 's') + ', shorter than ' + sel.label + ': the runs reuse those days. Set Period to All above for a longer history.');
+      const card = (l, v, sub, c, tip, id) => '<div class="bg-terminal-card border border-terminal-border p-2.5 rounded-lg flex flex-col"' + (id ? ' data-est="' + id + '"' : '') + (tip ? ' title="' + esc(tip) + '"' : '') + '><span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">' + l + '</span><div class="my-0.5"><div class="text-base sm:text-lg font-bold mono-num ' + (c || 'text-slate-100') + '">' + v + '</div>' + (sub ? '<div class="text-[10px] text-slate-400 truncate">' + statSub(sub) + '</div>' : '') + '</div></div>';
+      let stats = '';
+      if (pk.err) stats = '<p class="text-rose-400 mb-3">' + esc(pk.err) + '</p>';
+      else {
+        const s = sel.s, L = sel.last, rng = (a, b, f) => f(a) + ' to ' + f(b);
+        stats = '<div id="sigEstStats" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 statrow mb-3">'
+          + card('Trades', cnt(s.n), '8 in 10: ' + cnt(s.n10) + ' to ' + cnt(s.n90) + ' · ' + cnt(sel.H) + ' days', '', 'Graded alerts in ' + sel.label + ': the middle of ' + EST_RUNS.toLocaleString('en-US') + ' runs, and where 8 in 10 runs land.', 'n')
+          + card('Wins / losses', '<span class="text-emerald-400">' + cnt(s.w) + 'W</span> / <span class="text-rose-400">' + cnt(s.l) + 'L</span>', pct(st.win) + ' of past alerts won', '', '', 'wl')
+          + card('Total R', rfmt(s.r), '8 in 10: ' + rng(s.r10, s.r90, rfmt), tone(s.r), 'Every alert at 1R, after fees, as the Backtest report counts it.', 'r')
+          + card('Balance', mv ? m(s.end) : '—', mv ? sm(s.end - cfg.start) + ' from ' + m(cfg.start) : 'no money estimate', mv ? tone(s.end - cfg.start) : '', 'The Demo account\'s balance after ' + sel.label + ', starting again from ' + m(cfg.start) + '.', 'bal')
+          + card('Return', mv ? (pfmt(ret(s.end)) || '0.00%') : '—', mv ? '8 in 10: ' + rng(ret(s.end10), ret(s.end90), v => pfmt(v) || '0.00%') : '', mv ? tone(ret(s.end)) : '', '', 'ret')
+          + card('Chance of profit', pct(s.up), 'runs that ended above 0R', s.up >= 50 ? 'text-emerald-400' : 'text-rose-400', 'Out of ' + EST_RUNS.toLocaleString('en-US') + ' runs of ' + sel.label + ', how many ended above zero.', 'up')
+          + card('Worst fall', s.dd ? '-' + s.dd.toFixed(2) + 'R' : '0R', '1 in 10 runs: -' + s.dd90.toFixed(2) + 'R or worse', 'text-rose-400', 'The deepest fall from a high along the way, at 1R a trade.', 'dd')
+          + card('Last ' + esc(sel.label) + ', real', L ? rfmt(L.R.e) : '—', L ? cnt(L.n) + ' trades' + (sel.lastEnd != null ? ' · ' + (pfmt(ret(sel.lastEnd)) || '0.00%') : '') : 'history is only ' + B.D + ' day' + (B.D === 1 ? '' : 's'), L ? tone(L.R.e) : '', L ? 'What the alerts in view really did in the last ' + sel.H + ' days of the history, ' + fd(B.last) + ' back.' : '', 'last')
+          + '</div>';
+      }
+      const table = '<div><div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Every period</div><div class="overflow-x-auto"><table id="sigEstTable" class="w-full text-left mono-num"><thead class="text-slate-500 text-[10px] uppercase"><tr><th class="py-1 pr-3">Period</th><th class="pr-3 text-right">Trades</th><th class="pr-3 text-right">Total R</th><th class="pr-3 text-right">8 in 10 runs</th><th class="pr-3 text-right">Balance</th><th class="pr-3 text-right">Return</th><th class="pr-3 text-right">Profit chance</th><th class="pr-3 text-right">Worst fall</th><th class="text-right">Last, real</th></tr></thead><tbody>'
+        + list.map(x => { const s = x.s, on = sel && x.k === sel.k;
+          return '<tr data-estrow="' + x.k + '" onclick="estPick(\'' + x.k + '\')" class="border-t border-terminal-border/60 cursor-pointer hover:bg-white/5' + (on ? ' bg-amber-500/10' : '') + '"><td class="py-1.5 pr-3 text-slate-200 whitespace-nowrap">' + esc(x.label) + (on ? ' <span class="text-amber-300 text-[10px]">picked</span>' : '') + '</td>'
+            + '<td class="pr-3 text-right">' + cnt(s.n) + '</td><td class="pr-3 text-right font-bold ' + tone(s.r) + '">' + rfmt(s.r) + '</td><td class="pr-3 text-right text-slate-400 whitespace-nowrap">' + rfmt(s.r10) + ' to ' + rfmt(s.r90) + '</td>'
+            + '<td class="pr-3 text-right ' + (mv ? tone(s.end - cfg.start) : 'text-slate-500') + '">' + (mv ? m(s.end) : '—') + '</td><td class="pr-3 text-right ' + (mv ? tone(ret(s.end)) : 'text-slate-500') + '">' + (mv ? (pfmt(ret(s.end)) || '0.00%') : '—') + '</td>'
+            + '<td class="pr-3 text-right ' + (s.up >= 50 ? 'text-emerald-400' : 'text-rose-400') + '">' + pct(s.up) + '</td><td class="pr-3 text-right text-rose-400">' + (s.dd ? '-' + s.dd.toFixed(2) + 'R' : '0R') + '</td>'
+            + '<td class="text-right ' + (x.last ? tone(x.last.R.e) : 'text-slate-500') + '">' + (x.last ? rfmt(x.last.R.e) : '—') + '</td></tr>'; }).join('')
+        + '</tbody></table></div><p class="text-[10px] text-slate-500 mt-1">Tap a row to pick it. Likely = the middle of ' + EST_RUNS.toLocaleString('en-US') + ' runs; 8 in 10 runs land between the two figures. Last, real = what the last days of the history really did.</p></div>';
+      out.innerHTML = moneyLine + basis + notes.map(t => '<p class="text-amber-300 text-[11px] mb-2">' + esc(t) + '</p>').join('') + stats + table
+        + '<p class="text-[10px] text-slate-500 mt-3">How: the history in view is cut into calendar days (a day keeps all its alerts; quiet days count too). Each run picks that many days at random and adds them up, so busy and quiet stretches both show. Past results, not a promise: markets change. Alerts never filled or still open are not counted.</p>';
+      watchStatRows(out);
     }
 
     /* =================== FIB LEVELS =================== */
@@ -14290,7 +14481,7 @@
       return h;
     }
     /* =================== SECTION TABS (Signals and Analysis) =================== */
-    const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "demo", label: "Demo account" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
+    const SIG_SECS = [{ k: "alerts", label: "Alerts" }, { k: "report", label: "Backtest report" }, { k: "demo", label: "Demo account" }, { k: "est", label: "Estimator" }, { k: "edge", label: "Edge & breakdowns" }, { k: "vsme", label: "Alert vs my trade" }, { k: "market", label: "Market days" }];
     const CALC_SECS = [{ k: "quick", label: "Quick size" }, { k: "options", label: "Nifty options" }, { k: "calculator", label: "Full calculator" }, { k: "ladder", label: "SL ladder" }, { k: "planner", label: "Goal planner" }];
     const DASH_SECS = [{ k: "overview", label: "Equity & calendar" }, { k: "ledger", label: "Day's trades" }, { k: "week", label: "Week & grade" }, { k: "habits", label: "Time & habits" }];
     // The Review tab shows how many trades are waiting.
@@ -14330,6 +14521,7 @@
     const SIG_LAZY = {
       report: pairs => renderSigBacktest(pairs),
       demo: pairs => renderSigDemo(pairs),
+      est: pairs => renderSigEst(pairs),
       edge: pairs => renderSigEdge(pairs),
       market: () => renderMarketCalendar('mktCalSignals', sigView.mkt || undefined)
     };
@@ -14344,6 +14536,8 @@
       state.ui.sigSec = k; save();
       if (!sigView) { renderSignalsTable(); return; }
       renderSecBar('sigSecBar', sigSecList(), 'data-sigsec', state.ui.sigSec, setSigSec);
+      // The Estimator's money follows the Demo account's settings, which may have changed since.
+      if (sigCurSec() === 'est' && sigView.done.est) estDrawOut();
       drawSigSec(sigCurSec());
     }
     function setAnSec(k) { state.ui.anSec = k; save(); renderAnalysis(); }
@@ -16722,6 +16916,7 @@
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
       { v: '2026-11-23.210', pr: 123, title: 'Signals checked against a separate backtest', pts: ['Every Signals setting (Market, Channel, Period, Assets, Coins, BTC day / move, Levels, Type, Exit at, SL, Early entry, Move SL, Trail, Partial, Hold, Fees: 688 mixes) replayed on today\'s real alerts and candles by a separate backtest: every alert, fill and number matches', 'Fixed: Wick / Body SL looked back 299 candles, not 300; % targets with Move SL / Trail / Partial could read a touch right at the level wrong (up to 6 trades in 1,000)', 'Max drawdown, worst losing run and the Demo account no longer depend on the order alerts sent in the same minute were loaded'] },
+      { v: '2026-11-23.209', pr: 122, title: 'Signals Estimator', pts: ['New Signals section Estimator: pick 1 week, 1 month, 3, 6 or 12 months (or your own length) and see likely trades, wins, R, balance and return', 'Shows the range 8 in 10 runs land in, the chance of profit, the worst fall, and what the last stretch really did', 'Follows every filter; money uses your Demo account settings'] },
       { v: '2026-11-22.208', pr: 121, title: 'Phone alerts', pts: ['Settings → Connections → Phone alerts: a push on your iPhone / iPad (free ntfy app) when trades close, money moves in or out, or an import stops working', 'Pick which alerts you want; Send test checks your phone gets them', 'Sent by the Delta and CoinDCX imports on your server, so they come even with the journal closed'] },
       { v: '2026-11-22.207', pr: 120, title: 'Weekly check: BTC day says why it is empty', pts: ['BTC day filter: when BTC candles could not load (offline or Delta down) the row and the empty note say so, instead of just "no alerts on bullish days"', 'Weekly audit of every tab online and offline with bad inputs: no other bugs found'] },
       { v: '2026-11-22.206', pr: 119, title: 'Audit fixes: Delta sync, iPad header, backup', pts: ['Delta money in / out: a sync no longer drops where the import last read the wallet, so the import and your devices stop rewriting journal.json on every run', 'iPad portrait: the header takes two lines, so the tabs no longer cover the version and every book shows', 'Imports now say "your server" (they run on the AWS server, not your PC); a waiting run is in GitHub\'s queue. Restoring a backup brings your setups back too'] },
