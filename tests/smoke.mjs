@@ -4840,6 +4840,128 @@ async function cleanRun(seed) {
 // is this build's version and marked Current; versions only go down the list.
 // Backup file round trip (Settings → Backup): a fresh device restores everything the file
 // holds, setups included (v.206: they were left behind); junk files change nothing.
+// iPhone fit (lakky, 2026-11-24: "Improve iPhone ui its it not fully optimise"). Every tab and section
+// on iPhone sizes, upright and on its side, with the notch / home bar insets the home-screen app gets:
+// no sideways page scroll, a short header that scrolls away, 16px boxes (iPhone zooms on smaller ones),
+// buttons big enough to tap, one-line table rows, a full-screen inspector, nothing under the notch.
+// iPad and desktop keep their sticky header and small boxes.
+async function iphoneRun(seed) {
+  const errs = [];
+  const check = (ok, what) => { if (!ok) errs.push(what); };
+  const secs = [['dashboard', 'setDashSec', ['overview', 'ledger', 'week', 'habits']], ['signals', 'setSigSec', ['alerts', 'report', 'demo', 'est', 'edge', 'vsme', 'market']],
+    ['analysis', 'setAnSec', ['report', 'overview', 'demo', 'review', 'size', 'trades', 'market', 'ai']], ['calculator', null, ['quick', 'options', 'calculator', 'ladder', 'planner']], ['data', null, ['books', 'connect', 'backup']]];
+  const DEVICES = [
+    ['iPhone SE', { width: 375, height: 667 }, true, { top: 20, bottom: 0, left: 0, right: 0 }],
+    ['iPhone 15', { width: 393, height: 852 }, true, { top: 59, bottom: 34, left: 0, right: 0 }],
+    ['iPhone Pro Max', { width: 430, height: 932 }, true, { top: 59, bottom: 34, left: 0, right: 0 }],
+    ['iPhone on its side', { width: 852, height: 393 }, true, { top: 0, bottom: 21, left: 59, right: 59 }],
+    ['iPad', { width: 1180, height: 820 }, false, null],
+    ['desktop', { width: 1600, height: 900 }, false, null],
+  ];
+  for (const [name, vp, phone, inset] of DEVICES) {
+    const ctx = await browser.newContext({ viewport: vp, isMobile: phone, hasTouch: phone, timezoneId: 'Asia/Kolkata' });
+    await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+    await ctx.addInitScript(s => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); sessionStorage.setItem('seeded', '1'); } }, JSON.stringify(seed));
+    const page = await ctx.newPage();
+    page.on('pageerror', e => errs.push(name + ' page error: ' + (e.stack || e.message)));
+    // A day past its loss limit asks before the trade form opens: yes.
+    page.on('dialog', d => d.accept());
+    // Phones in a wide font: Inter is blocked here, and the fallback differs by machine (CI's was
+    // 16px wider on the Calculator's account box), so measure in about the widest common one.
+    if (phone) await ctx.addInitScript(() => document.addEventListener('DOMContentLoaded', () => { const st = document.createElement('style'); st.textContent = ':root:not(#_) *{font-family:"DejaVu Sans",Verdana,sans-serif!important}'; document.head.appendChild(st); }));
+    try {
+      if (inset) { const cdp = await ctx.newCDPSession(page); await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: inset }); }
+      await page.goto(base, { waitUntil: 'load' });
+      await page.waitForTimeout(300);
+      const upright = phone && vp.width < 640;
+      // A phone that never folded a panel starts with the Analysis filters folded, like Signals'.
+      const folds = await page.evaluate(() => { switchTab('analysis'); return ['anWhichPanel', 'anRulesPanel', 'sigWhichPanel'].map(id => document.getElementById(id).open); });
+      check(upright ? folds.every(o => !o) : folds.every(o => o), name + ': filter panels open = ' + JSON.stringify(folds));
+      const seen = { small: new Set(), zoom: new Set(), wide: [] };
+      for (const [tab, setter, list] of secs) {
+        for (const k of list) {
+          await page.evaluate(([tab, setter, k]) => {
+            if (tab === 'calculator') { switchTab('calculator'); calcUpdate({ view: k }); }
+            else if (tab === 'data') openSettings(k);
+            else { switchTab(tab); window[setter](k); }
+          }, [tab, setter, k]);
+          await page.waitForTimeout(60);
+          const m = await page.evaluate(() => {
+            const vw = document.documentElement.clientWidth, shown = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+            const zoom = [...document.querySelectorAll('input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=hidden]), select, textarea')]
+              .filter(shown).filter(el => parseFloat(getComputedStyle(el).fontSize) < 16).map(el => el.id || el.className.slice(0, 30));
+            const small = [...document.querySelectorAll('#accountsBar button, .seg button, [id$="Bar"] > button.py-1, #view-analysis button.py-0\\.5, #view-signals button.py-0\\.5')]
+              .filter(shown).filter(el => el.getBoundingClientRect().height < 31.5).map(el => (el.closest('[id]') || {}).id + ' "' + el.innerText.trim().slice(0, 12) + '" ' + Math.round(el.getBoundingClientRect().height));
+            // Rows in a sideways scroller: no cell's text wraps to a second line.
+            const tall = [...document.querySelectorAll('.overflow-x-auto table td')].filter(shown).filter(td => getComputedStyle(td).whiteSpace !== 'nowrap').length;
+            return { over: document.documentElement.scrollWidth - vw, zoom, small, tall };
+          });
+          const where = name + ' ' + tab + '/' + k;
+          if (m.over > 0) seen.wide.push(where + ' scrolls sideways by ' + m.over + 'px');
+          if (phone) {
+            m.zoom.forEach(z => seen.zoom.add(tab + '/' + k + ' ' + z));
+            m.small.forEach(z => seen.small.add(tab + '/' + k + ' ' + z));
+          }
+          if (upright) check(m.tall === 0, where + ': ' + m.tall + ' table cells still wrap');
+        }
+      }
+      check(!seen.wide.length, seen.wide.slice(0, 5).join('; '));
+      if (phone) {
+        check(!seen.zoom.size, name + ': boxes under 16px (iPhone zooms on them): ' + [...seen.zoom].slice(0, 6).join('; '));
+        check(!seen.small.size, name + ': buttons under 32px tall: ' + [...seen.small].slice(0, 6).join('; '));
+      } else {
+        // iPad and desktop are as they were: the small boxes stay small.
+        const f = await page.evaluate(() => { switchTab('signals'); return parseFloat(getComputedStyle(document.getElementById('sigChanSel')).fontSize); });
+        check(f < 16, name + ': Signals channel box grew to ' + f + 'px');
+      }
+      // Header: sticky on iPad / desktop; on a phone two short lines that scroll away, clear of the status bar.
+      const h = await page.evaluate(() => { switchTab('dashboard'); window.scrollTo(0, 0); const hd = document.querySelector('header'), r = hd.getBoundingClientRect(), cs = getComputedStyle(hd);
+        const bal = document.querySelector('.hdr-balbox').getBoundingClientRect(), logo = document.querySelector('.hdr-left img').getBoundingClientRect(), books = document.getElementById('accountsBar').getBoundingClientRect();
+        return { pos: cs.position, h: r.height, pt: parseFloat(cs.paddingTop), sameLine: Math.abs((bal.top + bal.bottom) / 2 - (logo.top + logo.bottom) / 2) < 6, booksTop: books.top, balRight: bal.right, vw: document.documentElement.clientWidth,
+          cover: parseFloat(getComputedStyle(document.body, '::before').height) || 0, padL: parseFloat(getComputedStyle(document.body).paddingLeft), padB: parseFloat(getComputedStyle(document.body).paddingBottom), logoL: logo.left }; });
+      if (phone) {
+        check(h.pos !== 'sticky' && h.pos !== 'fixed', name + ': header still sticks (' + h.pos + ')');
+        check(h.pt >= inset.top + 9, name + ': header top padding ' + h.pt + 'px under a ' + inset.top + 'px status bar');
+        check(h.cover === inset.top, name + ': status bar strip ' + h.cover + 'px, wanted ' + inset.top);
+        check(h.logoL >= inset.left, name + ': logo at x=' + h.logoL + ', under the notch (' + inset.left + 'px)');
+        check(h.balRight <= h.vw - inset.right, name + ': balance runs to ' + h.balRight + ' past the notch');
+      } else check(h.pos === 'sticky', name + ': header no longer sticky (' + h.pos + ')');
+      if (upright) {
+        check(h.sameLine && h.h - h.pt <= 100, name + ': header not two short lines: ' + JSON.stringify(h));
+        check(h.padB >= 68 + inset.bottom, name + ': page ends ' + h.padB + 'px above the bottom, tab bar + home bar need ' + (68 + inset.bottom));
+        // Bottom tab bar clears the home bar; toasts sit above it.
+        const nav = await page.evaluate(() => { toast('iPhone check'); const n = document.getElementById('mobileNav'), t = document.getElementById('toastContainer');
+          return { navPadB: parseFloat(getComputedStyle(n).paddingBottom), navTop: n.getBoundingClientRect().top, toastBottom: t.getBoundingClientRect().bottom }; });
+        check(nav.navPadB >= inset.bottom, name + ': tab bar ' + nav.navPadB + 'px over a ' + inset.bottom + 'px home bar');
+        check(nav.toastBottom <= nav.navTop, name + ': toast at ' + nav.toastBottom + ' sits on the tab bar (top ' + nav.navTop + ')');
+        // Trade inspector covers the screen; the trade form gives the date its own line.
+        const sh = await page.evaluate(() => { switchTab('analysis');
+          // Long notes: the middle must scroll, not push the buttons off the screen.
+          openInspector(Object.assign({}, state.trades[0], { notes: 'Waited for the retest, then sized down. '.repeat(40) })); const d = document.getElementById('tradeInspectorDrawer').getBoundingClientRect();
+          const edit = document.querySelector('#tradeInspectorDrawer [onclick="editActiveTrade()"]').getBoundingClientRect().bottom; closeInspector();
+          openTrade(); const dt = document.getElementById('mDate').getBoundingClientRect(), tm = document.getElementById('mTime').getBoundingClientRect(); closeModalSheet();
+          return { w: d.width, vw: document.documentElement.clientWidth, dateW: dt.width, timeW: tm.width, timeBelow: tm.top > dt.bottom - 1, edit, vh: innerHeight }; });
+        check(sh.edit <= sh.vh - inset.bottom, name + ': inspector Edit Trade at ' + sh.edit + 'px, off a ' + sh.vh + 'px screen less the ' + inset.bottom + 'px home bar');
+        check(Math.abs(sh.w - sh.vw) < 1, name + ': inspector ' + sh.w + 'px wide on a ' + sh.vw + 'px screen');
+        check(sh.timeBelow && sh.dateW > sh.timeW * 1.5, name + ': trade form date not on its own line: ' + JSON.stringify(sh));
+      }
+      if (name === 'iPad') {
+        const w = await page.evaluate(() => { openInspector(Object.assign({}, state.trades[0], { notes: 'Waited for the retest, then sized down. '.repeat(40) })); const r = document.getElementById('tradeInspectorDrawer').getBoundingClientRect().width;
+          const edit = document.querySelector('#tradeInspectorDrawer [onclick="editActiveTrade()"]').getBoundingClientRect().bottom; closeInspector(); return { r, edit, vh: innerHeight }; });
+        check(Math.round(w.r) === 384 && w.edit <= w.vh, 'iPad: inspector ' + JSON.stringify(w) + ', was 384px wide with Edit Trade on screen');
+      }
+    } catch (e) {
+      errs.push(name + ' threw: ' + e.message.split('\n').slice(0, 4).join(' | '));
+    }
+    await ctx.close();
+  }
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  check(/<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">/.test(html) && /viewport-fit=cover/.test(html), 'home-screen app meta tags missing');
+  const label = 'iPhone fit: no sideways scroll, 16px boxes, 32px buttons, short header, notch and home bar clear (iPad / desktop unchanged)';
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + label);
+  errs.forEach(e => { console.log('     ' + e); failures.push(label + ': ' + e); });
+}
+
 async function backupRestoreRun(seed) {
   const errs = [];
   const check = (ok, what) => { if (!ok) errs.push(what); };
@@ -8412,6 +8534,7 @@ await botStopRun(data);
 await walletMainRun(data);
 await pushRun(data);
 await backupRestoreRun(data);
+await iphoneRun(data);
 
 await browser.close();
 server.close();

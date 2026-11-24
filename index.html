@@ -4,11 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-23.210">
+  <meta name="app-version" content="2026-11-24.211">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
   <meta name="apple-mobile-web-app-title" content="Victus Journal">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#05080E">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://api.github.com https://api.india.delta.exchange https://raw.githubusercontent.com https://generativelanguage.googleapis.com https://ntfy.sh; base-uri 'none'; form-action 'none'; object-src 'none'">
@@ -437,6 +438,76 @@
     .sig-verdict{display:flex;flex-direction:column;gap:.25rem;font-size:11.5px;margin-top:.5rem}
     .sig-sure{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.5rem}
 </style>
+  <style id="iphone">
+    /* iPhone (v.211, lakky: "Improve iPhone ui"). The home-screen app runs edge to edge
+       (viewport-fit=cover, translucent status bar), so the notch, the status bar and the
+       home bar get their room here. Each inset is 0 where there is none (desktop, Safari tab). */
+    body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right);padding-bottom:env(safe-area-inset-bottom)}
+    header.sticky{padding-top:calc(.625rem + env(safe-area-inset-top))}
+    /* What scrolls past the top stays out from under the clock and battery. */
+    body::before{content:"";position:fixed;z-index:70;top:0;left:0;right:0;height:env(safe-area-inset-top);background:var(--bg);pointer-events:none}
+    #modalSheet{padding:max(.75rem,env(safe-area-inset-top)) max(.75rem,env(safe-area-inset-right)) max(.75rem,env(safe-area-inset-bottom)) max(.75rem,env(safe-area-inset-left))}
+    #tradeInspectorDrawer{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);padding-right:env(safe-area-inset-right)}
+    /* Its middle scrolls inside whatever height is left, so Delete / Close / Edit stay on screen
+       (it was 100vh less 130px, which ran past a short screen and the home bar). */
+    #tradeInspectorDrawer>div:first-child{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+    #tradeInspectorDrawer>div:first-child>.overflow-y-auto{flex:1 1 auto;min-height:0;max-height:none}
+    #wnBack{padding-top:calc(4.5rem + env(safe-area-inset-top))}
+    #wnBox{max-height:calc(100dvh - 6rem - env(safe-area-inset-top))}
+    /* No double-tap zoom on controls; iOS date and time boxes stay inside their column. */
+    button,a,summary,select,label,input,textarea{touch-action:manipulation}
+    input[type=date],input[type=time]{min-width:0;max-width:100%}
+    input[type=date]::-webkit-date-and-time-value,input[type=time]::-webkit-date-and-time-value{text-align:left}
+    /* Inputs at 16px on phones: below that, iPhone zooms the page in on every tap into a box
+       and leaves it zoomed. (Also phones on their side: short and touch.) */
+    @media (max-width:639px), (max-height:500px) and (pointer:coarse){
+      html:not(#_) :is(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=button]):not([type=submit]),select,textarea){font-size:16px!important}
+      /* The header scrolls away with the page: the bar at the bottom has the tabs. */
+      header.sticky{position:relative}
+      /* Room to tap: book switcher, filter buttons, segments, small row buttons. */
+      #accountsBar button,#allCurSwitch button{min-height:32px}
+      #appVerPill,#themeBtn{min-height:32px;min-width:32px}
+      :is(button,summary,select).py-0\.5,:is(button,summary).py-1,:is(button,summary).py-1\.5{min-height:32px}
+      :is(button,summary).py-1,:is(button,summary).py-1\.5{min-width:2rem}
+      #goalChips button,#wnBox .wn-head button{min-height:32px}
+      #inspChecklist button,#reviewQueuePanel button.flex{min-height:32px;align-items:center}
+      summary.cursor-pointer{padding-top:.35rem;padding-bottom:.35rem}
+      .seg button{min-height:34px}
+      .fsel select{min-height:34px}
+      #goalNav button{min-width:32px;min-height:32px}
+      #tradeInspectorDrawer .p-1.rounded-lg,#modalSheet button[onclick="closeModalSheet()"].text-sm{min-width:40px;min-height:40px}
+      input[type=checkbox],input[type=radio]{width:18px;height:18px}
+      /* A 16px select is wider: it may shrink to its row instead of pushing the page sideways. */
+      html:not(#_) select{max-width:100%;min-width:0}
+      :is(label,div):has(>select){min-width:0;max-width:100%}
+    }
+    @media (max-width:639px){
+      /* Header in two short lines: logo, version, theme and balance; then the books. */
+      header.sticky{padding-bottom:.5rem}
+      .hdr-row{row-gap:.45rem!important;column-gap:.5rem!important}
+      .hdr-left img{width:2rem!important;height:2rem!important}
+      .hdr-left .gap-2\.5{gap:.5rem}
+      /* The name gives way (the logo says it) so the balance always fits on the first line,
+         however long it is in rupees. */
+      header h1{display:none}
+      #appVerPill .vp-date{display:none}
+      .hdr-balbox{padding:.3rem .55rem!important}
+      body{padding-bottom:calc(68px + env(safe-area-inset-bottom))}
+      .mnav{padding-left:calc(4px + env(safe-area-inset-left));padding-right:calc(4px + env(safe-area-inset-right))}
+      /* Tables keep each row on one line and scroll sideways, instead of squeezing every
+         column into a tall stack of wrapped words. */
+      .overflow-x-auto table :is(td,th){white-space:nowrap}
+      /* Sheets use the whole width; the trade inspector covers the screen. */
+      #tradeInspectorDrawer{width:100%!important}
+      #modalSheet>div{padding:1rem}
+      .trade-dt{grid-template-columns:1fr 1fr!important}
+      .trade-dt>div:first-child{grid-column:1/-1}
+      #wnBack{padding:calc(1rem + env(safe-area-inset-top)) .75rem calc(1rem + env(safe-area-inset-bottom))}
+      #wnBox{max-height:calc(100dvh - 2rem - env(safe-area-inset-top) - env(safe-area-inset-bottom))}
+      /* Toasts sit above the tab bar, not on it. */
+      #toastContainer{left:.75rem;right:.75rem;bottom:calc(72px + env(safe-area-inset-bottom));align-items:center}
+    }
+  </style>
 </head>
 <body class="bg-terminal-bg text-slate-200 font-sans antialiased min-h-screen flex flex-col selection:bg-amber-500/25 selection:text-amber-200">
 
@@ -6904,7 +6975,7 @@
               ${state.accounts.filter(a => !a.reportBroker || a.id === v.accountId).map(a => `<option value="${esc(a.id)}" ${a.id === v.accountId ? 'selected' : ''}>${esc(a.name)} (${esc(a.market)})</option>`).join('')}
             </select>
           </div>
-          <div class="grid grid-cols-3 gap-2">
+          <div class="grid grid-cols-3 gap-2 trade-dt">
             <div>
               <label class="text-slate-400 block mb-1">Date</label>
               <input type="date" id="mDate" value="${esc(v.date)}" class="w-full bg-[#080D15] border border-terminal-border p-2 rounded text-white">
@@ -11634,9 +11705,9 @@
         if (el.dataset.init) return;
         el.dataset.init = '1';
         const k = el.dataset.fold, f = state.ui.sigFold && typeof state.ui.sigFold === 'object' ? state.ui.sigFold : {};
-        // A phone that never folded or opened one starts with the Signals filters folded: their
-        // one-line summaries instead of two screens of buttons before the first number.
-        el.open = f[k] === undefined && /^sig/.test(el.id) && window.innerWidth < 640 ? false : !f[k];
+        // A phone that never folded or opened one starts with the Signals and Analysis filters
+        // folded: their one-line summaries instead of two screens of buttons before the first number.
+        el.open = f[k] === undefined && /^(sig|an)/.test(el.id) && window.innerWidth < 640 ? false : !f[k];
         el.addEventListener('toggle', () => {
           const g = state.ui.sigFold && typeof state.ui.sigFold === 'object' ? state.ui.sigFold : {};
           if (!!g[k] === !el.open) return;
@@ -16488,7 +16559,7 @@
             tooltip: Object.assign(chartTip(), { callbacks: { label: c => btTipLines(closed, data, c.dataIndex, cur) } })
           },
           scales: {
-            x: { grid: { color: gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 10 }, maxTicksLimit: 7, maxRotation: 0, autoSkip: true, callback: function (v) { return String(this.getLabelForValue(v)).split(" · ")[0]; } } },
+            x: { grid: { color: gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 10 }, maxTicksLimit: window.innerWidth < 640 ? 4 : 7, maxRotation: 0, autoSkip: true, callback: function (v) { const s = String(this.getLabelForValue(v)).split(" · ")[0]; return window.innerWidth < 640 ? s.replace(/ \d\d:\d\d/, "") : s; } } },
             y: { grid: { color: c => c.tick && c.tick.value === 0 ? zeroC() : gridC() }, ticks: { color: "#64748B", font: { family: "Inter", size: 10 }, maxTicksLimit: 6, callback: v => signedMoney(v, cur, 0) } }
           }
         }
@@ -16915,6 +16986,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-24.211', pr: 124, title: 'iPhone fit', pts: ['Header is two short lines and scrolls away (was three, stuck on top); room for the notch, status bar and home bar', 'Boxes no longer zoom the page when tapped; buttons and filter chips bigger to tap', 'Tables keep each row on one line and scroll sideways; trade inspector full screen; filters start folded in Analysis too'] },
       { v: '2026-11-23.210', pr: 123, title: 'Signals checked against a separate backtest', pts: ['Every Signals setting (Market, Channel, Period, Assets, Coins, BTC day / move, Levels, Type, Exit at, SL, Early entry, Move SL, Trail, Partial, Hold, Fees: 688 mixes) replayed on today\'s real alerts and candles by a separate backtest: every alert, fill and number matches', 'Fixed: Wick / Body SL looked back 299 candles, not 300; % targets with Move SL / Trail / Partial could read a touch right at the level wrong (up to 6 trades in 1,000)', 'Max drawdown, worst losing run and the Demo account no longer depend on the order alerts sent in the same minute were loaded'] },
       { v: '2026-11-23.209', pr: 122, title: 'Signals Estimator', pts: ['New Signals section Estimator: pick 1 week, 1 month, 3, 6 or 12 months (or your own length) and see likely trades, wins, R, balance and return', 'Shows the range 8 in 10 runs land in, the chance of profit, the worst fall, and what the last stretch really did', 'Follows every filter; money uses your Demo account settings'] },
       { v: '2026-11-22.208', pr: 121, title: 'Phone alerts', pts: ['Settings → Connections → Phone alerts: a push on your iPhone / iPad (free ntfy app) when trades close, money moves in or out, or an import stops working', 'Pick which alerts you want; Send test checks your phone gets them', 'Sent by the Delta and CoinDCX imports on your server, so they come even with the journal closed'] },
