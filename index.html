@@ -477,6 +477,9 @@
       #goalNav button{min-width:32px;min-height:32px}
       #tradeInspectorDrawer .p-1.rounded-lg,#modalSheet button[onclick="closeModalSheet()"].text-sm{min-width:40px;min-height:40px}
       input[type=checkbox],input[type=radio]{width:18px;height:18px}
+      /* A 16px select is wider: it may shrink to its row instead of pushing the page sideways. */
+      html:not(#_) select{max-width:100%;min-width:0}
+      :is(label,div):has(>select){min-width:0;max-width:100%}
     }
     @media (max-width:639px){
       /* Header in two short lines: logo, version, theme and balance; then the books. */

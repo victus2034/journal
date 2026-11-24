@@ -4866,6 +4866,9 @@ async function iphoneRun(seed) {
     page.on('pageerror', e => errs.push(name + ' page error: ' + (e.stack || e.message)));
     // A day past its loss limit asks before the trade form opens: yes.
     page.on('dialog', d => d.accept());
+    // Phones in a wide font: Inter is blocked here, and the fallback differs by machine (CI's was
+    // 16px wider on the Calculator's account box), so measure in about the widest common one.
+    if (phone) await ctx.addInitScript(() => document.addEventListener('DOMContentLoaded', () => { const st = document.createElement('style'); st.textContent = ':root:not(#_) *{font-family:"DejaVu Sans",Verdana,sans-serif!important}'; document.head.appendChild(st); }));
     try {
       if (inset) { const cdp = await ctx.newCDPSession(page); await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: inset }); }
       await page.goto(base, { waitUntil: 'load' });
