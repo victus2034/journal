@@ -7949,6 +7949,111 @@ async function marketDayRun(seed) {
   console.log((errs.length ? 'FAIL ' : 'ok   ') + 'BTC market day: going into the day from closed candles (no hindsight), = rule on 210 real days, calendar, filter, 05:30 day');
 }
 
+// lakky, 2026-11-25: "in btc days its not showing data". His view was 7 Days + CRYPTO 1D, which had no
+// alerts at all (the last 1D fib was 17 Nov), yet the BTC day row looked like the cause. Now the BTC
+// day / BTC move buttons count what each keeps, and an empty view names the filter that emptied it,
+// on Signals and on Analysis, with a button to an option that has some.
+async function btcDayCountsRun(seed) {
+  const errs = [];
+  const check = (ok, msg) => { if (!ok) errs.push(msg); };
+  const days = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/btc-1d-delta-2026.json'), 'utf8')).days;
+  const fx = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/btc-15m-delta-2026-09.json'), 'utf8'));
+  // The BTC day rule, written again here (as marketDayRun does).
+  const ref = {};
+  { const a = 2 / 21, rows = []; let ema = null;
+    days.forEach(([d, o, h, l, c], i) => { const pc = i ? days[i - 1][4] : o; ema = ema == null ? c : c * a + ema * (1 - a); rows.push({ d, c, ema, tr: Math.max(h, pc) - Math.min(l, pc) }); });
+    for (let i = 39; i < rows.length; i++) {
+      const atr = rows.slice(i - 13, i + 1).reduce((x, r) => x + r.tr, 0) / 14, dist = (rows[i].c - rows[i].ema) / atr, slope = rows[i].ema - rows[i - 5].ema;
+      ref[new Date(Date.parse(rows[i].d + 'T00:00:00Z') + 864e5).toISOString().slice(0, 10)] = dist >= 0.75 && slope > 0 ? 'bull' : dist <= -0.75 && slope < 0 ? 'bear' : 'side';
+    } }
+  // [id, IST date, time, channel]: the UTC day is the IST date, except before 05:30 (the day before).
+  const AL = [['s1', '2026-09-18', '10:00', 'CRYPTO 4H'], ['s2', '2026-09-19', '05:00', 'CRYPTO 4H'], ['s3', '2026-09-19', '10:00', 'CRYPTO 4H'], ['s4', '2026-09-20', '10:00', 'CRYPTO 4H'], ['d1', '2026-09-05', '10:00', 'CRYPTO 1D']];
+  const dayOfAl = ([, d, t]) => t < '05:30' ? new Date(Date.parse(d + 'T00:00:00Z') - 864e5).toISOString().slice(0, 10) : d;
+  const cnt = list => { const n = { all: list.length, bull: 0, bear: 0, side: 0 }; list.forEach(a => { n[ref[dayOfAl(a)]]++; }); return n; };
+  const seeded = JSON.parse(JSON.stringify(seed));
+  const byDate = {}; days.forEach(([d, o, h, l, c]) => { byDate[d] = { o, c, h, l, pct: +((c - o) / o * 100).toFixed(2) }; });
+  seeded.mktCandles = { symbol: 'BTCUSD', byDate, fetchedAt: Date.now() };
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Kolkata' });
+  await ctx.route(url => !url.href.startsWith(base), r => r.abort());
+  await ctx.addInitScript(([s, mv]) => { if (!sessionStorage.getItem('seeded')) { localStorage.setItem('tapeAndTarget.v2', s); localStorage.setItem('tapeAndTarget.btcMove15m', mv); sessionStorage.setItem('seeded', '1'); } }, [JSON.stringify(seeded), JSON.stringify({ t0: fx.t0, c: fx.c, fetchedAt: Date.now() })]);
+  const page = await ctx.newPage();
+  page.on('pageerror', e => errs.push('page error: ' + e.message));
+  try {
+    await page.goto(base, { waitUntil: 'load' });
+    await page.waitForFunction(() => typeof tgtReady !== 'undefined' && tgtReady && signalsLoaded, null, { timeout: 5000 });
+    await page.evaluate(AL => {
+      state.signals = AL.map(([id, date, time, ch]) => ({ id, key: 'k' + id, kind: 'trendline', date, time, symbol: 'ETHUSD', side: 'long', score: '', market: 'CRYPTO', timeframe: ch.split(' ')[1], channel: ch, filled: true, outcome: '+1R', resultR: 1, hasReportR: true, price: 100, stop: 99, entry: 100 }));
+      Object.assign(state.ui, { sigKind: 'trendline', sigPeriod: { mode: 'all', from: '', to: '' }, sigChan: '', sigMarket: '', sigAsset: '', sigDay: '', sigSec: 'alerts', mktFilter: '', mvFilter: '', sigTgt: '', sigNoFee: false,
+        sigStop: { mode: 'off' }, sigTrail: { on: false }, sigHold: 'tp', sigCoins: '', sigFold: {}, sigLvl: '', sigTlType: '', sigSkipTiny: false });
+      save(); switchTab('signals'); renderAll();
+    }, AL);
+    const read = (bar = 'sigMktBar', attr = 'data-btcday', emptyId = 'sigEmpty') => page.evaluate(([bar, attr, emptyId]) => {
+      const e = document.getElementById(emptyId), n = {};
+      // textContent: the rows sit in a folded panel on a phone.
+      document.querySelectorAll('#' + bar + ' button').forEach(b => { const c = b.querySelector('span'); n[b.getAttribute(attr) || 'all'] = b.childNodes[0].textContent.trim() + (c ? ' ' + c.textContent : ''); });
+      return { n, why: e ? e.dataset.why : '', txt: e ? e.innerText.replace(/\s+/g, ' ') : '', ids: (sigView.pairs || []).map(p => p.signal.id).sort().join(','), mf: state.ui.mktFilter, mv: state.ui.mvFilter };
+    }, [bar, attr, emptyId]);
+    const lbl = { all: 'All days', bull: 'Bullish', bear: 'Bearish', side: 'Sideways' };
+    const want = n => { const o = {}; Object.keys(lbl).forEach(k => { o[k] = lbl[k] + ' ' + n[k]; }); return JSON.stringify(o); };
+    // 1. Every button counts what it keeps (worked out here from the rule).
+    const all = await read(), wAll = cnt(AL);
+    check(JSON.stringify(all.n) === want(wAll) && wAll.bull >= 2 && wAll.side >= 2 && wAll.bear === 0, 'BTC day buttons count their alerts: ' + JSON.stringify(all.n) + ' want ' + want(wAll));
+    // 2. A BTC day with none here says which days they fell on, and a button takes you there.
+    await page.evaluate(() => setMktFilter('mktCalSignals', 'bear'));
+    const bear = await read();
+    check(bear.why === 'btcday' && bear.txt.includes('No alerts here on BTC bearish days: the 5 here fell on bullish (' + wAll.bull + ') and sideways (' + wAll.side + ') days.')
+      // one kind of day only: "all N here fell on bullish days"
+      && await page.evaluate(() => mktSplitTxt({ all: 196, bull: 0, bear: 196, side: 0, none: 0 }, ['bull', 'bear', 'side'], 'bull')) === 'all 196 here fell on bearish days'
+      && await page.evaluate(() => mktSplitTxt({ all: 1, with: 0, against: 0, flat: 1, none: 0 }, ['with', 'against', 'flat'], 'with', true)) === 'the 1 here was BTC flat'
+      && bear.txt.includes('Bullish (' + wAll.bull + ')') && bear.txt.includes('Sideways (' + wAll.side + ')') && bear.txt.includes('All days (5)'), 'empty Bearish names the days: ' + bear.txt);
+    await page.evaluate(() => [...document.querySelectorAll('#sigEmpty button')].find(b => /^Bullish/.test(b.innerText)).click());
+    const bull = await read(), wBull = AL.filter(a => ref[dayOfAl(a)] === 'bull').map(a => a[0]).sort().join(',');
+    check(bull.mf === 'bull' && bull.ids === wBull && !bull.why, 'its Bullish button keeps the bullish days: ' + bull.ids + ' want ' + wBull);
+    // 3. lakky's view: a channel with no alerts in the period. The period is named, with the last alert's day, and it says the BTC day is not the cause.
+    await page.evaluate(() => { state.ui.sigChan = 'CRYPTO 1D'; state.ui.sigPeriod = { mode: 'custom', from: '2026-09-19', to: '2026-09-20' }; save(); renderSignalsTable(); });
+    const per = await read(), dd = await page.evaluate(() => ['2026-09-19', '2026-09-20', '2026-09-05'].map(fmtDay)); // "19 Sep" or "19 Sept", by the browser
+    check(per.why === 'period' && per.txt.includes('No trendline alerts on CRYPTO 1D from ' + dd[0] + ' to ' + dd[1] + ' (the last was on ' + dd[2] + '). The period empties it, not the BTC day row.') && /All history/.test(per.txt)
+      && JSON.stringify(per.n) === want({ all: 0, bull: 0, bear: 0, side: 0 }), 'period empties it, said so: ' + JSON.stringify(per));
+    await page.evaluate(() => setSigPeriod('7d'));
+    const p7 = await read();
+    check(p7.why === 'period' && p7.txt.includes('on CRYPTO 1D in the last 7 days (the last was on ' + dd[2] + ')'), '7 Days names itself: ' + p7.txt);
+    await page.evaluate(() => [...document.querySelectorAll('#sigEmpty button')].find(b => /All history/.test(b.innerText)).click());
+    const back = await read();
+    check(back.ids === 'd1' && ref['2026-09-05'] === 'bull', 'All history brings the 1D alert back on its bullish day: ' + JSON.stringify(back));
+    // 4. BTC move: counts once the 15m prices are in, and the same kind of empty note.
+    await page.evaluate(() => { Object.assign(state.ui, { sigChan: '', mktFilter: '', sigPeriod: { mode: 'all', from: '', to: '' } }); save(); renderSignalsTable(); });
+    const mv = await read('sigMvBar', 'data-mv');
+    const mvRef = await page.evaluate(() => { const n = { all: 0, with: 0, against: 0, flat: 0 }; state.signals.forEach(s => { const r = mvOfSig(s); n.all++; if (r) n[r]++; }); return n; });
+    const mvLbl = { all: 'All', with: 'With BTC', against: 'Against BTC', flat: 'BTC flat' };
+    check(Object.keys(mvLbl).every(k => mv.n[k] === mvLbl[k] + ' ' + mvRef[k]), 'BTC move buttons count their alerts: ' + JSON.stringify(mv.n) + ' ' + JSON.stringify(mvRef));
+    const none = ['with', 'against', 'flat'].find(k => !mvRef[k]);
+    if (none) {
+      await page.evaluate(k => setMvFilter('mktCalSignals', k), none);
+      const e = await read();
+      check(e.why === 'btcmove' && e.txt.includes('No alerts here were ' + mvLbl[none] + ' at entry: ') && /All \(\d+\)/.test(e.txt), 'empty BTC move says what the alerts were: ' + e.txt);
+      await page.evaluate(() => setMvFilter('mktCalSignals', ''));
+    }
+    // 5. Analysis: the same counts on its rows, and the same note when a BTC day empties it.
+    await page.evaluate(() => {
+      const tr = (id, date, time) => ({ id, accountId: 'acc_cry', date, time, symbol: 'ETHUSD', direction: 'long', entry: 100, exit: 101, qty: 1, fees: 0, stop: 99, setup: '', rules: [], notes: '' });
+      state.trades = [tr('t1', '2026-09-18', '10:00'), tr('t2', '2026-09-19', '10:00'), tr('t3', '2026-09-20', '10:00')];
+      Object.assign(state.ui, { account: 'acc_cry', allCur: 'USD', anSec: 'overview', anKind: '', anChan: '', anLvl: '', anTlType: '', anCoins: '', anAsset: '', anMarket: '', anBy: '', anNoFee: false, anPeriod: 'all', anPair: '', mktFilter: '', mvFilter: '' });
+      save(); switchTab('analysis'); renderAnalysis();
+    });
+    const TR = [['t1', '2026-09-18', '10:00'], ['t2', '2026-09-19', '10:00'], ['t3', '2026-09-20', '10:00']], wT = cnt(TR);
+    const an = await read('anMktBar', 'data-btcday', 'anEmpty');
+    check(JSON.stringify(an.n) === want(wT), 'Analysis BTC day buttons count trades: ' + JSON.stringify(an.n) + ' want ' + want(wT));
+    await page.evaluate(() => setMktFilter('mktCalAnalysis', 'bear'));
+    const anB = await read('anMktBar', 'data-btcday', 'anEmpty');
+    check(anB.why === 'btcday' && anB.txt.includes('No trades here opened on BTC bearish days: the 3 here opened on bullish (' + wT.bull + ') and sideways (' + wT.side + ') days.') && anB.txt.includes('All days (3)'), 'Analysis empty Bearish names the days: ' + anB.txt);
+    await page.evaluate(() => [...document.querySelectorAll('#anEmpty button')].find(b => /^All days/.test(b.innerText)).click());
+    check(!(await read('anMktBar', 'data-btcday', 'anEmpty')).why && await page.evaluate(() => state.ui.mktFilter) === '', 'All days brings the trades back');
+  } catch (e) { errs.push('threw: ' + e.message); }
+  await ctx.close();
+  if (errs.length) failures.push('BTC day counts:\n     ' + errs.join('\n     '));
+  console.log((errs.length ? 'FAIL ' : 'ok   ') + 'BTC day / move rows count each option; empty view names the filter (period vs BTC day), Signals + Analysis');
+}
+
 // lakky's BTC move rule (2026-11-21): BTC at the alert / trade open (last 15m close by then) against its
 // 05:30 IST open, +-1.5% = a move, else flat; With / Against = the trade's side vs that move.
 async function btcMoveRun(seed) {
@@ -8020,9 +8125,9 @@ async function btcMoveRun(seed) {
       save(); switchTab('signals'); renderAll(); setSigSec('market');
     });
     await page.waitForSelector('#mktCalSignalsMv');
-    const tab = await page.evaluate(() => ({ btns: [...document.querySelectorAll('#sigMvBar [data-mv]')].map(b => b.innerText).join('|'),
+    const tab = await page.evaluate(() => ({ btns: [...document.querySelectorAll('#sigMvBar [data-mv]')].map(b => b.childNodes[0].textContent + ((b.querySelector('span') || {}).textContent || '')).join('|'),
       rows: [...document.querySelectorAll('#mktCalSignalsMv tbody tr')].map(tr => tr.getAttribute('data-mvrow') + ' ' + tr.children[1].innerText.replace(/\s+/g, ' ').trim()) }));
-    check(tab.btns === 'All|With BTC|Against BTC|BTC flat', 'Signals row: ' + tab.btns);
+    check(tab.btns === 'All5|With BTC1|Against BTC2|BTC flat2', 'Signals row, with what each keeps (= the table below): ' + tab.btns);
     check(JSON.stringify(tab.rows.slice(0, 3)) === JSON.stringify(['with 1 · 100% won', 'against 2 · 0% won', 'flat 2 · 100% won']), 'Market days table by BTC move (sample trades of other months: No BTC data): ' + JSON.stringify(tab.rows));
     await page.evaluate(() => setMvFilter('mktCalSignals', 'against'));
     const f = await page.evaluate(() => ({ kept: (sigView && sigView.pairs || []).map(p => p.signal.id).sort().join(','), hint: document.getElementById('sigWhichSum').innerText, dot: document.querySelector('#view-signals .sig-row[data-k="btcmv"]').classList.contains('chg'), on: (document.querySelector('#sigMvBar [data-mv="against"]') || {}).className }));
@@ -8530,6 +8635,7 @@ await sigLightRun(data);
 await botTagRun(data);
 await marketDayRun(data);
 await btcMoveRun(data);
+await btcDayCountsRun(data);
 await botStopRun(data);
 await walletMainRun(data);
 await pushRun(data);
