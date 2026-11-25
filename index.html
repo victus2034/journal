@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-24.211">
+  <meta name="app-version" content="2026-11-25.212">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -4319,8 +4319,10 @@
         if (mktNeedsFetch() && !mktLoading) mktFetch().then(renderSignalsTable);
       }
       const mfSig = mktFiltersOn();
-      renderMktFilterBar('sigMktBar', 'mktCalSignals');
-      renderMvFilterBar('sigMvBar', 'mktCalSignals');
+      // Each BTC day / BTC move button counts the alerts it would keep here (tiny stops left out when the stats leave them out).
+      const mktN = mktRowCounts(state.ui.sigSkipTiny === true ? pairs.filter(pr => { const p = slPct(pr.signal); return !(p != null && p < TINY_STOP_PCT); }) : pairs, pr => pr.signal);
+      renderMktFilterBar('sigMktBar', 'mktCalSignals', mktN.day);
+      renderMvFilterBar('sigMvBar', 'mktCalSignals', mktN.move);
       mvLoadFor(renderSignalsTable, mvFilter() || state.ui.sigBtDim === "btcmv");
       renderSigTgtBar();
       renderSigSlBar();
@@ -4361,7 +4363,8 @@
       // Nothing left: the strip says which filter emptied the view, with the way back,
       // instead of a row of dashes (lakky, 2026-11-14: xStocks + CoinDCX showed only dashes).
       sigView.empty = sigView.pairs.length ? null : sigEmptyWhy({ kind, all: allPairs.length, mkt, mktN: mktPairs.length, chan, chanN: chanPairs.length, rangeN: inRange.length,
-        asset: assetMode, assetN: coinPool.length, coinSet, coinN, blocks, dayN: pairs.length, mf: mktFilter(), mv: mvFilter() });
+        range, lastDate: chanPairs.reduce((m, pr) => pr.signal.date > m && (!range.from || pr.signal.date < range.from) ? pr.signal.date : m, ""),
+        asset: assetMode, assetN: coinPool.length, coinSet, coinN, blocks, dayN: pairs.length, mf: mktFilter(), mv: mvFilter(), dayCnt: mktN.day, moveCnt: mktN.move });
       sigView.preCoin = coinKeep ? (skipTiny ? preCoin.filter(pr => !isTiny(pr)) : preCoin) : sigView.pairs;
       // The coins in view first, then the rest for the report's Top coins compare.
       tgtGen++;
@@ -4687,6 +4690,20 @@
         const cm = SIG_COIN_MODES.find(x => x.k === anCoinMode()) || SIG_COIN_MODES[0];
         return { why: 'coins', msg: 'No trades left: ' + (c.blocks[cm.k] || 'none of these ' + al + 'trades are on ' + coinSetTxt(anCoinCur, cm.label)) + '. ' + c.assetN + ' ' + al + 'trade' + (c.assetN === 1 ? '' : 's') + ' before Coins.',
           fix: btn('Coins: All (' + c.assetN + ')', "setAnCoins('')") + (c.asset ? ' ' + btn('Assets: Both', "setAnAsset('')") : '') };
+      }
+      // A BTC row emptied it: say which BTC days (moves) these trades did open on.
+      if (c.inN && c.mf && c.dayCnt && c.dayCnt.all && !c.dayCnt[c.mf]) {
+        const dc = c.dayCnt, other = ['bull', 'bear', 'side'].filter(k => k !== c.mf && dc[k]);
+        return { why: 'btcday', msg: 'No trades here opened on BTC ' + MKT_LABEL[c.mf].toLowerCase() + ' days' + (c.mv ? ' with ' + MV_LABEL[c.mv] + ' at entry' : '')
+          + (!Object.keys(mktCache().byDate).length ? (mktLoading ? ' (loading BTC daily candles)' : mktLoadErr ? ' (' + mktLoadErr.replace(/\. Check your connection and try again\.$/, '') + ')' : ' (no BTC daily candles yet)')
+            : ': ' + mktSplitTxt(dc, ['bull', 'bear', 'side'], c.mf).replace(/ fell on /, ' opened on ')) + '.',
+          fix: other.map(k => btn(MKT_LABEL[k] + ' (' + dc[k] + ')', "setMktFilter('mktCalAnalysis','" + k + "')")).join(' ') + (other.length ? ' ' : '') + btn('All days (' + dc.all + ')', "setMktFilter('mktCalAnalysis','')") };
+      }
+      if (c.inN && c.mv && c.moveCnt !== undefined) {
+        const mc = c.moveCnt, other = mc ? ['with', 'against', 'flat'].filter(k => k !== c.mv && mc[k]) : [];
+        return { why: 'btcmove', msg: mvLoading ? 'Loading BTC 15m prices for the BTC move row…' : 'No trades here were ' + MV_LABEL[c.mv] + ' at entry' + (c.mf ? ' on BTC ' + MKT_LABEL[c.mf].toLowerCase() + ' days' : '')
+          + (mvErr ? ' (' + String(mvErr).replace(/\.$/, '') + ')' : !mc ? ' (no BTC 15m prices yet)' : mc.all ? ': ' + mktSplitTxt(mc, ['with', 'against', 'flat'], c.mv, true) : '') + '.',
+          fix: other.map(k => btn(MV_LABEL[k] + ' (' + mc[k] + ')', "setMvFilter('mktCalAnalysis','" + k + "')")).join(' ') + (other.length ? ' ' : '') + btn('All' + (mc && mc.all ? ' (' + mc.all + ')' : ''), "setMvFilter('mktCalAnalysis','')") };
       }
       return { why: 'other', msg: 'No trades match these filters.', fix: clear };
     }
@@ -5923,6 +5940,11 @@
       const inPeriod = all.filter(x => anInRange(dayOf(x.t), anRg) && (!pairPick || x.t.symbol === pairPick) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t)).sort((a, b) => -byWhen(a.t, b.t));
       const mfAn = mktFiltersOn();
       const rows = mfAn ? inPeriod.filter(x => mktPassTrade(x.t)) : inPeriod;
+      // The BTC rows count the trades each option keeps; an empty view says which row emptied it.
+      const anMktN = mktRowCounts(inPeriod.map(x => x.t), null, true);
+      renderMktFilterBar('anMktBar', 'mktCalAnalysis', anMktN.day);
+      renderMvFilterBar('anMvBar', 'mktCalAnalysis', anMktN.move);
+      if (anEmptyCtx) Object.assign(anEmptyCtx, { inN: inPeriod.length, mf: mktFilter(), mv: mvFilter(), dayCnt: anMktN.day, moveCnt: anMktN.move });
       rows.anchored = all.anchored;
       // Pair list for the report's dropdown: every pair before the pair filter.
       if (!rep) renderAnJournalReport(rows, cur, all.filter(x => anInRange(dayOf(x.t), anRg) && anPassBy(x.t) && anPassSetup(anTradeSetup(x.t, anMap)) && anPassCoin(x.t) && (!mfAn || mktPassTrade(x.t))));
@@ -13477,7 +13499,14 @@
       if (!st.all) return { why: 'none', msg: 'No ' + kl + ' loaded yet.', fix: btn('Load scanner alerts', 'openScannerImport()') };
       if (!st.mktN) return { why: 'market', msg: 'No ' + marketOf(st.mkt).label + ' ' + kl + ' on this device' + (st.mkt === 'nse' ? ': load scanner alerts with market NSE or All.' : '.'), fix: btn('Market: All', "setSigMarket('')") };
       if (!st.chanN) return { why: 'channel', msg: 'No ' + kl + ' on ' + chanLabel(st.chan) + '.', fix: btn('All channels', "state.ui.sigChan='';save();renderSignalsTable()") };
-      if (!st.rangeN) return { why: 'period', msg: 'No ' + (st.mkt ? marketOf(st.mkt).label + ' ' : '') + kl + (st.chan ? ' on ' + chanLabel(st.chan) : '') + ' in this period.', fix: btn('All history', "setSigPeriod('all')") };
+      // The period emptied it: say which days, when the last alert was, and that a BTC row is not the cause.
+      if (!st.rangeN) {
+        const r = st.range || {}, pm = sigPeriod().mode;
+        const when = state.ui.sigDay ? 'on ' + fmtDay(state.ui.sigDay) : pm === '1d' ? 'today' : pm === '7d' ? 'in the last 7 days' : pm === '1m' ? 'in the last month'
+          : (r.from || r.to) ? 'from ' + (r.from ? fmtDay(r.from) : 'the start') + ' to ' + (r.to ? fmtDay(r.to) : 'now') : 'in this period';
+        return { why: 'period', msg: 'No ' + (st.mkt ? marketOf(st.mkt).label + ' ' : '') + kl + (st.chan ? ' on ' + chanLabel(st.chan) : '') + ' ' + when + (st.lastDate ? ' (the last was on ' + fmtDay(st.lastDate) + ')' : '') + '.'
+          + (st.mf || st.mv ? ' The period empties it, not the BTC ' + (st.mf ? 'day' : 'move') + ' row.' : ''), fix: btn('All history', "setSigPeriod('all')") };
+      }
       if (!st.assetN) return { why: 'assets', msg: 'No ' + al + kl + ' in this view.', fix: btn('Assets: Both', "setSigAsset('')") };
       if (!st.coinN) {
         const cm = SIG_COIN_MODES.find(x => x.k === sigCoinMode()) || SIG_COIN_MODES[0];
@@ -13485,8 +13514,20 @@
         return { why: 'coins', msg: 'No alerts left: ' + why + '. ' + st.assetN + ' ' + al + 'alert' + (st.assetN === 1 ? '' : 's') + ' before Coins.', fix: btn('Coins: All (' + st.assetN + ')', "setSigCoins('')") + (st.asset ? ' ' + btn('Assets: Both', "setSigAsset('')") : '') };
       }
       // With no BTC days on the device (loading, or Delta could not be reached) no alert can match: say so.
-      if (!st.dayN && st.mf) return { why: 'btcday', msg: mktLoading && !Object.keys(mktCache().byDate).length ? 'Loading BTC daily candles for the BTC day row…' : 'No alerts here on BTC ' + MKT_LABEL[st.mf].toLowerCase() + ' days' + (st.mv ? ' with ' + MV_LABEL[st.mv] + ' at entry' : '') + (mktLoadErr ? ' (' + mktLoadErr.replace(/\. Check your connection and try again\.$/, '') + ')' : !Object.keys(mktCache().byDate).length ? ' (no BTC daily candles yet)' : '') + '.', fix: btn('All days', "setMktFilter('mktCalSignals','')") };
-      if (!st.dayN && st.mv) return { why: 'btcmove', msg: mvLoading ? 'Loading BTC 15m prices for the BTC move row…' : 'No alerts here with ' + MV_LABEL[st.mv] + ' at entry' + (mvErr ? ' (' + String(mvErr).replace(/\.$/, '') + ')' : !mvCache().c.length ? ' (no BTC 15m prices yet)' : '') + '.', fix: btn('All', "setMvFilter('mktCalSignals','')") };
+      // The BTC day emptied it: say which days these alerts did fall on, with a button for each that has some.
+      if (!st.dayN && st.mf && !(st.mv && st.dayCnt && !st.dayCnt.all)) {
+        const dc = st.dayCnt, noCandles = !Object.keys(mktCache().byDate).length;
+        const other = dc ? ['bull', 'bear', 'side'].filter(k => k !== st.mf && dc[k]) : [];
+        const fell = !noCandles && !mktLoadErr && dc && dc.all ? ': ' + mktSplitTxt(dc, ['bull', 'bear', 'side'], st.mf) : '';
+        return { why: 'btcday', msg: mktLoading && noCandles ? 'Loading BTC daily candles for the BTC day row…' : 'No alerts here on BTC ' + MKT_LABEL[st.mf].toLowerCase() + ' days' + (st.mv ? ' with ' + MV_LABEL[st.mv] + ' at entry' : '') + (mktLoadErr ? ' (' + mktLoadErr.replace(/\. Check your connection and try again\.$/, '') + ')' : noCandles ? ' (no BTC daily candles yet)' : '') + fell + '.',
+          fix: other.map(k => btn(MKT_LABEL[k] + ' (' + dc[k] + ')', "setMktFilter('mktCalSignals','" + k + "')")).join(' ') + (other.length ? ' ' : '') + btn('All days' + (dc && dc.all ? ' (' + dc.all + ')' : ''), "setMktFilter('mktCalSignals','')") };
+      }
+      if (!st.dayN && st.mv) {
+        const mc = st.moveCnt, other = mc ? ['with', 'against', 'flat'].filter(k => k !== st.mv && mc[k]) : [];
+        const fell = !mvErr && mc && mc.all ? ': ' + mktSplitTxt(mc, ['with', 'against', 'flat'], st.mv, true) : '';
+        return { why: 'btcmove', msg: mvLoading ? 'Loading BTC 15m prices for the BTC move row…' : 'No alerts here were ' + MV_LABEL[st.mv] + ' at entry' + (st.mf ? ' on BTC ' + MKT_LABEL[st.mf].toLowerCase() + ' days' : '') + (mvErr ? ' (' + String(mvErr).replace(/\.$/, '') + ')' : !mvCache().c.length ? ' (no BTC 15m prices yet)' : '') + fell + '.',
+          fix: other.map(k => btn(MV_LABEL[k] + ' (' + mc[k] + ')', "setMvFilter('mktCalSignals','" + k + "')")).join(' ') + (other.length ? ' ' : '') + btn('All' + (mc && mc.all ? ' (' + mc.all + ')' : ''), "setMvFilter('mktCalSignals','')") };
+      }
       return { why: 'tiny', msg: 'Every alert here has a tiny stop, and those are left out of the stats.', fix: btn('Include them', 'state.ui.sigSkipTiny=false;save();renderSignalsTable()') };
     }
     function renderSignalEdgeAnalysis(pairs) {
@@ -14360,7 +14401,32 @@
     function mvLoadFor(redraw, wanted) {
       if (wanted && mvNeedsFetch()) mvFetch().then(redraw);
     }
-    function renderMvFilterBar(barId, hostId) {
+    // How many of the items in view each BTC day / BTC move option keeps (lakky, 2026-11-25: "in btc
+    // days its not showing data"): the rows had no counts, so an empty view read as the BTC day's fault
+    // when the period or channel had emptied it. Each row counts with the other BTC row applied.
+    function mktRowCounts(items, sigOf, tradeMode) {
+      const mf = mktFilter(), mv = mvFilter(), day = { all: 0, bull: 0, bear: 0, side: 0, none: 0 }, move = { all: 0, with: 0, against: 0, flat: 0, none: 0 };
+      const dayOf = it => (tradeMode ? mktBiasOfTrade(it) : mktBiasOn(sigOf(it).date, sigOf(it).time)) || "none";
+      const mvOf = it => (tradeMode ? mvOfTrade(it) : mvOfSig(sigOf(it))) || "none";
+      const mvOn = mvCache().c.length > 0;
+      items.forEach(it => {
+        const d = dayOf(it), m = mvOn || mv ? mvOf(it) : "none";
+        if (!mv || m === mv) { day.all++; day[d]++; }
+        if (!mf || d === mf) { move.all++; move[m]++; }
+      });
+      return { day, move: mvOn ? move : null };
+    }
+    // Where the items in view did fall, for an empty view's note: "all 196 here fell on bearish days",
+    // "the 30 here fell on bearish (20) and sideways (10) days". cnt: mktRowCounts' day or move counts.
+    function mktSplitTxt(cnt, keys, skip, move) {
+      const n = cnt.all, parts = keys.filter(k => k !== skip && cnt[k]).map(k => [move ? MV_LABEL[k] : MKT_LABEL[k].toLowerCase(), cnt[k]]), none = cnt.none || 0;
+      const v = move ? (n === 1 ? 'was ' : 'were ') : 'fell on ', unit = one => move ? '' : one ? ' day' : ' days';
+      if (!parts.length) return move ? 'none of the ' + n + ' here has a BTC price' : 'all ' + n + ' here are from before the BTC days start';
+      const s = parts.length === 1 && !none ? (n === 1 ? 'the 1 here ' + v + (move ? '' : 'a ') : 'all ' + n + ' here ' + v) + parts[0][0] + unit(n === 1)
+        : 'the ' + n + ' here ' + v + parts.map(p => p[0] + ' (' + p[1] + ')').join(' and ') + unit(false);
+      return s + (none ? ', ' + none + (move ? ' with no BTC price' : ' before the BTC days start') : '');
+    }
+    function renderMvFilterBar(barId, hostId, n) {
       const bar = document.getElementById(barId);
       if (!bar) return;
       const mv = mvFilter();
@@ -14372,6 +14438,7 @@
         b.setAttribute('data-mv', v);
         b.className = 'px-2.5 py-1 rounded-md font-semibold transition-all ' + (mv === v ? (v ? MV_TONE[v][0] + ' border ' + MV_TONE[v][1] + ' ' + MV_TONE[v][2] : 'bg-terminal-card border border-terminal-borderLight text-amber-400') : 'text-slate-400 hover:text-white');
         b.innerText = l;
+        if (n) { const c = document.createElement('span'); c.className = 'text-[10px] opacity-60 ml-1'; c.innerText = n[v || "all"] || 0; b.appendChild(c); }
         b.onclick = () => setMvFilter(hostId, mv === v ? "" : v);
         bar.appendChild(b);
       });
@@ -14613,7 +14680,7 @@
     }
     function setAnSec(k) { state.ui.anSec = k; save(); renderAnalysis(); }
     // BTC-day filter as a row of buttons, shared by both tabs.
-    function renderMktFilterBar(barId, hostId) {
+    function renderMktFilterBar(barId, hostId, n) {
       const bar = document.getElementById(barId);
       if (!bar) return;
       const mf = mktFilter();
@@ -14623,6 +14690,8 @@
         const b = document.createElement('button'); b.type = 'button';
         b.className = 'px-2.5 py-1 rounded-md font-semibold transition-all ' + (mf === v ? (v ? MKT_TONE[v][0] + ' border ' + MKT_TONE[v][1] + ' ' + MKT_TONE[v][2] : 'bg-terminal-card border border-terminal-borderLight text-amber-400') : 'text-slate-400 hover:text-white');
         b.innerText = l;
+        b.setAttribute('data-btcday', v);
+        if (n) { const c = document.createElement('span'); c.className = 'text-[10px] opacity-60 ml-1'; c.innerText = n[v || "all"] || 0; b.appendChild(c); }
         b.onclick = () => setMktFilter(hostId, mf === v ? "" : v);
         bar.appendChild(b);
       });
@@ -16986,6 +17055,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-25.212', pr: 125, title: 'BTC day: counts and a clear reason when empty', pts: ['BTC day and BTC move buttons show how many alerts (trades on Analysis) each keeps. BTC has been Bearish every day since 6 Nov, so Bullish and Sideways are empty for the last 7 days', 'An empty view names the filter that emptied it: the period ("no CRYPTO 1D fib alerts in the last 7 days, the last was on 17 Nov, not the BTC day") or the BTC day ("all 196 here fell on bearish days"), with a button to the days that have some', 'Analysis says the same when a BTC row empties it (it said "no trades match these filters")'] },
       { v: '2026-11-24.211', pr: 124, title: 'iPhone fit', pts: ['Header is two short lines and scrolls away (was three, stuck on top); room for the notch, status bar and home bar', 'Boxes no longer zoom the page when tapped; buttons and filter chips bigger to tap', 'Tables keep each row on one line and scroll sideways; trade inspector full screen; filters start folded in Analysis too'] },
       { v: '2026-11-23.210', pr: 123, title: 'Signals checked against a separate backtest', pts: ['Every Signals setting (Market, Channel, Period, Assets, Coins, BTC day / move, Levels, Type, Exit at, SL, Early entry, Move SL, Trail, Partial, Hold, Fees: 688 mixes) replayed on today\'s real alerts and candles by a separate backtest: every alert, fill and number matches', 'Fixed: Wick / Body SL looked back 299 candles, not 300; % targets with Move SL / Trail / Partial could read a touch right at the level wrong (up to 6 trades in 1,000)', 'Max drawdown, worst losing run and the Demo account no longer depend on the order alerts sent in the same minute were loaded'] },
       { v: '2026-11-23.209', pr: 122, title: 'Signals Estimator', pts: ['New Signals section Estimator: pick 1 week, 1 month, 3, 6 or 12 months (or your own length) and see likely trades, wins, R, balance and return', 'Shows the range 8 in 10 runs land in, the chance of profit, the worst fall, and what the last stretch really did', 'Follows every filter; money uses your Demo account settings'] },
