@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Victus Journal — Intraday Trading Workstation</title>
-  <meta name="app-version" content="2026-11-25.212">
+  <meta name="app-version" content="2026-11-27.213">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="application-name" content="Victus Journal">
@@ -11812,7 +11812,12 @@
       // The Scanner row has only the alerts the scanner graded: one it called "no fill" that
       // Exit at's walk filled later (tgtBase "walk") has no scanner result (lakky, 2026-11-08:
       // Edge & breakdowns came up empty).
-      const scanSet = set.filter(pr => scanR(pr, nf)), noScan = set.length - scanSet.length;
+      // With Early entry or an SL type on, each alert here is a copy played from another entry / SL, and a copy has no
+      // scanner result: the Scanner row read 0 alerts (lakky, 2026-11-27, entry 0.15% early). It is the scanner's own
+      // result, so it reads the alert as sent (sigOrig), at its own entry and SL, like it keeps the scanner's own exits.
+      const asSent = pr => pr.signal.eeFrom || pr.signal.slFrom ? Object.assign({}, pr, { signal: sigOrig(pr.signal) }) : pr;
+      const copies = set.some(pr => pr.signal.eeFrom || pr.signal.slFrom);
+      const scanSet = set.map(asSent).filter(pr => scanR(pr, nf)), noScan = set.length - scanSet.length;
       const rows = SIG_TGTS.map(tg => {
         const rs = [], ps = [];
         (tg.k ? set : scanSet).forEach(pr => { const o = tg.k ? tgtScore(pr.signal, tgtPath(pr.signal), tg, nf, mvR, trOf(tg), pxR) : scanR(pr, nf); if (!o) return; rs.push(o.r); const p = pctOfR(o.r, slPct(pr.signal)); if (p != null) ps.push(p); });
@@ -11833,7 +11838,7 @@
           + `<td class="text-right">${x.totP == null ? '—' : (x.totP >= 0 ? '+' : '') + x.totP.toFixed(2) + '%'}</td></tr>`);
       });
       const fees = nf ? 'No fees (the 0.05% stop slippage still counts).' : 'Fees as the scanner (0.08% round trip) + 0.05% stop slippage.';
-      h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row' + (noScan ? ', except ' + noScan + ' the scanner had as no fill that filled later within 20 candles: the Scanner row leaves ' + (noScan === 1 ? 'it' : 'them') + ' out' : '') + '. Fixed target, the alert\'s own stop, '
+      h += '</tbody></table></div><p class="text-[10px] text-slate-500 mt-2">Same alerts in every row' + (noScan ? ', except ' + noScan + ' the scanner had as no fill that filled later within 20 candles' + (sigEarlyOn() ? ' or only from the early entry' : '') + ': the Scanner row leaves ' + (noScan === 1 ? 'it' : 'them') + ' out' : '') + (copies ? '. The Scanner row is the scanner\'s own result, at the alert\'s own entry and SL' : '') + '. Fixed target, the alert\'s own stop, '
         + (mvR ? 'moved as Move SL says (' + esc(mvR.label) + ', from the candle after the one that reached it)' : 'no breakeven move') + (trR ? '; ' + esc(trR.label) + ' (R targets in R, % targets in %)' : '') + (pxR ? '; partial exits: ' + esc(pxR.label) + ' (a level at or past a target books nothing without Trail TP)' : '') + (mvR || trR || pxR ? '; the Scanner row keeps the scanner\'s own rules' : '')
         + '; a candle touching the stop and the target counts as the stop. ' + (sigHold() === 'tp' ? 'Held till the target or the stop; an alert with neither yet is left out. ' : 'Not hit in 20 candles of the alert\'s timeframe: closed there (Time exit). ') + fees + ' Click a row to score the whole tab at that exit.</p>';
       h += renderStopGrid(pairs, tgs, nf, cur, mvR, sigStopUnit() === "%" ? trOf({ p: 1 }) : trOf({ r: 1 }), pxR);
@@ -13698,9 +13703,14 @@
        Picking the best of many tries flatters it, so the search runs twice: on the first 60% of the alerts
        (by date) only, and the result is then read on the last 40% it never saw, next to what random settings
        from the same lists score on those two halves. */
-    const BS_MIN_N = 30;            // fewest trades a setting needs before it can be called best
+    const BS_MIN_N = 30;            // fewest trades a setting needs before it can be called best (60+ alerts in view)
     const BS_SPLIT = 0.6;           // share of the alerts (oldest first) the search may look at
-    const BS_RANDOM = 100;          // random settings (15+ trades on both halves) for the luck check
+    const BS_RANDOM = 100;          // random settings (15+ trades on both halves, fewer on a small view) for the luck check
+    // A view of 20-59 alerts is searched too (lakky, 2026-11-27: CRYPTO 1D fib, Coins CoinDCX, Period 1 Month = 34 alerts,
+    // and the card only said "too few to search (60 needed)"), with the bars scaled to it and a small-sample note.
+    const BS_FEW = 20;              // fewest alerts in view to search at all
+    const BS_FIRM = 60;             // fewer than this in view: the card says the sample is small
+    const BS_MIN_SMALL = 8;         // fewest trades a pick needs, however small the view
     const BS_KEYS = ["sigTgt", "sigSl", "sigEarly", "sigStop", "sigPart", "sigTrail", "sigHold", "sigChan", "sigMarket", "sigCoins", "sigLvlOff", "sigLvl", "sigTlType", "mktFilter", "mvFilter"];
     const BS = { res: null, busy: false, prog: null, stop: false };
     // The settings now, normalised the way the tab reads them.
@@ -13930,7 +13940,18 @@
     // ---- the search ----
     const bsOk = (s, m) => !!s && s.n >= (m || BS_MIN_N);
     // Fewest trades a setting needs to be picked: a tenth of the alerts (never under 30), so a thin slice with a lucky streak cannot win.
-    const bsMinFor = n => Math.max(BS_MIN_N, Math.round(n * 0.1));
+    // Under 60 alerts 30 is more than there are: half of them then (never under 8).
+    const bsMinFor = n => Math.max(Math.round(n * 0.1), Math.min(BS_MIN_N, Math.max(BS_MIN_SMALL, Math.round(n / 2))));
+    // Trades a random setting needs on each half for the luck check: 15, or half of the smaller half on a small view.
+    const bsLuckMin = (a, b) => Math.min(15, Math.max(5, Math.round(Math.min(a, b) / 2)));
+    // The Period (or the day picked on the calendar) in words, for the card.
+    function bsPeriodTxt() {
+      if (state.ui.sigDay) return "Day " + state.ui.sigDay;
+      const p = sigPeriod(), r = sigPeriodRange();
+      return "Period " + (p.mode === "custom" ? (r.from || "start") + " to " + (r.to || "now") : (SIG_PERIODS.find(x => x.k === p.mode) || SIG_PERIODS[3]).label);
+    }
+    // One tap from a thin view: the same view over all dates, searched at once.
+    function bsWiden() { state.ui.sigDay = ""; sigPeriod().mode = "all"; sigVisible = SIG_PAGE; save(); renderSignalsTable(); bsRun(); }
     // Greedy search: each setting in turn takes the option with the most total R (30+ trades), until a round changes nothing.
     async function bsGreedy(start, ctx, when, tag, dims, minN) {
       let cur = bsFix(start, ctx), best = await bsScore(cur, ctx, when, tag);
@@ -13982,7 +14003,11 @@
         const res = { at: Date.now(), kind, universe: all.length, range, dims: [], notes: [] };
         res.sig = bsSig();
         res.view = dims.filter(d => !d.rule && !(d.crypto && !bsView(cur0, ctx).cryptoHere)).map(d => d.label + " " + d.text(cur0)).join(" · ");
-        if (dates.length < 60) { res.tooFew = true; BS.res = res; return; }
+        res.per = bsPeriodTxt();
+        // The same view over all dates: what "Search all dates" would search.
+        res.allN = range.from || range.to ? bsWith(cur0, () => inSigScope(() => bsPairs(raw, { from: "", to: "" }).pairs.length)) : null;
+        if (dates.length < BS_FEW) { res.tooFew = true; BS.res = res; return; }
+        res.small = dates.length < BS_FIRM;
         const cut = dates[Math.floor(dates.length * BS_SPLIT) - 1];
         const train = g => g.date <= cut, test = g => g.date > cut;
         res.minN = bsMinFor(all.length);
@@ -14019,11 +14044,12 @@
         // 4) luck check: random settings from the same lists (SL and Hold left as they are), on both halves
         BS.prog.step = "Luck check: " + BS_RANDOM + " random settings";
         const rnd = bsRng(20261114), rows = [], rdims = dims.filter(d => d.id !== "sl" && d.id !== "hold");
+        res.luckMin = bsLuckMin(res.split.nTrain, res.split.nTest);
         for (let i = 0; i < BS_RANDOM * 4 && rows.length < BS_RANDOM && !BS.stop; i++) {
           let c = JSON.parse(JSON.stringify(startC));
           for (const d of rdims) { const o = bsOptions(d, c, ctx).filter(x => !(d.id === "tgt" && !x.cfg.sigTgt)); if (o.length) c = o[Math.floor(rnd() * o.length)].cfg; }
           const a = await bsScore(c, ctx, train, "train"), b = await bsScore(c, ctx, test, "test");
-          if (a.st.n >= 15 && b.st.n >= 15) rows.push({ a: a.st, b: b.st });
+          if (a.st.n >= res.luckMin && b.st.n >= res.luckMin) rows.push({ a: a.st, b: b.st });
         }
         const top = rows.slice().sort((x, y) => y.a.tot - x.a.tot).slice(0, 10), mean = v => v.length ? sum(v) / v.length : null, med = v => { const s = v.slice().sort((x, y) => x - y); return s.length ? (s[(s.length - 1) >> 1] + s[s.length >> 1]) / 2 : null; };
         res.rnd = { k: rows.length, trainPos: rows.filter(x => x.a.tot > 0).length, testPos: rows.filter(x => x.b.tot > 0).length, trainMed: med(rows.map(x => x.a.avg)), testMed: med(rows.map(x => x.b.avg)), topTrain: mean(top.map(x => x.a.avg)), topTest: mean(top.map(x => x.b.avg)), topN: top.length };
@@ -14046,6 +14072,8 @@
     function bsUseOpt(i, j) { const r = BS.res && BS.res.dims[i] && BS.res.dims[i].opts[j]; if (!r) return; BS_KEYS.forEach(k => { state.ui[k] = JSON.parse(JSON.stringify(r.cfg[k])); }); sigVisible = SIG_PAGE; sigFixCoins = true; save(); renderSignalsTable(); }
     function bsCancel() { BS.stop = true; }
     const bsTone = v => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-rose-400';
+    // "Search all dates" when the same view over all dates has at least `need` alerts (and the Period cuts some off).
+    function bsWidenBtn(r, need) { return r.allN != null && r.allN >= need && r.allN > r.universe ? ' <button type="button" id="sigBestWiden" onclick="bsWiden()" class="underline text-amber-300 font-semibold">Search all dates (' + r.allN + ' alerts)</button>' : ''; }
     function bsCells(st) {
       if (!st || !st.n) return '<td class="text-right text-slate-600" colspan="9">no trades</td>';
       const mr = sigMeanRange(st), pf = st.pf >= 1e9 ? Infinity : st.pf;
@@ -14073,12 +14101,14 @@
       if (BS.busy) h += '<p id="sigBestProg" class="text-slate-300">' + esc(BS.prog.step) + ' · ' + BS.prog.evals + ' settings scored · ' + BS.prog.reads + ' price reads…</p>';
       if (!r && !BS.busy) h += '<p class="text-slate-500">Tries every option of every setting on the alerts in view (Fib / Trendline / Zone as picked, this Period, your Market, Channel and Coins), then searches all of them together. Only settings the tab can really show are tried: no crypto market on an NSE channel, no Coins pick where there are no coins, no level without alerts. It can take a minute the first time: prices for each stop type are read once.</p>';
       if (r && r.err) h += '<p class="text-rose-300">Could not finish: ' + esc(r.err) + '</p>';
-      else if (r && r.tooFew) h += '<p id="sigBestFew" class="text-slate-400">Only ' + r.universe + ' alerts in view' + (r.view ? ' (' + esc(r.view) + ')' : '') + ': too few to search (60 needed). Widen the Period, or pick a wider Channel, Market, Coins or Level.</p>';
+      else if (r && r.tooFew) h += '<p id="sigBestFew" class="text-slate-400">Only ' + r.universe + ' alerts in view (' + esc([r.view, r.per].filter(Boolean).join(' · ')) + ')' + ': too few to search (' + BS_FEW + ' needed). Widen the Period, or pick a wider Channel, Market, Coins or Level.' + bsWidenBtn(r, BS_FEW) + '</p>';
       else if (r) {
         if (stale) h += '<p id="sigBestStale" class="text-amber-300 mb-2">Your settings, the alerts or the Period changed since this search: Now and the numbers below are for the settings it started from. <button type="button" class="underline" onclick="bsRun()">Search again</button></p>';
+        // A small view is searched, but says how little it rests on, and offers the same view over all dates.
+        if (r.small) h += '<p id="sigBestSmall" class="rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-200 text-[11px] px-3 py-2 mb-3 leading-relaxed"><b>Small sample: ' + r.universe + ' alerts</b> (' + esc(r.per) + '). A pick needs only ' + r.minN + '+ trades here (' + BS_MIN_N + '+ from ' + BS_FIRM + ' alerts), so a few lucky trades can decide it. Read it as a hint, not a rule.' + bsWidenBtn(r, r.universe + 1) + '</p>';
         h += '<p id="sigBestView" class="text-[10px] text-slate-500 mb-3">' + r.universe + ' ' + (SIG_KINDS.find(x => x.k === r.kind) || SIG_KINDS[0]).label.toLowerCase() + ' in view' + (r.view ? ' (' + esc(r.view) + ')' : '') + ' · ' + r.split.from + ' to ' + r.split.to + ' · older 60% = ' + r.split.nTrain + ' alerts up to ' + r.split.cut + ', newest 40% = ' + r.split.nTest + ' · ' + (r.evals || 0) + ' settings scored · fees ' + (state.ui.sigNoFee === true ? 'off' : 'on') + (r.refTgt && r.refTgt !== bsSnap().sigTgt ? ' · rules tried at Exit ' + r.refTgt + ' (you are on Scanner exits)' : '') + '</p>';
         // A. every setting on its own
-        h += '<div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Each setting on its own <span class="text-slate-500 normal-case font-normal">· the others as you have them now · only options the tab can show · best = most Total R with ' + r.minN + '+ trades, a tenth of the alerts in view (filters also show best Avg R)</span></div>';
+        h += '<div class="text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">Each setting on its own <span class="text-slate-500 normal-case font-normal">· the others as you have them now · only options the tab can show · best = most Total R with ' + r.minN + '+ trades, ' + (r.small ? 'half' : 'a tenth') + ' of the alerts in view (filters also show best Avg R)</span></div>';
         h += '<div class="overflow-x-auto"><table id="sigBestTable" class="w-full text-[11px] mono-num"><thead><tr class="text-slate-500 text-left"><th class="py-1 pr-2">Setting</th><th class="pr-2">Now</th><th class="pr-2">Best option</th>' + BS_HEAD + '<th></th></tr></thead><tbody>';
         r.dims.forEach((d, i) => {
           const b = d.bestTot, same = b && b.now, j = b ? d.opts.indexOf(b) : -1, ba = d.bestAvg, ja = ba ? d.opts.indexOf(ba) : -1;
@@ -14121,7 +14151,7 @@
         // D. luck check
         const rk = r.rnd;
         if (rk && rk.k) h += '<p id="sigBestLuck" class="mt-2 text-slate-400">Luck check: ' + rk.k + ' random settings from the same lists. On the older 60% ' + rk.trainPos + ' of ' + rk.k + ' win (median ' + rfmt(rk.trainMed) + ' a trade); on the newest 40% ' + rk.testPos + ' of ' + rk.k + ' win (median ' + rfmt(rk.testMed) + '). The 10 best of them on the older alerts averaged ' + rfmt(rk.topTrain) + ' there and ' + rfmt(rk.topTest) + ' on the newest: that gap is what picking the best costs.</p>';
-        else h += '<p id="sigBestLuck" class="mt-2 text-slate-400">Luck check: too few alerts to find random settings that keep 15 or more trades on both the older and the newest alerts.</p>';
+        else h += '<p id="sigBestLuck" class="mt-2 text-slate-400">Luck check: too few alerts to find random settings that keep ' + (r.luckMin || 15) + ' or more trades on both the older and the newest alerts.</p>';
         h += '<p class="text-[10px] text-slate-500 mt-2">Every number is what the tab shows once you press Use (same alerts, same walks, fees as set above). Rules other than Exit at only act with a fixed target, so they were tried at Exit ' + esc(r.refTgt || '1R') + '. Total % is the sum of price moves, comparable across stop types where R is not. The Scanner exit is a baseline only: it is never the search\'s pick.</p>';
       }
       host.innerHTML = h;
@@ -17055,6 +17085,7 @@
     // What's new: one entry per version, newest first. Every update adds one
     // here, with the same version as <meta name="app-version"> (the test checks).
     const CHANGELOG = [
+      { v: '2026-11-27.213', pr: 126, title: 'Best settings: works on smaller views', pts: ['Best settings now searches a view of 20+ alerts (it needed 60): CRYPTO 1D fib, CoinDCX, 1 Month = 34 alerts. A pick needs half the alerts in trades there, and a Small sample note says so', 'Search all dates: one tap runs the same view on Period All (257 alerts on CRYPTO 1D CoinDCX)', 'Exit targets compared: the Scanner row works with Early entry or an SL type on (it read 0, no scanner result)'] },
       { v: '2026-11-25.212', pr: 125, title: 'BTC day: counts and a clear reason when empty', pts: ['BTC day and BTC move buttons show how many alerts (trades on Analysis) each keeps. BTC has been Bearish every day since 6 Nov, so Bullish and Sideways are empty for the last 7 days', 'An empty view names the filter that emptied it: the period ("no CRYPTO 1D fib alerts in the last 7 days, the last was on 17 Nov, not the BTC day") or the BTC day ("all 196 here fell on bearish days"), with a button to the days that have some', 'Analysis says the same when a BTC row empties it (it said "no trades match these filters")'] },
       { v: '2026-11-24.211', pr: 124, title: 'iPhone fit', pts: ['Header is two short lines and scrolls away (was three, stuck on top); room for the notch, status bar and home bar', 'Boxes no longer zoom the page when tapped; buttons and filter chips bigger to tap', 'Tables keep each row on one line and scroll sideways; trade inspector full screen; filters start folded in Analysis too'] },
       { v: '2026-11-23.210', pr: 123, title: 'Signals checked against a separate backtest', pts: ['Every Signals setting (Market, Channel, Period, Assets, Coins, BTC day / move, Levels, Type, Exit at, SL, Early entry, Move SL, Trail, Partial, Hold, Fees: 688 mixes) replayed on today\'s real alerts and candles by a separate backtest: every alert, fill and number matches', 'Fixed: Wick / Body SL looked back 299 candles, not 300; % targets with Move SL / Trail / Partial could read a touch right at the level wrong (up to 6 trades in 1,000)', 'Max drawdown, worst losing run and the Demo account no longer depend on the order alerts sent in the same minute were loaded'] },
