@@ -7657,13 +7657,55 @@ async function bestSettingsRun() {
         check(ind.uses >= 4 && ind.bad.length === 0, 'every Use lands on settings the tab keeps, with alerts (' + ind.uses + '): ' + JSON.stringify(ind.bad.slice(0, 5)));
         check(!ind.stale0 && ind.stale1, 'the card says so once the settings moved (after Use): ' + JSON.stringify([ind.stale0, ind.stale1]));
       }
-      // 9) A view too thin to search says so, with what it is.
+      // 9) A view too thin to search (under 20 alerts) says so, with what it is and the Period.
       const few = await page.evaluate(async () => {
-        Object.assign(state.ui, { sigKind: 'fib', sigAsset: '', sigMarket: 'nse', sigChan: 'NSE 4H', sigCoins: 'dcx', sigTgt: '1R', sigStop: { mode: 'off' }, sigTrail: { on: false }, sigLvlOff: [], sigLvl: '' }); sigFixCoins = true; renderSignalsTable();
+        Object.assign(state.ui, { sigKind: 'fib', sigAsset: '', sigMarket: 'crypto', sigChan: 'CRYPTO 1D', sigCoins: 'dcx', sigTgt: '1R', sigStop: { mode: 'off' }, sigTrail: { on: false }, sigLvlOff: [], sigLvl: '', sigPeriod: { mode: 'custom', from: '2026-10-10', to: '2026-10-25' }, sigDay: '' }); sigFixCoins = true; renderSignalsTable();
         await bsRun();
         return { few: !!(BS.res && BS.res.tooFew), n: BS.res && BS.res.universe, view: sigView.pairs.length, txt: (document.getElementById('sigBestFew') || {}).innerText || '' };
       });
-      check(few.few && few.n === few.view && /NSE 4h/.test(few.txt) && /too few to search/.test(few.txt), 'a thin view is not searched: ' + JSON.stringify(few));
+      check(few.few && few.n === few.view && few.n > 0 && few.n < 20 && /CRYPTO 1D/i.test(few.txt) && /Period 2026-10-10 to 2026-10-25/.test(few.txt) && /too few to search \(20 needed\)/.test(few.txt), 'a thin view is not searched: ' + JSON.stringify(few));
+      // 10) A small view (20-59 alerts) is searched (lakky, 2026-11-27: CRYPTO 1D fib, Coins CoinDCX, Period 1 Month = 34
+      // alerts said "too few to search (60 needed)"), with the bars scaled to it, a small-sample note, and one tap to the
+      // same view over all dates. His rules: entry 0.15% early, Trail TP, 75% off at +2R.
+      await page.evaluate(() => { Object.assign(state.ui, { sigKind: 'fib', sigAsset: '', sigMarket: 'crypto', sigChan: 'CRYPTO 4H', sigCoins: 'dcx', sigTgt: '1R', sigHold: 'tp', sigSl: { mode: '' }, sigEarly: 0.15, sigStop: { mode: 'off' }, sigTrail: { on: true, step: 0.25, gap: 0, stepP: 0.25, gapP: 0 }, sigPart: { q: 75, at: 2, atP: 2, beQ: 0 }, sigLvlOff: [], sigLvl: '', sigTlType: '', mktFilter: '', mvFilter: '', sigPeriod: { mode: 'custom', from: '2026-10-10', to: '2026-10-19' }, sigDay: '' }); sigFixCoins = true; save(); renderSignalsTable(); });
+      await settle();
+      const small = await page.evaluate(async () => {
+        const inView = sigView.pairs.length;
+        await bsRun();
+        const r = BS.res;
+        if (!r || r.err || r.tooFew) return { err: r ? r.err || 'too few: ' + r.universe : 'no result' };
+        return { inView, universe: r.universe, small: !!r.small, minN: r.minN, minTrain: r.minTrain, luckMin: r.luckMin, allN: r.allN, split: r.split, rows: document.querySelectorAll('#sigBestTable tbody tr[data-bs]').length,
+          picks: r.dims.filter(d => d.bestTot).length, under: r.dims.filter(d => d.bestTot && d.bestTot.st.n < r.minN).map(d => d.id), combo: r.combo.st.n, hasOos: !!document.getElementById('sigBestOos'),
+          note: (document.getElementById('sigBestSmall') || {}).innerText || '', widen: !!document.getElementById('sigBestWiden') };
+      });
+      check(!small.err, 'small view search: ' + small.err);
+      if (!small.err) {
+        const half = Math.max(8, Math.round(small.universe / 2));
+        check(small.universe === small.inView && small.universe >= 20 && small.universe < 60 && small.small, 'a 20-59 alert view is searched: ' + JSON.stringify([small.inView, small.universe, small.small]));
+        check(small.minN === half && small.minTrain === Math.max(8, Math.round(small.split.nTrain / 2)) && small.luckMin === Math.min(15, Math.max(5, Math.round(Math.min(small.split.nTrain, small.split.nTest) / 2))), 'bars scaled to the view (half the alerts): ' + JSON.stringify([small.minN, half, small.minTrain, small.luckMin, small.split]));
+        check(small.rows === 14 && small.picks >= 3 && !small.under.length && small.combo >= small.minN && small.hasOos, 'the card draws picks, each with enough trades: ' + JSON.stringify([small.rows, small.picks, small.under, small.combo, small.hasOos]));
+        check(new RegExp('Small sample: ' + small.universe + ' alerts').test(small.note) && new RegExp('only ' + small.minN + '\\+ trades').test(small.note) && /Period 2026-10-10 to 2026-10-19/.test(small.note), 'small-sample note: ' + small.note);
+        check(small.widen && small.allN > small.universe && new RegExp('Search all dates \\(' + small.allN + ' alerts\\)').test(small.note), 'one tap to all dates: ' + JSON.stringify([small.widen, small.allN, small.note.slice(-40)]));
+        // The Scanner row of Exit targets compared with Early entry on: the scanner's own results (it read 0 alerts,
+        // "no scanner result for these alerts", because the early copies have none). Expected from the raw alerts.
+        const scan = await page.evaluate(() => {
+          const row = document.querySelector('#sigTgtCmp tr[data-tgt=""]'), cells = row ? [...row.cells].map(c => c.innerText.trim()) : [];
+          const td = trailRaw(), trOf = tg => sigTrailRule() ? (tg.p != null ? trailMove('%', td.stepP, td.gapP) : trailMove('R', td.step, td.gap)) : null;
+          const want = sigView.pairs.filter(pr => tgtBase(pr) && SIG_TGTS.filter(x => x.k).every(tg => tgtScore(pr.signal, tgtPath(pr.signal), tg, false, sigStopRule(), trOf(tg), sigPartRule())))
+            .map(pr => sigOrig(pr.signal)).filter(g => g.filled !== false && typeof g.resultR === 'number');
+          return { cells, early: sigView.pairs.filter(pr => pr.signal.eePct).length, n: want.length, tot: want.reduce((t, g) => t + g.resultR, 0) };
+        });
+        check(scan.early > 0 && scan.n > 0 && +scan.cells[1] === scan.n && Math.abs(parseFloat(scan.cells[3]) - scan.tot) < 0.006 && !/no scanner result/.test(scan.cells.join(' ')), 'Scanner row with Early entry on = the scanner\'s own results: ' + JSON.stringify(scan));
+        // Search all dates: Period All, searched at once, on more alerts.
+        const wide = await page.evaluate(async () => {
+          document.getElementById('sigBestWiden').click();
+          for (let i = 0; i < 600 && (BS.busy || !BS.res || BS.res.universe === undefined); i++) await new Promise(r => setTimeout(r, 100));
+          while (BS.busy) await new Promise(r => setTimeout(r, 100));
+          const r = BS.res;
+          return { mode: sigPeriod().mode, day: state.ui.sigDay || '', universe: r && r.universe, tooFew: !!(r && r.tooFew), err: r && r.err, chan: state.ui.sigChan, stale: !!document.getElementById('sigBestStale') };
+        });
+        check(wide.mode === 'all' && !wide.day && wide.universe === small.allN && !wide.tooFew && !wide.err && wide.chan === 'CRYPTO 4H' && !wide.stale, 'Search all dates: same view, all dates, searched: ' + JSON.stringify(wide));
+      }
     }
   } catch (e) { errs.push('threw: ' + String(e.message).split('\n').slice(0, 2).join(' | ')); }
   await ctx.close();
